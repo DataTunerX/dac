@@ -1,6 +1,61 @@
-# NVIDIA Environment Setup (x86_64)
+# NVIDIA Environment Setup
 
 This document summarizes key information for three technologies on x86_64 Linux: NVIDIA NeMo (Framework), NVIDIA NIM (Inference Microservices), and NeMo Agent Toolkit. Each section lists a brief overview, the latest version, official documentation, and environment highlights. For detailed installation and usage, follow the official docs.
+
+## Operating System Information (x86_64 Linux)
+
+- Supported distributions (examples):
+  - Ubuntu 22.04 LTS / 24.04 LTS
+  - Rocky Linux 9 / RHEL 9 family
+  - Debian 12 (Bookworm)
+  - SUSE Linux Enterprise 15 SPx
+
+- Recommended baseline:
+  - Recent LTS kernel (≥ 5.15)
+  - Docker Engine ≥ 24.x or Containerd/Kubernetes per your deployment
+  - NVIDIA Driver aligned with your CUDA/NIM/NGC container requirements (see each product’s Release Notes)
+
+- Verify OS and kernel
+
+1. Check distribution and version
+
+```bash
+cat /etc/os-release
+```
+
+2. Check kernel version
+
+```bash
+uname -r
+```
+
+3. Check CPU architecture is x86_64
+
+```bash
+uname -m
+# Expect: x86_64
+```
+
+- Verify container runtime and GPU stack
+
+1. Docker/Containerd/Kubernetes version
+
+```bash
+docker --version || containerd --version || kubectl version --client --output=yaml
+```
+
+2. NVIDIA driver and GPUs
+
+```bash
+nvidia-smi
+```
+
+3. CUDA runtime in container (if applicable)
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+```
+
 
 ## NVIDIA NeMo (Framework)
 
@@ -21,13 +76,13 @@ python -m venv .venv && source .venv/bin/activate
 pip install "nemo_toolkit[all]"
 ```
 
-1. Verify installation
+2. Verify installation
 
 ```bash
 python -c "import nemo; print('NeMo version:', nemo.__version__)"
 ```
 
-1. Follow the official quickstart to run a minimal example
+3. Follow the official quickstart to run a minimal example
 
 - [Quickstart with NeMo 2.0 API](https://docs.nvidia.com/nemo-framework/user-guide/latest/nemo-2.0/index.html)
 - [Quickstart with NeMo-Run](https://docs.nvidia.com/nemo-framework/user-guide/latest/nemo-2.0/quickstart.html)
@@ -52,12 +107,12 @@ export NGC_API_KEY=<YOUR_NGC_API_KEY>
 echo $NGC_API_KEY | docker login nvcr.io -u '$oauthtoken' --password-stdin
 ```
 
-1. Choose a NIM image (see docs for available models/tags)
+2. Choose a NIM image (see docs for available models/tags)
 
 - [NIM for Developers](https://developer.nvidia.com/nim)
 - [NIM for LLMs Release Notes](https://docs.nvidia.com/nim/large-language-models/latest/release-notes.html)
 
-1. Run the NIM container
+3. Run the NIM container
 
 ```bash
 docker run --gpus all \
@@ -66,13 +121,13 @@ docker run --gpus all \
   nvcr.io/nim/<publisher>/<model>:<tag>
 ```
 
-1. Health check
+4. Health check
 
 ```bash
 curl -s http://localhost:8000/v1/health/ready
 ```
 
-1. Send an example inference request (endpoint and payload vary by NIM)
+5. Send an example inference request (endpoint and payload vary by NIM)
 
 ```bash
 curl -X POST \
@@ -101,20 +156,20 @@ python -m venv .venv && source .venv/bin/activate
 pip install nvidia-nat
 ```
 
-1. (Optional) Provide API key for NVIDIA-hosted endpoints when examples need it
+2. (Optional) Provide API key for NVIDIA-hosted endpoints when examples need it
 
 ```bash
 export NVIDIA_API_KEY=<YOUR_API_KEY>
 ```
 
-1. Run a simple workflow (use a config from docs/examples)
+3. Run a simple workflow (use a config from docs/examples)
 
 ```bash
 # CLI name may appear as `aiq` in some docs; follow the release notes for the version you install
 aiq run --config_file=examples/simple/configs/config.yml --input "Hello"
 ```
 
-1. Serve a workflow API locally
+4. Serve a workflow API locally
 
 ```bash
 aiq serve --config_file=examples/simple/configs/config.yml
