@@ -2,12 +2,12 @@
 
 This document summarizes key information for three technologies on x86_64 Linux: NVIDIA NeMo (Framework), NVIDIA NIM (Inference Microservices), and NeMo Agent Toolkit. Each section lists a brief overview, the latest version, official documentation, and environment highlights. For detailed installation and usage, follow the official docs.
 
-## Operating System Information (x86_64 Linux)
+## Operating System Information (Ubuntu x86_64)
 
-- Supported distributions ():
-  - Ubuntu 22.04 LTS / 24.04 LTS
+- environment:
+  - Ubuntu 22.04 LTS / 24.04 LTS (x86_64)
 
-- Recommended baseline:
+- Baseline we target:
   - Recent LTS kernel (≥ 5.15)
   - Docker Engine ≥ 24.x or Containerd/Kubernetes per your deployment
   - NVIDIA Driver aligned with your CUDA/NIM/NGC container requirements (see each product’s Release Notes)
