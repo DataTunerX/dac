@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: expert-agent
+  name: expert-agent
+  namespace: jamesxiong
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: expert-agent
+  template:
+    metadata:
+      labels:
+        app: expert-agent
+    spec:
+      containers:
+      - name: expert-agent
+        env:
+        - name: Agent_Host
+          value: 192.168.xxx.xxx
+        - name: Agent_Port
+          value: "20004"
+        - name: Agent_Name
+          value: "ProductOrderAgent"
+        - name: Agent_Description
+          value: "I am a professional product order management system intelligent agent that can query databases for required data to answer user-related questions."
+        - name: DD_NAMESPACE
+          value: "dac"
+        - name: DataServicesURL
+          value: "http://data-services.dac.svc.cluster.local:8000"
+        - name: Data_Descriptor
+          value: "dd01"
+        - name: LANGFUSE_SECRET_KEY
+          value: "sk-xxx"
+        - name: LANGFUSE_PUBLIC_KEY
+          value: "pk-xxx"
+        - name: LANGFUSE_BASE_URL
+          value: "http://192.168.xxx.xxx:3000"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/expert-agent:v0.2.0-amd64
+        imagePullPolicy: IfNotPresent
+        name: expert-agent
+        ports:
+          - containerPort: 10100
+        args:
+          - "--redis-host"
+          - "redis-host"
+          - "--redis-port"
+          - "6389"
+          - "--redis-db"
+          - "0"
+          - "--password"
+          - "123"
+          - "--provider"
+          - "openai_compatible"
+          - "--api-key"
+          - "sk-xxx"
+          - "--base-url"
+          - "https://dashscope.aliyuncs.com/compatible-mode/v1"
+          - "--model"
+          - "qwen2.5-72b-instruct"
+        resources:
+          limits:
+            cpu: 100m
+            memory: 2Gi
+          requests:
+            cpu: 50m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: expert-agent
+  namespace: jamesxiong
+spec:
+  ports:
+    - name: tcp-10100-10100
+      protocol: TCP
+      port: 10100
+      targetPort: 10100
+  selector:
+    app: expert-agent
+  type: NodePort
