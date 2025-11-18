@@ -1,0 +1,16 @@
+FROM docker.m.daocloud.io/python:3.12
+
+# if you located in China, you can use aliyun mirror to speed up
+RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources
+
+RUN apt update
+
+RUN apt install -y vim
+
+COPY requirements.txt /tmp
+
+RUN pip3 install -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+COPY test.py /root/test.py
+
+WORKDIR /root

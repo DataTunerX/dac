@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: routing-agent
+  name: routing-agent
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: routing-agent
+  template:
+    metadata:
+      labels:
+        app: routing-agent
+    spec:
+      containers:
+      - name: routing-agent
+        env:
+        - name: Agent_Host
+          value: "10.17.xxx.xxx"
+        - name: Agent_Port
+          value: "30100"
+        - name: AgentRegistry
+          value: "http://orchestrator-registry.dac.svc.cluster.local:8000"
+        - name: LANGFUSE_SECRET_KEY
+          value: "sk-xxx"
+        - name: LANGFUSE_PUBLIC_KEY
+          value: "pk-xxx"
+        - name: LANGFUSE_BASE_URL
+          value: "http://192.168.xxx.xxx:3000"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/routing-agent:v0.2.0-amd64
+        imagePullPolicy: IfNotPresent
+        name: routing-agent
+        ports:
+          - containerPort: 10100
+        args:
+          - "--redis-host"
+          - "redis-server"
+          - "--redis-port"
+          - "6379"
+          - "--redis-db"
+          - "0"
+          - "--password"
+          - "123"
+          - "--provider"
+          - "openai_compatible"
+          - "--api-key"
+          - "sk-xxx"
+          - "--base-url"
+          - "https://dashscope.aliyuncs.com/compatible-mode/v1"
+          - "--model"
+          - "qwen2.5-72b-instruct"
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 100m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: routing-agent
+  namespace: dac
+spec:
+  ports:
+    - name: tcp-10100-10100
+      protocol: TCP
+      port: 10100
+      targetPort: 10100
+      nodePort: 30100
+  selector:
+    app: routing-agent
+  type: NodePort
