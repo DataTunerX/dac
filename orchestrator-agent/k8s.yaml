@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: orchestrator-agent
+  name: orchestrator-agent
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator-agent
+  template:
+    metadata:
+      labels:
+        app: orchestrator-agent
+    spec:
+      containers:
+      - name: orchestrator
+        env:
+        - name: Agent_Host
+          value: "10.17.0.41"
+        - name: Agent_Port
+          value: "31100"
+        - name: AgentRegistry
+          value: "http://expert-registry.dac.svc.cluster.local:8000"
+        - name: Agent_Name
+          value: "ProductOrderAgent"
+        - name: Agent_Description
+          value: "I am a professional product order management system intelligent agent that can query databases for required data to answer user-related questions."
+        - name: DD_NAMESPACE
+          value: "dac"
+        - name: DataServicesURL
+          value: "http://data-services.dac.svc.cluster.local:8000"
+        - name: Data_Descriptor
+          value: "dd01"
+        - name: DescriptorTypes
+          value: "dd01-mysql:structured-mysql:database:test1:host:mysql-server:password:123:port:3306:user:root"
+        - name: LANGFUSE_SECRET_KEY
+          value: "sk-xxx"
+        - name: LANGFUSE_PUBLIC_KEY
+          value: "pk-xxx"
+        - name: LANGFUSE_BASE_URL
+          value: "http://192.168.xxx.xxx:3000"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/orchestrator-agent:v0.1.1-amd64
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 10100
+        args:
+          - "--port"
+          - "10100"
+          - "--redis-host"
+          - "redis-server"
+          - "--redis-port"
+          - "6379"
+          - "--redis-db"
+          - "0"
+          - "--password"
+          - "123"
+          - "--provider"
+          - "openai_compatible"
+          - "--api-key"
+          - "sk-xxx"
+          - "--base-url"
+          - "https://dashscope.aliyuncs.com/compatible-mode/v1"
+          - "--model"
+          - "qwen2.5-72b-instruct"
+        resources:
+          limits:
+            cpu: 100m
+            memory: 2Gi
+          requests:
+            cpu: 50m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: orchestrator-agent
+  namespace: dac
+spec:
+  ports:
+    - name: tcp-10100-10100
+      protocol: TCP
+      port: 10100
+      targetPort: 10100
+  selector:
+    app: orchestrator-agent
+  type: NodePort

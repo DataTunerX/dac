@@ -1,0 +1,42 @@
+{
+    "name": "ExpertAgent",
+    "description": "answer user question using self knowledge",
+    "url": "http://192.168.xxx.xxx:20002/",
+    "provider": null,
+    "version": "1.0.0",
+    "documentationUrl": null,
+    "capabilities": {
+        "streaming": "True",
+        "pushNotifications": "True",
+        "stateTransitionHistory": "False"
+    },
+    "authentication": {
+        "credentials": null,
+        "schemes": [
+            "public"
+        ]
+    },
+    "defaultInputModes": [
+        "text",
+        "text/plain"
+    ],
+    "defaultOutputModes": [
+        "text",
+        "text/plain"
+    ],
+    "skills": [
+        {
+            "id": "answer-question",
+            "name": "Answer Question",
+            "description": "answer user question using self knowledge",
+            "tags": [
+                "expert agent"
+            ],
+            "examples": [
+                "1+1等于几"
+            ],
+            "inputModes": null,
+            "outputModes": null
+        }
+    ]
+}
