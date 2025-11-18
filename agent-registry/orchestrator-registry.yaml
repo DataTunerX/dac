@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: orchestrator-registry
+  name: orchestrator-registry
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator-registry
+  template:
+    metadata:
+      labels:
+        app: orchestrator-registry
+    spec:
+      containers:
+      - name: orchestrator-registry
+        env:
+        - name: DATA_SERVICES
+          value: http://data-services.dac.svc.cluster.local:8000
+        - name: COLLECTION_NAME
+          value: "orchestrator_agent_cards"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/agent-registry:v0.2.0-amd64
+        imagePullPolicy: IfNotPresent
+        name: orchestrator-registry
+        ports:
+          - containerPort: 8000
+        args:
+          - "--redis-host"
+          - "redis-server"
+          - "--redis-port"
+          - "6379"
+          - "--redis-db"
+          - "0"
+          - "--password"
+          - "123"
+        resources:
+          limits:
+            cpu: 100m
+            memory: 2Gi
+          requests:
+            cpu: 50m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: orchestrator-registry
+  namespace: dac
+spec:
+  ports:
+    - name: tcp-8000-8000
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  selector:
+    app: orchestrator-registry
+  type: NodePort
+
