@@ -1,0 +1,163 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: data-services
+  name: data-services
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-services
+  template:
+    metadata:
+      labels:
+        app: data-services
+    spec:
+      containers:
+      - name: data-services
+        env:
+        - name: MEM0_TELEMETRY
+          value: "False"
+        - name: EC_TELEMETRY
+          value: "False"
+        - name: EMBEDDING_PROVIDER
+          value: "dashscope"
+        - name: EMBEDDING_API_KEY
+          value: "sk-xxx"
+        - name: EMBEDDING_MODEL
+          value: "text-embedding-v4"
+        - name: LLM_API_KEY
+          value: "sk-xxx"
+        - name: LLM_BASE_URL
+          value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        - name: LLM_MODEL
+          value: "deepseek-v3"
+        - name: LLM_TEMPERATURE
+          value: "0.01"
+        - name: MEMORY_PGVECTOR_HOST
+          value: "pgvector"
+        - name: MEMORY_PGVECTOR_PORT
+          value: "5432"
+        - name: MEMORY_PGVECTOR_USER
+          value: "postgres"
+        - name: MEMORY_PGVECTOR_PASSWORD
+          value: "postgres"
+        - name: MEMORY_DBNAME
+          value: "agent_memory"
+        - name: MEMORY_PGVECTOR_MIN_CONNECTION
+          value: "1"
+        - name: MEMORY_PGVECTOR_MAX_CONNECTION
+          value: "50"
+        - name: MEMORY_COLLECTION
+          value: "memories"
+        - name: MEMORY_EMBEDDING_DIMS
+          value: "1024"
+        - name: MEMORY_GRAPH_ENABLE
+          value: "disable"
+        - name: MEMORY_GRAPH_DB_PROVIDER
+          value: "neo4j"
+        - name: MEMORY_GRAPH_DB_URL
+          value: "neo4j://neo4j-server:7687"
+        - name: MEMORY_GRAPH_DB_USERNAME
+          value: "neo4j"
+        - name: MEMORY_GRAPH_DB_PASSWORD
+          value: "test123456"
+        - name: MEMORY_GRAPH_LLM_MODEL
+          value: "deepseek-v3"
+        - name: MEMORY_GRAPH_LLM_APIKEY
+          value: "sk-xxx"
+        - name: MEMORY_GRAPH_LLM_BASEURL
+          value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        - name: PGVECTOR_HOST
+          value: "pgvector"
+        - name: PGVECTOR_PORT
+          value: "5432"
+        - name: PGVECTOR_USER
+          value: "postgres"
+        - name: PGVECTOR_PASSWORD
+          value: "postgres"
+        - name: PGVECTOR_DATABASE
+          value: "knowledge_vector"
+        - name: PGVECTOR_MIN_CONNECTION
+          value: "1"
+        - name: PGVECTOR_MAX_CONNECTION
+          value: "50"
+        - name: KNOWLEDGE_PGVECTOR_HOST
+          value: "pgvector"
+        - name: KNOWLEDGE_PGVECTOR_PORT
+          value: "5432"
+        - name: KNOWLEDGE_PGVECTOR_USER
+          value: "postgres"
+        - name: KNOWLEDGE_PGVECTOR_PASSWORD
+          value: "postgres"
+        - name: KNOWLEDGE_MEMORY_DBNAME
+          value: "knowledge_memories"
+        - name: KNOWLEDGE_PGVECTOR_MIN_CONNECTION
+          value: "1"
+        - name: KNOWLEDGE_PGVECTOR_MAX_CONNECTION
+          value: "50"
+        - name: KNOWLEDGE_MEMORY_COLLECTION
+          value: "knowledge_memories"
+        - name: KNOWLEDGE_MEMORY_EMBEDDING_DIMS
+          value: "1024"
+        - name: KNOWLEDGE_MEMORY_GRAPH_ENABLE
+          value: "disable"
+        - name: KNOWLEDGE_MEMORY_GRAPH_DB_PROVIDER
+          value: "neo4j"
+        - name: KNOWLEDGE_MEMORY_GRAPH_DB_URL
+          value: "neo4j://neo4j-server:7687"
+        - name: KNOWLEDGE_MEMORY_GRAPH_DB_USERNAME
+          value: "neo4j"
+        - name: KNOWLEDGE_MEMORY_GRAPH_DB_PASSWORD
+          value: "test123456"
+        - name: KNOWLEDGE_MEMORY_GRAPH_LLM_MODEL
+          value: "deepseek-v3"
+        - name: KNOWLEDGE_MEMORY_GRAPH_LLM_APIKEY
+          value: "sk-xxx"
+        - name: KNOWLEDGE_MEMORY_GRAPH_LLM_BASEURL
+          value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        - name: MYSQL_HOST
+          value: "mysql-server"
+        - name: MYSQL_PORT
+          value: "3306"
+        - name: MYSQL_USER
+          value: "root"
+        - name: MYSQL_PASSWORD
+          value: "123"
+        - name: MYSQL_FINGERPRINT_DATABASE
+          value: "fingerprint"
+        - name: MYSQL_MAX_CONNECTION
+          value: "50"
+        - name: MYSQL_HISTORY_DATABASE
+          value: "history"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/data-services:v0.2.0-amd64
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8000
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 200m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: data-services
+  namespace: dac
+spec:
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  selector:
+    app: data-services
+  type: NodePort
