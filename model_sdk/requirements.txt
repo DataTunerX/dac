@@ -1,0 +1,13 @@
+requests==2.31.0
+pydantic>=2.7.4
+langchain>=0.3.26
+python-dotenv
+langchain_community>=0.3.26
+setuptools
+wheel
+dashscope>=1.23.6
+gevent~=24.11.1
+tiktoken~=0.8.0
+openai~=1.96.1
+langchain-openai~=0.3.28
+psycopg2-binary~=2.9.10

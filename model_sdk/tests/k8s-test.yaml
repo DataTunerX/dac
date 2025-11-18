@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: mode-sdk-test
+  name: mode-sdk-test
+  namespace: jamesxiong
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mode-sdk-test
+  template:
+    metadata:
+      labels:
+        app: mode-sdk-test
+    spec:
+      containers:
+      - command:
+        - /bin/bash
+        - -c
+        - sleep 3600000s
+        env:
+        - name: name
+          value: test
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/model-sdk:v0.0.1-amd64
+        imagePullPolicy: IfNotPresent
+        name: mode-sdk-test
+      restartPolicy: Always

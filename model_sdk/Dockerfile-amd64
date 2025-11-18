@@ -1,0 +1,42 @@
+FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-amd64
+
+# if you located in China, you can use aliyun mirror to speed up
+RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources
+
+RUN apt update
+
+RUN apt install -y vim curl
+
+COPY requirements.txt /tmp
+
+RUN pip3 install -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+RUN mkdir /app
+
+WORKDIR /app
+
+# preload tiktoken
+ENV TIKTOKEN_CACHE_DIR=/app/.tiktoken
+
+RUN mkdir -p /app/.tiktoken
+
+COPY tiktoken/cl100k_base.tiktoken /app/.tiktoken/cl100k_base.tiktoken
+COPY tiktoken/o200k_base.tiktoken /app/.tiktoken/o200k_base.tiktoken
+COPY tiktoken/vocab.bpe /app/.tiktoken/vocab.bpe
+COPY tiktoken/encoder.json /app/.tiktoken/encoder.json
+COPY tiktoken/fb374d419588a4632f3f557e76b4b70aebbca790 /app/.tiktoken/fb374d419588a4632f3f557e76b4b70aebbca790
+COPY tiktoken/9b5ad71b2ce5302211f9c61530b329a4922fc6a4 /app/.tiktoken/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
+COPY tiktoken/6c7ea1a7e38e3a7f062df639a5b80947f075ffe6 /app/.tiktoken/6c7ea1a7e38e3a7f062df639a5b80947f075ffe6
+COPY tiktoken/6d1cbeee0f20b3d9449abfede4726ed8212e3aee /app/.tiktoken/6d1cbeee0f20b3d9449abfede4726ed8212e3aee
+
+COPY dist/model_sdk-0.1.0-py3-none-any.whl /app/model_sdk-0.1.0-py3-none-any.whl
+
+RUN pip3 install model_sdk-0.1.0-py3-none-any.whl
+
+COPY tests/test-ali.py /app/test-ali.py
+
+COPY tests/test-openai-compatible-llm.py /app/test-openai-compatible-llm.py
+
+COPY tests/test-openai-compatible-embedding.py /app/test-openai-compatible-embedding.py
+
+COPY tests/test-openai-compatible-rerank.py /app/test-openai-compatible-rerank.py
