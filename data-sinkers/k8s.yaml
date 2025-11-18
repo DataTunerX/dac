@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: data-sinkers
+  name: data-sinkers
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-sinkers
+  template:
+    metadata:
+      labels:
+        app: data-sinkers
+    spec:
+      containers:
+      - name: data-sinkers
+        env:
+        - name: REDIS_HOST
+          value: "redis-server"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_DB_BROKER
+          value: "2"
+        - name: REDIS_DB_BACKEND
+          value: "3"
+        - name: REDIS_PASSWORD
+          value: "123"
+        - name: DATA_SERVICES
+          value: "http://data-services:8000"
+        - name: PROVIDER
+          value: "openai_compatible"
+        - name: API_KEY
+          value: "sk-xxx"
+        - name: BASE_URL
+          value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        - name: Model
+          value: "qwen2.5-72b-instruct"
+        - name: Temperature
+          value: "0.01"
+        - name: ENABLE_ALLINONE
+          value: "disable"
+        - name: SQL_BATCHSIZE
+          value: "10"
+        - name: SQL_PROCESS_MODE
+          value: "dictionary"
+        - name: ENABLE_SAMPLE_DATA
+          value: "disable"
+        - name: CELERY_WORKER_AMOUNT
+          value: "10"
+        - name: MINERU_MODEL_SOURCE
+          value: "local"
+        - name: MINERU_DEVICE_MODE
+          value: "cpu"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers:v0.2.0-amd64
+        imagePullPolicy: IfNotPresent
+        name: data-sinkers
+        ports:
+          - containerPort: 8000
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 200m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: data-sinkers
+  namespace: dac
+spec:
+  ports:
+    - name: tcp-8000-8000
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  selector:
+    app: data-sinkers
+  type: NodePort
+
