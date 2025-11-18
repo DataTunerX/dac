@@ -1,0 +1,55 @@
+[project]
+name = "celery-httpserver"
+version = "0.1.0"
+description = "celery https erver"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "click>=8.1.8",
+    "httpx>=0.28.1",
+    "nest-asyncio>=1.6.0",
+    "networkx>=3.4.2",
+    "numpy>=2.2.5",
+    "pandas>=2.2.3",
+    "pydantic>=2.11.4",
+    "requests==2.31.0",
+    "python-dotenv",
+    "setuptools",
+    "wheel",
+    "gevent~=24.11.1",
+    "celery==5.5.2",
+    "redis[hiredis]~=6.1.0",
+    
+]
+
+[project.scripts]
+celery-httpserver = "celery_httpserver.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["celery_httpserver"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pyright]
+include = ["celery_httpserver"]
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.uv]
+dev-dependencies = []
+index-url = "https://mirrors.aliyun.com/pypi/simple/"

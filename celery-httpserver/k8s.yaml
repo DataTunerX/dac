@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: celery-httpserver
+  name: celery-httpserver
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: celery-httpserver
+  template:
+    metadata:
+      labels:
+        app: celery-httpserver
+    spec:
+      containers:
+      - name: celery-httpserver
+        env:
+        - name: REDIS_HOST
+          value: "redis-server"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_DB_BROKER
+          value: "2"
+        - name: REDIS_DB_BACKEND
+          value: "3"
+        - name: REDIS_PASSWORD
+          value: "123"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/celery-httpserver:v0.2.0-amd64
+        imagePullPolicy: IfNotPresent
+        name: celery-httpserver
+        ports:
+          - containerPort: 8000
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 200m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: celery-httpserver
+  namespace: dac
+spec:
+  ports:
+    - name: tcp-8000-8000
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  selector:
+    app: celery-httpserver
+  type: NodePort
+
