@@ -1,0 +1,16 @@
+FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-arm64
+
+# if you located in China, you can use aliyun mirror to speed up
+RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources
+
+RUN apt update
+
+RUN apt install -y vim curl
+
+COPY requirements.txt /tmp
+
+RUN pip3 install -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+RUN mkdir /app
+
+WORKDIR /app
