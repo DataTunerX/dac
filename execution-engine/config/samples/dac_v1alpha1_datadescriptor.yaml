@@ -1,0 +1,235 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-production-fewshots
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    data-source: dd-0
+data:
+  fewshots.json: |
+    [
+      {
+        "query": "查找年龄大于30岁的用户",
+        "answer": "SELECT name, age FROM users WHERE age > 30"
+      },
+      {
+        "query": "统计最近7天注册的用户数量",
+        "answer": "SELECT COUNT(*) FROM users WHERE registration_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)"
+      }
+    ]
+  background_knowledge.json: |
+    [
+      {
+        "description": "年度总额采用年末值进行处理。举例来说，如果想知道2023年的贷款总额，只需要查询2023年的记录中，看看月份最大的那个月的数据就是2023年的贷款总额。"
+      }
+    ]
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd00-mysql
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "dactest"
+      extract:
+        tables: ["deposit_data", "balance_sheet", "loan_data", "retail_loan_detail"]
+      prompts:
+        prompts:
+          name: "mysql-production-fewshots"
+      processing:
+        cleaning:
+          - rule: "remove_duplicates"
+            params: 
+              fields: "user_id,timestamp"
+          - rule: "fill_missing"
+            params: 
+              field: "price"
+              value: "0"
+      classification:
+        - domain: "科学技术类"
+          category: "计算机科学与技术"
+          subcategory: "软件工程师"
+          tags:
+            - skill: ["编程", "算法"]
+            - industry: ["互联网"]
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd01-mysql
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "test1"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+      processing:
+        cleaning:
+          - rule: "remove_duplicates"
+            params: 
+              fields: "user_id,timestamp"
+          - rule: "fill_missing"
+            params: 
+              field: "price"
+              value: "0"
+      classification:
+        - domain: "科学技术类"
+          category: "计算机科学与技术"
+          subcategory: "软件工程师"
+          tags:
+            - skill: ["编程", "算法"]
+            - industry: ["互联网"]
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-postgres
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-postgres"
+  sources:
+    - type: postgres
+      name: "postgres-production"
+      metadata:
+        host: "postgres-server"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "dactest"
+      extract:
+        tables: ["deposit_data", "balance_sheet", "loan_data", "retail_loan_detail"]
+      prompts:
+        prompts:
+          name: "postgres-production-fewshots"
+      processing:
+        cleaning:
+          - rule: "remove_duplicates"
+            params: 
+              fields: "user_id,timestamp"
+          - rule: "fill_missing"
+            params: 
+              field: "price"
+              value: "0"
+      classification:
+        - domain: "科学技术类"
+          category: "计算机科学与技术"
+          subcategory: "软件工程师"
+          tags:
+            - skill: ["编程", "算法"]
+            - industry: ["互联网"]
+
+---
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-minio-test
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "unstructured"
+  sources:
+    - type: minio
+      name: "minio-production"
+      metadata:
+        host: "minio-server:9000"
+        access_key: "root"
+        secret_key: "123"
+        bucket: "dactest"
+      extract:
+        files: ["test.pdf"]
+      prompts:
+        prompts:
+          name: "minio-production-fewshots"
+      processing:
+        cleaning:
+          - rule: "remove_duplicates"
+            params: 
+              fields: "user_id,timestamp"
+          - rule: "fill_missing"
+            params: 
+              field: "price"
+              value: "0"
+      classification:
+        - domain: "科学技术类"
+          category: "计算机科学与技术"
+          subcategory: "软件工程师"
+          tags:
+            - skill: ["编程", "算法"]
+            - industry: ["互联网"]
+    
+---
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-fileserver-test
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "unstructured"
+  sources:
+    - type: fileserver
+      name: "fileserver-production"
+      metadata:
+        host: "fileserver-server"
+        port: "8000"
+      extract:
+        files: ["test.pdf"]
+      prompts:
+        prompts:
+          name: "fileserver-production-fewshots"
+      processing:
+        cleaning:
+          - rule: "remove_duplicates"
+            params: 
+              fields: "user_id,timestamp"
+          - rule: "fill_missing"
+            params: 
+              field: "price"
+              value: "0"
+      classification:
+        - domain: "科学技术类"
+          category: "计算机科学与技术"
+          subcategory: "软件工程师"
+          tags:
+            - skill: ["编程", "算法"]
+            - industry: ["互联网"]

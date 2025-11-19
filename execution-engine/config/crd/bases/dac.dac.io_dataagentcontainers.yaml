@@ -1,0 +1,174 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: dataagentcontainers.dac.dac.io
+spec:
+  group: dac.dac.io
+  names:
+    kind: DataAgentContainer
+    listKind: DataAgentContainerList
+    plural: dataagentcontainers
+    singular: dataagentcontainer
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DataAgentContainer is the Schema for the dataagentcontainers
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DataAgentContainerSpec defines the desired state of DataAgentContainer
+            properties:
+              agentCard:
+                description: AgentCard defines the agent's metadata and capabilities
+                properties:
+                  description:
+                    type: string
+                  name:
+                    type: string
+                  skills:
+                    items:
+                      description: AgentSkill defines a specific skill the agent provides
+                      properties:
+                        description:
+                          type: string
+                        examples:
+                          items:
+                            type: string
+                          type: array
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        tags:
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - description
+                      - id
+                      - name
+                      type: object
+                    type: array
+                required:
+                - description
+                - name
+                type: object
+              dataPolicy:
+                description: DataPolicy defines how data sources should be selected
+                properties:
+                  sourceNameSelector:
+                    description: Selector for data sources by name
+                    items:
+                      type: string
+                    type: array
+                type: object
+              expertAgentMaxSteps:
+                type: string
+              model:
+                description: ModelSpec defines the LLM and embedding models to use
+                properties:
+                  embedding:
+                    type: string
+                  expertLLM:
+                    type: string
+                  plannerLLM:
+                    type: string
+                required:
+                - embedding
+                - expertLLM
+                - plannerLLM
+                type: object
+            required:
+            - agentCard
+            - dataPolicy
+            - expertAgentMaxSteps
+            - model
+            type: object
+          status:
+            description: DataAgentContainerStatus defines the observed state of DataAgentContainer
+            properties:
+              activeDataDescriptors:
+                items:
+                  description: ActiveDataDescriptor tracks which data descriptors
+                    are being used
+                  properties:
+                    lastSynced:
+                      type: string
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                  required:
+                  - lastSynced
+                  - name
+                  - namespace
+                  type: object
+                type: array
+              conditions:
+                items:
+                  description: Condition saves the state information of the cr
+                  properties:
+                    lastUpdateTime:
+                      description: The last time this condition was updated.
+                      type: string
+                    message:
+                      description: A human readable message indicating details about
+                        the transition.
+                      type: string
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Status of cr condition.
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              endpoint:
+                description: Endpoint defines how to connect to the agent
+                properties:
+                  address:
+                    type: string
+                  port:
+                    format: int32
+                    type: integer
+                  protocol:
+                    type: string
+                required:
+                - address
+                - port
+                - protocol
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

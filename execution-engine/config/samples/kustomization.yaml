@@ -1,0 +1,5 @@
+## Append samples of your project ##
+resources:
+- dac_v1alpha1_datadescriptor.yaml
+- dac_v1alpha1_dataagentcontainer.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

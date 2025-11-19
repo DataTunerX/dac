@@ -1,0 +1,208 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: datadescriptors.dac.dac.io
+spec:
+  group: dac.dac.io
+  names:
+    kind: DataDescriptor
+    listKind: DataDescriptorList
+    plural: datadescriptors
+    singular: datadescriptor
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DataDescriptor is the Schema for the datadescriptors API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DataDescriptorSpec defines the desired state of DataDescriptor.
+            properties:
+              descriptorType:
+                description: |-
+                  INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
+                  Important: Run "make" to regenerate code after modifying this file
+                type: string
+              sources:
+                items:
+                  description: DataSource defines a data source configuration
+                  properties:
+                    classification:
+                      items:
+                        description: Classification defines how data is categorized
+                        properties:
+                          category:
+                            type: string
+                          domain:
+                            type: string
+                          subcategory:
+                            type: string
+                          tags:
+                            items:
+                              additionalProperties:
+                                items:
+                                  type: string
+                                type: array
+                              type: object
+                            type: array
+                        required:
+                        - category
+                        - domain
+                        - subcategory
+                        type: object
+                      type: array
+                    extract:
+                      description: ExtractConfig defines extraction configuration
+                        for data sources
+                      properties:
+                        files:
+                          items:
+                            type: string
+                          type: array
+                        querys:
+                          items:
+                            type: string
+                          type: array
+                        tables:
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                    metadata:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    name:
+                      type: string
+                    processing:
+                      description: ProcessingConfig defines data processing rules
+                      properties:
+                        cleaning:
+                          items:
+                            description: CleaningRule defines a single data cleaning
+                              rule
+                            properties:
+                              params:
+                                additionalProperties:
+                                  type: string
+                                type: object
+                              rule:
+                                type: string
+                            required:
+                            - rule
+                            type: object
+                          type: array
+                      type: object
+                    prompts:
+                      description: Prompts defines fewshots and background_knowledge
+                        for data sources
+                      properties:
+                        prompts:
+                          description: LocalObjectReference contains enough information
+                            to let you locate the referenced object inside the same
+                            namespace.
+                          properties:
+                            name:
+                              type: string
+                          required:
+                          - name
+                          type: object
+                      type: object
+                    type:
+                      description: DataSourceType defines the type of data source
+                      type: string
+                  required:
+                  - name
+                  - type
+                  type: object
+                type: array
+            type: object
+          status:
+            description: DataDescriptorStatus defines the observed state of DataDescriptor.
+            properties:
+              conditions:
+                items:
+                  description: Condition saves the state information of the cr
+                  properties:
+                    lastUpdateTime:
+                      description: The last time this condition was updated.
+                      type: string
+                    message:
+                      description: A human readable message indicating details about
+                        the transition.
+                      type: string
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Status of cr condition.
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              consumedBy:
+                items:
+                  description: LocalObjectReference contains enough information to
+                    let you locate the referenced object inside the same namespace.
+                  properties:
+                    name:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              overallPhase:
+                type: string
+              sourceStatuses:
+                description: |-
+                  INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+                  Important: Run "make" to regenerate code after modifying this file
+                items:
+                  description: SourceStatus defines the status of a data source
+                  properties:
+                    lastSyncTime:
+                      format: date-time
+                      type: string
+                    name:
+                      type: string
+                    phase:
+                      type: string
+                    records:
+                      format: int64
+                      type: integer
+                    taskID:
+                      type: string
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

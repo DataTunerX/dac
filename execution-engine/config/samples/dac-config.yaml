@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dac-configuration
+  namespace: dac
+data:
+  observation-base-url: "http://10.17.0.43:3000"
+  observation-secret-key: "sk-lf-a8cd7ec4-d08c-4f2b-a174-d458073d6d73"
+  observation-public-key: "pk-lf-ebed2fcd-31df-4c35-ba33-d6bf0ab399e5"
+  redis-host: "redis-server.dac.svc.cluster.local"
+  redis-port: "6379"
+  redis-password: "123"
+  orchestrator-agent-image: "registry.cn-shanghai.aliyuncs.com/jamesxiong/orchestrator-agent:v0.2.0-amd64"
+  expert-agent-image: "registry.cn-shanghai.aliyuncs.com/jamesxiong/expert-agent:v0.2.0-amd64"
+  data-services-url: "http://data-services.dac.svc.cluster.local:8000"
+  expert-agent-registry: "http://expert-registry.dac.svc.cluster.local:8000"

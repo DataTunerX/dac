@@ -1,0 +1,80 @@
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: dac-00
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  dataPolicy:
+    sourceNameSelector: ["dd00-mysql"]
+  agentCard:
+    name: "FinancialDataAnalysisAgent"
+    description: "我是一个金融数据分析的专业智能体，可以去数据库查询需要的数据来回答用户提出来的相关的问题。"
+    skills:
+      - id: "Financial"
+        name: "Financial"
+        description: "answer user Financial question"
+        tags:
+          - "贷款总额"
+          - "存款总额"
+        examples:
+          - "2024年农商银行的存款总额"
+  expertAgentMaxSteps: "3"
+  model:
+    plannerLLM: "llm-deepseek-v3"
+    expertLLM: "llm-qwen3-coder-480b"
+    embedding: "embedding-config"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: dac-01
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  dataPolicy:
+    sourceNameSelector: ["dd01-mysql"]
+  agentCard:
+    name: "ProductOrderAgent"
+    description: "我是一个商品订单管理系统的专业智能体，可以去数据库查询需要的数据来回答用户提出来的相关的问题。"
+    skills:
+      - id: "OrderManager"
+        name: "OrderManager"
+        description: "订单管理专家，负责处理订单查询、状态跟踪、订单统计等业务"
+        tags:
+          - "订单查询"
+          - "订单统计"
+          - "订单状态"
+          - "销售分析"
+        examples:
+          - "查询今天的所有订单"
+          - "统计本月的销售额"
+          - "查看订单号为12345的详细信息"
+          - "列出所有待发货的订单"
+          - "计算每个产品的销售排名"
+          
+      - id: "ProductManager"
+        name: "ProductManager"
+        description: "商品管理专家，负责商品信息查询、库存管理、商品分类等业务"
+        tags:
+          - "商品查询"
+          - "库存管理"
+          - "商品分类"
+          - "价格分析"
+        examples:
+          - "查询所有商品列表"
+          - "查看商品A的库存数量"
+          - "按分类统计商品数量"
+          - "找出价格最高的10个商品"
+          - "查询缺货的商品列表"
+  expertAgentMaxSteps: "3"
+  model:
+    plannerLLM: "llm-deepseek-v3"
+    expertLLM: "llm-qwen3-coder-480b"
+    embedding: "embedding-config"
