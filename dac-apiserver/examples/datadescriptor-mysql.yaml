@@ -1,0 +1,38 @@
+# DataDescriptor Example - MySQL Data Source
+kind: DataDescriptor
+spec:
+  # Resource name (required)
+  name: my-mysql-descriptor
+  
+  # Kubernetes namespace (required)
+  namespace: default
+  
+  # Optional labels
+  labels:
+    app: dac-apiserver
+    env: production
+  
+  # Descriptor type (required)
+  # Supported types: mysql, postgres, minio, fileserver
+  descriptorType: mysql
+  
+  # Data sources list (required, at least one)
+  sources:
+    - type: mysql
+      name: production-db
+      
+      # Connection metadata
+      metadata:
+        host: mysql.example.com
+        port: "3306"
+        database: myapp_db
+        username: dbuser
+        password: dbpass123
+      
+      # Extract configuration (optional)
+      extract:
+        # Specify tables to extract, leave empty for all tables
+        tables:
+          - users
+          - orders
+          - products

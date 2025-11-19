@@ -1,0 +1,70 @@
+# 忽略不需要打包到 Docker 镜像的文件
+
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+*.test
+*.out
+coverage.txt
+coverage.html
+testdata/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+*.md
+!README.md
+# docs/ - 注释掉，Swagger 文档需要打包
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+.cache/
+
+# Local configs
+configs/*-local.yaml
+configs/local.yaml
+*.local.yaml
+
+# Deploy files (不需要打包到镜像)
+deploy/
+k8s/
+
+# Development tools
+Makefile
+.golangci.yml
+
+# Generated files (等待实际代码)
+pkg/generated/clientset/
+pkg/generated/informers/
+pkg/generated/listers/
+
+# Keep necessary config
+!configs/config-prod.yaml

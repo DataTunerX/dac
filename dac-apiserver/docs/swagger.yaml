@@ -1,0 +1,1231 @@
+basePath: /api/v1
+definitions:
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentCard:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      skills:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentSkill'
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentSkill:
+    properties:
+      description:
+        type: string
+      examples:
+        items:
+          type: string
+        type: array
+      id:
+        type: string
+      name:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.Classification:
+    properties:
+      category:
+        type: string
+      domain:
+        type: string
+      subcategory:
+        type: string
+      tags:
+        items:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.CleaningRule:
+    properties:
+      params:
+        additionalProperties:
+          type: string
+        type: object
+      rule:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.DataPolicy:
+    properties:
+      sourceNameSelector:
+        items:
+          type: string
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.DataSource:
+    properties:
+      classification:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.Classification'
+        type: array
+      extract:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.ExtractConfig'
+      metadata:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        type: string
+      processing:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.ProcessingConfig'
+      prompts:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.PromptsConfig'
+      type:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.ExtractConfig:
+    properties:
+      querys:
+        items:
+          type: string
+        type: array
+      tables:
+        items:
+          type: string
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.ModelSpec:
+    properties:
+      embedding:
+        type: string
+      expertLLM:
+        type: string
+      plannerLLM:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.ProcessingConfig:
+    properties:
+      cleaning:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.CleaningRule'
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_domain_entity.PromptsConfig:
+    properties:
+      configMapName:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ActiveDataDescriptorResponse:
+    properties:
+      last_synced:
+        type: string
+      name:
+        type: string
+      namespace:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentCardResponse:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      skills:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentSkillResponse'
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentContainerResponse:
+    properties:
+      active_data_descriptors:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ActiveDataDescriptorResponse'
+        type: array
+      agent_card:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentCardResponse'
+      conditions:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ConditionResponse'
+        type: array
+      created_at:
+        type: string
+      data_policy:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataPolicyResponse'
+      endpoint:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.EndpointResponse'
+      expert_agent_max_steps:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      model:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ModelSpecResponse'
+      name:
+        type: string
+      namespace:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentSkillResponse:
+    properties:
+      description:
+        type: string
+      examples:
+        items:
+          type: string
+        type: array
+      id:
+        type: string
+      name:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionChoice:
+    properties:
+      finish_reason:
+        type: string
+      index:
+        type: integer
+      message:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionMessage'
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionMessage:
+    properties:
+      content:
+        description: 消息内容
+        type: string
+      role:
+        description: user, assistant, system
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionRequest:
+    properties:
+      messages:
+        description: 消息列表
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionMessage'
+        type: array
+      model:
+        description: 模型
+        type: string
+      run_id:
+        description: 扩展：运行ID
+        type: string
+      stream:
+        description: 是否流式
+        type: boolean
+      user_id:
+        description: 扩展：用户ID
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionResponse:
+    properties:
+      choices:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionChoice'
+        type: array
+      created:
+        type: integer
+      id:
+        type: string
+      model:
+        type: string
+      object:
+        description: '"chat.completion"'
+        type: string
+      run_id:
+        type: string
+      usage:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionUsage'
+      user_id:
+        description: 扩展字段
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionUsage:
+    properties:
+      completion_tokens:
+        type: integer
+      prompt_tokens:
+        type: integer
+      total_tokens:
+        type: integer
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ClassificationResponse:
+    properties:
+      category:
+        type: string
+      domain:
+        type: string
+      subcategory:
+        type: string
+      tags:
+        items:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.CleaningRuleResponse:
+    properties:
+      params:
+        additionalProperties:
+          type: string
+        type: object
+      rule:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ConditionResponse:
+    properties:
+      last_transition_time:
+        type: string
+      message:
+        type: string
+      reason:
+        type: string
+      status:
+        type: string
+      type:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.CreateAgentContainerRequest:
+    properties:
+      agentCard:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentCard'
+      dataPolicy:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.DataPolicy'
+      expertAgentMaxSteps:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      model:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.ModelSpec'
+      name:
+        type: string
+      namespace:
+        type: string
+    required:
+    - agentCard
+    - dataPolicy
+    - model
+    - name
+    - namespace
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.CreateDataDescriptorRequest:
+    properties:
+      descriptorType:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        type: string
+      namespace:
+        type: string
+      sources:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.DataSource'
+        type: array
+    required:
+    - descriptorType
+    - name
+    - namespace
+    - sources
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.DataDescriptorResponse:
+    properties:
+      conditions:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ConditionResponse'
+        type: array
+      consumed_by:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ObjectReferenceResponse'
+        type: array
+      created_at:
+        type: string
+      descriptor_type:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        type: string
+      namespace:
+        type: string
+      overall_phase:
+        type: string
+      source_statuses:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.SourceStatusResponse'
+        type: array
+      sources:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataSourceResponse'
+        type: array
+      updated_at:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.DataPolicyResponse:
+    properties:
+      source_name_selector:
+        items:
+          type: string
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.DataSourceResponse:
+    properties:
+      classification:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ClassificationResponse'
+        type: array
+      extract:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ExtractConfigResponse'
+      metadata:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        type: string
+      processing:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ProcessingConfigResponse'
+      prompts:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.PromptsConfigResponse'
+      type:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.EndpointResponse:
+    properties:
+      address:
+        type: string
+      port:
+        type: integer
+      protocol:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ExtractConfigResponse:
+    properties:
+      querys:
+        items:
+          type: string
+        type: array
+      tables:
+        items:
+          type: string
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.LoginRequest:
+    properties:
+      password:
+        type: string
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.LoginResponse:
+    properties:
+      expire:
+        type: string
+      token:
+        type: string
+      user:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse'
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ModelSpecResponse:
+    properties:
+      embedding:
+        type: string
+      expert_llm:
+        type: string
+      planner_llm:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ObjectReferenceResponse:
+    properties:
+      name:
+        type: string
+      namespace:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.ProcessingConfigResponse:
+    properties:
+      cleaning:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.CleaningRuleResponse'
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.PromptsConfigResponse:
+    properties:
+      config_map_name:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.RegisterRequest:
+    properties:
+      password:
+        description: bcrypt 限制72字节
+        maxLength: 72
+        minLength: 6
+        type: string
+      username:
+        maxLength: 50
+        minLength: 3
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.SourceStatusResponse:
+    properties:
+      last_sync_time:
+        type: string
+      name:
+        type: string
+      phase:
+        type: string
+      records:
+        type: integer
+      task_id:
+        type: string
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.UpdateAgentContainerRequest:
+    properties:
+      agentCard:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentCard'
+      dataPolicy:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.DataPolicy'
+      expertAgentMaxSteps:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      model:
+        $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.ModelSpec'
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.UpdateDataDescriptorRequest:
+    properties:
+      descriptorType:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      sources:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.DataSource'
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.UserListResponse:
+    properties:
+      page:
+        type: integer
+      page_size:
+        type: integer
+      total:
+        type: integer
+      total_pages:
+        type: integer
+      users:
+        items:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse'
+        type: array
+    type: object
+  github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      last_login_at:
+        type: string
+      username:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@example.com
+    name: API Support
+  description: AI Agent 管理平台 API 服务，提供用户管理、聊天对话和 Kubernetes 资源编排功能
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: DAC API Server
+  version: 0.1.0
+paths:
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: 用户名密码登录，返回 JWT Token
+      parameters:
+      - description: 登录信息
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 登录成功
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.LoginResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: 用户名或密码错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 用户登录
+      tags:
+      - 认证
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      description: 创建新用户账号
+      parameters:
+      - description: 注册信息
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 注册成功
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: 用户名已存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 用户注册
+      tags:
+      - 认证
+  /chat/completions:
+    post:
+      consumes:
+      - application/json
+      description: OpenAI 兼容的聊天接口，支持流式和非流式响应
+      parameters:
+      - description: 聊天请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 聊天响应
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 聊天对话接口
+      tags:
+      - 聊天
+  /health/live:
+    get:
+      description: 检查服务是否存活
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 存活检查
+      tags:
+      - health
+  /health/ready:
+    get:
+      description: 检查服务是否就绪（包括依赖项）
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 就绪检查
+      tags:
+      - health
+  /namespaces/{namespace}/agents:
+    get:
+      consumes:
+      - application/json
+      description: 获取指定命名空间下的所有 Agent
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Agent 列表
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Agent 列表
+      tags:
+      - Agent管理
+    post:
+      consumes:
+      - application/json
+      description: 在指定命名空间创建新的 Agent 容器资源
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      - description: Agent 配置
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.CreateAgentContainerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 创建成功
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentContainerResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建 Agent
+      tags:
+      - Agent管理
+  /namespaces/{namespace}/agents/{name}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定的 Agent 资源
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      - description: Agent 名称
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Agent 不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 删除 Agent
+      tags:
+      - Agent管理
+    get:
+      consumes:
+      - application/json
+      description: 根据名称获取指定 Agent 的详细信息
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      - description: Agent 名称
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Agent 详情
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentContainerResponse'
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Agent 不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取 Agent 详情
+      tags:
+      - Agent管理
+    put:
+      consumes:
+      - application/json
+      description: 更新指定 Agent 的配置
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      - description: Agent 名称
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: 更新内容
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UpdateAgentContainerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentContainerResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Agent 不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 更新 Agent
+      tags:
+      - Agent管理
+  /namespaces/{namespace}/descriptors:
+    get:
+      consumes:
+      - application/json
+      description: 获取指定命名空间下的所有数据描述符
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 数据描述符列表
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 数据描述符列表
+      tags:
+      - 数据描述符
+    post:
+      consumes:
+      - application/json
+      description: 在指定命名空间创建新的数据描述符
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      - description: 数据描述符配置
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.CreateDataDescriptorRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 创建成功
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataDescriptorResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 创建数据描述符
+      tags:
+      - 数据描述符
+  /namespaces/{namespace}/descriptors/{name}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定的数据描述符
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      - description: 数据描述符名称
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: 数据描述符不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 删除数据描述符
+      tags:
+      - 数据描述符
+    get:
+      consumes:
+      - application/json
+      description: 根据名称获取指定数据描述符的详细信息
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      - description: 数据描述符名称
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 数据描述符详情
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataDescriptorResponse'
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: 数据描述符不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取数据描述符详情
+      tags:
+      - 数据描述符
+    put:
+      consumes:
+      - application/json
+      description: 更新指定数据描述符的配置
+      parameters:
+      - description: Kubernetes 命名空间
+        in: path
+        name: namespace
+        required: true
+        type: string
+      - description: 数据描述符名称
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: 更新内容
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UpdateDataDescriptorRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataDescriptorResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: 数据描述符不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 更新数据描述符
+      tags:
+      - 数据描述符
+  /ping:
+    get:
+      description: 检查服务是否运行
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Ping 健康检查
+      tags:
+      - health
+  /users:
+    get:
+      consumes:
+      - application/json
+      description: 分页查询用户列表（需要认证）
+      parameters:
+      - default: 1
+        description: 页码
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: 每页数量
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 用户列表
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserListResponse'
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 用户列表
+      tags:
+      - 用户管理
+  /users/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: 软删除指定用户（标记为已删除，不可恢复）
+      parameters:
+      - description: 用户ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: 用户不存在
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 删除用户
+      tags:
+      - 用户管理
+  /users/me:
+    get:
+      consumes:
+      - application/json
+      description: 获取当前登录用户的详细信息
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 用户信息
+          schema:
+            $ref: '#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse'
+        "401":
+          description: 未授权
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 获取当前用户
+      tags:
+      - 用户管理
+securityDefinitions:
+  BearerAuth:
+    description: JWT Token，格式：Bearer {token}
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

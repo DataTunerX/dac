@@ -1,0 +1,1884 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "AI Agent 管理平台 API 服务，提供用户管理、聊天对话和 Kubernetes 资源编排功能",
+        "title": "DAC API Server",
+        "termsOfService": "http://swagger.io/terms/",
+        "contact": {
+            "name": "API Support",
+            "email": "support@example.com"
+        },
+        "license": {
+            "name": "Apache 2.0",
+            "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
+        },
+        "version": "0.1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/api/v1",
+    "paths": {
+        "/auth/login": {
+            "post": {
+                "description": "用户名密码登录，返回 JWT Token",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证"
+                ],
+                "summary": "用户登录",
+                "parameters": [
+                    {
+                        "description": "登录信息",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.LoginRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "登录成功",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.LoginResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "用户名或密码错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/register": {
+            "post": {
+                "description": "创建新用户账号",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证"
+                ],
+                "summary": "用户注册",
+                "parameters": [
+                    {
+                        "description": "注册信息",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.RegisterRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "注册成功",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "用户名已存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/chat/completions": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "OpenAI 兼容的聊天接口，支持流式和非流式响应",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "聊天"
+                ],
+                "summary": "聊天对话接口",
+                "parameters": [
+                    {
+                        "description": "聊天请求",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "聊天响应",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/health/live": {
+            "get": {
+                "description": "检查服务是否存活",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "存活检查",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/health/ready": {
+            "get": {
+                "description": "检查服务是否就绪（包括依赖项）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "就绪检查",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/namespaces/{namespace}/agents": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "获取指定命名空间下的所有 Agent",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Agent管理"
+                ],
+                "summary": "Agent 列表",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Agent 列表",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "在指定命名空间创建新的 Agent 容器资源",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Agent管理"
+                ],
+                "summary": "创建 Agent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Agent 配置",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.CreateAgentContainerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "创建成功",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentContainerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/namespaces/{namespace}/agents/{name}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据名称获取指定 Agent 的详细信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Agent管理"
+                ],
+                "summary": "获取 Agent 详情",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Agent 名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Agent 详情",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentContainerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent 不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "更新指定 Agent 的配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Agent管理"
+                ],
+                "summary": "更新 Agent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Agent 名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新内容",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UpdateAgentContainerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新成功",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentContainerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent 不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "删除指定的 Agent 资源",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Agent管理"
+                ],
+                "summary": "删除 Agent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Agent 名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "删除成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent 不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/namespaces/{namespace}/descriptors": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "获取指定命名空间下的所有数据描述符",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "数据描述符"
+                ],
+                "summary": "数据描述符列表",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "数据描述符列表",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "在指定命名空间创建新的数据描述符",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "数据描述符"
+                ],
+                "summary": "创建数据描述符",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "数据描述符配置",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.CreateDataDescriptorRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "创建成功",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataDescriptorResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/namespaces/{namespace}/descriptors/{name}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据名称获取指定数据描述符的详细信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "数据描述符"
+                ],
+                "summary": "获取数据描述符详情",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "数据描述符名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "数据描述符详情",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataDescriptorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "数据描述符不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "更新指定数据描述符的配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "数据描述符"
+                ],
+                "summary": "更新数据描述符",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "数据描述符名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新内容",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UpdateDataDescriptorRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新成功",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataDescriptorResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "数据描述符不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "删除指定的数据描述符",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "数据描述符"
+                ],
+                "summary": "删除数据描述符",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Kubernetes 命名空间",
+                        "name": "namespace",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "数据描述符名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "删除成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "数据描述符不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/ping": {
+            "get": {
+                "description": "检查服务是否运行",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Ping 健康检查",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/users": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "分页查询用户列表（需要认证）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户管理"
+                ],
+                "summary": "用户列表",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "用户列表",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserListResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/users/me": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "获取当前登录用户的详细信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户管理"
+                ],
+                "summary": "获取当前用户",
+                "responses": {
+                    "200": {
+                        "description": "用户信息",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/users/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "软删除指定用户（标记为已删除，不可恢复）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户管理"
+                ],
+                "summary": "删除用户",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "用户ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "删除成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "未授权",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "用户不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentCard": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "skills": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentSkill"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentSkill": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "examples": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.Classification": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "subcategory": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.CleaningRule": {
+            "type": "object",
+            "properties": {
+                "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "rule": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.DataPolicy": {
+            "type": "object",
+            "properties": {
+                "sourceNameSelector": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.DataSource": {
+            "type": "object",
+            "properties": {
+                "classification": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.Classification"
+                    }
+                },
+                "extract": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.ExtractConfig"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "processing": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.ProcessingConfig"
+                },
+                "prompts": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.PromptsConfig"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.ExtractConfig": {
+            "type": "object",
+            "properties": {
+                "querys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tables": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.ModelSpec": {
+            "type": "object",
+            "properties": {
+                "embedding": {
+                    "type": "string"
+                },
+                "expertLLM": {
+                    "type": "string"
+                },
+                "plannerLLM": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.ProcessingConfig": {
+            "type": "object",
+            "properties": {
+                "cleaning": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.CleaningRule"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_domain_entity.PromptsConfig": {
+            "type": "object",
+            "properties": {
+                "configMapName": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ActiveDataDescriptorResponse": {
+            "type": "object",
+            "properties": {
+                "last_synced": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentCardResponse": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "skills": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentSkillResponse"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentContainerResponse": {
+            "type": "object",
+            "properties": {
+                "active_data_descriptors": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ActiveDataDescriptorResponse"
+                    }
+                },
+                "agent_card": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentCardResponse"
+                },
+                "conditions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ConditionResponse"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "data_policy": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataPolicyResponse"
+                },
+                "endpoint": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.EndpointResponse"
+                },
+                "expert_agent_max_steps": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "model": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ModelSpecResponse"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.AgentSkillResponse": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "examples": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionChoice": {
+            "type": "object",
+            "properties": {
+                "finish_reason": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "message": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionMessage"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionMessage": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "description": "消息内容",
+                    "type": "string"
+                },
+                "role": {
+                    "description": "user, assistant, system",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionRequest": {
+            "type": "object",
+            "properties": {
+                "messages": {
+                    "description": "消息列表",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionMessage"
+                    }
+                },
+                "model": {
+                    "description": "模型",
+                    "type": "string"
+                },
+                "run_id": {
+                    "description": "扩展：运行ID",
+                    "type": "string"
+                },
+                "stream": {
+                    "description": "是否流式",
+                    "type": "boolean"
+                },
+                "user_id": {
+                    "description": "扩展：用户ID",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionResponse": {
+            "type": "object",
+            "properties": {
+                "choices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionChoice"
+                    }
+                },
+                "created": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "object": {
+                    "description": "\"chat.completion\"",
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "usage": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionUsage"
+                },
+                "user_id": {
+                    "description": "扩展字段",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ChatCompletionUsage": {
+            "type": "object",
+            "properties": {
+                "completion_tokens": {
+                    "type": "integer"
+                },
+                "prompt_tokens": {
+                    "type": "integer"
+                },
+                "total_tokens": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ClassificationResponse": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "subcategory": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.CleaningRuleResponse": {
+            "type": "object",
+            "properties": {
+                "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "rule": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ConditionResponse": {
+            "type": "object",
+            "properties": {
+                "last_transition_time": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.CreateAgentContainerRequest": {
+            "type": "object",
+            "required": [
+                "agentCard",
+                "dataPolicy",
+                "model",
+                "name",
+                "namespace"
+            ],
+            "properties": {
+                "agentCard": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentCard"
+                },
+                "dataPolicy": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.DataPolicy"
+                },
+                "expertAgentMaxSteps": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "model": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.ModelSpec"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.CreateDataDescriptorRequest": {
+            "type": "object",
+            "required": [
+                "descriptorType",
+                "name",
+                "namespace",
+                "sources"
+            ],
+            "properties": {
+                "descriptorType": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.DataSource"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.DataDescriptorResponse": {
+            "type": "object",
+            "properties": {
+                "conditions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ConditionResponse"
+                    }
+                },
+                "consumed_by": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ObjectReferenceResponse"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "descriptor_type": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "overall_phase": {
+                    "type": "string"
+                },
+                "source_statuses": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.SourceStatusResponse"
+                    }
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.DataSourceResponse"
+                    }
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.DataPolicyResponse": {
+            "type": "object",
+            "properties": {
+                "source_name_selector": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.DataSourceResponse": {
+            "type": "object",
+            "properties": {
+                "classification": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ClassificationResponse"
+                    }
+                },
+                "extract": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ExtractConfigResponse"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "processing": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.ProcessingConfigResponse"
+                },
+                "prompts": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.PromptsConfigResponse"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.EndpointResponse": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "protocol": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ExtractConfigResponse": {
+            "type": "object",
+            "properties": {
+                "querys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tables": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.LoginRequest": {
+            "type": "object",
+            "required": [
+                "password",
+                "username"
+            ],
+            "properties": {
+                "password": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.LoginResponse": {
+            "type": "object",
+            "properties": {
+                "expire": {
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                },
+                "user": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ModelSpecResponse": {
+            "type": "object",
+            "properties": {
+                "embedding": {
+                    "type": "string"
+                },
+                "expert_llm": {
+                    "type": "string"
+                },
+                "planner_llm": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ObjectReferenceResponse": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.ProcessingConfigResponse": {
+            "type": "object",
+            "properties": {
+                "cleaning": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.CleaningRuleResponse"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.PromptsConfigResponse": {
+            "type": "object",
+            "properties": {
+                "config_map_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.RegisterRequest": {
+            "type": "object",
+            "required": [
+                "password",
+                "username"
+            ],
+            "properties": {
+                "password": {
+                    "description": "bcrypt 限制72字节",
+                    "type": "string",
+                    "maxLength": 72,
+                    "minLength": 6
+                },
+                "username": {
+                    "type": "string",
+                    "maxLength": 50,
+                    "minLength": 3
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.SourceStatusResponse": {
+            "type": "object",
+            "properties": {
+                "last_sync_time": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "records": {
+                    "type": "integer"
+                },
+                "task_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.UpdateAgentContainerRequest": {
+            "type": "object",
+            "properties": {
+                "agentCard": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.AgentCard"
+                },
+                "dataPolicy": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.DataPolicy"
+                },
+                "expertAgentMaxSteps": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "model": {
+                    "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.ModelSpec"
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.UpdateDataDescriptorRequest": {
+            "type": "object",
+            "properties": {
+                "descriptorType": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_domain_entity.DataSource"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.UserListResponse": {
+            "type": "object",
+            "properties": {
+                "page": {
+                    "type": "integer"
+                },
+                "page_size": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "total_pages": {
+                    "type": "integer"
+                },
+                "users": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse"
+                    }
+                }
+            }
+        },
+        "github_com_lvyanru_dac-apiserver_internal_handler_dto.UserResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_login_at": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "JWT Token，格式：Bearer {token}",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}

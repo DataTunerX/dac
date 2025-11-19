@@ -1,0 +1,68 @@
+# ServiceAccount for DAC API Server
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dac-apiserver
+  namespace: dac
+---
+# ClusterRole: 定义权限
+# 使用 ClusterRole 跨 namespace 操作
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dac-apiserver-role
+rules:
+  # DataAgentContainer 资源权限
+  - apiGroups: ["dac.dac.io"]
+    resources: ["dataagentcontainers"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  
+  # DataAgentContainer status 子资源权限
+  - apiGroups: ["dac.dac.io"]
+    resources: ["dataagentcontainers/status"]
+    verbs:
+      - get
+      - update
+      - patch
+  
+  # DataDescriptor 资源权限
+  - apiGroups: ["dac.dac.io"]
+    resources: ["datadescriptors"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  
+  # DataDescriptor status 子资源权限
+  - apiGroups: ["dac.dac.io"]
+    resources: ["datadescriptors/status"]
+    verbs:
+      - get
+      - update
+      - patch
+---
+# ClusterRoleBinding: 将权限绑定到 ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dac-apiserver-binding
+subjects:
+  - kind: ServiceAccount
+    name: dac-apiserver
+    namespace: dac  # ServiceAccount 所在的 namespace
+roleRef:
+  kind: ClusterRole
+  name: dac-apiserver-role
+  apiGroup: rbac.authorization.k8s.io
+

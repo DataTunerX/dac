@@ -1,0 +1,44 @@
+# 本地开发配置
+server:
+  host: ""
+  port: 8080
+  mode: "debug"
+  read_timeout: 10s
+  write_timeout: 10s
+  max_request_body_size: 10
+
+log:
+  level: "debug"
+  format: "json"
+  output: "stdout"
+  file_path: ""
+  add_source: true
+
+observability:
+  enable_metrics: false
+  metrics_port: 9090
+  enable_tracing: false
+  tracing_endpoint: ""
+
+# JWT 配置
+jwt:
+  secret: "dac-jwt-secret-key-for-development-please-change-in-production"
+
+# Routing Agent 配置
+routing_agent:
+  base_url: "http://10.17.0.41:30100"
+  timeout: 30s
+  session_timeout: 30m
+
+# 数据库配置
+database:
+  driver: "mysql"
+  host: "127.0.0.1"
+  port: 3306
+  user: "dac_user"
+  password: "dac_pass"
+  database: "dac_db"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 5m
+

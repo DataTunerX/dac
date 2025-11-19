@@ -1,0 +1,62 @@
+# DataAgentContainer Example
+kind: DataAgentContainer
+spec:
+  # Resource name (required)
+  name: my-data-agent
+  
+  # Kubernetes namespace (required)
+  namespace: default
+  
+  # Optional labels
+  labels:
+    app: dac-apiserver
+    team: data-science
+    env: production
+  
+  # Data policy (required)
+  # Specifies which DataDescriptors this agent can access
+  dataPolicy:
+    sourceNameSelector:
+      - my-mysql-descriptor
+      - my-postgres-descriptor
+  
+  # Agent card information (optional, uses defaults if not specified)
+  agentCard:
+    name: my-data-agent
+    description: "Intelligent data analysis agent supporting MySQL and PostgreSQL data sources"
+    
+    # Optional skills list
+    skills:
+      - id: sql-query
+        name: SQL Query
+        description: Execute complex SQL queries and data analysis
+        tags:
+          - database
+          - analytics
+        examples:
+          - "Query user growth trends for the last 30 days"
+          - "Analyze geographic distribution of order data"
+      
+      - id: data-insight
+        name: Data Insights
+        description: Extract valuable business insights from data
+        tags:
+          - analytics
+          - reporting
+        examples:
+          - "Identify high-value customer segments"
+          - "Discover sales trends and patterns"
+  
+  # Model configuration (optional, uses defaults if not specified)
+  model:
+    # LLM model selection
+    # Recommended: qwen-max, qwen-plus, qwen-turbo
+    expertLLM: qwen-max
+    plannerLLM: qwen-max
+    
+    # Embedding model selection
+    # Recommended: text-embedding-v3, text-embedding-v2
+    embedding: text-embedding-v3
+  
+  # Expert Agent maximum execution steps (optional, default is 5)
+  expertAgentMaxSteps: "5"
