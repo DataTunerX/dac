@@ -46,7 +46,8 @@ class HistoryServiceTester:
             user_id=f"USER{self.fake.random_number(digits=6)}",
             agent_id=f"AGENT{self.fake.random_number(digits=4)}",
             run_id=f"RUN{self.fake.random_number(digits=8)}",
-            conversation=self.generate_conversation()
+            conversation=self.generate_conversation(),
+            think=None
         )
     
     async def test_initialize(self):

@@ -3,7 +3,7 @@
 
 # 1.1 Only userid :user1
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories" \
+curl -X POST "http://192.168.3.7:22000/memories" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user1",
@@ -64,7 +64,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories" \
 
 # Add two memories for the same user, convenient for testing, but the memory content is different.
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories" \
+curl -X POST "http://192.168.3.7:22000/memories" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user1",
@@ -88,7 +88,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories" \
 
 # 1.2 Only agentid: agent1:
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories" \
+curl -X POST "http://192.168.3.7:22000/memories" \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [
@@ -113,7 +113,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories" \
 
 # agent1 No facts: The messages contain no specific facts, resulting in no memory being created even if the request is sent.
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories" \
+curl -X POST "http://192.168.3.238:22000/memories" \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [
@@ -138,7 +138,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories" \
 
 # 1.3 Only runid: run1
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories" \
+curl -X POST "http://192.168.3.238:22000/memories" \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [
@@ -162,7 +162,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories" \
 
 # 1.4 Contains userid, agentid, and runid simultaneously
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories" \
+curl -X POST "http://192.168.3.238:22000/memories" \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [
@@ -189,7 +189,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories" \
 
 # 1.5 Error will occur if none of userid, agentid, or runid are set
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories" \
+curl -X POST "http://192.168.3.238:22000/memories" \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [
@@ -218,7 +218,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories" \
 
 # 2. Get Single Memory
 
-curl -s -X GET "http://192.168.xxx.xxx:22000/memories/c9dd1492-4832-4f2a-aef4-682ed09d0ee6" | jq .
+curl -s -X GET "http://192.168.3.238:22000/memories/c9dd1492-4832-4f2a-aef4-682ed09d0ee6" | jq .
 
 # Output:
 
@@ -244,7 +244,7 @@ curl -s -X GET "http://192.168.xxx.xxx:22000/memories/c9dd1492-4832-4f2a-aef4-68
 
 # 3.1. Get all memories - will error if none of userid, agentid, or runid are set
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
+curl -X POST "http://192.168.3.7:22000/memories/get_all" \
   -H "Content-Type: application/json" \
   -d '{}' | jq .
 
@@ -255,7 +255,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
 
 # 3.2 Get memories by user ID
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
+curl -X POST "http://192.168.3.7:22000/memories/get_all" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user1"
@@ -287,7 +287,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
 
 # 3.3 Get memories by agent_id
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
+curl -X POST "http://192.168.3.238:22000/memories/get_all" \
   -H "Content-Type: application/json" \
   -d '{
     "agent_id": "agent1"
@@ -296,7 +296,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
 
 # 3.4 Get memories by run_id
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
+curl -X POST "http://192.168.3.238:22000/memories/get_all" \
   -H "Content-Type: application/json" \
   -d '{
     "run_id": "run1"
@@ -305,7 +305,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
 
 # 3.5 Query with combined conditions
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
+curl -X POST "http://192.168.3.238:22000/memories/get_all" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user1",
@@ -318,7 +318,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/get_all" \
 
 # 4.1 Basic keyword search - will error if none of userid, agentid, or runid are set
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
+curl -X POST "http://192.168.3.7:22000/memories/search" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "pasta"
@@ -331,7 +331,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
 
 # 4.2 Search by user ID
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
+curl -X POST "http://192.168.3.238:22000/memories/search" \
      -H "Content-Type: application/json" \
      -d '{
        "query": "pasta",
@@ -380,7 +380,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
 
 # 4.3 Search by agent_id
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
+curl -X POST "http://192.168.3.238:22000/memories/search" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "pasta",
@@ -390,7 +390,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
 
 # 4.4 Search by run_id
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
+curl -X POST "http://192.168.3.238:22000/memories/search" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "pasta",
@@ -400,7 +400,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
 
 # 4.5 Limit number of returned results
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
+curl -X POST "http://192.168.3.238:22000/memories/search" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user1",
@@ -411,7 +411,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
 
 # 4.6 Search with combined conditions
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
+curl -X POST "http://192.168.3.238:22000/memories/search" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "pasta",
@@ -421,7 +421,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
   }' | jq .
 
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
+curl -X POST "http://192.168.3.238:22000/memories/search" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "pasta",
@@ -464,7 +464,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
 
 # 4.7 Search using filters
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
+curl -X POST "http://192.168.3.238:22000/memories/search" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "pasta",
@@ -483,7 +483,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/search" \
 
 # 5. 获取记忆历史
 # 替换 {memory_id} 为实际的记忆 ID
-curl -X GET "http://192.168.xxx.xxx:22000/memories/37a54411-c606-4487-bb25-23492bddd145/history" | jq .
+curl -X GET "http://192.168.3.238:22000/memories/37a54411-c606-4487-bb25-23492bddd145/history" | jq .
 
 # 输出：
 
@@ -524,7 +524,7 @@ curl -X GET "http://192.168.xxx.xxx:22000/memories/37a54411-c606-4487-bb25-23492
 # 6. Update Single Memory
 # Replace {memory_id} with the actual memory ID
 
-curl -X PUT "http://192.168.xxx.xxx:22000/memories/37a54411-c606-4487-bb25-23492bddd145" \
+curl -X PUT "http://192.168.3.238:22000/memories/37a54411-c606-4487-bb25-23492bddd145" \
      -H "Content-Type: application/json" \
      -d '{
        "data": "I like to eat pizza, pasta, and bread"
@@ -544,7 +544,7 @@ curl -X PUT "http://192.168.xxx.xxx:22000/memories/37a54411-c606-4487-bb25-23492
 # 7. Delete Single Memory
 # Replace {memory_id} with the actual memory ID
 
-curl -X DELETE "http://192.168.xxx.xxx:22000/memories/37a54411-c606-4487-bb25-23492bddd145" | jq .
+curl -X DELETE "http://192.168.3.238:22000/memories/37a54411-c606-4487-bb25-23492bddd145" | jq .
 
 # Output:
 
@@ -561,7 +561,7 @@ curl -X DELETE "http://192.168.xxx.xxx:22000/memories/37a54411-c606-4487-bb25-23
 
 # 8.1 Delete all memories for a specific user
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
+curl -X POST "http://192.168.3.238:22000/memories/delete" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user1"
@@ -580,7 +580,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
 
 # 8.2 Delete all memories for a specific agent
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
+curl -X POST "http://192.168.3.238:22000/memories/delete" \
   -H "Content-Type: application/json" \
   -d '{
     "agent_id": "agent1"
@@ -589,7 +589,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
 
 # 8.3 Delete all memories for a specific run
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
+curl -X POST "http://192.168.3.238:22000/memories/delete" \
   -H "Content-Type: application/json" \
   -d '{
     "run_id": "run1"
@@ -598,7 +598,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
 
 # 8.4 Delete with combined conditions (user + agent)
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
+curl -X POST "http://192.168.3.238:22000/memories/delete" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user1",
@@ -608,7 +608,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
 
 # 8.5 Delete with combined conditions (user + run)
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
+curl -X POST "http://192.168.3.238:22000/memories/delete" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user1",
@@ -618,7 +618,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
 
 # 8.6 Delete with combined conditions (agent + run)
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
+curl -X POST "http://192.168.3.238:22000/memories/delete" \
   -H "Content-Type: application/json" \
   -d '{
     "agent_id": "agent1",
@@ -628,7 +628,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
 
 # 8.7 Delete with three combined conditions
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
+curl -X POST "http://192.168.3.238:22000/memories/delete" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user1",
@@ -639,7 +639,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
 
 # 8.8 Delete all memories (empty conditions)
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
+curl -X POST "http://192.168.3.238:22000/memories/delete" \
   -H "Content-Type: application/json" \
   -d '{}' | jq .
 
@@ -651,7 +651,7 @@ curl -X POST "http://192.168.xxx.xxx:22000/memories/delete" \
 
 # 9. Reset All Memories
 
-curl -X POST "http://192.168.xxx.xxx:22000/memories/reset" | jq .
+curl -X POST "http://192.168.3.238:22000/memories/reset" | jq .
 
 # Output:
 

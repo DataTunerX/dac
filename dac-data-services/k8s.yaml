@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: dac-data-services
+  name: dac-data-services
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dac-data-services
+  template:
+    metadata:
+      labels:
+        app: dac-data-services
+    spec:
+      containers:
+      - name: dac-data-services
+        env:
+        - name: DATA_SERVICES
+          value: "http://data-services.dac:8000"
+        - name: DATA_DESCRIPTOR
+          value: "dd01"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/dac-data-services:v0.4.0-amd64
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8000
+        resources:
+          limits:
+            cpu: 500m
+            memory: 1Gi
+          requests:
+            cpu: 200m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: dac-data-services
+  namespace: dac
+spec:
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  selector:
+    app: dac-data-services
+  type: NodePort

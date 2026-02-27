@@ -26,6 +26,8 @@ import (
 // DataPolicy defines how data sources should be selected
 type DataPolicy struct {
 	// Selector for data sources by name
+	DataSourceType     string   `json:"dataSourceType,omitempty"`
+	SemanticGroupID    string   `json:"semanticGroupID,omitempty"`
 	SourceNameSelector []string `json:"sourceNameSelector,omitempty"`
 }
 
@@ -45,19 +47,20 @@ type AgentSkill struct {
 	Examples    []string `json:"examples,omitempty"`
 }
 
-// ModelSpec defines the LLM and embedding models to use
+// ModelSpec defines the LLM models to use
 type ModelSpec struct {
 	PlannerLLM string `json:"plannerLLM"`
 	ExpertLLM  string `json:"expertLLM"`
-	Embedding  string `json:"embedding"`
 }
 
 // DataAgentContainerSpec defines the desired state of DataAgentContainer
 type DataAgentContainerSpec struct {
-	DataPolicy          DataPolicy `json:"dataPolicy"`
-	AgentCard           AgentCard  `json:"agentCard"`
-	Model               ModelSpec  `json:"model"`
-	ExpertAgentMaxSteps string     `json:"expertAgentMaxSteps"`
+	DataPolicy                DataPolicy `json:"dataPolicy"`
+	AgentCard                 AgentCard  `json:"agentCard"`
+	DACType                   string     `json:"dacType"`
+	Model                     ModelSpec  `json:"model"`
+	OrchestratorAgentMaxLoops string     `json:"orchestratorAgentMaxLoops"`
+	ExpertAgentMaxSteps       string     `json:"expertAgentMaxSteps"`
 }
 
 // ActiveDataDescriptor tracks which data descriptors are being used

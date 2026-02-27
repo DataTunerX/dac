@@ -40,6 +40,7 @@ WORKDIR /app
 
 # 从构建阶段复制二进制文件和默认配置（直接指定所有者）
 COPY --from=builder --chown=app:app /app/bin/dac-apiserver .
+COPY --from=builder --chown=app:app /app/configs ./configs
 
 # 切换到非 root 用户
 USER app

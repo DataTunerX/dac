@@ -28,21 +28,27 @@ spec:
           value: "ProductOrderAgent"
         - name: Agent_Description
           value: "I am a professional product order management system intelligent agent that can query databases for required data to answer user-related questions."
+        - name: DataSourceType
+          value: "SemanticDomain"
         - name: DD_NAMESPACE
           value: "dac"
         - name: DataServicesURL
           value: "http://data-services.dac.svc.cluster.local:8000"
+        - name: ROOT_RECONCILE_SUMMARY_EVERY
+          value: "20"
         - name: Data_Descriptor
           value: "dd01"
         - name: DescriptorTypes
           value: "dd01-mysql:structured-mysql:database:test1:host:mysql-server:password:123:port:3306:user:root"
+        - name: Enable_History
+          value: "enable"
         - name: LANGFUSE_SECRET_KEY
           value: "sk-xxx"
         - name: LANGFUSE_PUBLIC_KEY
           value: "pk-xxx"
         - name: LANGFUSE_BASE_URL
           value: "http://192.168.xxx.xxx:3000"
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/orchestrator-agent:v0.1.1-amd64
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/orchestrator-agent:v0.6.0-amd64
         imagePullPolicy: IfNotPresent
         ports:
           - containerPort: 10100

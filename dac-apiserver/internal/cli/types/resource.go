@@ -7,8 +7,8 @@ type AgentContainer struct {
 	Name                  string                 `json:"name"`
 	Namespace             string                 `json:"namespace"`
 	Labels                map[string]string      `json:"labels,omitempty"`
-	DataPolicy            DataPolicy             `json:"data_policy,omitempty"`             // From spec - what user configured
-	ActiveDataDescriptors []ActiveDataDescriptor `json:"active_data_descriptors,omitempty"` // From status - actual running state
+	DataPolicy            DataPolicy             `json:"dataPolicy,omitempty"`             // From spec - what user configured
+	ActiveDataDescriptors []ActiveDataDescriptor `json:"activeDataDescriptors,omitempty"` // From status - actual running state
 	Endpoint              *Endpoint              `json:"endpoint,omitempty"`
 	CreatedAt             time.Time              `json:"created_at"`
 }
@@ -25,10 +25,10 @@ type DataDescriptor struct {
 	Name           string            `json:"name"`
 	Namespace      string            `json:"namespace"`
 	Labels         map[string]string `json:"labels,omitempty"`
-	DescriptorType string            `json:"descriptor_type"`
+	DescriptorType string            `json:"descriptorType"`
 	Sources        []DataSource      `json:"sources,omitempty"`
-	SourceStatuses []SourceStatus    `json:"source_statuses,omitempty"`
-	OverallPhase   string            `json:"overall_phase"`
+	SourceStatuses []SourceStatus    `json:"sourceStatuses,omitempty"`
+	OverallPhase   string            `json:"overallPhase"`
 	CreatedAt      time.Time         `json:"created_at"`
 }
 
@@ -75,7 +75,8 @@ type Classification struct {
 
 // DataPolicy defines how data sources should be selected
 type DataPolicy struct {
-	SourceNameSelector []string `json:"source_name_selector"`
+	// SourceNameSelector is the list of DataDescriptor names the agent can access
+	SourceNameSelector []string `json:"sourceNameSelector" yaml:"sourceNameSelector"`
 }
 
 // AgentCard defines the agent's metadata and capabilities
@@ -105,7 +106,7 @@ type ModelSpec struct {
 type SourceStatus struct {
 	Name         string `json:"name"`
 	Phase        string `json:"phase"`
-	LastSyncTime string `json:"last_sync_time"`
+	LastSyncTime string `json:"lastSyncTime"`
 	Records      int64  `json:"records"`
 }
 

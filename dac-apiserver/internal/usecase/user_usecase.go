@@ -141,6 +141,52 @@ func (u *userUsecase) DeleteUser(ctx context.Context, userID string) error {
 	return nil
 }
 
+// SeedAdmin ensures that the admin user exists.
+func (u *userUsecase) SeedAdmin(ctx context.Context) error {
+	const (
+		adminUsername = "admin"
+		adminPassword = "changeme"
+	)
+
+	// Check if admin already exists
+	user, err := u.userRepo.GetByUsername(ctx, adminUsername)
+	if err == nil {
+		// Admin exists, check and update role if necessary
+		if user.Role != "admin" {
+			if err := u.userRepo.UpdateRole(ctx, user.ID, "admin"); err != nil {
+				u.logger.Error("failed to update existing admin user role", "error", err)
+				return err
+			}
+			u.logger.Info("existing admin user role updated to admin")
+		}
+		return nil
+	}
+	if !domain.IsNotFound(err) {
+		// Unexpected error
+		return fmt.Errorf("failed to check admin user existence: %w", err)
+	}
+
+	// Admin does not exist, create it
+	passwordHash, err := hashPassword(adminPassword)
+	if err != nil {
+		return fmt.Errorf("failed to hash admin password: %w", err)
+	}
+
+	// createuser
+	newUser, err := u.userRepo.Create(ctx, adminUsername, passwordHash)
+	if err != nil {
+		return fmt.Errorf("failed to create admin user: %w", err)
+	}
+
+	// Update role to admin
+	if err := u.userRepo.UpdateRole(ctx, newUser.ID, "admin"); err != nil {
+		return fmt.Errorf("failed to set admin role: %w", err)
+	}
+
+	u.logger.Info("admin user created successfully", "username", adminUsername, "password", adminPassword)
+	return nil
+}
+
 // ============ 辅助函数 ============
 
 // validateRegisterRequest 验证注册请求

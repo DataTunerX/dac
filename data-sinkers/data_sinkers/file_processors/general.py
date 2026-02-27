@@ -6,7 +6,7 @@ from .csv import CsvProcessor
 from .txt import TxtProcessor
 from .markdown import MarkdownProcessor
 from ..spliters.langchain import TextSplitterWrapper
-from langchain.schema import Document
+from langchain_core.documents import Document
 import logging
 import os
 

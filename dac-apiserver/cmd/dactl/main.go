@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
@@ -15,7 +14,7 @@ func main() {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "unknown command") {
 			ui.PrintError("%s", errMsg)
-			fmt.Println("\nRun 'dactl --help' for usage.")
+			ui.PrintInfo("Run 'dactl --help' for usage.")
 		}
 		os.Exit(1)
 	}

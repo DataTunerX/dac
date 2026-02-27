@@ -146,3 +146,17 @@ class AgentRegistryClient:
             search_type=response.get("search_type", ""),
             result=result_items
         )
+
+    async def alist_all_agents(self) -> List[Dict[str, Any]]:
+        """
+        List ALL registered agents from the registry service.
+
+        Unlike asearch() which uses vector search, this retrieves every agent
+        in the registry without filtering.
+
+        Returns:
+            List of agent data dicts (agent_cards from response)
+        """
+        endpoint = "/agents"
+        response = await self._amake_request("GET", endpoint)
+        return response.get("agent_cards", [])

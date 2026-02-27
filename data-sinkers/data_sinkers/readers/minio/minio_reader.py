@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple, List
 from abc import ABC, abstractmethod
 from io import BytesIO
 from minio.error import S3Error
-from langchain.schema import Document
+from langchain_core.documents import Document
 from .minio_conn import GeneralMinio
 from ..base.base_reader import BaseDataReader
 from ...file_processors.general import Processor

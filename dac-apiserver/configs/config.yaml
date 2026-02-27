@@ -30,6 +30,11 @@ routing_agent:
   timeout: 30s
   session_timeout: 30m
 
+# Data Services 配置
+data_services:
+  base_url: "http://10.17.0.41:22000" # Explicitly set based on doc examples
+  timeout: 30s
+
 # 数据库配置
 database:
   driver: "mysql"
@@ -41,4 +46,3 @@ database:
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: 5m
-

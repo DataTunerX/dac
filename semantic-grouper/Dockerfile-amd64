@@ -1,0 +1,27 @@
+FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.12-amd64
+
+RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tzdata && \
+    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV TZ="Asia/Shanghai"
+
+COPY requirements.txt /tmp
+
+RUN pip3 install -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+WORKDIR /app
+
+ADD . /app
+
+RUN pip3 install /app/sdks/model_sdk-0.1.0-py3-none-any.whl -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+RUN chmod +x /app/entrypoint-api.sh /app/entrypoint-worker.sh
+
+# Default to API mode; override with entrypoint-worker.sh for Celery workers
+ENTRYPOINT ["/bin/bash", "/app/entrypoint-api.sh"]

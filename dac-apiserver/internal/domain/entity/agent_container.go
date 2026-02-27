@@ -10,10 +10,12 @@ type AgentContainer struct {
 	Labels    map[string]string
 
 	// Spec
+	DACType             string
 	DataPolicy          DataPolicy
 	AgentCard           AgentCard
 	Model               ModelSpec
-	ExpertAgentMaxSteps string
+	ExpertAgentMaxSteps     string
+	OrchestratorAgentMaxLoops string
 
 	// Status
 	ActiveDataDescriptors []ActiveDataDescriptor
@@ -27,6 +29,8 @@ type AgentContainer struct {
 
 // DataPolicy defines how data sources should be selected
 type DataPolicy struct {
+	DataSourceType     string
+	SemanticGroupID    string
 	SourceNameSelector []string
 }
 

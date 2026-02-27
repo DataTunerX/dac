@@ -30,6 +30,9 @@ type UserRepository interface {
 
 	// UpdateLastLogin 更new最后登录时间
 	UpdateLastLogin(ctx context.Context, userID string) error
+
+	// UpdateRole updates the user's role
+	UpdateRole(ctx context.Context, userID, role string) error
 }
 
 // ============ Usecase interface ============
@@ -50,4 +53,7 @@ type UserUsecase interface {
 
 	// DeleteUser Delete user
 	DeleteUser(ctx context.Context, userID string) error
+
+	// SeedAdmin ensures an admin user exists
+	SeedAdmin(ctx context.Context) error
 }

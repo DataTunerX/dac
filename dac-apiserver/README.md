@@ -2,11 +2,11 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.25-blue.svg)](https://golang.org/)
 
-> A high-performance API server for managing AI agents on Kubernetes, providing a comprehensive platform for orchestrating data agents and enabling intelligent conversations.
+> RESTful API server for managing AI agents on Kubernetes, including agent lifecycle, data descriptors, and chat APIs.
 
 ## 📖 Overview
 
-DAC (Data Agent Container) API Server is a production-ready RESTful API service built with the CloudWeGo Hertz framework. It serves as the control plane for managing AI agents in Kubernetes environments, offering:
+DAC (Data Agent Container) API Server is a RESTful API service built with the CloudWeGo Hertz framework. It serves as the control plane for managing AI agents in Kubernetes environments and provides:
 
 - **Agent Lifecycle Management**: Full CRUD operations for AI agent containers
 - **Data Source Orchestration**: Manage and configure data descriptors for agent training
@@ -118,7 +118,7 @@ make install-cli
 #### Login
 
 ```bash
-dactl login -s http://localhost:8080 -u admin
+dactl login http://localhost:8080 -u admin
 ```
 
 #### List Resources
@@ -130,8 +130,6 @@ dactl list
 # List across all namespaces
 dactl list -A
 
-# List specific resource type
-dactl list -t agent
 ```
 
 #### Interactive Chat

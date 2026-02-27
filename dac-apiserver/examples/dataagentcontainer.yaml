@@ -1,62 +1,49 @@
-# DataAgentContainer Example
+apiVersion: dac.dac.io/v1alpha1
 kind: DataAgentContainer
-spec:
-  # Resource name (required)
-  name: my-data-agent
-  
-  # Kubernetes namespace (required)
-  namespace: default
-  
-  # Optional labels
+metadata:
+  name: dac-01
+  namespace: dac
   labels:
-    app: dac-apiserver
-    team: data-science
-    env: production
-  
-  # Data policy (required)
-  # Specifies which DataDescriptors this agent can access
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
   dataPolicy:
-    sourceNameSelector:
-      - my-mysql-descriptor
-      - my-postgres-descriptor
-  
-  # Agent card information (optional, uses defaults if not specified)
+    sourceNameSelector: ["dd01-mysql"]
   agentCard:
-    name: my-data-agent
-    description: "Intelligent data analysis agent supporting MySQL and PostgreSQL data sources"
-    
-    # Optional skills list
+    name: "ProductOrderAgent"
+    description: "我是一个商品订单管理系统的专业智能体，可以去数据库查询需要的数据来回答用户提出来的相关的问题。"
     skills:
-      - id: sql-query
-        name: SQL Query
-        description: Execute complex SQL queries and data analysis
+      - id: "OrderManager"
+        name: "OrderManager"
+        description: "订单管理专家，负责处理订单查询、状态跟踪、订单统计等业务"
         tags:
-          - database
-          - analytics
+          - "订单查询"
+          - "订单统计"
+          - "订单状态"
+          - "销售分析"
         examples:
-          - "Query user growth trends for the last 30 days"
-          - "Analyze geographic distribution of order data"
-      
-      - id: data-insight
-        name: Data Insights
-        description: Extract valuable business insights from data
+          - "查询今天的所有订单"
+          - "统计本月的销售额"
+          - "查看订单号为12345的详细信息"
+          - "列出所有待发货的订单"
+          - "计算每个产品的销售排名"
+          
+      - id: "ProductManager"
+        name: "ProductManager"
+        description: "商品管理专家，负责商品信息查询、库存管理、商品分类等业务"
         tags:
-          - analytics
-          - reporting
+          - "商品查询"
+          - "库存管理"
+          - "商品分类"
+          - "价格分析"
         examples:
-          - "Identify high-value customer segments"
-          - "Discover sales trends and patterns"
-  
-  # Model configuration (optional, uses defaults if not specified)
+          - "查询所有商品列表"
+          - "查看商品A的库存数量"
+          - "按分类统计商品数量"
+          - "找出价格最高的10个商品"
+          - "查询缺货的商品列表"
+  expertAgentMaxSteps: "3"
   model:
-    # LLM model selection
-    # Recommended: qwen-max, qwen-plus, qwen-turbo
-    expertLLM: qwen-max
-    plannerLLM: qwen-max
-    
-    # Embedding model selection
-    # Recommended: text-embedding-v3, text-embedding-v2
-    embedding: text-embedding-v3
-  
-  # Expert Agent maximum execution steps (optional, default is 5)
-  expertAgentMaxSteps: "5"
+    plannerLLM: "llm-deepseek-v3"
+    expertLLM: "llm-qwen3-coder-480b"
+    embedding: "embedding-config"

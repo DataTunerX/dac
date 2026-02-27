@@ -1,6 +1,7 @@
 import aiohttp
 import json
 import logging
+import os
 from typing import Dict, Any, Optional, List, AsyncGenerator, Union
 from dataclasses import dataclass
 import asyncio
@@ -20,7 +21,6 @@ class SearchRequest:
     search_type: str = "hybrid"
     limit: int = 5
     hybrid_threshold: float = 0.1
-    memory_threshold: float = 0.1
     extra_params: Optional[Dict[str, Any]] = None
 
 # vector api
@@ -169,6 +169,7 @@ class MemorySearchResponse:
 class HistoryMessage:
     role: str
     content: str
+    think: Optional[str] = None
 
 @dataclass
 class CreateHistoryRequest:
@@ -176,10 +177,6 @@ class CreateHistoryRequest:
     agent_id: str
     run_id: str
     messages: List[HistoryMessage]
-
-    def get_messages_json(self) -> str:
-        """Serialize messages field to JSON string"""
-        return json.dumps([msg.model_dump() for msg in self.messages], ensure_ascii=False)
 
 @dataclass
 class CreateHistoryResponse:
@@ -190,7 +187,6 @@ class CreateHistoryResponse:
 @dataclass
 class SearchHistoryRequest:
     user_id: str
-    agent_id: str
     run_id: str
     limit: int = 10
 
@@ -203,6 +199,7 @@ class HistoryRecordResponse:
     messages: List[HistoryMessage]
     created_at: datetime
     updated_at: datetime
+    think: Optional[List[str]] = None
 
 @dataclass
 class SearchHistoryResponse:
@@ -211,16 +208,40 @@ class SearchHistoryResponse:
     total: int
     message: str
 
+def get_data_descriptor():
+    """Build Data-Descriptor header from env DD_NAMESPACE and Data_Descriptor. Only used when DataSourceType is SemanticDomain."""
+    dd_namespace = os.getenv('DD_NAMESPACE')
+    data_descriptors_str = os.getenv('Data_Descriptor')
+    if not data_descriptors_str or not dd_namespace:
+        return ""
+    data_descriptors = data_descriptors_str.split(",")
+    if not data_descriptors:
+        return ""
+    data_descriptor = data_descriptors[0].strip()
+    data_descriptor_all = f"{dd_namespace}_{data_descriptor}"
+    return data_descriptor_all.replace("-", "_")
 
 
 class DataServicesClient:
     """DataServices API asynchronous client (supports dynamic collections)"""
-    
-    def __init__(self, base_url: str = "http://data-services.dac.svc.cluster.local:8000", timeout: int = 300):
+
+    def __init__(
+        self,
+        base_url: str = "http://data-services.dac.svc.cluster.local:8000",
+        timeout: int = 300,
+        use_data_descriptor_header: bool = False,
+    ):
+        """
+        Args:
+            base_url: Data-services API base URL.
+            timeout: Request timeout in seconds.
+            use_data_descriptor_header: If True (SemanticDomain), set Data-Descriptor header from env; if False (SemanticGroup), do not set it.
+        """
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
+        self.use_data_descriptor_header = use_data_descriptor_header
         self.session: Optional[aiohttp.ClientSession] = None
-    
+
     @asynccontextmanager
     async def session_context(self) -> AsyncGenerator['DataServicesClient', None]:
         """Asynchronous context manager"""
@@ -229,15 +250,18 @@ class DataServicesClient:
             yield self
         finally:
             await self.close()
-    
+
     async def _create_session(self):
-        """Create aiohttp session"""
+        """Create aiohttp session. Data-Descriptor header only set when use_data_descriptor_header is True (SemanticDomain)."""
         if self.session is None or self.session.closed:
+            headers = {"Content-Type": "application/json"}
+            if self.use_data_descriptor_header:
+                data_descriptor = get_data_descriptor()
+                if data_descriptor:
+                    headers["Data-Descriptor"] = data_descriptor
             self.session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
-                headers={
-                    "Content-Type": "application/json"
-                }
+                headers=headers,
             )
     
     async def close(self):
@@ -295,7 +319,6 @@ class DataServicesClient:
         search_type: str = "hybrid",
         limit: int = 5,
         hybrid_threshold: float = 0.1,
-        memory_threshold: float = 0.1,
         **extra_params
     ) -> SearchResult:
         """
@@ -307,7 +330,6 @@ class DataServicesClient:
             search_type: Search type
             limit: Number of results to return
             hybrid_threshold: Hybrid search threshold
-            memory_threshold: Memory threshold
             **extra_params: Additional parameters
         
         Returns:
@@ -319,7 +341,6 @@ class DataServicesClient:
             search_type=search_type,
             limit=limit,
             hybrid_threshold=hybrid_threshold,
-            memory_threshold=memory_threshold,
             extra_params=extra_params
         )
         return await self._search(request_data)
@@ -331,7 +352,6 @@ class DataServicesClient:
         search_type: str = "hybrid",
         limit: int = 5,
         hybrid_threshold: float = 0.1,
-        memory_threshold: float = 0.1,
         **extra_params
     ) -> MultiSearchResult:
         """
@@ -343,7 +363,6 @@ class DataServicesClient:
             search_type: Search type
             limit: Number of results per collection
             hybrid_threshold: Hybrid search threshold
-            memory_threshold: Memory threshold
             **extra_params: Additional parameters
         
         Returns:
@@ -369,7 +388,6 @@ class DataServicesClient:
                     search_type=search_type,
                     limit=limit,
                     hybrid_threshold=hybrid_threshold,
-                    memory_threshold=memory_threshold,
                     **extra_params
                 )
                 results[collection_name] = result
@@ -407,8 +425,7 @@ class DataServicesClient:
             "query": request.query,
             "search_type": request.search_type,
             "limit": request.limit,
-            "hybrid_threshold": request.hybrid_threshold,
-            "memory_threshold": request.memory_threshold
+            "hybrid_threshold": request.hybrid_threshold
         }
         
         # Add extra parameters
@@ -682,11 +699,11 @@ class DataServicesClient:
             "user_id": request.user_id,
             "agent_id": request.agent_id,
             "run_id": request.run_id,
-            "messages": [{"role": msg.role, "content": msg.content} for msg in request.messages]
+            "messages": [{"role": msg.role, "content": msg.content, "think": msg.think} for msg in request.messages]
         }
         
         logger.info(f"Create history record request URL: {url}")
-        logger.debug(f"Create history record request parameters: {payload}")
+        logger.info(f"Create history record request parameters: {payload}")
 
         try:
             await self._create_session()
@@ -721,7 +738,7 @@ class DataServicesClient:
             logger.error(error_msg)
             raise TimeoutError(error_msg)
 
-    async def search_history(self, request: SearchHistoryRequest) -> SearchHistoryResponse:
+    async def search_history_by_user_and_run(self, request: SearchHistoryRequest) -> SearchHistoryResponse:
         """
         Search history records - asynchronous version
         
@@ -735,12 +752,11 @@ class DataServicesClient:
             aiohttp.ClientError: Network request exception
             ValueError: Response data parsing exception
         """
-        url = f"{self.base_url}/history/search"
+        url = f"{self.base_url}/history/search_user_run"
         
         # Prepare request data
         payload = {
             "user_id": request.user_id,
-            "agent_id": request.agent_id,
             "run_id": request.run_id
         }
         
@@ -777,7 +793,8 @@ class DataServicesClient:
                             for msg_data in record_data.get('messages', []):
                                 messages.append(HistoryMessage(
                                     role=msg_data.get('role', ''),
-                                    content=msg_data.get('content', '')
+                                    content=msg_data.get('content', ''),
+                                    think=msg_data.get('think') or None
                                 ))
 
                             history_record = HistoryRecordResponse(
@@ -785,9 +802,10 @@ class DataServicesClient:
                                 user_id=record_data.get('user_id', ''),
                                 agent_id=record_data.get('agent_id', ''),
                                 run_id=record_data.get('run_id', ''),
-                                messages=messages,  # Use messages field instead of conversation
+                                messages=messages,
                                 created_at=created_at,
-                                updated_at=updated_at
+                                updated_at=updated_at,
+                                think=record_data.get('think')
                             )
                             history_records.append(history_record)
                         

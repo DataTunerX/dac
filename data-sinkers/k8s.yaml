@@ -37,7 +37,7 @@ spec:
         - name: BASE_URL
           value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
         - name: Model
-          value: "qwen2.5-72b-instruct"
+          value: "deepseek-v3.2"
         - name: Temperature
           value: "0.01"
         - name: ENABLE_ALLINONE
@@ -54,7 +54,9 @@ spec:
           value: "local"
         - name: MINERU_DEVICE_MODE
           value: "cpu"
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers:v0.2.0-amd64
+        - name: regroup_batch_size
+          value: "10"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers:v0.6.0-amd64
         imagePullPolicy: IfNotPresent
         name: data-sinkers
         ports:

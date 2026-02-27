@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"time"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
 )
@@ -20,6 +21,39 @@ type ChatResponse struct {
 	UserID   string
 	RunID    string
 	Response string
+}
+
+// MessageItem represents a single message in conversation history
+type MessageItem struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	Think   string `json:"think,omitempty"`
+}
+
+// ConversationHistory represents a full conversation history
+type ConversationHistory struct {
+	RunID    string        `json:"run_id"`
+	Messages []MessageItem `json:"messages"`
+}
+
+// ConversationSummary represents a conversation summary for listing.
+// Title is derived from the first user message content when available.
+type ConversationSummary struct {
+	ID        string
+	Title     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// HistoryRecord represents a single history record from data services
+type HistoryRecord struct {
+	HID       string                   `json:"hid"`
+	UserID    string                   `json:"user_id"`
+	AgentID   string                   `json:"agent_id"`
+	RunID     string                   `json:"run_id"`
+	Messages  []map[string]interface{} `json:"messages"`
+	CreatedAt string                   `json:"created_at"`
+	UpdatedAt string                   `json:"updated_at"`
 }
 
 // ChatRepository Chat 数据存储interface（只负责 Run 相关数据）
@@ -43,11 +77,22 @@ type A2AClient interface {
 	SendMessageStreaming(ctx context.Context, message *entity.ChatMessage, userID, runID string) (<-chan entity.StreamChunk, error)
 }
 
+// DataServicesClient defines methods for interacting with data services
+type DataServicesClient interface {
+	GetRunHistory(ctx context.Context, userID, runID string) ([]HistoryRecord, error)
+}
+
 // ChatUsecase Chat用例interface
 type ChatUsecase interface {
 	// Chat 发送Chat消息（非流式）
 	Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
 
 	// ChatStreaming 发送Chat消息（流式）
-	ChatStreaming(ctx context.Context, req *ChatRequest) (<-chan entity.StreamChunk, error)
+	ChatStreaming(ctx context.Context, req *ChatRequest) (<-chan entity.StreamChunk, string, error)
+
+	// ListConversations 列出用户的最近会话
+	ListConversations(ctx context.Context, userID string) ([]ConversationSummary, error)
+
+	// GetConversation 获取指定会话的历史记录
+	GetConversation(ctx context.Context, userID, runID string) (*ConversationHistory, error)
 }

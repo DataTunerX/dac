@@ -8,6 +8,43 @@ import (
 )
 
 var (
+	// DiscoveryJobsColumns holds the columns for the "discovery_jobs" table.
+	DiscoveryJobsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "name", Type: field.TypeString, Nullable: true},
+		{Name: "target", Type: field.TypeString},
+		{Name: "ports_spec", Type: field.TypeString, Nullable: true},
+		{Name: "status", Type: field.TypeString, Default: "PENDING"},
+		{Name: "error", Type: field.TypeString, Nullable: true},
+		{Name: "started_at", Type: field.TypeTime, Nullable: true},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
+		{Name: "services", Type: field.TypeJSON, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// DiscoveryJobsTable holds the schema information for the "discovery_jobs" table.
+	DiscoveryJobsTable = &schema.Table{
+		Name:       "discovery_jobs",
+		Columns:    DiscoveryJobsColumns,
+		PrimaryKey: []*schema.Column{DiscoveryJobsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "discoveryjob_target",
+				Unique:  false,
+				Columns: []*schema.Column{DiscoveryJobsColumns[2]},
+			},
+			{
+				Name:    "discoveryjob_status",
+				Unique:  false,
+				Columns: []*schema.Column{DiscoveryJobsColumns[4]},
+			},
+			{
+				Name:    "discoveryjob_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{DiscoveryJobsColumns[9]},
+			},
+		},
+	}
 	// RunsColumns holds the columns for the "runs" table.
 	RunsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -42,6 +79,7 @@ var (
 		{Name: "id", Type: field.TypeUUID},
 		{Name: "username", Type: field.TypeString, Unique: true, Size: 50},
 		{Name: "password_hash", Type: field.TypeString},
+		{Name: "role", Type: field.TypeString, Default: "user"},
 		{Name: "last_login_at", Type: field.TypeTime, Nullable: true},
 		{Name: "deleted_at", Type: field.TypeTime, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime},
@@ -61,12 +99,13 @@ var (
 			{
 				Name:    "user_deleted_at",
 				Unique:  false,
-				Columns: []*schema.Column{UsersColumns[4]},
+				Columns: []*schema.Column{UsersColumns[5]},
 			},
 		},
 	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
+		DiscoveryJobsTable,
 		RunsTable,
 		UsersTable,
 	}

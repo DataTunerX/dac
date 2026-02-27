@@ -1,6 +1,6 @@
-from langchain.text_splitter import CharacterTextSplitter, RecursiveCharacterTextSplitter
+from langchain_text_splitters import CharacterTextSplitter, RecursiveCharacterTextSplitter
 from typing import Literal, Optional, List, Iterable
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 class TextSplitterWrapper:
     """

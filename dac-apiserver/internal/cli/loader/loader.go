@@ -9,20 +9,32 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/cli/types"
 )
 
+// Metadata represents standard Kubernetes-style metadata section.
+// This allows YAML files that follow the common apiVersion/kind/metadata/spec
+// layout to be used directly with dactl.
+type Metadata struct {
+	Name      string            `yaml:"name,omitempty"`
+	Namespace string            `yaml:"namespace,omitempty"`
+	Labels    map[string]string `yaml:"labels,omitempty"`
+}
+
 // ResourceFile represents a resource definition loaded from a YAML file
 type ResourceFile struct {
 	// Kind specifies the resource type: "DataAgentContainer" or "DataDescriptor"
 	Kind string `yaml:"kind"`
+	// Metadata mirrors Kubernetes resource metadata. It is optional but, when
+	// present, can be used as a fallback for name/namespace/labels.
+	Metadata Metadata `yaml:"metadata,omitempty"`
 	// Spec contains the resource specification
 	Spec ResourceSpec `yaml:"spec"`
 }
 
-// ResourceSpec defines a unified resource specification
+// ResourceSpec defines a unified resource specification.
+// Note: name/namespace/labels follow Kubernetes conventions and are taken
+// from the top-level metadata field instead of spec to avoid inventing a
+// custom schema.
 type ResourceSpec struct {
 	// Fields for DataAgentContainer (DAC)
-	Name                string            `yaml:"name,omitempty"`
-	Namespace           string            `yaml:"namespace,omitempty"`
-	Labels              map[string]string `yaml:"labels,omitempty"`
 	DataPolicy          *types.DataPolicy `yaml:"dataPolicy,omitempty"`
 	AgentCard           *types.AgentCard  `yaml:"agentCard,omitempty"`
 	Model               *types.ModelSpec  `yaml:"model,omitempty"`
@@ -70,13 +82,19 @@ func (r *ResourceFile) ToCreateDACRequest() (*types.CreateDACRequest, error) {
 		return nil, fmt.Errorf("resource kind is '%s', expected 'DataAgentContainer'", r.Kind)
 	}
 
-	// Validate required fields
-	if r.Spec.Name == "" {
-		return nil, fmt.Errorf("spec.name is required")
+	// Follow Kubernetes conventions: use metadata.name / metadata.namespace
+	// instead of custom spec.name/spec.namespace fields.
+	name := r.Metadata.Name
+	if name == "" {
+		return nil, fmt.Errorf("metadata.name is required")
 	}
-	if r.Spec.Namespace == "" {
-		return nil, fmt.Errorf("spec.namespace is required")
+
+	namespace := r.Metadata.Namespace
+	if namespace == "" {
+		return nil, fmt.Errorf("metadata.namespace is required")
 	}
+
+	// DataPolicy must still be configured under spec to keep semantics clear.
 	if r.Spec.DataPolicy == nil || len(r.Spec.DataPolicy.SourceNameSelector) == 0 {
 		return nil, fmt.Errorf("spec.dataPolicy.sourceNameSelector is required")
 	}
@@ -85,12 +103,12 @@ func (r *ResourceFile) ToCreateDACRequest() (*types.CreateDACRequest, error) {
 	agentCard := r.Spec.AgentCard
 	if agentCard == nil {
 		agentCard = &types.AgentCard{
-			Name:        r.Spec.Name,
-			Description: fmt.Sprintf("Data Agent for %s", r.Spec.Name),
+			Name:        name,
+			Description: fmt.Sprintf("Data Agent for %s", name),
 			Skills:      []types.AgentSkill{},
 		}
 	} else if agentCard.Name == "" {
-		agentCard.Name = r.Spec.Name
+		agentCard.Name = name
 	}
 
 	model := r.Spec.Model
@@ -108,10 +126,13 @@ func (r *ResourceFile) ToCreateDACRequest() (*types.CreateDACRequest, error) {
 		maxSteps = "5"
 	}
 
+	// Labels follow Kubernetes conventions and are taken from metadata.labels.
+	labels := r.Metadata.Labels
+
 	return &types.CreateDACRequest{
-		Name:                r.Spec.Name,
-		Namespace:           r.Spec.Namespace,
-		Labels:              r.Spec.Labels,
+		Name:                name,
+		Namespace:           namespace,
+		Labels:              labels,
 		DataPolicy:          *r.Spec.DataPolicy,
 		AgentCard:           *agentCard,
 		Model:               *model,
@@ -125,13 +146,18 @@ func (r *ResourceFile) ToCreateDDRequest() (*types.CreateDDRequest, error) {
 		return nil, fmt.Errorf("resource kind is '%s', expected 'DataDescriptor'", r.Kind)
 	}
 
-	// Validate required fields
-	if r.Spec.Name == "" {
-		return nil, fmt.Errorf("spec.name is required")
+	// For DataDescriptor as well, strictly follow Kubernetes-style metadata
+	// for identity fields.
+	name := r.Metadata.Name
+	if name == "" {
+		return nil, fmt.Errorf("metadata.name is required")
 	}
-	if r.Spec.Namespace == "" {
-		return nil, fmt.Errorf("spec.namespace is required")
+
+	namespace := r.Metadata.Namespace
+	if namespace == "" {
+		return nil, fmt.Errorf("metadata.namespace is required")
 	}
+
 	if r.Spec.DescriptorType == "" {
 		return nil, fmt.Errorf("spec.descriptorType is required")
 	}
@@ -139,10 +165,12 @@ func (r *ResourceFile) ToCreateDDRequest() (*types.CreateDDRequest, error) {
 		return nil, fmt.Errorf("spec.sources is required and must not be empty")
 	}
 
+	labels := r.Metadata.Labels
+
 	return &types.CreateDDRequest{
-		Name:           r.Spec.Name,
-		Namespace:      r.Spec.Namespace,
-		Labels:         r.Spec.Labels,
+		Name:           name,
+		Namespace:      namespace,
+		Labels:         labels,
 		DescriptorType: r.Spec.DescriptorType,
 		Sources:        r.Spec.Sources,
 	}, nil

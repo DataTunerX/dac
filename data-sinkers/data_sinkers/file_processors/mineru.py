@@ -1,6 +1,6 @@
 from langchain_community.document_loaders.base import BaseLoader
 from typing import List, Dict, Optional, Union, Any, Literal
-from langchain.schema import Document
+from langchain_core.documents import Document
 import logging
 import os
 import time

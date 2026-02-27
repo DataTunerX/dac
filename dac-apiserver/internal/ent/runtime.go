@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lvyanru/dac-apiserver/internal/ent/discoveryjob"
 	"github.com/lvyanru/dac-apiserver/internal/ent/run"
 	"github.com/lvyanru/dac-apiserver/internal/ent/schema"
 	"github.com/lvyanru/dac-apiserver/internal/ent/user"
@@ -15,6 +16,30 @@ import (
 // (default values, validators, hooks and policies) and stitches it
 // to their package variables.
 func init() {
+	discoveryjobFields := schema.DiscoveryJob{}.Fields()
+	_ = discoveryjobFields
+	// discoveryjobDescTarget is the schema descriptor for target field.
+	discoveryjobDescTarget := discoveryjobFields[2].Descriptor()
+	// discoveryjob.TargetValidator is a validator for the "target" field. It is called by the builders before save.
+	discoveryjob.TargetValidator = discoveryjobDescTarget.Validators[0].(func(string) error)
+	// discoveryjobDescStatus is the schema descriptor for status field.
+	discoveryjobDescStatus := discoveryjobFields[4].Descriptor()
+	// discoveryjob.DefaultStatus holds the default value on creation for the status field.
+	discoveryjob.DefaultStatus = discoveryjobDescStatus.Default.(string)
+	// discoveryjobDescCreatedAt is the schema descriptor for created_at field.
+	discoveryjobDescCreatedAt := discoveryjobFields[9].Descriptor()
+	// discoveryjob.DefaultCreatedAt holds the default value on creation for the created_at field.
+	discoveryjob.DefaultCreatedAt = discoveryjobDescCreatedAt.Default.(func() time.Time)
+	// discoveryjobDescUpdatedAt is the schema descriptor for updated_at field.
+	discoveryjobDescUpdatedAt := discoveryjobFields[10].Descriptor()
+	// discoveryjob.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	discoveryjob.DefaultUpdatedAt = discoveryjobDescUpdatedAt.Default.(func() time.Time)
+	// discoveryjob.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	discoveryjob.UpdateDefaultUpdatedAt = discoveryjobDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// discoveryjobDescID is the schema descriptor for id field.
+	discoveryjobDescID := discoveryjobFields[0].Descriptor()
+	// discoveryjob.DefaultID holds the default value on creation for the id field.
+	discoveryjob.DefaultID = discoveryjobDescID.Default.(func() uuid.UUID)
 	runFields := schema.Run{}.Fields()
 	_ = runFields
 	// runDescCreatedAt is the schema descriptor for created_at field.
@@ -55,12 +80,16 @@ func init() {
 	userDescPasswordHash := userFields[2].Descriptor()
 	// user.PasswordHashValidator is a validator for the "password_hash" field. It is called by the builders before save.
 	user.PasswordHashValidator = userDescPasswordHash.Validators[0].(func(string) error)
+	// userDescRole is the schema descriptor for role field.
+	userDescRole := userFields[3].Descriptor()
+	// user.DefaultRole holds the default value on creation for the role field.
+	user.DefaultRole = userDescRole.Default.(string)
 	// userDescCreatedAt is the schema descriptor for created_at field.
-	userDescCreatedAt := userFields[5].Descriptor()
+	userDescCreatedAt := userFields[6].Descriptor()
 	// user.DefaultCreatedAt holds the default value on creation for the created_at field.
 	user.DefaultCreatedAt = userDescCreatedAt.Default.(func() time.Time)
 	// userDescUpdatedAt is the schema descriptor for updated_at field.
-	userDescUpdatedAt := userFields[6].Descriptor()
+	userDescUpdatedAt := userFields[7].Descriptor()
 	// user.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	user.DefaultUpdatedAt = userDescUpdatedAt.Default.(func() time.Time)
 	// user.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

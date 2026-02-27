@@ -1,0 +1,458 @@
+{
+    "nodes": [
+        {
+            "id": "SemanticDomain_001",
+            "name": "企业组织与项目管理",
+            "labels": [
+                "SemanticDomain"
+            ],
+            "properties": {
+                "englishName": "Enterprise Organization & Project Management",
+                "description": "系统的最高层语义域"
+            }
+        },
+        {
+            "id": "SemanticDomain_002",
+            "name": "组织架构管理",
+            "labels": [
+                "SemanticDomain"
+            ],
+            "properties": {
+                "englishName": "Organization Management",
+                "description": "管理公司的部门层级结构、办公地点和部门负责人信息。"
+            }
+        },
+        {
+            "id": "SemanticDomain_003",
+            "name": "人力资源管理",
+            "labels": [
+                "SemanticDomain"
+            ],
+            "properties": {
+                "englishName": "Human Resource Management",
+                "description": "管理员工的全生命周期信息，包括个人资料、雇佣关系、职位、薪资和部门归属。"
+            }
+        },
+        {
+            "id": "SemanticDomain_004",
+            "name": "项目管理",
+            "labels": [
+                "SemanticDomain"
+            ],
+            "properties": {
+                "englishName": "Project Management",
+                "description": "管理项目的全生命周期，包括项目定义、预算、时间线、优先级，以及项目的人员配置。"
+            }
+        },
+        {
+            "id": "DomainTerm_001",
+            "name": "部门层级",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "部门层级",
+                "englishTerm": "Department Hierarchy",
+                "description": "通过父子关系构建的树状组织结构，用于表示公司的汇报关系。",
+                "belongsToDomain": "组织架构管理"
+            }
+        },
+        {
+            "id": "DomainTerm_002",
+            "name": "部门经理",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "部门经理",
+                "englishTerm": "Department Manager",
+                "description": "负责一个部门日常运营和管理的员工。",
+                "belongsToDomain": "组织架构管理"
+            }
+        },
+        {
+            "id": "DomainTerm_003",
+            "name": "办公地点",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "办公地点",
+                "englishTerm": "Office Location",
+                "description": "部门物理上的办公场所。",
+                "belongsToDomain": "组织架构管理"
+            }
+        },
+        {
+            "id": "DomainTerm_004",
+            "name": "雇佣状态",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "雇佣状态",
+                "englishTerm": "Employment Status",
+                "description": "员工当前的在职状态（如在职、离职、休假）。",
+                "belongsToDomain": "人力资源管理"
+            }
+        },
+        {
+            "id": "DomainTerm_005",
+            "name": "职位级别",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "职位级别",
+                "englishTerm": "Job Grade/Level",
+                "description": "定义员工在公司内的职级和岗位。",
+                "belongsToDomain": "人力资源管理"
+            }
+        },
+        {
+            "id": "DomainTerm_006",
+            "name": "薪资信息",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "薪资信息",
+                "englishTerm": "Compensation",
+                "description": "与员工职位级别绑定的薪酬数据。",
+                "belongsToDomain": "人力资源管理"
+            }
+        },
+        {
+            "id": "DomainTerm_007",
+            "name": "部门归属",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "部门归属",
+                "englishTerm": "Department Assignment",
+                "description": "员工在组织架构中所属的具体部门。",
+                "belongsToDomain": "人力资源管理"
+            }
+        },
+        {
+            "id": "DomainTerm_008",
+            "name": "项目负责人",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "项目负责人",
+                "englishTerm": "Project Lead",
+                "description": "对项目的整体成功负责的员工。",
+                "belongsToDomain": "项目管理"
+            }
+        },
+        {
+            "id": "DomainTerm_009",
+            "name": "项目分配",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "项目分配",
+                "englishTerm": "Project Assignment",
+                "description": "将一名员工以特定角色和计划工时分配到一个项目。",
+                "belongsToDomain": "项目管理"
+            }
+        },
+        {
+            "id": "DomainTerm_010",
+            "name": "项目角色",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "项目角色",
+                "englishTerm": "Project Role",
+                "description": "员工在项目中承担的具体职责（如开发、测试、项目经理）。",
+                "belongsToDomain": "项目管理"
+            }
+        },
+        {
+            "id": "DomainTerm_011",
+            "name": "计划工时",
+            "labels": [
+                "DomainTerm"
+            ],
+            "properties": {
+                "term": "计划工时",
+                "englishTerm": "Allocated Hours",
+                "description": "为项目分配预估的员工工作时间，用于资源规划和成本估算。",
+                "belongsToDomain": "项目管理"
+            }
+        },
+        {
+            "id": "DomainModel_001",
+            "name": "部门",
+            "labels": [
+                "DomainModel",
+                "AggregateRoot"
+            ],
+            "properties": {
+                "englishName": "Department",
+                "tableName": "departments",
+                "description": "管理部门的层级结构、名称、经理、办公地点。它是组织结构的核心。",
+                "belongsToDomain": "组织架构管理"
+            }
+        },
+        {
+            "id": "DomainModel_002",
+            "name": "员工",
+            "labels": [
+                "DomainModel",
+                "AggregateRoot"
+            ],
+            "properties": {
+                "englishName": "Employee",
+                "tableName": "employees",
+                "description": "管理员工的核心人事信息，包括个人资料、雇佣日期、职位、薪资、所属部门及状态。",
+                "belongsToDomain": "人力资源管理"
+            }
+        },
+        {
+            "id": "DomainModel_003",
+            "name": "项目",
+            "labels": [
+                "DomainModel",
+                "AggregateRoot"
+            ],
+            "properties": {
+                "englishName": "Project",
+                "tableName": "projects",
+                "description": "管理项目的基本信息，包括名称、预算、起止日期、优先级和负责人。",
+                "belongsToDomain": "项目管理"
+            }
+        },
+        {
+            "id": "DomainModel_004",
+            "name": "项目分配",
+            "labels": [
+                "DomainModel",
+                "Entity"
+            ],
+            "properties": {
+                "englishName": "ProjectAssignment",
+                "tableName": "project_assignments",
+                "description": "记录员工在项目中的具体角色和分配的工时，是连接员工和项目的桥梁。",
+                "belongsToDomain": "项目管理"
+            }
+        }
+    ],
+    "relationships": [
+        {
+            "type": "CONTAINS",
+            "start": "SemanticDomain_001",
+            "end": "SemanticDomain_002",
+            "properties": {}
+        },
+        {
+            "type": "CONTAINS",
+            "start": "SemanticDomain_001",
+            "end": "SemanticDomain_003",
+            "properties": {}
+        },
+        {
+            "type": "CONTAINS",
+            "start": "SemanticDomain_001",
+            "end": "SemanticDomain_004",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_002",
+            "end": "DomainTerm_001",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_002",
+            "end": "DomainTerm_002",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_002",
+            "end": "DomainTerm_003",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_003",
+            "end": "DomainTerm_004",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_003",
+            "end": "DomainTerm_005",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_003",
+            "end": "DomainTerm_006",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_003",
+            "end": "DomainTerm_007",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_004",
+            "end": "DomainTerm_008",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_004",
+            "end": "DomainTerm_009",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_004",
+            "end": "DomainTerm_010",
+            "properties": {}
+        },
+        {
+            "type": "DEFINES",
+            "start": "SemanticDomain_004",
+            "end": "DomainTerm_011",
+            "properties": {}
+        },
+        {
+            "type": "CONTAINS",
+            "start": "SemanticDomain_002",
+            "end": "DomainModel_001",
+            "properties": {}
+        },
+        {
+            "type": "CONTAINS",
+            "start": "SemanticDomain_003",
+            "end": "DomainModel_002",
+            "properties": {}
+        },
+        {
+            "type": "CONTAINS",
+            "start": "SemanticDomain_004",
+            "end": "DomainModel_003",
+            "properties": {}
+        },
+        {
+            "type": "CONTAINS",
+            "start": "SemanticDomain_004",
+            "end": "DomainModel_004",
+            "properties": {}
+        },
+        {
+            "type": "HAS_SUBDEPARTMENT",
+            "start": "DomainModel_001",
+            "end": "DomainModel_001",
+            "properties": {
+                "description": "自引用，形成树状层级结构"
+            }
+        },
+        {
+            "type": "MANAGED_BY",
+            "start": "DomainModel_001",
+            "end": "DomainModel_002",
+            "properties": {
+                "description": "部门通过经理ID关联到员工模型",
+                "foreignKeyField": "managerId"
+            }
+        },
+        {
+            "type": "BELONGS_TO",
+            "start": "DomainModel_002",
+            "end": "DomainModel_001",
+            "properties": {
+                "description": "员工通过部门ID关联到所属部门",
+                "foreignKeyField": "departmentId"
+            }
+        },
+        {
+            "type": "LEADS",
+            "start": "DomainModel_002",
+            "end": "DomainModel_003",
+            "properties": {
+                "description": "员工作为项目负责人",
+                "foreignKeyField": "leadId"
+            }
+        },
+        {
+            "type": "ASSIGNED_TO",
+            "start": "DomainModel_002",
+            "end": "DomainModel_004",
+            "properties": {
+                "description": "员工被分配到项目任务",
+                "foreignKeyField": "employeeId"
+            }
+        },
+        {
+            "type": "HAS_ASSIGNMENT",
+            "start": "DomainModel_003",
+            "end": "DomainModel_004",
+            "properties": {
+                "description": "项目包含多个项目分配"
+            }
+        },
+        {
+            "type": "ASSIGNED_TO_PROJECT",
+            "start": "DomainModel_004",
+            "end": "DomainModel_003",
+            "properties": {
+                "description": "项目分配通过项目ID关联到项目",
+                "foreignKeyField": "projectId"
+            }
+        },
+        {
+            "type": "DEPENDS_ON",
+            "start": "SemanticDomain_002",
+            "end": "SemanticDomain_003",
+            "properties": {
+                "description": "部门通过经理ID引用员工信息。",
+                "bridgeTable": "departments",
+                "foreignKeyField": "managerId"
+            }
+        },
+        {
+            "type": "DEPENDS_ON",
+            "start": "SemanticDomain_003",
+            "end": "SemanticDomain_002",
+            "properties": {
+                "description": "员工通过部门ID关联到所属部门。",
+                "bridgeTable": "employees",
+                "foreignKeyField": "departmentId"
+            }
+        },
+        {
+            "type": "DEPENDS_ON",
+            "start": "SemanticDomain_004",
+            "end": "SemanticDomain_003",
+            "properties": {
+                "description": "项目通过负责人ID关联到员工。项目分配通过员工ID关联到员工。",
+                "bridgeTable": "projects, project_assignments",
+                "foreignKeyField": "leadId, employeeId"
+            }
+        },
+        {
+            "type": "DEPENDS_ON",
+            "start": "SemanticDomain_003",
+            "end": "SemanticDomain_004",
+            "properties": {
+                "description": "员工作为项目负责人或被分配到项目任务。",
+                "bridgeTable": "projects, project_assignments",
+                "foreignKeyField": "leadId, employeeId"
+            }
+        }
+    ]
+}

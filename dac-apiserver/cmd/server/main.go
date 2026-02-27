@@ -19,6 +19,8 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/handler"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/a2a"
 	infradb "github.com/lvyanru/dac-apiserver/internal/infrastructure/database"
+	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
+	discoveryinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/discovery"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/k8s"
 	"github.com/lvyanru/dac-apiserver/internal/router"
 	"github.com/lvyanru/dac-apiserver/internal/usecase"
@@ -91,7 +93,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	)
 
 	// Setup Hertz to use slog
-	hertzLogger := logger.NewHertzSlogAdapter(slog.Default())
+	appLogger := slog.Default()
+	hertzLogger := logger.NewHertzSlogAdapter(appLogger)
 	hlog.SetLogger(hertzLogger)
 	hlog.SetLevel(hlog.LevelDebug)
 
@@ -112,17 +115,50 @@ func runServer(cmd *cobra.Command, args []string) {
 		slog.Warn("kubernetes health check failed, service may not work properly", "error", err)
 	}
 
+	// Initialize DataServices Client
+	dsClient := dataservices.NewClient(
+		cfg.DataServices.BaseURL,
+		cfg.DataServices.Timeout,
+		appLogger,
+	)
+
 	// Initialize repositories, usecases, and handlers with dynamic client
 	agentRepo := k8s.NewAgentContainerRepository(k8sClient)
-	agentUsecase := usecase.NewAgentContainerUsecase(agentRepo)
-	agentHandler := handler.NewAgentContainerHandler(agentUsecase)
+	agentUsecase := usecase.NewAgentContainerUsecase(agentRepo, appLogger)
+	agentHandler := handler.NewAgentContainerHandler(agentUsecase, appLogger)
 
 	descriptorRepo := k8s.NewDataDescriptorRepository(k8sClient)
-	descriptorUsecase := usecase.NewDataDescriptorUsecase(descriptorRepo)
-	descriptorHandler := handler.NewDataDescriptorHandler(descriptorUsecase)
+	descriptorUsecase := usecase.NewDataDescriptorUsecase(descriptorRepo, dsClient, appLogger) // Injected dsClient + logger
+	descriptorHandler := handler.NewDataDescriptorHandler(descriptorUsecase, appLogger)
+
+	// Semantic Domain module (data-services)
+	semanticDomainUsecase := usecase.NewSemanticDomainUsecase(dsClient, appLogger)
+	semanticDomainHandler := handler.NewSemanticDomainHandler(semanticDomainUsecase, appLogger)
+
+	// Semantic Group module (data-services)
+	semanticGroupUsecase := usecase.NewSemanticGroupUsecase(dsClient, appLogger)
+	semanticGroupHandler := handler.NewSemanticGroupHandler(semanticGroupUsecase, appLogger)
+
+	// DD Group Relation module (data-services)
+	ddGroupRelationUsecase := usecase.NewDDGroupRelationUsecase(dsClient, appLogger)
+	ddGroupRelationHandler := handler.NewDDGroupRelationHandler(ddGroupRelationUsecase, appLogger)
+
+	// Knowledge Graph module (data-services)
+	knowledgeGraphUsecase := usecase.NewKnowledgeGraphUsecase(dsClient, appLogger)
+	knowledgeGraphHandler := handler.NewKnowledgeGraphHandler(knowledgeGraphUsecase, appLogger)
+
+	// ConfigMap module (DAC managed ConfigMaps: llm/prompts)
+	configMapRepo := k8s.NewConfigMapRepository(k8sClient)
+	configMapUsecase := usecase.NewConfigMapUsecase(configMapRepo, appLogger)
+	configMapHandler := handler.NewConfigMapHandler(configMapUsecase, appLogger)
+
+	// Namespace module (for UI namespace dropdown)
+	namespaceRepo := k8s.NewNamespaceRepository(k8sClient)
+	namespaceUsecase := usecase.NewNamespaceUsecase(namespaceRepo, appLogger)
+	namespaceHandler := handler.NewNamespaceHandler(namespaceUsecase, appLogger)
 
 	// Initialize Database
-	dbClient, err := dbpkg.NewClient(cfg.Database, slog.Default())
+	dbClient, err := dbpkg.NewClient(cfg.Database, appLogger)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
@@ -130,31 +166,45 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	slog.Info("database connected successfully")
 
+	// Discovery module (scan IP -> services) - persisted in DB
+	discoveryRepo := infradb.NewDiscoveryJobRepository(dbClient)
+	discoveryScanner := discoveryinfra.NewScanner(2 * time.Second)
+	discoveryUsecase := usecase.NewDiscoveryUsecase(discoveryRepo, discoveryScanner, appLogger)
+	discoveryHandler := handler.NewDiscoveryHandler(discoveryUsecase, appLogger)
+
 	// Initialize User components
 	userRepo := infradb.NewUserRepository(dbClient)
-	userUsecase := usecase.NewUserUsecase(userRepo, slog.Default())
-	userHandler := handler.NewUserHandler(userUsecase, cfg.JWT.Secret, slog.Default())
+	userUsecase := usecase.NewUserUsecase(userRepo, appLogger)
+	userHandler := handler.NewUserHandler(userUsecase, cfg.JWT.Secret, appLogger)
 
 	slog.Info("user module initialized")
+
+	// Seed admin user
+	if err := userUsecase.SeedAdmin(context.Background()); err != nil {
+		slog.Error("failed to seed admin user", "error", err)
+		// Don't exit, just log error, maybe database issue or already exists handling failed
+	} else {
+		slog.Info("admin user check/seeding completed")
+	}
 
 	// Initialize Chat components
 	a2aClient := a2a.NewClient(
 		cfg.RoutingAgent.BaseURL,
 		cfg.RoutingAgent.Timeout,
-		slog.Default(),
+		appLogger,
 	)
 	chatRepo := infradb.NewChatRepository(dbClient)
 	chatUsecase := usecase.NewChatUsecase(
-		a2aClient,
 		chatRepo,
-		userRepo, // Inject UserRepository
-		slog.Default(),
+		a2aClient,
+		dsClient, // Inject dsClient
+		appLogger,
 	)
-	chatHandler := handler.NewChatHandler(chatUsecase, slog.Default())
+	chatHandler := handler.NewChatHandler(chatUsecase, appLogger)
 
 	slog.Info("handlers initialized with dynamic client")
 
-	healthHandler := handler.NewHealthHandler(k8sClient)
+	healthHandler := handler.NewHealthHandler(k8sClient, appLogger)
 
 	// Create Hertz server with performance optimization
 	h := server.Default(
@@ -166,7 +216,21 @@ func runServer(cmd *cobra.Command, args []string) {
 	)
 
 	// Setup routes
-	router.Setup(h, userHandler, agentHandler, descriptorHandler, chatHandler, healthHandler)
+	router.Setup(
+		h,
+		userHandler,
+		agentHandler,
+		descriptorHandler,
+		semanticDomainHandler,
+		discoveryHandler,
+		chatHandler,
+		configMapHandler,
+		namespaceHandler,
+		semanticGroupHandler,
+		ddGroupRelationHandler,
+		knowledgeGraphHandler,
+		healthHandler,
+	)
 
 	// Start server
 	slog.Info("server started successfully",

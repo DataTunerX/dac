@@ -70,6 +70,18 @@ func init() {
 }
 
 func runCreateDAC(cmd *cobra.Command, args []string) error {
+	// Handle common help invocations like `dactl create dac help`
+	if len(args) > 0 {
+		switch args[0] {
+		case "help", "-h", "--help":
+			return cmd.Help()
+		default:
+			ui.PrintError("unexpected argument: %s", args[0])
+			ui.PrintInfo("Run '%s --help' for usage.", cmd.CommandPath())
+			return fmt.Errorf("invalid arguments")
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -82,7 +94,7 @@ func runCreateDAC(cmd *cobra.Command, args []string) error {
 
 	if !cfg.IsAuthenticated() {
 		ui.PrintError("not authenticated, please login first")
-		fmt.Println("\nRun 'dactl login' to authenticate.")
+		ui.PrintInfo("Run 'dactl login' to authenticate.")
 		return fmt.Errorf("authentication required")
 	}
 

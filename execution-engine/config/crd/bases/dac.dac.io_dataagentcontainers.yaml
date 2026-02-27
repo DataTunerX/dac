@@ -75,11 +75,17 @@ spec:
                 - description
                 - name
                 type: object
+              dacType:
+                type: string
               dataPolicy:
                 description: DataPolicy defines how data sources should be selected
                 properties:
-                  sourceNameSelector:
+                  dataSourceType:
                     description: Selector for data sources by name
+                    type: string
+                  semanticGroupID:
+                    type: string
+                  sourceNameSelector:
                     items:
                       type: string
                     type: array
@@ -87,24 +93,25 @@ spec:
               expertAgentMaxSteps:
                 type: string
               model:
-                description: ModelSpec defines the LLM and embedding models to use
+                description: ModelSpec defines the LLM models to use
                 properties:
-                  embedding:
-                    type: string
                   expertLLM:
                     type: string
                   plannerLLM:
                     type: string
                 required:
-                - embedding
                 - expertLLM
                 - plannerLLM
                 type: object
+              orchestratorAgentMaxLoops:
+                type: string
             required:
             - agentCard
+            - dacType
             - dataPolicy
             - expertAgentMaxSteps
             - model
+            - orchestratorAgentMaxLoops
             type: object
           status:
             description: DataAgentContainerStatus defines the observed state of DataAgentContainer

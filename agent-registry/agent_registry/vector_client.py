@@ -667,6 +667,20 @@ class VectorClient:
             vector_weight=vector_weight
         )
 
+    def get_ids_by_metadata_field(
+        self,
+        collection_name: str,
+        key: str,
+        value: str
+    ) -> List[str]:
+        """
+        Return document ids whose metadata has the given key-value. Use for existence check or listing by metadata.
+        """
+        payload = {"key": key, "value": value}
+        endpoint = f"/vector/{collection_name}/get_ids_by_metadata_field"
+        response = self._make_request("POST", endpoint, payload)
+        return response.get("ids", [])
+
     def delete_by_metadata_field(
         self,
         collection_name: str,

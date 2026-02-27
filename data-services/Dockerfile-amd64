@@ -9,8 +9,6 @@ RUN mkdir /app/sdks
 
 COPY sdks/model_sdk-0.1.0-py3-none-any.whl /app/sdks/model_sdk-0.1.0-py3-none-any.whl
 
-COPY sdks/vector_sdk-0.1.0-py3-none-any.whl /app/sdks/vector_sdk-0.1.0-py3-none-any.whl
-
 # Enable bytecode compilation
 ENV UV_COMPILE_BYTECODE=1
 

@@ -22,6 +22,7 @@ Create new conversation history records.
 - `messages` (array, required): Conversation messages array
   - `role` (string): Role (user/assistant)
   - `content` (string): Message content
+  - `think` (string, optional): Think content for this message (stored in separate DB column)
 
 ### Request Example
 ```bash
@@ -119,7 +120,8 @@ curl -X POST "http://192.168.xxx.xxx:22000/history/search" \
 | `user_id` | string | User unique identifier |
 | `agent_id` | string | Agent unique identifier |
 | `run_id` | string | Run session unique identifier |
-| `messages` | array | Conversation content |
+| `messages` | array | Conversation content (每项含 role, content, think) |
+| `think` | array | Think 内容数组，与 messages 一一对应 |
 | `created_at` | datetime | Record creation time |
 | `updated_at` | datetime | Record update time |
 

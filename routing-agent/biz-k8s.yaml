@@ -1,0 +1,86 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: biz-routing-agent
+  namespace: dac
+  labels:
+    app: biz-routing-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: biz-routing-agent
+  template:
+    metadata:
+      labels:
+        app: biz-routing-agent
+    spec:
+      containers:
+        - name: biz-routing-agent
+          image: >-
+            registry.cn-shanghai.aliyuncs.com/jamesxiong/routing-agent:v0.6.0-amd64
+          args:
+            - '--redis-host'
+            - redis-server
+            - '--redis-port'
+            - '6379'
+            - '--redis-db'
+            - '2'
+            - '--password'
+            - '123'
+            - '--provider'
+            - openai_compatible
+            - '--api-key'
+            - sk-xxx
+            - '--base-url'
+            - https://dashscope.aliyuncs.com/compatible-mode/v1
+            - '--model'
+            - deepseek-v3.2
+          ports:
+            - containerPort: 10100
+              protocol: TCP
+          env:
+            - name: Agent_Host
+              value: 10.17.0.41
+            - name: Agent_Port
+              value: '30200'
+            - name: AgentRegistry
+              value: http://orchestrator-registry.dac.svc.cluster.local:8000
+            - name: LANGFUSE_SECRET_KEY
+              value: sk-lf-a8cd7ec4-d08c-4f2b-a174-d458073d6d73
+            - name: LANGFUSE_PUBLIC_KEY
+              value: pk-lf-ebed2fcd-31df-4c35-ba33-d6bf0ab399e5
+            - name: LANGFUSE_BASE_URL
+              value: http://10.17.0.43:3000
+            - name: max_retries
+              value: '1'
+            - name: AgentRegistryCollection
+              value: "biz_orchestrator_agent_cards"
+          resources:
+            limits:
+              cpu: '1'
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 1Gi
+          imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: biz-routing-agent
+  namespace: dac
+spec:
+  ports:
+    - name: tcp-10100-10100
+      protocol: TCP
+      port: 10100
+      targetPort: 10100
+      nodePort: 30200
+  selector:
+    app: biz-routing-agent
+  type: NodePort
+  

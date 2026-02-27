@@ -6,6 +6,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 )
 
+// DiscoveryJob is the predicate function for discoveryjob builders.
+type DiscoveryJob func(*sql.Selector)
+
 // Run is the predicate function for run builders.
 type Run func(*sql.Selector)
 

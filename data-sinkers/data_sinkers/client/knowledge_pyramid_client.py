@@ -1,5 +1,6 @@
 import requests
 import json
+import os
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -59,6 +60,11 @@ class KnowledgePyramidClient:
         headers = {
             "Content-Type": "application/json"
         }
+        
+        # 从环境变量读取 DATA_DESCRIPTOR 并添加到 header
+        data_descriptor = os.getenv("DATA_DESCRIPTOR")
+        if data_descriptor:
+            headers["Data-Descriptor"] = data_descriptor
         
         try:
             # Only set json parameter when there is payload

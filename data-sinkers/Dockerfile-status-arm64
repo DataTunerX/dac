@@ -1,0 +1,26 @@
+# Status API service - ARM64
+FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.12-arm64
+
+# If you are in China, you can use aliyun mirror to speed up
+RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies (status service only needs fastapi + uvicorn; use full reqs for consistency)
+COPY requirements.txt /tmp/
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Copy application
+COPY . /app
+
+# Default port (override with PORT env)
+ENV PORT=8000
+EXPOSE 8000
+
+# Run the status API service
+CMD ["python3", "-m", "data_sinkers.status"]

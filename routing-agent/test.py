@@ -1,3 +1,5 @@
+import os
+import sys
 import httpx
 import asyncio
 from a2a.client import A2ACardResolver, A2AClient
@@ -8,7 +10,6 @@ from a2a.types import (
     SendStreamingMessageRequest,
     TaskArtifactUpdateEvent,
 )
-import sys
 
 def print_welcome_message() -> None:
     print("Welcome to the generic A2A client!")
@@ -33,8 +34,8 @@ async def interact_with_server(client: A2AClient) -> None:
                 'messageId': uuid4().hex,
             },
             'metadata': {
-                'user_id': 'user1106',
-                'run_id': 'run1106',
+                'user_id': 'user202602032132',
+                'run_id': 'run202602032132',
             },
         }
 
@@ -73,7 +74,8 @@ def get_response_text(chunk) -> str:
 async def main() -> None:
     print_welcome_message()
 
-    base_url = 'http://192.168.xxx.xxx:20002'
+    base_url = os.getenv("A2A_AGENT_URL", "http://10.17.0.41:30100")
+    print(f"Connecting to agent at: {base_url}")
 
     async with httpx.AsyncClient() as httpx_client:
         resolver = A2ACardResolver(
@@ -82,7 +84,20 @@ async def main() -> None:
         )
         final_agent_card_to_use = None
 
-        _public_card = await resolver.get_agent_card()
+        try:
+            _public_card = await resolver.get_agent_card()
+        except Exception as e:
+            print(
+                f"Failed to fetch agent card from {base_url}: {e}",
+                file=sys.stderr,
+            )
+            print(
+                "Make sure the agent server is running and reachable. "
+                "For local testing, set A2A_AGENT_URL=http://localhost:PORT (e.g. http://localhost:8000).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         print('Successfully fetched public agent card:')
         print(_public_card.model_dump_json(indent=2, exclude_none=True))
         final_agent_card_to_use = _public_card

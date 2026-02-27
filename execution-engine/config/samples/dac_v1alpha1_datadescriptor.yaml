@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: mysql-production-fewshots
-  namespace: dac
+  namespace: default
   labels:
     app.kubernetes.io/name: execution-engine
     data-source: dd-0
@@ -30,18 +30,15 @@ data:
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
 metadata:
-  name: dd00-mysql
-  namespace: dac
-  labels:
-    app.kubernetes.io/name: execution-engine
-    app.kubernetes.io/managed-by: kustomize
+  name: bank-mysql
+  namespace: default
 spec:
   descriptorType: "structured-mysql"
   sources:
     - type: mysql
       name: "mysql-production"
       metadata:
-        host: "mysql-server"
+        host: "mysql-server.dac"
         port: "3306"
         user: "root"
         password: "123"
@@ -51,40 +48,22 @@ spec:
       prompts:
         prompts:
           name: "mysql-production-fewshots"
-      processing:
-        cleaning:
-          - rule: "remove_duplicates"
-            params: 
-              fields: "user_id,timestamp"
-          - rule: "fill_missing"
-            params: 
-              field: "price"
-              value: "0"
-      classification:
-        - domain: "科学技术类"
-          category: "计算机科学与技术"
-          subcategory: "软件工程师"
-          tags:
-            - skill: ["编程", "算法"]
-            - industry: ["互联网"]
 
 ---
+
 
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
 metadata:
-  name: dd01-mysql
-  namespace: dac
-  labels:
-    app.kubernetes.io/name: execution-engine
-    app.kubernetes.io/managed-by: kustomize
+  name: dianshang-mysql
+  namespace: default
 spec:
   descriptorType: "structured-mysql"
   sources:
     - type: mysql
       name: "mysql-production"
       metadata:
-        host: "mysql-server"
+        host: "mysql-server.dac"
         port: "3306"
         user: "root"
         password: "123"
@@ -94,22 +73,209 @@ spec:
       prompts:
         prompts:
           name: ""
-      processing:
-        cleaning:
-          - rule: "remove_duplicates"
-            params: 
-              fields: "user_id,timestamp"
-          - rule: "fill_missing"
-            params: 
-              field: "price"
-              value: "0"
-      classification:
-        - domain: "科学技术类"
-          category: "计算机科学与技术"
-          subcategory: "软件工程师"
-          tags:
-            - skill: ["编程", "算法"]
-            - industry: ["互联网"]
+
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: user-management-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "user_management"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+---
+
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: product-management-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "product_management"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: order-management-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "order_management"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd01-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "test1"
+      codeRepo:
+        codeRepoType: "github"
+        codeRepoPath: "https://github.com/James-Dao/test-code"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd01-github-00001
+  namespace: default
+spec:
+  descriptorType: "code"
+  sources:
+    - type: github
+      name: "github-00001"
+      metadata:
+        codeRepoPath: "https://github.com/James-Dao/test-code.git"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""
+      
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd01-gitee-nmap
+  namespace: default
+spec:
+  descriptorType: "code"
+  sources:
+    - type: gitee
+      name: "gitee-nmap"
+      metadata:
+        codeRepoPath: "https://gitee.com/tan_fu_xiang/nmap.git"
+        codeRepoBranch: "master"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: datatunerx
+  namespace: default
+spec:
+  descriptorType: "code"
+  sources:
+    - type: gitee
+      name: "gitee-datatunerx"
+      metadata:
+        codeRepoPath: "https://gitee.com/jamesxiong888/datatunerx.git"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""
+
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: metaserver
+  namespace: default
+spec:
+  descriptorType: "code"
+  sources:
+    - type: gitee
+      name: "gitee-metaserver"
+      metadata:
+        codeRepoPath: "https://gitee.com/jamesxiong888/meta-server.git"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dianshang-code
+  namespace: default
+spec:
+  descriptorType: "code"
+  sources:
+    - type: gitee
+      name: "dianshang-code"
+      metadata:
+        codeRepoPath: "https://gitee.com/jamesxiong888/test-code.git"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""
 
 ---
 
@@ -117,10 +283,7 @@ apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
 metadata:
   name: dd-postgres
-  namespace: dac
-  labels:
-    app.kubernetes.io/name: execution-engine
-    app.kubernetes.io/managed-by: kustomize
+  namespace: default
 spec:
   descriptorType: "structured-postgres"
   sources:
@@ -137,73 +300,58 @@ spec:
       prompts:
         prompts:
           name: "postgres-production-fewshots"
-      processing:
-        cleaning:
-          - rule: "remove_duplicates"
-            params: 
-              fields: "user_id,timestamp"
-          - rule: "fill_missing"
-            params: 
-              field: "price"
-              value: "0"
-      classification:
-        - domain: "科学技术类"
-          category: "计算机科学与技术"
-          subcategory: "软件工程师"
-          tags:
-            - skill: ["编程", "算法"]
-            - industry: ["互联网"]
+
 
 ---
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
 metadata:
-  name: dd-minio-test
-  namespace: dac
-  labels:
-    app.kubernetes.io/name: execution-engine
-    app.kubernetes.io/managed-by: kustomize
+  name: minio-dianshang
+  namespace: default
 spec:
   descriptorType: "unstructured"
   sources:
     - type: minio
-      name: "minio-production"
+      name: "minio-dianshang"
       metadata:
-        host: "minio-server:9000"
-        access_key: "root"
-        secret_key: "123"
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
         bucket: "dactest"
       extract:
-        files: ["test.pdf"]
+        files: ["dianshang.docx"]
       prompts:
         prompts:
-          name: "minio-production-fewshots"
-      processing:
-        cleaning:
-          - rule: "remove_duplicates"
-            params: 
-              fields: "user_id,timestamp"
-          - rule: "fill_missing"
-            params: 
-              field: "price"
-              value: "0"
-      classification:
-        - domain: "科学技术类"
-          category: "计算机科学与技术"
-          subcategory: "软件工程师"
-          tags:
-            - skill: ["编程", "算法"]
-            - industry: ["互联网"]
+          name: ""
+
+---
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: minio-satellite
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  sources:
+    - type: minio
+      name: "minio-satellite"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "dactest"
+      extract:
+        files: ["naive.pdf"]
+      prompts:
+        prompts:
+          name: ""
     
 ---
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
 metadata:
   name: dd-fileserver-test
-  namespace: dac
-  labels:
-    app.kubernetes.io/name: execution-engine
-    app.kubernetes.io/managed-by: kustomize
+  namespace: default
 spec:
   descriptorType: "unstructured"
   sources:
@@ -216,20 +364,4 @@ spec:
         files: ["test.pdf"]
       prompts:
         prompts:
-          name: "fileserver-production-fewshots"
-      processing:
-        cleaning:
-          - rule: "remove_duplicates"
-            params: 
-              fields: "user_id,timestamp"
-          - rule: "fill_missing"
-            params: 
-              field: "price"
-              value: "0"
-      classification:
-        - domain: "科学技术类"
-          category: "计算机科学与技术"
-          subcategory: "软件工程师"
-          tags:
-            - skill: ["编程", "算法"]
-            - industry: ["互联网"]
+          name: ""

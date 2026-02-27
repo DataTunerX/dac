@@ -1,0 +1,7 @@
+# Sandbox runtime data should never be kept in git.
+data/**
+!data/filesystem/**
+
+# Local env files
+.env
+

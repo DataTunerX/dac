@@ -72,6 +72,17 @@ spec:
                         - subcategory
                         type: object
                       type: array
+                    codeRepo:
+                      properties:
+                        codeRepoBranch:
+                          type: string
+                        codeRepoPath:
+                          type: string
+                        codeRepoToken:
+                          type: string
+                        codeRepoType:
+                          type: string
+                      type: object
                     extract:
                       description: ExtractConfig defines extraction configuration
                         for data sources

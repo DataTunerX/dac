@@ -40,6 +40,7 @@ type DataSource struct {
 	Metadata       map[string]string `json:"metadata,omitempty"`
 	Extract        *ExtractConfig    `json:"extract,omitempty"`
 	Prompts        *Prompts          `json:"prompts,omitempty"`
+	CodeRepo       *CodeRepo         `json:"codeRepo,omitempty"`
 	Processing     ProcessingConfig  `json:"processing,omitempty"`
 	Classification []Classification  `json:"classification,omitempty"`
 }
@@ -64,6 +65,13 @@ type ConfigMapData struct {
 type FewShot struct {
 	Query  string `json:"query"`
 	Answer string `json:"answer"`
+}
+
+type CodeRepo struct {
+	CodeRepoType   string `json:"codeRepoType,omitempty"`
+	CodeRepoPath   string `json:"codeRepoPath,omitempty"`
+	CodeRepoBranch string `json:"codeRepoBranch,omitempty"`
+	CodeRepoToken  string `json:"codeRepoToken,omitempty"`
 }
 
 type BackgroundKnowledge struct {

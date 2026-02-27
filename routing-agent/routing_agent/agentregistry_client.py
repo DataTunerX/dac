@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -7,6 +8,8 @@ import asyncio
 import aiohttp
 from aiohttp import ClientTimeout
 import os
+
+logger = logging.getLogger(__name__)
 
 class SearchType(str, Enum):
     """Search type enumeration"""
@@ -92,9 +95,17 @@ class AgentRegistryClient:
                 if payload is not None:
                     request_kwargs["json"] = payload
                 
+                logger.info(f"[DEBUG] REQUEST: {method} {url}, payload={json.dumps(payload, ensure_ascii=False) if payload else 'None'}")
                 async with session.request(**request_kwargs) as response:
                     response.raise_for_status()
-                    return await response.json()
+                    raw_text = await response.text()
+                    logger.info(f"[DEBUG] {method} {url} -> status={response.status}, raw_response(first 1000 chars)={raw_text[:1000]}")
+                    try:
+                        parsed = json.loads(raw_text)
+                    except json.JSONDecodeError:
+                        parsed = await response.json()
+                    logger.info(f"[DEBUG] parsed response type={type(parsed).__name__}, keys={list(parsed.keys()) if isinstance(parsed, dict) else 'N/A(list)'}, len={len(parsed) if isinstance(parsed, (list, dict)) else 'N/A'}")
+                    return parsed
                     
             except aiohttp.ClientError as e:
                 raise Exception(f"HTTP request failed: {e}")
@@ -146,3 +157,26 @@ class AgentRegistryClient:
             search_type=response.get("search_type", ""),
             result=result_items
         )
+
+    async def alist_all_agents(
+        self,
+        collection_name: str = "orchestrator_agent_cards",
+    ) -> List[Dict[str, Any]]:
+        """
+        List ALL registered agents from the registry service.
+        
+        Unlike asearch() which uses vector search to find relevant agents,
+        this method retrieves every agent in the collection without filtering.
+        
+        Args:
+            collection_name: Collection name to list from
+            
+        Returns:
+            List of agent data dictionaries that can be used to construct AgentCard objects
+        """
+        # 使用 query params 而非 JSON body，因为 GET 请求的 body 会被大多数服务端框架忽略
+        endpoint = f"/agents?collection={collection_name}"
+        
+        response = await self._amake_request("GET", endpoint)
+        
+        return response.get("agent_cards", [])

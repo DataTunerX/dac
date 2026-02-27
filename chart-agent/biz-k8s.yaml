@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: biz-chart-agent
+  name: biz-chart-agent
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: biz-chart-agent
+  template:
+    metadata:
+      labels:
+        app: biz-chart-agent
+    spec:
+      containers:
+      - name: biz-chart-agent
+        env:
+        - name: Agent_Host
+          value: "biz-chart-agent.dac.svc.cluster.local"
+        - name: Agent_Port
+          value: "10100"
+        - name: Agent_Name
+          value: "ChartAgent"
+        - name: Agent_Description
+          value: "根据用户描述与数据判断是否可绘图并生成 ECharts 图表；数据不足时明确说明无法生成。"
+        - name: CHART_AGENT_START_MODE
+          value: "agent"
+        - name: REGISTER_AGENT
+          value: "true"
+        - name: LANGFUSE_BASE_URL
+          value: "http://10.17.0.43:3000"
+        - name: LANGFUSE_SECRET_KEY
+          value: "sk-lf-a8cd7ec4-d08c-4f2b-a174-d458073d6d73"
+        - name: LANGFUSE_PUBLIC_KEY
+          value: "pk-lf-ebed2fcd-31df-4c35-ba33-d6bf0ab399e5"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/chart-agent:v0.6.0-amd64
+        imagePullPolicy: IfNotPresent
+        name: biz-chart-agent
+        ports:
+          - containerPort: 10100
+        args:
+          - "--redis-host"
+          - "redis-server.dac.svc.cluster.local"
+          - "--redis-port"
+          - "6379"
+          - "--redis-db"
+          - "3"
+          - "--password"
+          - "123"
+          - "--provider"
+          - "openai_compatible"
+          - "--api-key"
+          - "sk-xxx"
+          - "--base-url"
+          - "https://dashscope.aliyuncs.com/compatible-mode/v1"
+          - "--model"
+          - "deepseek-v3.2"
+        resources:
+          limits:
+            cpu: 100m
+            memory: 2Gi
+          requests:
+            cpu: 50m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: biz-chart-agent
+  namespace: dac
+spec:
+  ports:
+    - name: tcp-10100-10100
+      protocol: TCP
+      port: 10100
+      targetPort: 10100
+  selector:
+    app: biz-chart-agent
+  type: NodePort

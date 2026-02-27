@@ -232,12 +232,13 @@ func (m *chatModel) handleWindowResize(msg tea.WindowSizeMsg) {
 // startStreaming starts a new streaming conversation
 func (m *chatModel) startStreaming(text string) {
 	m.input.Reset()
+	// reset streaming state
 	m.streamLine = ""
 	m.lineBuffer = ""
 	m.inAnswer = false
 	m.tasksShown = false
 
-	// 添加user消息到内容区
+	// append user message to content
 	m.content.WriteString("\n")
 	m.content.WriteString(boldStyle.Render("You"))
 	m.content.WriteString("\n")
@@ -254,29 +255,8 @@ func (m *chatModel) startStreaming(text string) {
 func (m *chatModel) finishStream() {
 	m.state = streamIdle
 	m.chunkCh, m.errCh = nil, nil
-
-	// Process remaining content in lineBuffer
-	if m.lineBuffer != "" {
-		line := strings.TrimRight(m.lineBuffer, "\r")
-		if m.inAnswer {
-			m.content.WriteString(line)
-			m.content.WriteString("\n")
-		} else if !m.isTaskPlanningLine(line) && strings.TrimSpace(line) != "" {
-			m.content.WriteString(line)
-			m.content.WriteString("\n")
-		}
-		m.lineBuffer = ""
-		m.streamLine = ""
-	} else if m.streamLine != "" {
-		if m.inAnswer {
-			m.content.WriteString(m.streamLine)
-			m.content.WriteString("\n")
-		} else if !m.isTaskPlanningLine(m.streamLine) && strings.TrimSpace(m.streamLine) != "" {
-			m.content.WriteString(m.streamLine)
-			m.content.WriteString("\n")
-		}
-		m.streamLine = ""
-	}
+	m.streamLine = ""
+	m.lineBuffer = ""
 
 	m.refreshContent()
 }
@@ -325,207 +305,11 @@ func (m *chatModel) handleChunk(chunk types.ChatStreamChunk) {
 		return
 	}
 
-	m.lineBuffer += delta
-
-	// Process complete lines
-	for {
-		idx := strings.Index(m.lineBuffer, "\n")
-		if idx < 0 {
-			break
-		}
-		line := m.lineBuffer[:idx]
-		m.processLine(line)
-		m.lineBuffer = m.lineBuffer[idx+1:]
-	}
-
-	// 部分行作为流式显示
-	if m.lineBuffer != "" {
-		if m.inAnswer {
-			m.streamLine = m.lineBuffer
-		} else if !m.looksLikeTaskPlanning(m.lineBuffer) {
-			m.streamLine = m.lineBuffer
-		} else {
-			m.streamLine = ""
-		}
-	} else {
-		m.streamLine = ""
-	}
+	// Simply append streamed content as-is
+	m.content.WriteString(delta)
+	m.streamLine = ""
 
 	m.refreshContent()
-}
-
-// looksLikeTaskPlanning checks if a partial line looks like task planning (for streaming display prediction)
-func (m *chatModel) looksLikeTaskPlanning(partial string) bool {
-	trimmed := strings.TrimSpace(partial)
-	if trimmed == "" {
-		return false
-	}
-
-	lower := strings.ToLower(trimmed)
-
-	return strings.HasPrefix(trimmed, "📋") ||
-		strings.HasPrefix(trimmed, "All Tasks") ||
-		(strings.HasPrefix(trimmed, "[") && (strings.Contains(trimmed, "]:") || strings.Contains(trimmed, "] "))) ||
-		strings.HasPrefix(trimmed, "Task [") ||
-		strings.HasPrefix(lower, "step ") ||
-		strings.HasPrefix(lower, "step:") ||
-		strings.HasPrefix(lower, "next:") ||
-		strings.HasPrefix(lower, "answer:") ||
-		strings.HasPrefix(trimmed, "===") ||
-		strings.HasPrefix(trimmed, "failure分析") ||
-		strings.HasPrefix(trimmed, "⚠️")
-}
-
-// processLine processes a complete line of text
-func (m *chatModel) processLine(line string) {
-	line = strings.TrimRight(line, "\r")
-	trimmed := strings.TrimSpace(line)
-
-	// Check if this is a retry/re-planning related line
-	if m.isRetryOrPlanningLine(trimmed) {
-		m.streamLine = ""
-		return
-	}
-
-	// Check if this is an answer line
-	if m.isAnswerLine(trimmed) {
-		m.handleAnswerLine(line)
-		return
-	}
-
-	// If already in answer section, display all content
-	if m.inAnswer {
-		m.content.WriteString(line)
-		m.content.WriteString("\n")
-		m.streamLine = ""
-		return
-	}
-
-	// Before answer, check if this is a task line
-	if m.isTaskLine(trimmed) {
-		m.handleTaskLine(trimmed)
-		return
-	}
-
-	// Filter out other task planning related lines and empty lines
-	if m.isTaskPlanningLine(line) || trimmed == "" {
-		m.streamLine = ""
-		return
-	}
-
-	// Filter intermediate results
-	if m.looksLikeIntermediateResult(trimmed) {
-		m.streamLine = ""
-		return
-	}
-
-	// Display other content as well
-	m.content.WriteString(line)
-	m.content.WriteString("\n")
-	m.streamLine = ""
-}
-
-// isAnswerLine checks if this is an answer line
-func (m *chatModel) isAnswerLine(line string) bool {
-	return strings.HasPrefix(strings.ToLower(line), "answer:")
-}
-
-// handleAnswerLine processes an answer line
-func (m *chatModel) handleAnswerLine(line string) {
-	if !m.inAnswer {
-		m.inAnswer = true
-		m.content.WriteString("\n")
-	}
-
-	// Extract content after "answer:"
-	if idx := strings.Index(line, ":"); idx >= 0 {
-		answerContent := strings.TrimSpace(line[idx+1:])
-		if answerContent != "" {
-			m.content.WriteString(answerContent)
-			m.content.WriteString("\n")
-		}
-	}
-	m.streamLine = ""
-}
-
-// isTaskLine checks if this is a task line
-func (m *chatModel) isTaskLine(line string) bool {
-	return strings.HasPrefix(line, "[") && strings.Contains(line, "]:")
-}
-
-// handleTaskLine processes a task line
-func (m *chatModel) handleTaskLine(line string) {
-	// If tasks haven't been shown yet, display a concise task hint
-	if !m.tasksShown {
-		parts := strings.SplitN(line, "]:", 2)
-		if len(parts) == 2 {
-			taskNum := strings.TrimPrefix(parts[0], "[")
-			taskDesc := strings.TrimSpace(parts[1])
-
-			// Remove Agent name part
-			if idx := strings.Index(taskDesc, " - ["); idx >= 0 {
-				taskDesc = strings.TrimSpace(taskDesc[:idx])
-			}
-
-			// Display concise task hint
-			m.content.WriteString(dimStyle.Render(fmt.Sprintf("⏳ [%s] %s", taskNum, taskDesc)))
-			m.content.WriteString("\n")
-		}
-	}
-
-	// If line starts with [1], mark tasks as shown
-	if strings.HasPrefix(line, "[1]") {
-		m.tasksShown = true
-	}
-	m.streamLine = ""
-}
-
-// isRetryOrPlanningLine checks if the line is related to retry or re-planning
-func (m *chatModel) isRetryOrPlanningLine(line string) bool {
-	return strings.Contains(line, "=== 计划执行遇到问题") ||
-		strings.Contains(line, "=== 第") && (strings.Contains(line, "次重试") || strings.Contains(line, "次重new规划")) ||
-		strings.HasPrefix(line, "failure分析:") ||
-		strings.Contains(line, "分配给") && strings.Contains(line, "failure") ||
-		strings.HasPrefix(line, "All Tasks:") ||
-		strings.HasPrefix(line, "⚠️")
-}
-
-// looksLikeIntermediateResult checks if the line looks like an intermediate result
-func (m *chatModel) looksLikeIntermediateResult(line string) bool {
-	// Before answer, all lines containing "based on背景知识" are intermediate results
-	if !m.inAnswer && strings.Contains(line, "based on背景知识") {
-		return true
-	}
-	// Single ellipsis
-	if line == "..." {
-		return true
-	}
-	return false
-}
-
-// isTaskPlanningLine checks if the line is related to task planning
-func (m *chatModel) isTaskPlanningLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		return false
-	}
-
-	lower := strings.ToLower(trimmed)
-
-	return strings.HasPrefix(trimmed, "📋") ||
-		strings.HasPrefix(trimmed, "All Tasks") ||
-		(strings.HasPrefix(trimmed, "[") && strings.Contains(trimmed, "]:")) ||
-		strings.HasPrefix(trimmed, "Task [") ||
-		strings.HasPrefix(lower, "step") ||
-		strings.HasPrefix(lower, "next") ||
-		strings.HasPrefix(lower, "answer:") ||
-		strings.Contains(trimmed, "=== 计划执行遇到问题") ||
-		strings.Contains(trimmed, "=== 第") && (strings.Contains(trimmed, "次重试") || strings.Contains(trimmed, "次重new规划")) ||
-		strings.HasPrefix(trimmed, "failure分析:") ||
-		(strings.Contains(trimmed, "分配给") && strings.Contains(trimmed, "failure")) ||
-		strings.HasPrefix(trimmed, "⚠️") ||
-		strings.Contains(trimmed, "已达到最大重试次数") ||
-		strings.HasPrefix(trimmed, "...")
 }
 
 // refreshContent refreshes the display content
@@ -535,7 +319,7 @@ func (m *chatModel) refreshContent() {
 		display += m.streamLine
 	}
 	if m.err != nil {
-		display += "\n" + errorStyle.Render(fmt.Sprintf("错误: %v", m.err))
+		display += "\n" + errorStyle.Render(fmt.Sprintf("Error: %v", m.err))
 	}
 
 	// Auto-wrap handling
@@ -610,9 +394,9 @@ func (m *chatModel) wrapLine(line string, maxWidth int) string {
 // View renders the UI (Bubble Tea interface)
 func (m chatModel) View() string {
 	// Top status bar
-	status := dimStyle.Render(fmt.Sprintf("会话 %s", m.runID[:sessionIDDisplayLength]))
+	status := dimStyle.Render(fmt.Sprintf("Session %s", m.runID[:sessionIDDisplayLength]))
 	if m.state == streamStreaming {
-		status += dimStyle.Render(" • 生成中...")
+		status += dimStyle.Render(" • generating...")
 	}
 
 	// Content area
@@ -621,7 +405,7 @@ func (m chatModel) View() string {
 	// Input area
 	var inputView string
 	if m.state == streamStreaming {
-		inputView = dimStyle.Render("> ") + dimStyle.Render("等待回复完成...")
+		inputView = dimStyle.Render("> ") + dimStyle.Render("Waiting for response...")
 	} else {
 		inputView = promptStyle.Render("> ") + m.input.View()
 	}
@@ -629,7 +413,7 @@ func (m chatModel) View() string {
 	// Bottom help text
 	help := ""
 	if m.state != streamStreaming {
-		help = dimStyle.Render("Enter 发送 • ↑↓ 滚动 • Esc 退出")
+		help = dimStyle.Render("Enter to send • ↑↓ scroll • Esc to exit")
 	}
 
 	parts := []string{status, "", content, "", inputView}

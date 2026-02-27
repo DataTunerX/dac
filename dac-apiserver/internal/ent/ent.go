@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"github.com/lvyanru/dac-apiserver/internal/ent/discoveryjob"
 	"github.com/lvyanru/dac-apiserver/internal/ent/run"
 	"github.com/lvyanru/dac-apiserver/internal/ent/user"
 )
@@ -74,8 +75,9 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			run.Table:  run.ValidColumn,
-			user.Table: user.ValidColumn,
+			discoveryjob.Table: discoveryjob.ValidColumn,
+			run.Table:          run.ValidColumn,
+			user.Table:         user.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

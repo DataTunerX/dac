@@ -59,7 +59,7 @@ spec:
         - name: MEMORY_GRAPH_DB_PROVIDER
           value: "neo4j"
         - name: MEMORY_GRAPH_DB_URL
-          value: "neo4j://neo4j-server:7687"
+          value: "bolt://neo4j-server:7687"
         - name: MEMORY_GRAPH_DB_USERNAME
           value: "neo4j"
         - name: MEMORY_GRAPH_DB_PASSWORD
@@ -84,40 +84,6 @@ spec:
           value: "1"
         - name: PGVECTOR_MAX_CONNECTION
           value: "50"
-        - name: KNOWLEDGE_PGVECTOR_HOST
-          value: "pgvector"
-        - name: KNOWLEDGE_PGVECTOR_PORT
-          value: "5432"
-        - name: KNOWLEDGE_PGVECTOR_USER
-          value: "postgres"
-        - name: KNOWLEDGE_PGVECTOR_PASSWORD
-          value: "postgres"
-        - name: KNOWLEDGE_MEMORY_DBNAME
-          value: "knowledge_memories"
-        - name: KNOWLEDGE_PGVECTOR_MIN_CONNECTION
-          value: "1"
-        - name: KNOWLEDGE_PGVECTOR_MAX_CONNECTION
-          value: "50"
-        - name: KNOWLEDGE_MEMORY_COLLECTION
-          value: "knowledge_memories"
-        - name: KNOWLEDGE_MEMORY_EMBEDDING_DIMS
-          value: "1024"
-        - name: KNOWLEDGE_MEMORY_GRAPH_ENABLE
-          value: "disable"
-        - name: KNOWLEDGE_MEMORY_GRAPH_DB_PROVIDER
-          value: "neo4j"
-        - name: KNOWLEDGE_MEMORY_GRAPH_DB_URL
-          value: "neo4j://neo4j-server:7687"
-        - name: KNOWLEDGE_MEMORY_GRAPH_DB_USERNAME
-          value: "neo4j"
-        - name: KNOWLEDGE_MEMORY_GRAPH_DB_PASSWORD
-          value: "test123456"
-        - name: KNOWLEDGE_MEMORY_GRAPH_LLM_MODEL
-          value: "deepseek-v3"
-        - name: KNOWLEDGE_MEMORY_GRAPH_LLM_APIKEY
-          value: "sk-xxx"
-        - name: KNOWLEDGE_MEMORY_GRAPH_LLM_BASEURL
-          value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
         - name: MYSQL_HOST
           value: "mysql-server"
         - name: MYSQL_PORT
@@ -132,7 +98,15 @@ spec:
           value: "50"
         - name: MYSQL_HISTORY_DATABASE
           value: "history"
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/data-services:v0.2.0-amd64
+        - name: KNOWLEDGE_GRAPH_DB_URL
+          value: "bolt://neo4j-server:7687"
+        - name: KNOWLEDGE_GRAPH_DB_USERNAME
+          value: "neo4j"
+        - name: KNOWLEDGE_GRAPH_DB_PASSWORD
+          value: "test123456"
+        - name: KNOWLEDGE_GRAPH_EMBEDDING_DIMS
+          value: "1024"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/data-services:v0.6.0-amd64
         imagePullPolicy: IfNotPresent
         ports:
           - containerPort: 8000

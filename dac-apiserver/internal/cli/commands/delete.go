@@ -66,10 +66,10 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		isDAC = false
 	default:
 		ui.PrintError("invalid resource type: %s", resourceType)
-		fmt.Println("\nValid types:")
-		fmt.Println("  • dac, dataagentcontainer")
-		fmt.Println("  • dd, datadescriptor")
-		fmt.Printf("\nRun '%s --help' for usage.\n", cmd.CommandPath())
+		ui.PrintInfo("Valid types:")
+		ui.PrintBold("  dac, dataagentcontainer")
+		ui.PrintBold("  dd, datadescriptor")
+		ui.PrintInfo("Run '%s --help' for usage.", cmd.CommandPath())
 		return fmt.Errorf("invalid resource type")
 	}
 
@@ -85,7 +85,7 @@ func runDelete(cmd *cobra.Command, args []string) error {
 
 	if !cfg.IsAuthenticated() {
 		ui.PrintError("not authenticated, please login first")
-		fmt.Println("\nRun 'dactl login' to authenticate.")
+		ui.PrintInfo("Run 'dactl login' to authenticate.")
 		return fmt.Errorf("authentication required")
 	}
 

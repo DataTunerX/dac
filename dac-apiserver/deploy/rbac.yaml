@@ -12,6 +12,26 @@ kind: ClusterRole
 metadata:
   name: dac-apiserver-role
 rules:
+  # Namespace 资源权限（用于前端下拉选择）
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs:
+      - get
+      - list
+      - watch
+
+  # ConfigMap 资源权限（用于 LLM / Prompts 配置管理）
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
   # DataAgentContainer 资源权限
   - apiGroups: ["dac.dac.io"]
     resources: ["dataagentcontainers"]

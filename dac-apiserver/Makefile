@@ -98,6 +98,10 @@ fmt: ## Format code
 	@echo "Formatting code..."
 	$(GOFMT) ./...
 
+generate: ## Run go generate
+	@echo "Running go generate..."
+	$(GOCMD) generate ./...
+
 vet: ## Run go vet
 	@echo "Running go vet..."
 	$(GOVET) ./...

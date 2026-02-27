@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -24,7 +23,7 @@ var loginCmd = &cobra.Command{
 	Short: "authenticate with DAC API server",
 	Long: `Authenticate with DAC API Server and save credentials locally.
 
-Your authentication token will be stored in ~/.dactl/config.yaml and used
+Your authentication token will be stored in ~/.dactl/config.json and used
 automatically for all subsequent commands. The token remains valid until
 it expires or you login again.
 
@@ -49,6 +48,14 @@ func init() {
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
+	// Handle common help invocations like `dactl login help`
+	if len(args) > 0 {
+		switch args[0] {
+		case "help", "-h", "--help":
+			return cmd.Help()
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -129,9 +136,4 @@ Config saved:   %s`,
 	ui.PrintBold("  dactl describe <name>   # Show resource details")
 
 	return nil
-}
-
-// trimServer removes trailing slashes from server address
-func trimServer(server string) string {
-	return strings.TrimRight(server, "/")
 }

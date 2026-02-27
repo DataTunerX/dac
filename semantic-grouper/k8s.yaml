@@ -1,0 +1,258 @@
+# =============================================================================
+# semantic-grouper API Deployment
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: semantic-grouper-api
+  name: semantic-grouper-api
+  namespace: dac
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: semantic-grouper-api
+  template:
+    metadata:
+      labels:
+        app: semantic-grouper-api
+    spec:
+      containers:
+      - name: semantic-grouper-api
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:v0.7.0-amd64
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "/app/entrypoint-api.sh"]
+        env:
+        - name: REDIS_HOST
+          value: "redis-server"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_DB_BROKER
+          value: "8"
+        - name: REDIS_DB_BACKEND
+          value: "9"
+        - name: REDIS_DB_LOCK
+          value: "6"
+        - name: REDIS_PASSWORD
+          value: "123"
+        - name: DATA_SERVICES
+          value: "http://data-services.dac:8000"
+        - name: PROVIDER
+          value: "openai_compatible"
+        - name: API_KEY
+          value: "sk-xxx"
+        - name: BASE_URL
+          value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        - name: Model
+          value: "deepseek-v3.2"
+        - name: Temperature
+          value: "0.01"
+        ports:
+          - containerPort: 8000
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+      restartPolicy: Always
+
+---
+
+# =============================================================================
+# semantic-grouper Worker Deployment
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: semantic-grouper-worker
+  name: semantic-grouper-worker
+  namespace: dac
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: semantic-grouper-worker
+  template:
+    metadata:
+      labels:
+        app: semantic-grouper-worker
+    spec:
+      serviceAccountName: semantic-grouper-worker
+      containers:
+      - name: semantic-grouper-worker
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:v0.7.0-amd64
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "/app/entrypoint-worker.sh"]
+        env:
+        - name: REDIS_HOST
+          value: "redis-server"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_DB_BROKER
+          value: "8"
+        - name: REDIS_DB_BACKEND
+          value: "9"
+        - name: REDIS_DB_LOCK
+          value: "6"
+        - name: REDIS_PASSWORD
+          value: "123"
+        - name: DATA_SERVICES
+          value: "http://data-services.dac:8000"
+        - name: HIERARCHY_MERGE_DEBOUNCE_SECONDS
+          value: "60"
+        - name: MIN_GROUPS_FOR_MERGE_DEPTH0
+          value: "3"
+        - name: MIN_GROUPS_FOR_MERGE_UPPER
+          value: "2"
+        - name: PROVIDER
+          value: "openai_compatible"
+        - name: API_KEY
+          value: "sk-xxx"
+        - name: BASE_URL
+          value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        - name: Model
+          value: "deepseek-v3.2"
+        - name: Temperature
+          value: "0.01"
+        - name: CELERY_WORKER_AMOUNT
+          value: "2"
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 200m
+            memory: 512Mi
+      restartPolicy: Always
+
+---
+
+# =============================================================================
+# semantic-grouper Beat Deployment (RedBeat HA: 2 replicas, only leader fires)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: semantic-grouper-beat
+  name: semantic-grouper-beat
+  namespace: dac
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: semantic-grouper-beat
+  template:
+    metadata:
+      labels:
+        app: semantic-grouper-beat
+    spec:
+      containers:
+      - name: semantic-grouper-beat
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:v0.7.0-amd64
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "/app/entrypoint-beat.sh"]
+        env:
+        - name: REDIS_HOST
+          value: "redis-server"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_DB_BROKER
+          value: "8"
+        - name: REDIS_DB_BACKEND
+          value: "9"
+        - name: REDIS_DB_LOCK
+          value: "6"
+        - name: REDIS_DB_BEAT
+          value: "10"
+        - name: REDBEAT_KEY_PREFIX
+          value: "semantic_grouper:redbeat"
+        - name: REDBEAT_LOCK_KEY
+          value: "semantic_grouper:redbeat:lock"
+        - name: REDIS_PASSWORD
+          value: "123"
+        - name: HIERARCHY_MERGE_INTERVAL_MINUTES
+          value: "30"
+        - name: REDBEAT_LOCK_TIMEOUT_SECONDS
+          value: "120"
+        - name: DATA_SERVICES
+          value: "http://data-services.dac:8000"
+        - name: PROVIDER
+          value: "openai_compatible"
+        - name: API_KEY
+          value: "sk-xxx"
+        - name: BASE_URL
+          value: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        - name: Model
+          value: "deepseek-v3.2"
+        - name: Temperature
+          value: "0.01"
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+      restartPolicy: Always
+
+---
+
+# =============================================================================
+# Service (points to API pods)
+# =============================================================================
+kind: Service
+apiVersion: v1
+metadata:
+  name: semantic-grouper
+  namespace: dac
+spec:
+  ports:
+    - name: tcp-8000-8000
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  selector:
+    app: semantic-grouper-api
+  type: ClusterIP
+
+---
+
+# =============================================================================
+# RBAC: allow semantic-grouper-worker to patch DataDescriptor annotations
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: semantic-grouper-worker
+  namespace: dac
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: semantic-grouper-dd-notifier
+rules:
+- apiGroups: ["dac.dac.io"]
+  resources: ["datadescriptors"]
+  verbs: ["get", "patch"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: semantic-grouper-dd-notifier
+subjects:
+- kind: ServiceAccount
+  name: semantic-grouper-worker
+  namespace: dac
+roleRef:
+  kind: ClusterRole
+  name: semantic-grouper-dd-notifier
+  apiGroup: rbac.authorization.k8s.io

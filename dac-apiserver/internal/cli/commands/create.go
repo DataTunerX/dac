@@ -75,7 +75,7 @@ func runCreateFromFile(cmd *cobra.Command, args []string) error {
 
 	if !cfg.IsAuthenticated() {
 		ui.PrintError("not authenticated, please login first")
-		fmt.Println("\nRun 'dactl login' to authenticate.")
+		ui.PrintInfo("Run 'dactl login' to authenticate.")
 		return fmt.Errorf("authentication required")
 	}
 

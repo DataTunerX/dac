@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
@@ -18,13 +19,15 @@ type AgentContainerUsecase interface {
 }
 
 type agentContainerUsecase struct {
-	repo domain.AgentContainerRepository
+	repo   domain.AgentContainerRepository
+	logger *slog.Logger
 }
 
 // NewAgentContainerUsecase creates a new agent container usecase
-func NewAgentContainerUsecase(repo domain.AgentContainerRepository) AgentContainerUsecase {
+func NewAgentContainerUsecase(repo domain.AgentContainerRepository, logger *slog.Logger) AgentContainerUsecase {
 	return &agentContainerUsecase{
-		repo: repo,
+		repo:   repo,
+		logger: logger,
 	}
 }
 
@@ -35,15 +38,27 @@ func (u *agentContainerUsecase) Create(ctx context.Context, req *domain.CreateAg
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
+	// Default dacType to keep CRD validation happy.
+	// execution-engine CRD spec defines `dacType` as required (no omitempty).
+	if req.DACType == "" {
+		req.DACType = "ds"
+	}
+
+	if req.OrchestratorAgentMaxLoops == "" {
+		req.OrchestratorAgentMaxLoops = "5" // Default value
+	}
+
 	// Build entity
 	container := &entity.AgentContainer{
-		Name:                req.Name,
-		Namespace:           req.Namespace,
-		Labels:              req.Labels,
-		DataPolicy:          req.DataPolicy,
-		AgentCard:           req.AgentCard,
-		Model:               req.Model,
-		ExpertAgentMaxSteps: req.ExpertAgentMaxSteps,
+		Name:                      req.Name,
+		Namespace:                 req.Namespace,
+		Labels:                    req.Labels,
+		DACType:                   req.DACType,
+		DataPolicy:                req.DataPolicy,
+		AgentCard:                 req.AgentCard,
+		Model:                     req.Model,
+		ExpertAgentMaxSteps:       req.ExpertAgentMaxSteps,
+		OrchestratorAgentMaxLoops: req.OrchestratorAgentMaxLoops,
 	}
 
 	// Create in repository
@@ -87,6 +102,9 @@ func (u *agentContainerUsecase) Update(ctx context.Context, namespace, name stri
 	if req.Labels != nil {
 		existing.Labels = req.Labels
 	}
+	if req.DACType != nil {
+		existing.DACType = *req.DACType
+	}
 	if req.DataPolicy != nil {
 		existing.DataPolicy = *req.DataPolicy
 	}
@@ -98,6 +116,9 @@ func (u *agentContainerUsecase) Update(ctx context.Context, namespace, name stri
 	}
 	if req.ExpertAgentMaxSteps != nil {
 		existing.ExpertAgentMaxSteps = *req.ExpertAgentMaxSteps
+	}
+	if req.OrchestratorAgentMaxLoops != nil {
+		existing.OrchestratorAgentMaxLoops = *req.OrchestratorAgentMaxLoops
 	}
 
 	// Update in repository

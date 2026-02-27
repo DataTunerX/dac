@@ -1,16 +1,16 @@
 apiVersion: dac.dac.io/v1alpha1
 kind: DataAgentContainer
 metadata:
-  name: dac-00
-  namespace: dac
-  labels:
-    app.kubernetes.io/name: execution-engine
-    app.kubernetes.io/managed-by: kustomize
+  name: dac-aa00006
+  namespace: default
 spec:
+  dacType: "ds"
   dataPolicy:
-    sourceNameSelector: ["dd00-mysql"]
+    dataSourceType: "SemanticDomain"
+    semanticGroupID: ""
+    sourceNameSelector: ["aa00006-mysql"]
   agentCard:
-    name: "FinancialDataAnalysisAgent"
+    name: "BankBranchFinancialDataAgent"
     description: "我是一个金融数据分析的专业智能体，可以去数据库查询需要的数据来回答用户提出来的相关的问题。"
     skills:
       - id: "Financial"
@@ -21,60 +21,632 @@ spec:
           - "存款总额"
         examples:
           - "2024年农商银行的存款总额"
+  orchestratorAgentMaxLoops: "2"
   expertAgentMaxSteps: "3"
   model:
-    plannerLLM: "llm-deepseek-v3"
-    expertLLM: "llm-qwen3-coder-480b"
-    embedding: "embedding-config"
+    plannerLLM: "llm-deepseek-v32"
+    expertLLM: "llm-deepseek-v32"
 
 ---
 
 apiVersion: dac.dac.io/v1alpha1
 kind: DataAgentContainer
 metadata:
-  name: dac-01
-  namespace: dac
-  labels:
-    app.kubernetes.io/name: execution-engine
-    app.kubernetes.io/managed-by: kustomize
+  name: dg-0000001
+  namespace: default
 spec:
+  dacType: "normal"
   dataPolicy:
-    sourceNameSelector: ["dd01-mysql"]
+    dataSourceType: "SemanticGroup"
+    semanticGroupID: "050961ba-4785-4022-ae84-ea94493821aa"
+    sourceNameSelector: []
   agentCard:
-    name: "ProductOrderAgent"
-    description: "我是一个商品订单管理系统的专业智能体，可以去数据库查询需要的数据来回答用户提出来的相关的问题。"
+    name: "BankBranchDataAnalyticsAgent"
+    description: "我是一个金融数据分析的专业智能体，可以去数据库查询需要的数据来回答用户提出来的相关的问题。"
     skills:
-      - id: "OrderManager"
-        name: "OrderManager"
-        description: "订单管理专家，负责处理订单查询、状态跟踪、订单统计等业务"
+      - id: "Financial"
+        name: "Financial"
+        description: "answer user Financial question"
         tags:
-          - "订单查询"
-          - "订单统计"
-          - "订单状态"
-          - "销售分析"
+          - "贷款总额"
+          - "存款总额"
         examples:
-          - "查询今天的所有订单"
-          - "统计本月的销售额"
-          - "查看订单号为12345的详细信息"
-          - "列出所有待发货的订单"
-          - "计算每个产品的销售排名"
-          
-      - id: "ProductManager"
-        name: "ProductManager"
-        description: "商品管理专家，负责商品信息查询、库存管理、商品分类等业务"
+          - "2024年农商银行的存款总额"
+  orchestratorAgentMaxLoops: "1"
+  expertAgentMaxSteps: "1"
+  model:
+    plannerLLM: "llm-deepseek-v32"
+    expertLLM: "llm-deepseek-v32"
+
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: dac-satellite
+  namespace: default
+spec:
+  dacType: "ds"
+  dataPolicy:
+    dataSourceType: "SemanticDomain"
+    semanticGroupID: ""
+    sourceNameSelector: ["dd-minio-test"]
+  agentCard:
+    name: "SatelliteCommunicationAnalyst"
+    description: "我是全球通信卫星产业发展的『年度情报分析师』，专注于解读年度卫星部署动态、技术演进趋势与各国战略布局，为相关决策提供基于数据的深度洞察。\n\n我能为你解决的问题：\n1. **年度部署全景分析**：帮你梳理全球年度通信卫星发射的总体数量、国家/地区分布及增长驱动因素，清晰掌握市场格局与活跃主体。\n2. **军用通信卫星发展追踪**：帮你分析各国军用通信系统的升级换代进程、在轨能力增强情况以及下一代体系（如分级式防护体系、Skynet-6）的规划论证，把握国防通信能力建设方向。\n3. **民商用通信卫星创新解读**：帮你洞察低轨星座（如IridiumNEXT）、高通量卫星（如ViaSat-2、Epic系列）、全电推进平台（如Eurostar-3000EOR）等颠覆性技术潮流的部署进展、技术特点与新兴应用（如机载宽带），识别商业创新与市场机会。\n4. **区域与国家深度剖析**：帮你深入分析美国、欧洲、俄罗斯、日本、印度等主要国家/地区的年度发射情况、重点卫星项目（如WGS-9、MUOS-5、SmallGEO、GSat-9）及其背后的产业战略调整（如频谱政策、5G融合）。\n5. **采购与新兴市场案例研究**：帮你了解巴西、阿尔及利亚等通过采购方式部署卫星的典型案例，分析其战略意图与合作模式。\n\n何时找我 & 我的服务承诺：\n- **找我时机**：当需要获取关于特定年份（如2017年）全球通信卫星发展的结构化、多维度分析报告时；当需要对比不同国家在军用或民商用领域的发展策略与技术路径时；当需要评估低轨星座、高通量卫星等特定技术趋势的年度进展与影响时。\n- **我能保证**：我确保提供的信息基于公开的年度综述数据，分析视角覆盖部署统计、技术解析与战略研判，输出内容结构清晰、重点突出。\n- **协作方式**：通过调用我的`analyze-annual-report`技能，输入年份与关注领域，我将返回该年度的核心发展分析。\n\n典型业务场景演示：\n当一家航天投资机构需要评估2017年全球低轨通信星座的投资热度时，我会：1) 汇总并分析该年度低轨星座的主要部署事件（如IridiumNEXT的批量发射完成），2) 对比其他高通量卫星系统的进展（如ViaSat-2发射创容量记录），3) 指出技术特点（如全电推进验证）与市场应用方向（如机载宽带），4) 最终形成关于该领域年度创新活力与竞争格局的简明报告。"
+    skills:
+      - id: "analyze-annual-report"
+        name: "Analyze Annual Satellite Communication Report"
+        description: "生成指定年份的全球通信卫星发展年度综述分析。业务目的：为战略规划、市场研究或投资分析提供结构化的年度发展概览与深度洞察。输入：目标年份（如2017）、可选关注领域（如‘军用’、‘民商用’、‘美国’、‘低轨星座’）。输出：包含年度总体部署情况、主要国家/地区分析、关键技术趋势、典型案例及核心结论的结构化分析报告。主要被战略规划Agent、市场研究Agent和投资分析Agent调用。"
         tags:
-          - "商品查询"
-          - "库存管理"
-          - "商品分类"
-          - "价格分析"
+          - "satellite"
+          - "communication"
+          - "market-analysis"
+          - "annual-report"
         examples:
-          - "查询所有商品列表"
-          - "查看商品A的库存数量"
-          - "按分类统计商品数量"
-          - "找出价格最高的10个商品"
-          - "查询缺货的商品列表"
+          - "请分析2017年全球通信卫星发展情况，重点关注美国的民商用领域和低轨星座进展。"
+  orchestratorAgentMaxLoops: "2"
   expertAgentMaxSteps: "3"
   model:
-    plannerLLM: "llm-deepseek-v3"
-    expertLLM: "llm-qwen3-coder-480b"
-    embedding: "embedding-config"
+    plannerLLM: "llm-deepseek-v32"
+    expertLLM: "llm-deepseek-v32"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: dd-ecommerce-orchestration-agent
+  namespace: default
+spec:
+  dacType: "ds"
+  dataPolicy:
+    dataSourceType: "SemanticDomain"
+    semanticGroupID: ""
+    sourceNameSelector: ["dd01-gitee-testcode"]
+  agentCard:
+    name: "EcommerceOrchestrationAgent"
+    description: |
+      I am the 'Master Orchestrator' of e-commerce transaction processes, focused on orchestrating complex cross-domain business workflows such as user selection, inventory locking, and order generation with atomicity and consistency principles, ensuring seamless flow from shopping cart to order fulfillment.
+
+      Core business problems I can solve for you include:
+      1. **One-stop Order Process Orchestration**: Handling the complete business chain from cart checkout to order generation. I coordinate user identity verification, product inventory locking, and order snapshot creation, ensuring the entire process either succeeds completely or rolls back entirely, preventing data inconsistencies like 'orders without inventory' or 'inventory deducted without orders'.
+      2. **Post-payment Fulfillment Process Driving**: Handling critical business connections after successful payment. When receiving payment callbacks, I drive order status updates from 'pending payment' to 'paid', and execute final inventory deductions, ensuring payment results accurately and idempotently trigger subsequent warehouse shipping processes.
+      3. **Order Cancellation Resource Coordination**: Handling order cancellation requests initiated by users or systems. I assess cancellation feasibility based on the order's current status (e.g., whether shipped) and coordinate the release of previously reserved inventory for that order, allowing inventory resources to return promptly for other transactions.
+
+      **When to Contact Me & My Service Commitment**
+      - **Contact Timing**: When you need to execute a complete transaction use case involving multiple business domains (user, product, order), such as when users click "Submit Order" for checkout, or when payment gateway callbacks notify successful payment.
+      - **What I Guarantee**: I ensure business atomicity and eventual state consistency for cross-domain operations, making complex distributed businesses as reliable as local transactions through clear process orchestration and failure compensation mechanisms.
+      - **Collaboration Method**: By calling my orchestration skills like `place-order`, `handle-payment`, `cancel-order`, and passing necessary business identifiers (like user ID, product list, order ID), I will return complete process execution results.
+      - **What I Don't Handle**: I don't handle specific operations within single domains, such as directly creating user accounts, modifying product descriptions, or independently querying order details. These are responsibilities of respective domain experts.
+
+      **Typical Business Scenario Demonstrations**
+      1. **User Order Submission Scenario**: When a user clicks "Checkout" from the shopping cart, I will: 1) Verify with the user management domain whether the user ID is valid; 2) Request locking of specified quantity inventory for each item in the list from the product management domain; 3) Obtain current snapshot information (name, price) of products; 4) Call the order management domain service to create an order aggregate with "pending payment" status based on the above information; 5) Return the generated order ID and process success result to the frontend. If any step fails (e.g., insufficient inventory), executed operations (e.g., inventory locking) will be rolled back.
+      2. **Payment Success Callback Scenario**: When the payment platform notifies that order 12345 payment succeeded, I will: 1) Check if this payment notification has been processed for this order (idempotency validation); 2) Drive the order management domain to update order 12345 status from 'pending payment' to 'paid'; 3) Drive the product management domain to finally deduct inventory reserved for order 12345; 4) Return processing success result, triggering subsequent logistics shipping processes.
+    skills:
+      - id: "place-order"
+        name: "Place Order"
+        description: |
+          Orchestrate the complete order placement business process. Business Purpose: Transform user shopping cart selections into a formal pending payment order and ensure inventory is safely reserved.
+          Typical Input: user ID, product list (containing product IDs and purchase quantities), shipping address information.
+          Expected Output: Generated order ID, process execution status (success/failure), specific reasons for failure.
+          Primarily called by frontend shopping cart Agent or checkout page Agent.
+        tags:
+          - "orchestration"
+          - "order"
+          - "inventory"
+        examples:
+          - |
+            {
+              "user_id": "U1001",
+              "items": [
+                {"product_id": "P5001", "quantity": 2},
+                {"product_id": "P5003", "quantity": 1}
+              ],
+              "shipping_address": {
+                "recipient": "张三",
+                "phone": "13800138000",
+                "province": "北京",
+                "city": "北京市",
+                "detail": "海淀区中关村大街1号"
+              }
+            }
+      - id: "handle-payment"
+        name: "Handle Payment Success"
+        description: |
+          Orchestrate the fulfillment process after payment confirmation. Business Purpose: Update order status and deduct actual inventory after payment confirmation, bridging payment and warehousing.
+          Typical Input: Order ID, payment platform transaction ID, payment amount and payment time.
+          Expected Output: Order status update result, inventory deduction result, overall processing status.
+          Primarily called by payment gateway callback processing Agent or reconciliation Agent.
+        tags:
+          - "orchestration"
+          - "payment"
+          - "fulfillment"
+        examples:
+          - |
+            {
+              "order_id": "O202310240001",
+              "payment_id": "PAY123456789",
+              "amount": 299.00,
+              "paid_at": "2023-10-24T14:30:00Z"
+            }
+      - id: "cancel-order"
+        name: "Cancel Order Process"
+        description: |
+          Orchestrate order cancellation and resource release process. Business Purpose: Cancel orders according to business rules and release inventory resources associated with the order.
+          Typical Input: Order ID, cancellation reason (user canceled/system timeout, etc.).
+          Expected Output: Order cancellation result (success/failure and reasons), inventory release result.
+          Primarily called by user order center Agent or backend order management Agent.
+        tags:
+          - "orchestration"
+          - "cancellation"
+          - "inventory-release"
+        examples:
+          - |
+            {
+              "order_id": "O202310240002",
+              "cancel_reason": "USER_CANCELED"
+            }
+  orchestratorAgentMaxLoops: "2"
+  expertAgentMaxSteps: "3"
+  model:
+    plannerLLM: "llm-deepseek-v32"
+    expertLLM: "llm-deepseek-v32"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: dac-ecommerce-transaction-agent
+  namespace: default
+spec:
+  dacType: "ds"
+  dataPolicy:
+    dataSourceType: "SemanticDomain"
+    semanticGroupID: ""
+    sourceNameSelector: ["dd-dianshang-mysql"]
+  agentCard:
+    name: "EcommerceTransactionAgent"
+    description: "我是电子商务交易闭环的『全链路协调专家』，专注于从商品展示、库存锁定到订单履约、状态流转及用户身份验证的端到端业务协同，确保在线交易顺畅、数据一致且体验可靠。\n\n我能为你解决的问题：\n1. **商品信息与库存协同管理**：帮你解决商品分类展示、实时库存查询与预留、以及价格信息同步的业务痛点。确保前端展示的商品状态、库存数量与后端真实数据一致，避免超卖或信息滞后。\n2. **订单全生命周期处理**：帮你处理从购物车到订单创建的复杂业务逻辑，包括生成订单快照、执行库存预留、管理订单状态机（如待支付、已支付、已发货、已完成、已取消）的合规流转，并处理与售后单（退款/退货）的关联。\n3. **用户身份与交易关联验证**：帮你验证下单用户的身份合法性，并确保订单、用户、商品三大核心数据域的关联关系准确无误，为交易安全与用户权限控制提供基础。\n\n何时找我 & 我的服务承诺：\n- **找我时机**：当需要创建一笔新订单、查询或修改商品库存状态、验证用户交易权限、或驱动订单状态向下一个合法环节（如支付后发货）流转时。\n- **我能保证**：我确保跨商品、订单、用户三大领域的业务操作是原子性且一致的，例如创建订单时会同步锁定库存，状态变更会遵循预定义的业务规则。\n- **协作方式**：通过调用我提供的商品查询、库存操作、订单创建、状态变更、用户验证等具体技能。\n\n典型业务场景演示：\n当用户准备结算购物车时，我会：1) 验证用户身份的有效性，2) 实时核验购物车中每个SKU的现货库存是否充足，3) 为可售商品创建预留库存记录，4) 基于商品当前价格生成不可变的订单项快照，5) 创建初始状态为『待支付』的完整订单聚合。当用户支付成功后，支付Agent会通知我，我将驱动订单状态从『待支付』合规变更为『已支付』，并触发后续的履约流程。"
+    skills:
+      - id: "query-product-with-stock"
+        name: "Query Product with Stock"
+        description: "查询商品详细信息及实时库存状态。业务目的：为商品展示或订单创建提供准确的可售性判断依据。输入：商品ID或SKU。输出：商品基础信息（名称、价格、分类）、上下架状态、现货库存与预留库存数量。主要被商品展示Agent和购物车Agent调用。"
+        tags:
+          - "product"
+          - "inventory"
+          - "catalog"
+        examples:
+          - "{\"product_id\": \"P12345\"}"
+          - "{\"sku\": \"TSHIRT-RED-L\"}"
+      - id: "reserve-stock-for-order"
+        name: "Reserve Stock for Order"
+        description: "为即将创建的订单预留指定数量的商品库存。业务目的：防止超卖，确保订单创建时商品可用。输入：商品SKU、需要预留的数量、关联的订单ID（或临时标识）。输出：预留操作结果（成功/失败）、预留后的现货与预留库存数量。主要被订单创建Agent调用。"
+        tags:
+          - "inventory"
+          - "order"
+          - "reservation"
+        examples:
+          - "{\"sku\": \"TSHIRT-BLUE-M\", \"quantity\": 2, \"order_token\": \"temp_order_abc123\"}"
+      - id: "create-order-with-snapshot"
+        name: "Create Order with Snapshot"
+        description: "基于购物车信息创建新订单，并生成订单项快照。业务目的：将用户购物意图转化为一个具有完整业务上下文、数据不可变的正式订单。输入：用户ID、配送地址、支付方式、包含商品SKU、数量、快照价格的商品清单。输出：新创建的订单聚合详情，包括订单ID、总金额、初始状态（待支付）以及所有订单项的快照信息。主要被购物车结算Agent调用。"
+        tags:
+          - "order"
+          - "fulfillment"
+          - "transaction"
+        examples:
+          - "{\"user_id\": \"U1001\", \"shipping_address\": \"...\", \"items\": [{\"sku\": \"BOOK-001\", \"quantity\": 1, \"snapshot_price\": 29.99}]}"
+      - id: "transition-order-state"
+        name: "Transition Order State"
+        description: "根据业务规则驱动订单状态机的合法流转。业务目的：管理订单生命周期，确保状态变更（如从已支付到已发货）符合预定义的业务流程。输入：订单ID、目标状态（如“shipped”、“cancelled”）、可选的变更原因。输出：状态变更结果（成功/失败）、变更后的订单状态、可能触发的后续动作提示（如释放库存）。主要被支付回调Agent、物流发货Agent、客服Agent调用。"
+        tags:
+          - "order"
+          - "state-machine"
+          - "workflow"
+        examples:
+          - "{\"order_id\": \"ORD20231124001\", \"target_state\": \"paid\"}"
+          - "{\"order_id\": \"ORD20231124002\", \"target_state\": \"cancelled\", \"reason\": \"customer_request\"}"
+      - id: "verify-user-for-transaction"
+        name: "Verify User for Transaction"
+        description: "验证指定用户身份及其进行交易的基本权限。业务目的：在关键业务操作（如下单）前确认用户合法性，保障交易安全。输入：用户ID或身份令牌。输出：验证结果（通过/不通过）、用户基本信息（如用户名、角色）、不通过时的原因。主要被订单创建Agent和支付发起Agent调用。"
+        tags:
+          - "user"
+          - "authentication"
+          - "authorization"
+        examples:
+          - "{\"user_id\": \"U1001\"}"
+          - "{\"auth_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\"}"
+  orchestratorAgentMaxLoops: "2"
+  expertAgentMaxSteps: "3"
+  model:
+    plannerLLM: "llm-deepseek-v32"
+    expertLLM: "llm-deepseek-v32"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: semanticgroup-dianshang
+  namespace: default
+spec:
+  dacType: "normal"
+  dataPolicy:
+    dataSourceType: "SemanticGroup"
+    semanticGroupID: "bbea38ec-2d73-46b7-89c3-8931c35f5708"
+    sourceNameSelector: []
+  agentCard:
+    name: "EcommerceTransactionOrchestrator"
+    description: |
+      我是电商交易流程的『总调度专家』，专注于以原子性和一致性为原则，编排用户选购、库存锁定、订单生成等跨领域复杂业务，确保从购物车到订单履约的完整链路顺畅无误。
+      
+      我能为你解决的核心业务问题包括：
+      1. **一站式下单流程编排**：帮你处理从购物车结算到订单生成的完整业务链。我负责协调验证用户身份、锁定商品库存、创建订单快照，确保整个流程要么全部成功，要么全部回滚，避免产生‘有订单无库存’或‘扣了库存没订单’的数据不一致问题。
+      2. **支付后履约流程驱动**：帮你处理支付成功后的关键业务衔接。当收到支付回调时，我会驱动订单状态从‘待支付’更新为‘已支付’，并执行库存的最终扣减，确保支付结果能准确、幂等地触发后续的仓储发货流程。
+      3. **订单取消的资源协调**：帮你处理用户或系统发起的订单取消请求。我会根据订单的当前状态（如是否已发货）判断取消的可行性，并协调释放之前为这笔订单预占的商品库存，让库存资源能够及时回流，供其他交易使用。
+      
+      **何时找我 & 我的服务承诺**
+      - **找我时机**：当你需要执行一个涉及多个业务领域（用户、商品、订单）的完整交易用例时，例如用户点击"提交订单"进行结算，或支付网关回调通知支付成功时。
+      - **我能保证**：我确保跨领域操作的业务原子性和状态最终一致性，通过明确的流程编排和失败补偿机制，让复杂的分布式业务像本地事务一样可靠。
+      - **协作方式**：通过调用我的 `place-order`、`handle-payment`、`cancel-order` 等编排技能，传入必要的业务标识（如用户ID、商品清单、订单ID），我将返回完整的流程执行结果。
+      
+      **典型业务场景演示**
+      1. **用户提交订单场景**：当用户从购物车点击"结算"时，我会：1) 向用户管理域验证该用户ID是否有效；2) 向商品管理域请求锁定清单中每个商品的指定数量库存；3) 获取商品的当前快照信息（名称、价格）；4) 调用订单管理域的服务，基于以上信息创建一张状态为"待支付"的订单聚合；5) 将生成的订单ID和流程成功结果返回给前端。若任何一步失败（如库存不足），则已执行的操作（如库存锁定）将被回滚。
+      2. **支付成功回调场景**：当支付平台通知订单12345支付成功时，我会：1) 检查该订单是否已处理过此支付通知（幂等性校验）；2) 驱动订单管理域将订单12345的状态从"待支付"更新为"已支付"；3) 驱动商品管理域将订单12345预占的库存进行最终扣减；4) 返回处理成功的结果，触发后续的物流发货流程。
+    url: "http://192.168.xxx.xxx:20002/"
+    provider: null
+    version: "1.0.0"
+    documentationUrl: null
+    capabilities:
+      streaming: "True"
+      pushNotifications: "True"
+      stateTransitionHistory: "False"
+    authentication:
+      credentials: null
+      schemes:
+        - "public"
+    defaultInputModes:
+      - "text"
+      - "text/plain"
+    defaultOutputModes:
+      - "text"
+      - "text/plain"
+    skills:
+      - id: "place-order"
+        name: "Place Order"
+        description: "编排一站式下单流程。业务目的：将购物车中的商品清单转化为一张状态为‘待支付’的订单，并确保用户身份有效、库存被成功锁定。典型输入：用户ID、商品SKU及数量清单、配送地址。预期输出：流程执行结果（成功/失败）、生成的订单ID、失败原因。主要被前端购物车Agent或结算页面Agent调用。"
+        tags:
+          - "orchestration"
+          - "order"
+          - "inventory"
+        examples:
+          - |
+            {
+              "user_id": "U1001",
+              "items": [
+                {"sku": "PROD001-RED-M", "quantity": 2},
+                {"sku": "PROD002", "quantity": 1}
+              ],
+              "shipping_address": "上海市浦东新区..."
+            }
+        inputModes: null
+        outputModes: null
+      - id: "handle-payment"
+        name: "Handle Payment"
+        description: "驱动支付成功后的履约流程。业务目的：幂等地处理支付回调，更新订单状态并最终扣减库存，为发货流程铺路。典型输入：订单ID、支付交易号、支付金额、支付状态。预期输出：处理结果（成功/已处理/失败）、订单新状态、库存扣减详情。主要被支付网关回调处理Agent调用。"
+        tags:
+          - "orchestration"
+          - "payment"
+          - "fulfillment"
+        examples:
+          - |
+            {
+              "order_id": "ORD20231124001",
+              "payment_transaction_id": "PAY123456789",
+              "amount": 299.00,
+              "status": "SUCCESS"
+            }
+        inputModes: null
+        outputModes: null
+      - id: "cancel-order"
+        name: "Cancel Order"
+        description: "协调订单取消及资源释放。业务目的：根据订单当前状态判断取消可行性，并协调释放预占的库存资源。典型输入：订单ID、取消原因（用户取消/超时未支付/系统异常）。预期输出：取消处理结果（成功/失败/不允许）、释放的库存详情。主要被订单超时管理Agent或用户前台Agent调用。"
+        tags:
+          - "orchestration"
+          - "order"
+          - "inventory"
+        examples:
+          - |
+            {
+              "order_id": "ORD20231124001",
+              "cancel_reason": "USER_CANCELLED"
+            }
+        inputModes: null
+        outputModes: null
+  orchestratorAgentMaxLoops: "1"
+  expertAgentMaxSteps: "1"
+  model:
+    plannerLLM: "llm-deepseek-v32"
+    expertLLM: "llm-deepseek-v32"
+
+---
+
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: llmfinetuneorchestratoragent
+  namespace: default
+spec:
+  agentCard:
+    description: >-
+      我是大语言模型（LLM）微调与部署平台的『工作流总指挥』，专注于在Kubernetes环境中自动化编排从模型微调实验、分布式训练执行到服务部署与评估的完整生命周期，确保流程高效、可靠且可观测。
+
+
+      **我能为你解决的问题（列出全部的能力）**
+
+      1. 
+      **微调实验与作业编排**：帮你创建和管理包含多个对比作业的微调实验，自动化驱动从数据准备、模型训练、镜像构建、服务部署到效果评分的完整工作流，解决手动串联步骤复杂、状态难以跟踪的业务痛点。
+
+      2. 
+      **分布式训练任务调度**：为你启动和管理具体的模型微调训练任务，关联底层RayJob等分布式计算资源，确保训练规格（模型、数据集、超参数）被正确执行，解决大规模模型训练资源调度与执行的难题。
+
+      3. 
+      **模型服务部署与生命周期管理**：将训练完成的模型部署为可伸缩的Ray集群推理服务，并管理其生命周期（创建、状态监控、清理），解决模型从训练成果到线上服务的最后一公里问题。
+
+      4. 
+      **效果评估与最佳版本决策**：对已部署的模型服务执行评分任务，量化其性能（如准确率、困惑度），并聚合实验内所有作业的评分结果，自动计算并标识出最佳模型版本，解决多版本模型效果对比与选型的决策难题。
+
+      5. 
+      **资源清理与成本控制**：在实验或作业结束后，按序清理所有关联的Kubernetes资源（如训练任务、服务实例），避免资源残留，帮助你有效控制云计算成本。
+
+
+      **何时找我 & 我的服务承诺**
+
+      - **找我时机**：当你需要自动化、可复现地管理大语言模型的微调实验，或需要将训练流程与Kubernetes基础设施无缝集成时。
+
+      - **我能保证**：我确保你的微调工作流被正确、有序地编排和执行，提供清晰的流程状态与聚合视图，并自动完成从训练到服务的资源管理。
+
+      - **协作方式**：通过调用我的创建实验、启动作业、部署服务、执行评分等技能，你可以像指挥专家团队一样管理整个微调生命周期。
+
+
+      **典型业务场景演示**
+
+      当数据科学家希望对比不同超参数对模型效果的影响时，我会：1) 创建一个微调实验，并为其定义多个不同配置的微调作业；2)
+      自动为每个作业启动训练任务、部署推理服务并执行评分；3) 持续协调各作业的阶段状态转换；4)
+      实验结束后，聚合所有评分结果，明确指出哪个配置产出了最佳模型版本，并清理所有临时资源。
+    name: LLMFinetuneOrchestratorAgent
+    skills:
+      - description: >-
+          创建一个包含多个对比作业的微调实验单元。业务目的：为模型调优提供结构化、可对比的实验框架。输入：实验规格（目标、配置）、作业列表（每个作业的规格）。输出：实验ID、创建状态（成功/失败）、错误信息（如有）。主要被实验管理界面Agent或自动化流水线Agent调用。
+        examples:
+          - >-
+            {"experimentSpec": {"name": "llama2-7b-lr-comparison", "objective":
+            "Compare learning rates"}, "jobSpecs": [{"model": "llama2-7b",
+            "dataset": "finance-qa", "hyperparameters": {"learning_rate":
+            0.0001}}, {"model": "llama2-7b", "dataset": "finance-qa",
+            "hyperparameters": {"learning_rate": 0.00001}}]}
+        id: create-finetune-experiment
+        name: Create Finetune Experiment
+        tags:
+          - orchestration
+          - experiment
+      - description: >-
+          启动一个完整的微调作业，协调其生命周期各阶段。业务目的：自动化执行从数据检查、训练、构建、部署到评分的端到端流程。输入：作业规格（包含各阶段参数和依赖）。输出：作业ID、启动结果、初始阶段状态。主要被实验聚合根Agent或手动触发工作流的用户Agent调用。
+        examples:
+          - >-
+            {"jobSpec": {"name": "job-alpha", "trainingSpec": {"model":
+            "chatglm3-6b", "dataset": "customer-service", "hyperparameters":
+            {"lora_r": 8}}, "deploymentConfig": {"replicas": 2}, "scoringLogic":
+            "accuracy_on_test_set"}}
+        id: start-finetune-job
+        name: Start Finetune Job
+        tags:
+          - orchestration
+          - workflow
+      - description: >-
+          为微调作业创建一个具体的分布式训练任务实例。业务目的：将训练规格转化为可执行的Kubernetes计算资源。输入：训练规格（模型标识、数据集路径、超参配置）。输出：任务ID、关联的底层RayJob
+          ID、创建状态。主要被工作流状态协调器在作业进入训练阶段时调用。
+        examples:
+          - >-
+            {"trainingSpec": {"model": "qwen-7b", "dataset":
+            "s3://bucket/path/to/data", "hyperparameters": {"num_epochs": 3,
+            "batch_size": 4}}}
+        id: create-finetune-task
+        name: Create Finetune Task
+        tags:
+          - training
+          - execution
+      - description: >-
+          将训练完成的模型部署为Ray集群推理服务。业务目的：使微调后的模型具备在线服务能力。输入：模型镜像地址、服务配置（资源需求、副本数）。输出：Ray服务ID、部署状态、服务访问端点（如可用）。主要被工作流状态协调器在作业进入部署阶段时调用。
+        examples:
+          - >-
+            {"image": "registry.example.com/llm-models/finetuned-chatglm:v1.0",
+            "serviceConfig": {"cpu": "4", "memory": "16Gi", "gpu": "1",
+            "minReplicas": 1}}
+        id: deploy-model-service
+        name: Deploy Model Service
+        tags:
+          - deployment
+          - serving
+      - description: >-
+          对已部署的模型服务执行效果评估任务。业务目的：量化微调后模型的性能，为版本选择提供数据支持。输入：评分逻辑标识或配置、目标模型服务地址。输出：评分任务ID、评估结果（如准确率、F1值、困惑度）。主要被工作流状态协调器在作业进入评分阶段时调用，或被最佳版本计算器调用。
+        examples:
+          - >-
+            {"scoringLogic": "perplexity_on_validation_set", "targetServiceUrl":
+            "http://ray-service-alpha.default.svc.cluster.local:8000"}
+        id: execute-model-scoring
+        name: Execute Model Scoring
+        tags:
+          - evaluation
+          - scoring
+      - description: >-
+          查询微调实验的整体状态并计算最佳版本。业务目的：提供实验的全局视图和决策建议。输入：实验ID。输出：实验聚合状态（如进行中、已完成）、各子作业状态摘要、最佳版本信息（作业ID、评分结果）。主要被监控面板Agent或需要实验报告的用户Agent调用。
+        examples:
+          - '{"experimentId": "exp-20240520-001"}'
+        id: get-experiment-aggregated-status
+        name: Get Experiment Aggregated Status
+        tags:
+          - query
+          - experiment
+      - description: >-
+          清理微调实验关联的所有Kubernetes资源。业务目的：在实验结束后释放集群资源，控制成本。输入：实验ID。输出：清理结果（成功/失败）、已清理的资源列表。主要被实验生命周期管理Agent或定时清理任务Agent调用。
+        examples:
+          - '{"experimentId": "exp-20240520-001"}'
+        id: cleanup-experiment-resources
+        name: Cleanup Experiment Resources
+        tags:
+          - maintenance
+          - cost-control
+  dacType: ds
+  dataPolicy:
+    dataSourceType: SemanticDomain
+    semanticGroupID: ''
+    sourceNameSelector:
+      - datatunerx-gitee-code
+  expertAgentMaxSteps: '1'
+  model:
+    expertLLM: llm-deepseek-v32
+    plannerLLM: llm-deepseek-v32
+  orchestratorAgentMaxLoops: '1'
+
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: llmfinetuneplatformagent
+  namespace: default
+spec:
+  agentCard:
+    description: >-
+      我是大语言模型（LLM）微调与评估平台的『全生命周期管理专家』，专注于为AI团队提供声明式、可复现、可扩展的模型微调工作流自动化管理方案。
+
+
+      我能为你解决的问题：
+
+      1.
+      **模型资产管理**：帮你定义、注册和管理基础大语言模型（LLM）及其微调产出的检查点（Checkpoint），确保模型资产的唯一性、可追溯性和生命周期合规性。
+
+      2.
+      **数据资产管理**：帮你注册和管理用于训练或评估的数据集（Dataset），以及可扩展的数据处理插件（DataPlugin），确保数据来源可靠、结构清晰且可被安全引用。
+
+      3.
+      **训练配置管理**：帮你创建和管理模型微调的超参数配置（Hyperparameter），包括优化器、学习率、LoRA参数等，确保训练策略的参数合理性和内部一致性。
+
+      4.
+      **模型评估管理**：帮你定义和执行模型性能评估任务（Scoring），管理可扩展的评分算法插件（ScoringPlugin），并收集标准化的评估结果，为模型选型提供客观依据。
+
+      5.
+      **微调作业管理**：帮你编排和执行具体的模型微调作业（FinetuneJob），协调模型、数据、配置等核心资产的引用，管理作业从创建、运行到产出检查点与推理服务的完整生命周期。
+
+      6.
+      **微调实验管理**：帮你组织和管理一组相关的微调作业，形成顶层实验（FinetuneExperiment），支持批量作业执行、结果比较和根据评估指标自动选取最佳模型版本（BestVersion）。
+
+
+      何时找我 & 我的服务承诺：
+
+      -
+      **找我时机**：当你的AI团队需要系统化地管理大语言模型的微调实验，从资产定义、实验编排、作业执行到模型评估与版本选取，希望实现流程自动化、资产可复用和实验可复现时。
+
+      -
+      **我能保证**：我确保所有核心资产（模型、数据、配置）的引用关系清晰、生命周期状态一致，并强制执行“资产被引用时禁止关键修改”的业务规则，保障实验流程的稳定性和数据完整性。
+
+      - **协作方式**：通过调用我提供的各项技能，你可以像与一位专业的实验室管理员协作一样，高效地构建和管理你的模型微调工作流。
+
+
+      典型业务场景演示：
+
+      当团队需要对一个开源大模型进行多组超参数对比实验时，我会：1) 确保基础模型、训练数据集已正确注册；2) 为你创建多套不同的超参数配置；3)
+      基于这些配置，创建一个微调实验，自动生成并并行执行多个微调作业；4)
+      在每个作业完成后，调用指定的评分插件对产出的模型进行检查点记录和自动化评估；5)
+      最终，汇总所有作业的评估结果，并根据你设定的标准（如准确率最高）自动推荐最佳模型版本，并记录其完整的训练上下文。
+    name: LLMFinetunePlatformAgent
+    skills:
+      - description: >-
+          定义并注册一个新的基础大语言模型资产。业务目的：为微调实验建立可复用的模型起点，管理其元数据和硬件需求。输入：模型标识符、元数据（领域、任务、框架、许可证）、镜像配置、计算需求。输出：注册成功的模型ID及确认信息。主要被实验设计者或平台管理员调用，作为创建微调作业的前提。
+        examples:
+          - >-
+            注册一个名为`llama-3-8b-base`的基础模型，领域为`通用对话`，任务为`文本生成`，框架为`PyTorch`，许可证为`Meta
+            Llama 3 Community License`，并指定其运行所需的GPU类型和内存。
+        id: register-llm
+        name: Register Base LLM
+        tags:
+          - model-asset
+          - registration
+      - description: >-
+          定义并注册一个用于模型训练或评估的数据集。业务目的：确保训练数据来源清晰、结构明确且可被安全引用。输入：数据集标识符、元数据（语言、任务类型、许可证）、数据源地址、数据集结构定义。输出：注册成功的数据集ID及确认信息。主要被数据工程师或实验设计者调用，为微调作业提供数据输入。
+        examples:
+          - >-
+            注册一个名为`finance-qa-zh`的数据集，语言为`中文`，任务类型为`问答`，数据文件存储在S3桶`s3://my-bucket/finance_data.jsonl`，并定义其训练集和验证集的划分。
+        id: register-dataset
+        name: Register Training Dataset
+        tags:
+          - data-asset
+          - registration
+      - description: >-
+          创建一套完整的模型训练超参数配置。业务目的：为微调作业提供可复现且经过验证的训练策略模板。输入：配置标识符、调优目标（如SFT）、详细的参数集合（优化器配置、学习率、LoRA参数、训练轮次等）。输出：创建成功的配置ID及完整的配置详情。主要被算法研究员调用，用于定义和保存不同的训练方案。
+        examples:
+          - >-
+            创建一套名为`lora-sft-001`的超参数配置，目标为监督微调（SFT），使用AdamW优化器（学习率2e-5），并启用LoRA（秩r=8，alpha=16），训练3个epoch。
+        id: create-hyperparameter
+        name: Create Hyperparameter Configuration
+        tags:
+          - training-config
+          - tuning
+      - description: >-
+          定义一个具体的模型微调任务实例。业务目的：将模型、数据、配置等静态资产组合成一个可执行的训练作业。输入：作业名称、微调规格（引用的模型ID、数据集ID、超参数配置ID）、计算资源限制、可选的评估插件和服务部署配置。输出：创建成功的作业ID及作业配置摘要。主要被实验编排Agent或直接用户调用，是启动训练的核心步骤。
+        examples:
+          - >-
+            创建一个名为`exp1-job-a`的微调作业，使用基础模型`llama-3-8b-base`、数据集`finance-qa-zh`和超参数配置`lora-sft-001`，申请2块A100
+            GPU，并配置在完成后使用`accuracy-scorer`插件进行评估。
+        id: create-finetune-job
+        name: Create Finetune Job
+        tags:
+          - job-management
+          - orchestration
+      - description: >-
+          定义一个顶层微调实验，用于管理多个相关作业及其共享配置。业务目的：组织批量实验，支持变量控制和结果对比，实现复杂的实验流程（如网格搜索）。输入：实验名称、作业设置列表（每个设置可覆盖共享配置）、共享的评估插件配置、共享的服务配置。输出：创建成功的实验ID及实验结构概览。主要被实验负责人或自动化脚本调用，用于发起多组对比实验。
+        examples:
+          - >-
+            创建一个名为`hyperparam-search-01`的实验，包含3个子作业，分别使用超参数配置`lora-sft-001`、`lora-sft-002`和`lora-sft-003`，但共享同一个基础模型、数据集和评估插件，以比较不同学习率的效果。
+        id: create-finetune-experiment
+        name: Create Finetune Experiment
+        tags:
+          - experiment-management
+          - batch-orchestration
+      - description: >-
+          查询指定核心资产（模型、数据集、配置、检查点）的完整元数据信息。业务目的：了解资产的详细属性、引用关系及当前状态，用于决策和审计。输入：资产类型和对应的唯一标识符（如`LLM/llama-3-8b-base`）。输出：资产的完整详细信息，包括元数据、配置、引用该资产的作业列表等。主要被所有需要了解资产上下文的Agent调用，如作业创建前验证、实验报告生成等。
+        examples:
+          - 查询数据集`finance-qa-zh`的详细信息，包括其大小、许可证、存储位置以及当前是否有微调作业正在引用它。
+        id: get-asset-detail
+        name: Get Asset Details
+        tags:
+          - query
+          - asset-inspection
+      - description: >-
+          查询微调作业的当前状态、进度和产出结果。业务目的：监控训练作业的执行情况，获取最终产出的模型检查点、服务端点或评估分数。输入：微调作业的唯一标识符。输出：作业的实时状态（如Pending,
+          Running, Succeeded,
+          Failed）、进度信息、以及完成后的结果（检查点ID、服务URL、评估结果）。主要被实验管理Agent、监控面板或用户直接调用，用于跟踪作业生命周期。
+        examples:
+          - 查询作业`exp1-job-a`的当前状态，如果已完成，请返回其产出的模型检查点存储路径和评估任务的总体分数。
+        id: get-job-status
+        name: Get Finetune Job Status
+        tags:
+          - monitoring
+          - job-lifecycle
+  dacType: ds
+  dataPolicy:
+    dataSourceType: SemanticDomain
+    semanticGroupID: ''
+    sourceNameSelector:
+      - metaserver-gitee-code
+  expertAgentMaxSteps: '1'
+  model:
+    expertLLM: llm-deepseek-v32
+    plannerLLM: llm-deepseek-v32
+  orchestratorAgentMaxLoops: '1'

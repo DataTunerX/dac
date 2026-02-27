@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: common-orchestrator-agent
+  name: common-orchestrator-agent
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: common-orchestrator-agent
+  template:
+    metadata:
+      labels:
+        app: common-orchestrator-agent
+    spec:
+      containers:
+      - name: orchestrator
+        env:
+        - name: Agent_Host
+          value: "10.17.0.41"
+        - name: Agent_Port
+          value: "32000"
+        - name: AgentRegistry
+          value: "http://expert-registry.dac.svc.cluster.local:8000"
+        - name: Agent_Name
+          value: "CommonAgent"
+        - name: Agent_Description
+          value: "I am a common system intelligent agent that can answer user-related questions."
+        - name: DataServicesURL
+          value: "http://data-services.dac.svc.cluster.local:8000"
+        - name: DataSourceType
+          value: "SemanticGroup"
+        - name: SemanticGroupID
+          value: "00000000-0000-0000-0000-000000000000"
+        - name: Enable_History
+          value: "enable"
+        - name: REGISTER_AGENT
+          value: "no"
+        - name: CollectionName
+          value: "expert_agent_cards"
+        - name: LANGFUSE_BASE_URL
+          value: "http://10.17.0.43:3000"
+        - name: LANGFUSE_SECRET_KEY
+          value: "sk-lf-a8cd7ec4-d08c-4f2b-a174-d458073d6d73"
+        - name: LANGFUSE_PUBLIC_KEY
+          value: "pk-lf-ebed2fcd-31df-4c35-ba33-d6bf0ab399e5"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/orchestrator-agent:v0.6.0-amd64
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 10100
+        args:
+          - "--port"
+          - "10100"
+          - "--redis-host"
+          - "redis-server.dac.svc.cluster.local"
+          - "--redis-port"
+          - "6379"
+          - "--redis-db"
+          - "0"
+          - "--password"
+          - "123"
+          - "--provider"
+          - "openai_compatible"
+          - "--api-key"
+          - "sk-xxx"
+          - "--base-url"
+          - "https://dashscope.aliyuncs.com/compatible-mode/v1"
+          - "--model"
+          - "deepseek-v3.2"
+        resources:
+          limits:
+            cpu: 500m
+            memory: 2Gi
+          requests:
+            cpu: 100m
+            memory: 1Gi
+      restartPolicy: Always
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: common-orchestrator-agent
+  namespace: dac
+spec:
+  ports:
+    - name: tcp-10100-10100
+      protocol: TCP
+      port: 10100
+      targetPort: 10100
+      nodePort: 32000
+  selector:
+    app: common-orchestrator-agent
+  type: NodePort

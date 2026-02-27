@@ -26,7 +26,6 @@ class KnowledgePyramidTester:
         self.test_collection = "test_knowledge_pyramid8"
         self.knowledge_service = KnowledgePyramidService()
         self.added_document_ids = []
-        self.added_memory_ids = []
 
     def setup_environment(self):
         """Set up test environment variables"""
@@ -47,7 +46,7 @@ class KnowledgePyramidTester:
             'LLM_TEMPERATURE': '0.01',
             
             # Memory vector database configuration
-            'MEMORY_PGVECTOR_HOST': '192.168.xxx.xxx',
+            'MEMORY_PGVECTOR_HOST': '192.168.3.238',
             'MEMORY_PGVECTOR_PORT': '5433',
             'MEMORY_PGVECTOR_USER': 'postgres',
             'MEMORY_PGVECTOR_PASSWORD': 'postgres',
@@ -58,34 +57,13 @@ class KnowledgePyramidTester:
             'MEMORY_EMBEDDING_DIMS': '1024',
             
             # General vector database configuration (maintain backward compatibility)
-            'PGVECTOR_HOST': '192.168.xxx.xxx',
+            'PGVECTOR_HOST': '192.168.3.238',
             'PGVECTOR_PORT': '5433',
             'PGVECTOR_USER': 'postgres',
             'PGVECTOR_PASSWORD': 'postgres',
             'PGVECTOR_DATABASE': 'knowledge_vector',
             'PGVECTOR_MIN_CONNECTION': '1',
             'PGVECTOR_MAX_CONNECTION': '10',
-            
-            # Knowledge base vector database configuration
-            'KNOWLEDGE_PGVECTOR_HOST': '192.168.xxx.xxx',
-            'KNOWLEDGE_PGVECTOR_PORT': '5433',
-            'KNOWLEDGE_PGVECTOR_USER': 'postgres',
-            'KNOWLEDGE_PGVECTOR_PASSWORD': 'postgres',
-            'KNOWLEDGE_PGVECTOR_MIN_CONNECTION': '1',
-            'KNOWLEDGE_PGVECTOR_MAX_CONNECTION': '10',
-            'KNOWLEDGE_MEMORY_DBNAME': 'knowledge_memories',
-            'KNOWLEDGE_MEMORY_COLLECTION': 'knowledge_memories',
-            'KNOWLEDGE_MEMORY_EMBEDDING_DIMS': '1024',
-
-            # graph setting
-            'KNOWLEDGE_MEMORY_GRAPH_ENABLE': 'disable',
-            'KNOWLEDGE_MEMORY_GRAPH_DB_PROVIDER': 'neo4j',
-            'KNOWLEDGE_MEMORY_GRAPH_DB_URL': "neo4j://192.168.xxx.xxx:7687",
-            'KNOWLEDGE_MEMORY_GRAPH_DB_USERNAME': 'neo4j',
-            'KNOWLEDGE_MEMORY_GRAPH_DB_PASSWORD': 'test123456',
-            'KNOWLEDGE_MEMORY_GRAPH_LLM_MODEL': 'qwen2.5-72b-instruct',
-            'KNOWLEDGE_MEMORY_GRAPH_LLM_APIKEY': 'sk-xxx',
-            'KNOWLEDGE_MEMORY_GRAPH_LLM_BASEURL': 'https://dashscope.aliyuncs.com/compatible-mode/v1'
         })
         logger.info("Environment variables set")
 
@@ -113,14 +91,6 @@ class KnowledgePyramidTester:
             )
         ]
 
-        # Test SQL case
-        # return [
-        #     DocumentModel(
-        #         page_content=testdata,
-        #         metadata={"category": "technology", "source": "wikipedia", "language": "english"}
-        #     )
-        # ]
-
     async def test_add_documents(self):
         """Test adding documents to knowledge pyramid"""
         logger.info("===== Testing add_documents_with_knowledge_pyramid =====")
@@ -138,7 +108,6 @@ class KnowledgePyramidTester:
             if result["status"] == "success":
                 # Extract IDs based on actual return structure
                 vector_results = result.get("vector_results", [])
-                memory_result = result.get("memory_result", [])
                 
                 # Save document IDs (list of strings)
                 if isinstance(vector_results, list) and all(isinstance(id, str) for id in vector_results):
@@ -146,21 +115,8 @@ class KnowledgePyramidTester:
                     logger.info(f"Document IDs: {self.added_document_ids}")
                 else:
                     logger.warning(f"Unexpected vector_results format: {vector_results}")
-                
-                # Save memory IDs (extract id field from list of dictionaries)
-                if isinstance(memory_result, list):
-                    memory_ids = []
-                    for memory_item in memory_result:
-                        if isinstance(memory_item, dict) and 'id' in memory_item:
-                            memory_ids.append(memory_item['id'])
-                    self.added_memory_ids = memory_ids
-                    logger.info(f"Memory IDs: {self.added_memory_ids}")
-                else:
-                    logger.warning(f"Unexpected memory_result format: {memory_result}")
-                
                 logger.info(f"Successfully added {len(test_documents)} documents")
                 logger.info(f"Got {len(self.added_document_ids)} document IDs")
-                logger.info(f"Got {len(self.added_memory_ids)} memory IDs")
                 return True
             else:
                 logger.error(f"Failed to add documents: {result.get('message', 'Unknown error')}")
@@ -186,20 +142,13 @@ class KnowledgePyramidTester:
             
             if result["status"] == "success":
                 vector_results = result.get("vector_result", [])
-                memory_results = result.get("memory_result", [])
                 logger.info(f"Found {len(vector_results)} vector results")
-                logger.info(f"Found {len(memory_results)} memory results")
                 
                 # Display some search result details
                 if vector_results:
                     for i, doc in enumerate(vector_results[:2]):  # Only show first 2
                         logger.info(f"Vector result {i+1}: {doc.get('content', '')[:100]}...")
                         logger.info(f"  Score: {doc.get('score', 0)}, Metadata: {doc.get('metadata', {})}")
-                
-                if memory_results:
-                    for i, mem in enumerate(memory_results[:2]):  # Only show first 2
-                        logger.info(f"Memory result {i+1}: {mem.get('memory', '')[:100]}...")
-                        logger.info(f"  Score: {mem.get('score', 0)}")
                 
                 return True
             else:
@@ -210,83 +159,36 @@ class KnowledgePyramidTester:
             logger.error(f"Error in search test: {str(e)}")
             return False
 
-    async def test_search_memory_documents(self):
-        """Test searching memory documents with knowledge pyramid"""
-        logger.info("===== Testing search_memory_documents_with_knowledge_pyramid =====")
+    async def test_find_metadata_values_in_collections(self):
+        """Test searching documents"""
+        logger.info("===== Testing search_documents_with_knowledge_pyramid =====")
         
         try:
-            result = await self.knowledge_service.search_memory_documents_with_knowledge_pyramid(
-                collection_name=self.test_collection
-            )
-            
-            logger.info(f"Search memory documents result status: {result}")
-            
-            if result["status"] == "success":
-                collection = result.get("collection", "")
-                memory_result = result.get("memory_result", [])
-                
-                logger.info(f"Collection: {collection}")
-                logger.info(f"Found {len(memory_result)} memory results")
-                
-                # Display memory results details
-                if memory_result:
-                    logger.info("Memory results (sorted by score ascending):")
-                    for i, memory in enumerate(memory_result):
-                        logger.info(f"Memory {i+1}:")
-                        logger.info(f"  ID: {memory.get('id', 'N/A')}")
-                        logger.info(f"  Score: {memory.get('score', 0)}")
-                        logger.info(f"  Content: {memory.get('memory', '')[:100]}..." if memory.get('memory') else "  Content: N/A")
-                        
-                        # Log additional metadata if available
-                        metadata = memory.get('metadata', {})
-                        if metadata:
-                            logger.info(f"  Metadata: {metadata}")
-                        
-                        # Only show first 3 results to avoid log spam
-                        if i >= 2:
-                            remaining = len(memory_result) - 3
-                            if remaining > 0:
-                                logger.info(f"  ... and {remaining} more memory results")
-                            break
-                
-                # Verify the sorting (should be ascending order by score)
-                if len(memory_result) >= 2:
-                    scores = [mem.get('score', 0) for mem in memory_result]
-                    is_sorted_ascending = all(scores[i] <= scores[i+1] for i in range(len(scores)-1))
-                    logger.info(f"Memory results sorted ascending by score: {is_sorted_ascending}")
+            collection_names=["embedding_dac_dd_d07", "embedding_dac_dd_d08"]
 
-                    if not is_sorted_ascending:
-                        logger.warning("Memory results are not properly sorted by score ascending")
-                return True
-            else:
-                logger.error(f"Search memory documents failed: {result.get('message', 'Unknown error')}")
-                return False
+            result = await self.knowledge_service.find_metadata_values_in_collections(collection_names=collection_names, metadata_key="source")
+            
+            logger.info(f"Search result status: {result}")
                     
         except Exception as e:
-            logger.error(f"Error in search memory documents test: {str(e)}")
+            logger.error(f"Error in search test: {str(e)}")
             return False
 
     async def test_delete_documents_by_ids(self):
         """Test deleting documents and memories by IDs"""
-        logger.info("===== Testing delete_documents_and_memorys_by_ids =====")
+        logger.info("===== Testing delete_documents_by_ids =====")
         
         if not self.added_document_ids:
             logger.error("No document IDs available for deletion test")
             return False
         
-        if not self.added_memory_ids:
-            logger.error("No memory IDs available for deletion test")
-            return False
-        
         try:
             # Use actual obtained IDs for testing
             logger.info(f"Deleting document IDs: {self.added_document_ids[:1]}")  # Only delete first one
-            logger.info(f"Deleting memory IDs: {self.added_memory_ids[:1]}")     # Only delete first one
             
-            result = await self.knowledge_service.delete_documents_and_memorys_by_ids(
+            result = await self.knowledge_service.delete_documents_by_ids(
                 collection_name=self.test_collection,
-                documents=self.added_document_ids[:1],  # Only delete first document
-                memorys=self.added_memory_ids[:1]       # Only delete first memory
+                documents=self.added_document_ids[:1]  # Only delete first document
             )
             
             logger.info(f"Delete by IDs result: {result}")
@@ -318,7 +220,7 @@ class KnowledgePyramidTester:
 
     async def test_delete_all_documents(self):
         """Test deleting all documents and memories"""
-        logger.info("===== Testing delete_all_documents_and_memorys_by_collection_name =====")
+        logger.info("===== Testing delete_all_documents_by_collection_name =====")
         
         # First ensure there is some data
         if not self.added_document_ids:
@@ -328,7 +230,7 @@ class KnowledgePyramidTester:
             await asyncio.sleep(2)
         
         try:
-            result = await self.knowledge_service.delete_all_documents_and_memorys_by_collection_name(
+            result = await self.knowledge_service.delete_all_documents_by_collection_name(
                 collection_name=self.test_collection
             )
             
@@ -373,11 +275,12 @@ class KnowledgePyramidTester:
             
             # await asyncio.sleep(1)
 
-            # Test 3: Searching memories documents
+
+            # # Test 3: Searching documents
             logger.info("\n" + "="*50)
-            logger.info("TEST 2: Searching memory Documents")
+            logger.info("TEST 3: Searching metadata Documents")
             logger.info("="*50)
-            if not await self.test_search_memory_documents():
+            if not await self.test_find_metadata_values_in_collections():
                 return False
             
             await asyncio.sleep(1)

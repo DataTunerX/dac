@@ -51,27 +51,36 @@ func (r *chatRepository) GetOrCreateRun(ctx context.Context, userID, runID, agen
 		return nil, fmt.Errorf("invalid user id: %w", err)
 	}
 
-	// If runID is provided, try to get it
+	// If runID is provided, try to get it. If it doesn't exist, create a new run using the provided ID.
 	if runID != "" {
 		rid, err := uuid.Parse(runID)
 		if err != nil {
 			return nil, fmt.Errorf("invalid run id: %w", err)
 		}
 
-		runEntity, err := r.client.Run.Query().
-			Where(
-				run.ID(rid),
-				run.UserID(uid),
-			).
-			Only(ctx)
-
+		// 1) Check by primary key first so we can detect "run_id exists but belongs to another user".
+		existing, err := r.client.Run.Get(ctx, rid)
 		if err == nil {
-			return toRunEntity(runEntity), nil
+			if existing.UserID != uid {
+				// Avoid leaking existence of other users' runs; treat as invalid input.
+				return nil, domain.ErrInvalidInput
+			}
+			return toRunEntity(existing), nil
 		}
-
-		if !ent.IsNotFound(err) {
+		if err != nil && !ent.IsNotFound(err) {
 			return nil, err
 		}
+
+		// 2) Not found: create with the provided run ID (so frontend can pre-generate run_id safely).
+		created, err := r.client.Run.Create().
+			SetID(rid).
+			SetUserID(uid).
+			SetAgentID(agentID).
+			Save(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return toRunEntity(created), nil
 	}
 
 	// Create new run

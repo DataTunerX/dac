@@ -1,38 +1,40 @@
-# DataDescriptor Example - MySQL Data Source
+apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
-spec:
-  # Resource name (required)
-  name: my-mysql-descriptor
-  
-  # Kubernetes namespace (required)
-  namespace: default
-  
-  # Optional labels
+metadata:
+  name: dd01-mysql
+  namespace: dac
   labels:
-    app: dac-apiserver
-    env: production
-  
-  # Descriptor type (required)
-  # Supported types: mysql, postgres, minio, fileserver
-  descriptorType: mysql
-  
-  # Data sources list (required, at least one)
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-mysql"
   sources:
     - type: mysql
-      name: production-db
-      
-      # Connection metadata
+      name: "mysql-production"
       metadata:
-        host: mysql.example.com
+        host: "mysql-server"
         port: "3306"
-        database: myapp_db
-        username: dbuser
-        password: dbpass123
-      
-      # Extract configuration (optional)
+        user: "root"
+        password: "123"
+        database: "test1"
       extract:
-        # Specify tables to extract, leave empty for all tables
-        tables:
-          - users
-          - orders
-          - products
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+      processing:
+        cleaning:
+          - rule: "remove_duplicates"
+            params: 
+              fields: "user_id,timestamp"
+          - rule: "fill_missing"
+            params: 
+              field: "price"
+              value: "0"
+      classification:
+        - domain: "科学技术类"
+          category: "计算机科学与技术"
+          subcategory: "软件工程师"
+          tags:
+            - skill: ["编程", "算法"]
+            - industry: ["互联网"]

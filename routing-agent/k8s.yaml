@@ -30,7 +30,11 @@ spec:
           value: "pk-xxx"
         - name: LANGFUSE_BASE_URL
           value: "http://192.168.xxx.xxx:3000"
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/routing-agent:v0.2.0-amd64
+        - name: max_retries
+          value: "1"
+        - name: AgentRegistryCollection
+          value: "orchestrator_agent_cards"
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/routing-agent:v0.6.0-amd64
         imagePullPolicy: IfNotPresent
         name: routing-agent
         ports:

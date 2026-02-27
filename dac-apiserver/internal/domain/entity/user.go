@@ -7,6 +7,7 @@ type User struct {
 	ID           string
 	Username     string
 	PasswordHash string     // 密码哈希
+	Role         string     // 用户角色
 	LastLoginAt  *time.Time // 最后登录时间
 	DeletedAt    *time.Time // 软删除时间
 	CreatedAt    time.Time

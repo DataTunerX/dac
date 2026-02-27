@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dac-sandbox-minio-init
+  namespace: dac-sandbox
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: dac-sandbox-minio-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: minio-init
+          image: release.daocloud.io/dac/minio-mc:latest
+          command: ["sh", "-c", "sh /seed/init.sh"]
+          env:
+            - name: MINIO_ENDPOINT
+              value: http://dac-sandbox-host:9000
+            - name: MINIO_ROOT_USER
+              value: minioadmin
+            - name: MINIO_ROOT_PASSWORD
+              value: minioadmin
+          volumeMounts:
+            - name: minio-seed
+              mountPath: /seed
+              readOnly: true
+      volumes:
+        - name: minio-seed
+          configMap:
+            name: dac-sandbox-minio-seed
+            items:
+              - key: init.sh
+                path: init.sh
+              - key: objects-erp-exports-customers.csv
+                path: objects/erp/exports/customers.csv
+              - key: objects-o365-drive-readme.txt
+                path: objects/o365/drive/readme.txt
+              - key: lake-warehouse-demo.db-orders-orders.csv
+                path: lake/warehouse/demo.db/orders/orders.csv
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dac-sandbox-trino-init
+  namespace: dac-sandbox
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: dac-sandbox-trino-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: trino-init
+          image: release.daocloud.io/dac/trino:latest
+          command: ["sh", "-c", "sh /seed/init-cli.sh"]
+          env:
+            - name: TRINO_SERVER
+              value: http://dac-sandbox-host:8080
+          volumeMounts:
+            - name: trino-seed
+              mountPath: /seed
+              readOnly: true
+      volumes:
+        - name: trino-seed
+          configMap:
+            name: dac-sandbox-trino-seed
+            items:
+              - key: init-cli.sh
+                path: init-cli.sh
+              - key: init.sql
+                path: init.sql
+

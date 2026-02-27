@@ -1,6 +1,6 @@
 # stage 1
 # Build stage with explicit platform specification
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/uv:python3.13-ubuntu-arm64 AS uv
+FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-ubuntu-timezone-arm64 AS uv
 
 # Install the project into /app
 WORKDIR /app
@@ -8,8 +8,6 @@ WORKDIR /app
 RUN mkdir /app/sdks
 
 COPY sdks/model_sdk-0.1.0-py3-none-any.whl /app/sdks/model_sdk-0.1.0-py3-none-any.whl
-
-COPY sdks/vector_sdk-0.1.0-py3-none-any.whl /app/sdks/vector_sdk-0.1.0-py3-none-any.whl
 
 # Enable bytecode compilation
 ENV UV_COMPILE_BYTECODE=1

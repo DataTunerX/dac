@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
@@ -12,12 +13,14 @@ import (
 // HealthHandler 健康检查处理器
 type HealthHandler struct {
 	k8sClient *k8s.Client
+	logger   *slog.Logger
 }
 
 // NewHealthHandler createnewof健康检查处理器
-func NewHealthHandler(k8sClient *k8s.Client) *HealthHandler {
+func NewHealthHandler(k8sClient *k8s.Client, logger *slog.Logger) *HealthHandler {
 	return &HealthHandler{
 		k8sClient: k8sClient,
+		logger:   logger,
 	}
 }
 

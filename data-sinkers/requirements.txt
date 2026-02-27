@@ -38,3 +38,5 @@ msoffcrypto-tool==5.4.2
 openpyxl==3.1.5
 markdown==3.9.0
 strenum==0.4.15
+langchain-text-splitters==1.0.0
+a2a-sdk>=0.3.5

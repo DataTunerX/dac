@@ -31,6 +31,9 @@ func (User) Fields() []ent.Field {
 			NotEmpty().
 			Sensitive(). // 不会在查询中自动返回
 			Comment("密码哈希"),
+		field.String("role").
+			Default("user").
+			Comment("用户角色：admin/user"),
 		field.Time("last_login_at").
 			Optional().
 			Nillable().

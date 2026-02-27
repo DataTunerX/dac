@@ -22,7 +22,7 @@ spec:
           value: http://data-services.dac.svc.cluster.local:8000
         - name: COLLECTION_NAME
           value: "orchestrator_agent_cards"
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/agent-registry:v0.2.0-amd64
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/agent-registry:v0.6.0-amd64
         imagePullPolicy: IfNotPresent
         name: orchestrator-registry
         ports:

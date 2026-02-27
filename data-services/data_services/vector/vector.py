@@ -2,7 +2,7 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 from model_sdk import ModelManager
-from vector_sdk import Vector, Document, CacheEmbedding
+from ..vector_sdk import Vector, Document, CacheEmbedding
 from ..api.base import DocumentModel, SearchType
 from datetime import datetime
 import asyncio
@@ -345,5 +345,12 @@ class VectorService:
             "key": key,
             "value": value
         }
+
+    async def get_ids_by_metadata_field(self, collection_name: str, key: str, value: str) -> List[str]:
+        vector = self.get_vector_instance(collection_name)
+        if vector is None:
+            logger.error(f"Vector instance for collection '{collection_name}' is None")
+            return []
+        return await vector.aget_ids_by_metadata_field(key, value)
 
 

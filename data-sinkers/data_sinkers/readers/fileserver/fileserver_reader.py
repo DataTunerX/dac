@@ -3,7 +3,7 @@ import tempfile
 import os
 from typing import Any, Dict, Optional, Tuple, List
 from abc import ABC, abstractmethod
-from langchain.schema import Document
+from langchain_core.documents import Document
 from ..base.base_reader import BaseDataReader
 from ...file_processors.general import Processor
 import logging

@@ -1,0 +1,21 @@
+p, admin, *, *
+p, user, /api/v1/users/me, GET
+p, user, /api/v1/chat/conversations, GET
+p, user, /api/v1/chat/conversations/*, GET
+p, user, /api/v1/agents, GET
+p, user, /api/v1/descriptors, GET
+p, user, /api/v1/namespaces, GET
+p, user, /api/v1/namespaces/*/agents, GET
+p, user, /api/v1/namespaces/*/agents/*, GET
+p, user, /api/v1/namespaces/*/descriptors, GET
+p, user, /api/v1/namespaces/*/descriptors/*, GET
+p, user, /api/v1/namespaces/*/configmaps, GET
+p, user, /api/v1/namespaces/*/configmaps/*, GET
+p, user, /api/v1/semantic-groups, GET
+p, user, /api/v1/semantic-groups/*, GET
+p, user, /api/v1/discovery/scans, GET
+p, user, /api/v1/discovery/scans/*, GET
+p, user, /v1/chat/completions, POST
+
+g, admin, admin
+g, user, user

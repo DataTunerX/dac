@@ -12,8 +12,10 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
+	"github.com/lvyanru/dac-apiserver/internal/ent/discoveryjob"
 	"github.com/lvyanru/dac-apiserver/internal/ent/predicate"
 	"github.com/lvyanru/dac-apiserver/internal/ent/run"
+	"github.com/lvyanru/dac-apiserver/internal/ent/schema"
 	"github.com/lvyanru/dac-apiserver/internal/ent/user"
 )
 
@@ -26,9 +28,962 @@ const (
 	OpUpdateOne = ent.OpUpdateOne
 
 	// Node types.
-	TypeRun  = "Run"
-	TypeUser = "User"
+	TypeDiscoveryJob = "DiscoveryJob"
+	TypeRun          = "Run"
+	TypeUser         = "User"
 )
+
+// DiscoveryJobMutation represents an operation that mutates the DiscoveryJob nodes in the graph.
+type DiscoveryJobMutation struct {
+	config
+	op             Op
+	typ            string
+	id             *uuid.UUID
+	name           *string
+	target         *string
+	ports_spec     *string
+	status         *string
+	error          *string
+	started_at     *time.Time
+	finished_at    *time.Time
+	services       *[]schema.DiscoveryService
+	appendservices []schema.DiscoveryService
+	created_at     *time.Time
+	updated_at     *time.Time
+	clearedFields  map[string]struct{}
+	done           bool
+	oldValue       func(context.Context) (*DiscoveryJob, error)
+	predicates     []predicate.DiscoveryJob
+}
+
+var _ ent.Mutation = (*DiscoveryJobMutation)(nil)
+
+// discoveryjobOption allows management of the mutation configuration using functional options.
+type discoveryjobOption func(*DiscoveryJobMutation)
+
+// newDiscoveryJobMutation creates new mutation for the DiscoveryJob entity.
+func newDiscoveryJobMutation(c config, op Op, opts ...discoveryjobOption) *DiscoveryJobMutation {
+	m := &DiscoveryJobMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeDiscoveryJob,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withDiscoveryJobID sets the ID field of the mutation.
+func withDiscoveryJobID(id uuid.UUID) discoveryjobOption {
+	return func(m *DiscoveryJobMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *DiscoveryJob
+		)
+		m.oldValue = func(ctx context.Context) (*DiscoveryJob, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().DiscoveryJob.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withDiscoveryJob sets the old DiscoveryJob of the mutation.
+func withDiscoveryJob(node *DiscoveryJob) discoveryjobOption {
+	return func(m *DiscoveryJobMutation) {
+		m.oldValue = func(context.Context) (*DiscoveryJob, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m DiscoveryJobMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m DiscoveryJobMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of DiscoveryJob entities.
+func (m *DiscoveryJobMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *DiscoveryJobMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *DiscoveryJobMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().DiscoveryJob.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetName sets the "name" field.
+func (m *DiscoveryJobMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *DiscoveryJobMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ClearName clears the value of the "name" field.
+func (m *DiscoveryJobMutation) ClearName() {
+	m.name = nil
+	m.clearedFields[discoveryjob.FieldName] = struct{}{}
+}
+
+// NameCleared returns if the "name" field was cleared in this mutation.
+func (m *DiscoveryJobMutation) NameCleared() bool {
+	_, ok := m.clearedFields[discoveryjob.FieldName]
+	return ok
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *DiscoveryJobMutation) ResetName() {
+	m.name = nil
+	delete(m.clearedFields, discoveryjob.FieldName)
+}
+
+// SetTarget sets the "target" field.
+func (m *DiscoveryJobMutation) SetTarget(s string) {
+	m.target = &s
+}
+
+// Target returns the value of the "target" field in the mutation.
+func (m *DiscoveryJobMutation) Target() (r string, exists bool) {
+	v := m.target
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTarget returns the old "target" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldTarget(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTarget is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTarget requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTarget: %w", err)
+	}
+	return oldValue.Target, nil
+}
+
+// ResetTarget resets all changes to the "target" field.
+func (m *DiscoveryJobMutation) ResetTarget() {
+	m.target = nil
+}
+
+// SetPortsSpec sets the "ports_spec" field.
+func (m *DiscoveryJobMutation) SetPortsSpec(s string) {
+	m.ports_spec = &s
+}
+
+// PortsSpec returns the value of the "ports_spec" field in the mutation.
+func (m *DiscoveryJobMutation) PortsSpec() (r string, exists bool) {
+	v := m.ports_spec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPortsSpec returns the old "ports_spec" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldPortsSpec(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPortsSpec is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPortsSpec requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPortsSpec: %w", err)
+	}
+	return oldValue.PortsSpec, nil
+}
+
+// ClearPortsSpec clears the value of the "ports_spec" field.
+func (m *DiscoveryJobMutation) ClearPortsSpec() {
+	m.ports_spec = nil
+	m.clearedFields[discoveryjob.FieldPortsSpec] = struct{}{}
+}
+
+// PortsSpecCleared returns if the "ports_spec" field was cleared in this mutation.
+func (m *DiscoveryJobMutation) PortsSpecCleared() bool {
+	_, ok := m.clearedFields[discoveryjob.FieldPortsSpec]
+	return ok
+}
+
+// ResetPortsSpec resets all changes to the "ports_spec" field.
+func (m *DiscoveryJobMutation) ResetPortsSpec() {
+	m.ports_spec = nil
+	delete(m.clearedFields, discoveryjob.FieldPortsSpec)
+}
+
+// SetStatus sets the "status" field.
+func (m *DiscoveryJobMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *DiscoveryJobMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *DiscoveryJobMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetError sets the "error" field.
+func (m *DiscoveryJobMutation) SetError(s string) {
+	m.error = &s
+}
+
+// Error returns the value of the "error" field in the mutation.
+func (m *DiscoveryJobMutation) Error() (r string, exists bool) {
+	v := m.error
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldError returns the old "error" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldError(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldError is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldError requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldError: %w", err)
+	}
+	return oldValue.Error, nil
+}
+
+// ClearError clears the value of the "error" field.
+func (m *DiscoveryJobMutation) ClearError() {
+	m.error = nil
+	m.clearedFields[discoveryjob.FieldError] = struct{}{}
+}
+
+// ErrorCleared returns if the "error" field was cleared in this mutation.
+func (m *DiscoveryJobMutation) ErrorCleared() bool {
+	_, ok := m.clearedFields[discoveryjob.FieldError]
+	return ok
+}
+
+// ResetError resets all changes to the "error" field.
+func (m *DiscoveryJobMutation) ResetError() {
+	m.error = nil
+	delete(m.clearedFields, discoveryjob.FieldError)
+}
+
+// SetStartedAt sets the "started_at" field.
+func (m *DiscoveryJobMutation) SetStartedAt(t time.Time) {
+	m.started_at = &t
+}
+
+// StartedAt returns the value of the "started_at" field in the mutation.
+func (m *DiscoveryJobMutation) StartedAt() (r time.Time, exists bool) {
+	v := m.started_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStartedAt returns the old "started_at" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldStartedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStartedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStartedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStartedAt: %w", err)
+	}
+	return oldValue.StartedAt, nil
+}
+
+// ClearStartedAt clears the value of the "started_at" field.
+func (m *DiscoveryJobMutation) ClearStartedAt() {
+	m.started_at = nil
+	m.clearedFields[discoveryjob.FieldStartedAt] = struct{}{}
+}
+
+// StartedAtCleared returns if the "started_at" field was cleared in this mutation.
+func (m *DiscoveryJobMutation) StartedAtCleared() bool {
+	_, ok := m.clearedFields[discoveryjob.FieldStartedAt]
+	return ok
+}
+
+// ResetStartedAt resets all changes to the "started_at" field.
+func (m *DiscoveryJobMutation) ResetStartedAt() {
+	m.started_at = nil
+	delete(m.clearedFields, discoveryjob.FieldStartedAt)
+}
+
+// SetFinishedAt sets the "finished_at" field.
+func (m *DiscoveryJobMutation) SetFinishedAt(t time.Time) {
+	m.finished_at = &t
+}
+
+// FinishedAt returns the value of the "finished_at" field in the mutation.
+func (m *DiscoveryJobMutation) FinishedAt() (r time.Time, exists bool) {
+	v := m.finished_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFinishedAt returns the old "finished_at" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldFinishedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFinishedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFinishedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFinishedAt: %w", err)
+	}
+	return oldValue.FinishedAt, nil
+}
+
+// ClearFinishedAt clears the value of the "finished_at" field.
+func (m *DiscoveryJobMutation) ClearFinishedAt() {
+	m.finished_at = nil
+	m.clearedFields[discoveryjob.FieldFinishedAt] = struct{}{}
+}
+
+// FinishedAtCleared returns if the "finished_at" field was cleared in this mutation.
+func (m *DiscoveryJobMutation) FinishedAtCleared() bool {
+	_, ok := m.clearedFields[discoveryjob.FieldFinishedAt]
+	return ok
+}
+
+// ResetFinishedAt resets all changes to the "finished_at" field.
+func (m *DiscoveryJobMutation) ResetFinishedAt() {
+	m.finished_at = nil
+	delete(m.clearedFields, discoveryjob.FieldFinishedAt)
+}
+
+// SetServices sets the "services" field.
+func (m *DiscoveryJobMutation) SetServices(ss []schema.DiscoveryService) {
+	m.services = &ss
+	m.appendservices = nil
+}
+
+// Services returns the value of the "services" field in the mutation.
+func (m *DiscoveryJobMutation) Services() (r []schema.DiscoveryService, exists bool) {
+	v := m.services
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldServices returns the old "services" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldServices(ctx context.Context) (v []schema.DiscoveryService, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldServices is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldServices requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldServices: %w", err)
+	}
+	return oldValue.Services, nil
+}
+
+// AppendServices adds ss to the "services" field.
+func (m *DiscoveryJobMutation) AppendServices(ss []schema.DiscoveryService) {
+	m.appendservices = append(m.appendservices, ss...)
+}
+
+// AppendedServices returns the list of values that were appended to the "services" field in this mutation.
+func (m *DiscoveryJobMutation) AppendedServices() ([]schema.DiscoveryService, bool) {
+	if len(m.appendservices) == 0 {
+		return nil, false
+	}
+	return m.appendservices, true
+}
+
+// ClearServices clears the value of the "services" field.
+func (m *DiscoveryJobMutation) ClearServices() {
+	m.services = nil
+	m.appendservices = nil
+	m.clearedFields[discoveryjob.FieldServices] = struct{}{}
+}
+
+// ServicesCleared returns if the "services" field was cleared in this mutation.
+func (m *DiscoveryJobMutation) ServicesCleared() bool {
+	_, ok := m.clearedFields[discoveryjob.FieldServices]
+	return ok
+}
+
+// ResetServices resets all changes to the "services" field.
+func (m *DiscoveryJobMutation) ResetServices() {
+	m.services = nil
+	m.appendservices = nil
+	delete(m.clearedFields, discoveryjob.FieldServices)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *DiscoveryJobMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *DiscoveryJobMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *DiscoveryJobMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *DiscoveryJobMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *DiscoveryJobMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the DiscoveryJob entity.
+// If the DiscoveryJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiscoveryJobMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *DiscoveryJobMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// Where appends a list predicates to the DiscoveryJobMutation builder.
+func (m *DiscoveryJobMutation) Where(ps ...predicate.DiscoveryJob) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the DiscoveryJobMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *DiscoveryJobMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.DiscoveryJob, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *DiscoveryJobMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *DiscoveryJobMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (DiscoveryJob).
+func (m *DiscoveryJobMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *DiscoveryJobMutation) Fields() []string {
+	fields := make([]string, 0, 10)
+	if m.name != nil {
+		fields = append(fields, discoveryjob.FieldName)
+	}
+	if m.target != nil {
+		fields = append(fields, discoveryjob.FieldTarget)
+	}
+	if m.ports_spec != nil {
+		fields = append(fields, discoveryjob.FieldPortsSpec)
+	}
+	if m.status != nil {
+		fields = append(fields, discoveryjob.FieldStatus)
+	}
+	if m.error != nil {
+		fields = append(fields, discoveryjob.FieldError)
+	}
+	if m.started_at != nil {
+		fields = append(fields, discoveryjob.FieldStartedAt)
+	}
+	if m.finished_at != nil {
+		fields = append(fields, discoveryjob.FieldFinishedAt)
+	}
+	if m.services != nil {
+		fields = append(fields, discoveryjob.FieldServices)
+	}
+	if m.created_at != nil {
+		fields = append(fields, discoveryjob.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, discoveryjob.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *DiscoveryJobMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case discoveryjob.FieldName:
+		return m.Name()
+	case discoveryjob.FieldTarget:
+		return m.Target()
+	case discoveryjob.FieldPortsSpec:
+		return m.PortsSpec()
+	case discoveryjob.FieldStatus:
+		return m.Status()
+	case discoveryjob.FieldError:
+		return m.Error()
+	case discoveryjob.FieldStartedAt:
+		return m.StartedAt()
+	case discoveryjob.FieldFinishedAt:
+		return m.FinishedAt()
+	case discoveryjob.FieldServices:
+		return m.Services()
+	case discoveryjob.FieldCreatedAt:
+		return m.CreatedAt()
+	case discoveryjob.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *DiscoveryJobMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case discoveryjob.FieldName:
+		return m.OldName(ctx)
+	case discoveryjob.FieldTarget:
+		return m.OldTarget(ctx)
+	case discoveryjob.FieldPortsSpec:
+		return m.OldPortsSpec(ctx)
+	case discoveryjob.FieldStatus:
+		return m.OldStatus(ctx)
+	case discoveryjob.FieldError:
+		return m.OldError(ctx)
+	case discoveryjob.FieldStartedAt:
+		return m.OldStartedAt(ctx)
+	case discoveryjob.FieldFinishedAt:
+		return m.OldFinishedAt(ctx)
+	case discoveryjob.FieldServices:
+		return m.OldServices(ctx)
+	case discoveryjob.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case discoveryjob.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown DiscoveryJob field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *DiscoveryJobMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case discoveryjob.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
+	case discoveryjob.FieldTarget:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTarget(v)
+		return nil
+	case discoveryjob.FieldPortsSpec:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPortsSpec(v)
+		return nil
+	case discoveryjob.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case discoveryjob.FieldError:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetError(v)
+		return nil
+	case discoveryjob.FieldStartedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStartedAt(v)
+		return nil
+	case discoveryjob.FieldFinishedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFinishedAt(v)
+		return nil
+	case discoveryjob.FieldServices:
+		v, ok := value.([]schema.DiscoveryService)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetServices(v)
+		return nil
+	case discoveryjob.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case discoveryjob.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown DiscoveryJob field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *DiscoveryJobMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *DiscoveryJobMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *DiscoveryJobMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown DiscoveryJob numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *DiscoveryJobMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(discoveryjob.FieldName) {
+		fields = append(fields, discoveryjob.FieldName)
+	}
+	if m.FieldCleared(discoveryjob.FieldPortsSpec) {
+		fields = append(fields, discoveryjob.FieldPortsSpec)
+	}
+	if m.FieldCleared(discoveryjob.FieldError) {
+		fields = append(fields, discoveryjob.FieldError)
+	}
+	if m.FieldCleared(discoveryjob.FieldStartedAt) {
+		fields = append(fields, discoveryjob.FieldStartedAt)
+	}
+	if m.FieldCleared(discoveryjob.FieldFinishedAt) {
+		fields = append(fields, discoveryjob.FieldFinishedAt)
+	}
+	if m.FieldCleared(discoveryjob.FieldServices) {
+		fields = append(fields, discoveryjob.FieldServices)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *DiscoveryJobMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *DiscoveryJobMutation) ClearField(name string) error {
+	switch name {
+	case discoveryjob.FieldName:
+		m.ClearName()
+		return nil
+	case discoveryjob.FieldPortsSpec:
+		m.ClearPortsSpec()
+		return nil
+	case discoveryjob.FieldError:
+		m.ClearError()
+		return nil
+	case discoveryjob.FieldStartedAt:
+		m.ClearStartedAt()
+		return nil
+	case discoveryjob.FieldFinishedAt:
+		m.ClearFinishedAt()
+		return nil
+	case discoveryjob.FieldServices:
+		m.ClearServices()
+		return nil
+	}
+	return fmt.Errorf("unknown DiscoveryJob nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *DiscoveryJobMutation) ResetField(name string) error {
+	switch name {
+	case discoveryjob.FieldName:
+		m.ResetName()
+		return nil
+	case discoveryjob.FieldTarget:
+		m.ResetTarget()
+		return nil
+	case discoveryjob.FieldPortsSpec:
+		m.ResetPortsSpec()
+		return nil
+	case discoveryjob.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case discoveryjob.FieldError:
+		m.ResetError()
+		return nil
+	case discoveryjob.FieldStartedAt:
+		m.ResetStartedAt()
+		return nil
+	case discoveryjob.FieldFinishedAt:
+		m.ResetFinishedAt()
+		return nil
+	case discoveryjob.FieldServices:
+		m.ResetServices()
+		return nil
+	case discoveryjob.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case discoveryjob.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown DiscoveryJob field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *DiscoveryJobMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *DiscoveryJobMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *DiscoveryJobMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *DiscoveryJobMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *DiscoveryJobMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *DiscoveryJobMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *DiscoveryJobMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown DiscoveryJob unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *DiscoveryJobMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown DiscoveryJob edge %s", name)
+}
 
 // RunMutation represents an operation that mutates the Run nodes in the graph.
 type RunMutation struct {
@@ -608,6 +1563,7 @@ type UserMutation struct {
 	id            *uuid.UUID
 	username      *string
 	password_hash *string
+	role          *string
 	last_login_at *time.Time
 	deleted_at    *time.Time
 	created_at    *time.Time
@@ -795,6 +1751,42 @@ func (m *UserMutation) OldPasswordHash(ctx context.Context) (v string, err error
 // ResetPasswordHash resets all changes to the "password_hash" field.
 func (m *UserMutation) ResetPasswordHash() {
 	m.password_hash = nil
+}
+
+// SetRole sets the "role" field.
+func (m *UserMutation) SetRole(s string) {
+	m.role = &s
+}
+
+// Role returns the value of the "role" field in the mutation.
+func (m *UserMutation) Role() (r string, exists bool) {
+	v := m.role
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRole returns the old "role" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldRole(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRole is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRole requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRole: %w", err)
+	}
+	return oldValue.Role, nil
+}
+
+// ResetRole resets all changes to the "role" field.
+func (m *UserMutation) ResetRole() {
+	m.role = nil
 }
 
 // SetLastLoginAt sets the "last_login_at" field.
@@ -1055,12 +2047,15 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 6)
+	fields := make([]string, 0, 7)
 	if m.username != nil {
 		fields = append(fields, user.FieldUsername)
 	}
 	if m.password_hash != nil {
 		fields = append(fields, user.FieldPasswordHash)
+	}
+	if m.role != nil {
+		fields = append(fields, user.FieldRole)
 	}
 	if m.last_login_at != nil {
 		fields = append(fields, user.FieldLastLoginAt)
@@ -1086,6 +2081,8 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.Username()
 	case user.FieldPasswordHash:
 		return m.PasswordHash()
+	case user.FieldRole:
+		return m.Role()
 	case user.FieldLastLoginAt:
 		return m.LastLoginAt()
 	case user.FieldDeletedAt:
@@ -1107,6 +2104,8 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldUsername(ctx)
 	case user.FieldPasswordHash:
 		return m.OldPasswordHash(ctx)
+	case user.FieldRole:
+		return m.OldRole(ctx)
 	case user.FieldLastLoginAt:
 		return m.OldLastLoginAt(ctx)
 	case user.FieldDeletedAt:
@@ -1137,6 +2136,13 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPasswordHash(v)
+		return nil
+	case user.FieldRole:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRole(v)
 		return nil
 	case user.FieldLastLoginAt:
 		v, ok := value.(time.Time)
@@ -1235,6 +2241,9 @@ func (m *UserMutation) ResetField(name string) error {
 		return nil
 	case user.FieldPasswordHash:
 		m.ResetPasswordHash()
+		return nil
+	case user.FieldRole:
+		m.ResetRole()
 		return nil
 	case user.FieldLastLoginAt:
 		m.ResetLastLoginAt()

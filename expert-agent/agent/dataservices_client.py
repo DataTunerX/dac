@@ -1,6 +1,7 @@
 import aiohttp
 import json
 import logging
+import os
 from typing import Dict, Any, Optional, List, AsyncGenerator, Union
 from dataclasses import dataclass
 import asyncio
@@ -18,7 +19,6 @@ class SearchRequest:
     search_type: str = "hybrid"
     limit: int = 5
     hybrid_threshold: float = 0.1
-    memory_threshold: float = 0.1
     extra_params: Optional[Dict[str, Any]] = None
 
 # vector api
@@ -92,6 +92,117 @@ class MultiSearchResult:
         return all_memory_results
 
 
+# ============================================================================
+# 两阶段 LLM 知识检索 —— 数据模型
+#
+# 用于替代向量/混合搜索的知识检索方案（与 code-agent、doc-agent 保持一致）：
+#   Stage 1 (粗筛): 调用 find_metadata_values_in_collections 获取所有知识块的摘要,
+#                    由 LLM 根据用户问题选出相关的 knowledge_id
+#   Stage 2 (精取): 按选中的 knowledge_id 通过 get_text_by_ids 获取完整内容
+#
+# MetadataValuesResult 同时承载两个阶段的数据 —— 一次 API 调用即可拿到
+# metadata_value (摘要) 和 text (全文)，Stage 2 无需再次网络请求。
+# ============================================================================
+@dataclass
+class MetadataValuesResult:
+    """find_metadata_values_in_collections API 的返回结果。
+
+    每条记录包含三个关键字段:
+      - id:             知识块唯一标识
+      - metadata_value: 摘要 (Stage 1 粗筛用)
+      - text:           全文 (Stage 2 精取用)
+    """
+    status: str
+    data: Dict[str, List[Any]]  # collection_name -> list of metadata values
+    errors: Optional[Dict[str, str]] = None  # collection_name -> error message
+
+    def extract_metadata_as_string(self, text_key: str = "metadata_value", id_key: str = "id") -> str:
+        """将所有摘要拼接为单个字符串，供 LLM 一次性阅读。"""
+        texts = []
+        for collection_name, values in self.data.items():
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if isinstance(item, dict):
+                    item_id = item.get(id_key, "")
+                    text = item.get(text_key, "")
+                    if text:
+                        if item_id:
+                            texts.append(f"[Knowledge ID: {item_id}]\n{text}")
+                        else:
+                            texts.append(text)
+                elif isinstance(item, str):
+                    texts.append(item)
+        return "\n\n=========\n\n".join(texts)
+
+    def extract_metadata_as_batches(self, max_chars_per_batch: int = 60000,
+                                      text_key: str = "metadata_value",
+                                      id_key: str = "id") -> list:
+        """将摘要按字符数上限分批，切分点对齐到完整记录边界，避免截断。
+
+        当知识块总量较大时，单次发给 LLM 可能超出上下文窗口限制，
+        因此按 max_chars_per_batch（默认 60000 字符 ≈ 15K tokens）拆分，
+        每个批次可并行发给 LLM 进行 Stage 1 筛选。
+        """
+        items = []
+        for collection_name, values in self.data.items():
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if isinstance(item, dict):
+                    item_id = item.get(id_key, "")
+                    text = item.get(text_key, "")
+                    if text:
+                        entry = f"[Knowledge ID: {item_id}]\n{text}" if item_id else text
+                        items.append(entry)
+                elif isinstance(item, str):
+                    items.append(item)
+        if not items:
+            return []
+        separator = "\n\n=========\n\n"
+        sep_len = len(separator)
+        batches = []
+        current_batch = []
+        current_len = 0
+        for entry in items:
+            entry_len = len(entry)
+            additional = entry_len + (sep_len if current_batch else 0)
+            if current_batch and current_len + additional > max_chars_per_batch:
+                batches.append(separator.join(current_batch))
+                current_batch = [entry]
+                current_len = entry_len
+            else:
+                current_batch.append(entry)
+                current_len += additional
+        if current_batch:
+            batches.append(separator.join(current_batch))
+        return batches
+
+    def get_text_by_ids(self, knowledge_ids: List[str], text_key: str = "text", id_key: str = "id") -> str:
+        """Stage 2: 根据 Stage 1 选中的 knowledge_id 列表，提取对应的完整知识内容（text 字段）。"""
+        texts = []
+        knowledge_ids_set = set(knowledge_ids)
+        for collection_name, values in self.data.items():
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if isinstance(item, dict):
+                    item_id = item.get(id_key, "")
+                    if item_id in knowledge_ids_set:
+                        text = item.get(text_key, "")
+                        if text:
+                            texts.append(f"[Knowledge ID: {item_id}]\n{text}")
+        return "\n\n=========\n\n".join(texts)
+
+    def get_all_items(self) -> List[Dict[str, Any]]:
+        """获取所有知识块的原始数据项，用于判断是否有可用数据。"""
+        all_items = []
+        for collection_name, values in self.data.items():
+            if isinstance(values, list):
+                all_items.extend(values)
+        return all_items
+
+
 # memory add api
 @dataclass
 class MemoryRequest:
@@ -146,13 +257,90 @@ class MemorySearchResponse:
     data: Optional[Dict[str, Any]] = None
 
 
-class DataServicesClient:
+# semantic group with members api
+@dataclass
+class SemanticDomainInfo:
+    """Semantic domain details from data services."""
+    semantic_domain_id: Optional[str] = None
+    semantic_domain: Optional[str] = None
+    agent_card: Optional[str] = None
+    dd_namespace: Optional[str] = None
+    dd_name: Optional[str] = None
+    descriptor_type: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
-    def __init__(self, base_url: str = "http://data-services.dac.svc.cluster.local:8000", timeout: int = 30):
+
+@dataclass
+class DDGroupRelationInfo:
+    """Group-SD relation."""
+    id: Optional[int] = None
+    sd_id: str = ""
+    group_id: str = ""
+    association_reason: Optional[str] = None
+
+
+@dataclass
+class SemanticGroupMemberDetail:
+    """One member: relation + semantic domain."""
+    relation: DDGroupRelationInfo
+    semantic_domain: Optional[SemanticDomainInfo] = None
+
+
+@dataclass
+class SemanticGroupInfo:
+    """Summary info of a child group within a parent group."""
+    id: str = ""
+    group_name: str = ""
+    description: Optional[str] = None
+    agent_card: Optional[str] = None
+    descriptor_type: str = "group"
+
+
+@dataclass
+class SemanticGroupWithMembersResult:
+    """Semantic group with its member semantic domains and child groups."""
+    group: Dict[str, Any]  # semantic group dict (id, group_name, description, ...)
+    members: List[SemanticGroupMemberDetail]
+    child_groups: List[SemanticGroupInfo] = None
+
+    def __post_init__(self):
+        if self.child_groups is None:
+            self.child_groups = []
+
+
+def get_data_descriptor():
+    """Build Data-Descriptor header from env DD_NAMESPACE and Data_Descriptor. Only used when DataSourceType is SemanticDomain."""
+    dd_namespace = os.getenv('DD_NAMESPACE')
+    data_descriptors_str = os.getenv('Data_Descriptor')
+    if not data_descriptors_str or not dd_namespace:
+        return ""
+    data_descriptors = data_descriptors_str.split(",")
+    if not data_descriptors:
+        return ""
+    data_descriptor = data_descriptors[0].strip()
+    data_descriptor_all = f"{dd_namespace}_{data_descriptor}"
+    return data_descriptor_all.replace("-", "_")
+
+
+class DataServicesClient:
+    def __init__(
+        self,
+        base_url: str = "http://data-services.dac.svc.cluster.local:8000",
+        timeout: int = 30,
+        use_data_descriptor_header: bool = False,
+    ):
+        """
+        Args:
+            base_url: Data-services API base URL.
+            timeout: Request timeout in seconds.
+            use_data_descriptor_header: If True (SemanticDomain), set Data-Descriptor header from env; if False (SemanticGroup), do not set it.
+        """
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
+        self.use_data_descriptor_header = use_data_descriptor_header
         self.session: Optional[aiohttp.ClientSession] = None
-    
+
     @asynccontextmanager
     async def session_context(self) -> AsyncGenerator['DataServicesClient', None]:
         try:
@@ -160,14 +348,18 @@ class DataServicesClient:
             yield self
         finally:
             await self.close()
-    
+
     async def _create_session(self):
+        """Create aiohttp session. Data-Descriptor header only set when use_data_descriptor_header is True (SemanticDomain)."""
         if self.session is None or self.session.closed:
+            headers = {"Content-Type": "application/json"}
+            if self.use_data_descriptor_header:
+                data_descriptor = get_data_descriptor()
+                if data_descriptor:
+                    headers["Data-Descriptor"] = data_descriptor
             self.session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
-                headers={
-                    "Content-Type": "application/json"
-                }
+                headers=headers,
             )
     
     async def close(self):
@@ -220,7 +412,6 @@ class DataServicesClient:
         search_type: str = "hybrid",
         limit: int = 5,
         hybrid_threshold: float = 0.1,
-        memory_threshold: float = 0.1,
         **extra_params
     ) -> SearchResult:
         """
@@ -232,7 +423,6 @@ class DataServicesClient:
             search_type: Search type
             limit: Number of results to return
             hybrid_threshold: Hybrid search threshold
-            memory_threshold: Memory threshold
             **extra_params: Additional parameters
         
         Returns:
@@ -244,7 +434,6 @@ class DataServicesClient:
             search_type=search_type,
             limit=limit,
             hybrid_threshold=hybrid_threshold,
-            memory_threshold=memory_threshold,
             extra_params=extra_params
         )
         return await self._search(request_data)
@@ -256,7 +445,6 @@ class DataServicesClient:
         search_type: str = "hybrid",
         limit: int = 5,
         hybrid_threshold: float = 0.1,
-        memory_threshold: float = 0.1,
         **extra_params
     ) -> MultiSearchResult:
         """
@@ -268,7 +456,6 @@ class DataServicesClient:
             search_type: Search type
             limit: Number of results to return per collection
             hybrid_threshold: Hybrid search threshold
-            memory_threshold: Memory threshold
             **extra_params: Additional parameters
         
         Returns:
@@ -292,7 +479,6 @@ class DataServicesClient:
                     search_type=search_type,
                     limit=limit,
                     hybrid_threshold=hybrid_threshold,
-                    memory_threshold=memory_threshold,
                     **extra_params
                 )
                 results[collection_name] = result
@@ -326,8 +512,7 @@ class DataServicesClient:
             "query": request.query,
             "search_type": request.search_type,
             "limit": request.limit,
-            "hybrid_threshold": request.hybrid_threshold,
-            "memory_threshold": request.memory_threshold
+            "hybrid_threshold": request.hybrid_threshold
         }
 
         if request.extra_params:
@@ -562,6 +747,134 @@ class DataServicesClient:
                         run_id=item.get('run_id', '')
                     ))
         return results
+
+    async def get_semantic_group_with_members(self, group_id: str) -> Optional[SemanticGroupWithMembersResult]:
+        """
+        Get semantic group by id and detailed info of its member semantic domains.
+
+        Args:
+            group_id: Semantic group ID.
+
+        Returns:
+            SemanticGroupWithMembersResult with group and members (relation + semantic_domain),
+            or None if not found or request failed.
+        """
+        url = f"{self.base_url}/semantic_groups/{group_id}/with_members"
+        try:
+            await self._create_session()
+            async with self.session.get(url) as response:
+                if response.status != 200:
+                    logger.warning(f"get_semantic_group_with_members HTTP {response.status}: {await response.text()}")
+                    return None
+                data = await response.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.error(f"get_semantic_group_with_members request error: {e}")
+            return None
+        if data.get("status") != "success" or not data.get("data"):
+            return None
+        payload = data["data"]
+        group = payload.get("group") or {}
+        members_raw = payload.get("members") or []
+        members = []
+        for m in members_raw:
+            rel = m.get("relation") or {}
+            relation = DDGroupRelationInfo(
+                id=rel.get("id"),
+                sd_id=rel.get("sd_id", ""),
+                group_id=rel.get("group_id", ""),
+                association_reason=rel.get("association_reason"),
+            )
+            sd_raw = m.get("semantic_domain")
+            semantic_domain = None
+            if sd_raw and isinstance(sd_raw, dict):
+                semantic_domain = SemanticDomainInfo(
+                    semantic_domain_id=sd_raw.get("semantic_domain_id"),
+                    semantic_domain=sd_raw.get("semantic_domain"),
+                    agent_card=sd_raw.get("agent_card"),
+                    dd_namespace=sd_raw.get("dd_namespace"),
+                    dd_name=sd_raw.get("dd_name"),
+                    descriptor_type=sd_raw.get("descriptor_type"),
+                    created_at=sd_raw.get("created_at"),
+                    updated_at=sd_raw.get("updated_at"),
+                )
+            members.append(SemanticGroupMemberDetail(relation=relation, semantic_domain=semantic_domain))
+
+        child_groups_raw = payload.get("child_groups") or []
+        child_groups = []
+        for cg in child_groups_raw:
+            if isinstance(cg, dict):
+                child_groups.append(SemanticGroupInfo(
+                    id=cg.get("id", ""),
+                    group_name=cg.get("group_name", ""),
+                    description=cg.get("description"),
+                    agent_card=cg.get("agent_card"),
+                ))
+        return SemanticGroupWithMembersResult(group=group, members=members, child_groups=child_groups)
+
+    async def find_metadata_values_in_collections(
+        self,
+        collection_names: List[str],
+    ) -> MetadataValuesResult:
+        """两阶段知识检索的数据源 API。
+
+        一次调用返回所有知识块的 id + metadata_value(摘要) + text(全文)，
+        由 MetadataValuesResult 同时承载 Stage 1 和 Stage 2 所需的数据，
+        避免 Stage 2 再发一次网络请求。
+
+        Args:
+            collection_names: 要查询的 collection 名称列表。
+
+        Returns:
+            MetadataValuesResult: 包含 status、data (collection_name -> metadata values) 和 errors。
+        """
+        url = f"{self.base_url}/knowledge_pyramid/find_metadata_values_in_collections"
+        payload = {"collection_names": collection_names}
+
+        try:
+            await self._create_session()
+            async with self.session.post(url, json=payload) as response:
+                response_text = await response.text()
+
+                if response.status == 200:
+                    try:
+                        data = await response.json()
+                        return MetadataValuesResult(
+                            status=data.get("status", ""),
+                            data=data.get("results", {}),
+                            errors=data.get("errors")
+                        )
+                    except json.JSONDecodeError:
+                        logger.error(f"JSON parse fail: {response_text}")
+                        return MetadataValuesResult(
+                            status="error",
+                            data={},
+                            errors={"parse_error": f"JSON parse fail: {response_text}"}
+                        )
+                else:
+                    error_msg = f"HTTP error: {response.status}, response: {response_text}"
+                    logger.error(error_msg)
+                    return MetadataValuesResult(
+                        status="error",
+                        data={},
+                        errors={"http_error": error_msg}
+                    )
+
+        except aiohttp.ClientError as e:
+            error_msg = f"network request error: {str(e)}"
+            logger.error(error_msg)
+            return MetadataValuesResult(
+                status="error",
+                data={},
+                errors={"network_error": error_msg}
+            )
+        except asyncio.TimeoutError:
+            error_msg = f"request timeout"
+            logger.error(error_msg)
+            return MetadataValuesResult(
+                status="error",
+                data={},
+                errors={"timeout_error": error_msg}
+            )
 
 
 async def example_usage():

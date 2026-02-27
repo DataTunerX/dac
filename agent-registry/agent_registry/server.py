@@ -104,6 +104,49 @@ def change_logger(event_type, agent_url, agent):
         remove_agent_from_vector_db(agent_url, agent)
 
 
+def _agent_exists_in_vector_db(agent_url: str) -> bool:
+    """Check if a document with this agent_url already exists (metadata query: agent_url key-value)."""
+    try:
+        vector_client = create_vector_client()
+        ids = vector_client.get_ids_by_metadata_field(
+            collection_name=collection_name,
+            key="agent_url",
+            value=agent_url
+        )
+        return len(ids) > 0
+    except Exception as e:
+        logger.warning(f"Check agent in vector DB failed for {agent_url}: {e}")
+        return False
+
+
+def sync_existing_agents_to_vector_db(registry):
+    """
+    Startup compensation: ensure every agent currently in Redis is present in the vector DB.
+    Covers the case where agents registered while the agent registry was not running.
+    Only adds when not already present (no delete-then-add), to keep startup lightweight.
+
+    Why not delete-then-add? That would touch every agent on every restart (delete + add),
+    which is heavy and unnecessary when the agent is already in the vector DB. We avoid
+    duplicates by checking existence via metadata query (get_ids_by_metadata_field) first.
+    """
+    try:
+        added = 0
+        skipped = 0
+        for agent_url in registry.redis.hkeys(registry.registry_key):
+            agent = registry.get_agent(agent_url)
+            if not agent:
+                continue
+            if _agent_exists_in_vector_db(agent_url):
+                skipped += 1
+                continue
+            add_agent_to_vector_db(agent_url, agent)
+            added += 1
+        if added > 0 or skipped > 0:
+            logger.info(f"Startup sync: added {added} agent(s) to vector DB, skipped {skipped} (already present)")
+    except Exception as e:
+        logger.error(f"Startup sync to vector DB failed: {e}", exc_info=True)
+
+
 def create_fastapi_app(registry):
     """Create FastAPI application with routes"""
     app = FastAPI(title="Agent Cards API", version="1.0.0")
@@ -158,6 +201,9 @@ def serve_mcp(host, port, transport, redis_host, redis_port, redis_db, password)
     cleanup_service = CleanupService(registry)
     cleanup_service.start()
 
+    logger.info('Syncing existing Redis agents to vector DB (startup compensation)')
+    sync_existing_agents_to_vector_db(registry)
+
     logger.info('Starting watch redis changes')
     watcher = registry.watch_changes(change_logger)
     logger.info(f"The watcher thread is active.: {watcher.is_alive()}")
@@ -199,6 +245,9 @@ def serve_api(host, port, redis_host, redis_port, redis_db, password):
     cleanup_service = CleanupService(registry)
     cleanup_service.start()
 
+    logger.info('Syncing existing Redis agents to vector DB (startup compensation)')
+    sync_existing_agents_to_vector_db(registry)
+
     logger.info('Starting watch redis changes')
     watcher = registry.watch_changes(change_logger)
     logger.info(f"The watcher thread is active.: {watcher.is_alive()}")
@@ -220,6 +269,9 @@ def serve_both(mcp_host, mcp_port, mcp_transport, api_host, api_port, redis_host
     logger.info('Starting CleanupService')
     cleanup_service = CleanupService(registry)
     cleanup_service.start()
+
+    logger.info('Syncing existing Redis agents to vector DB (startup compensation)')
+    sync_existing_agents_to_vector_db(registry)
 
     logger.info('Starting watch redis changes')
     watcher = registry.watch_changes(change_logger)

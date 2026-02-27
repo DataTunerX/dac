@@ -48,19 +48,23 @@ type CreateAgentContainerRequest struct {
 	Namespace           string
 	Name                string
 	Labels              map[string]string
+	DACType             string
 	DataPolicy          entity.DataPolicy
 	AgentCard           entity.AgentCard
-	Model               entity.ModelSpec
-	ExpertAgentMaxSteps string
+	Model                     entity.ModelSpec
+	ExpertAgentMaxSteps       string
+	OrchestratorAgentMaxLoops string
 }
 
 // UpdateAgentContainerRequest represents a request to update an agent container
 type UpdateAgentContainerRequest struct {
-	Labels              map[string]string
-	DataPolicy          *entity.DataPolicy
-	AgentCard           *entity.AgentCard
-	Model               *entity.ModelSpec
-	ExpertAgentMaxSteps *string
+	Labels                    map[string]string
+	DACType                   *string
+	DataPolicy                *entity.DataPolicy
+	AgentCard                 *entity.AgentCard
+	Model                     *entity.ModelSpec
+	ExpertAgentMaxSteps       *string
+	OrchestratorAgentMaxLoops *string
 }
 
 // CreateDataDescriptorRequest represents a request to create a data descriptor

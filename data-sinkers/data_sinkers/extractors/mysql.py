@@ -3,18 +3,18 @@ import json
 from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
 from ..readers.mysql.mysql_reader import MySQLReader
+from ..readers.code.github_reader import GitHubReader
+from ..readers.code.gitee_reader import GiteeReader
+from ..readers.code.gitlab_reader import GitLabReader
 from ..api.base import DocumentModel
-from ..prompts.mysql import build_mysql_prompt
-from ..prompts.mysql import format_schema_to_markdown as mysql_format_schema_to_markdown
-from ..prompts.mysql import format_one_schema_to_markdown as mysql_format_one_schema_to_markdown
-from ..analyzers.fingerprint import FingerprintAnalyzer
+from ..prompts.mysql import format_schema_to_markdown_with_tables, format_schema_to_markdown_with_all_tables
 from ..client.knowledge_pyramid_client import KnowledgePyramidClient
 from ..client.vector_client import VectorClient
-from ..client.fingerprint_client import FingerprintClient, FingerprintData
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 import logging
-
+from .base import CodeFileLister,CodeAnalyzer,SQLAnalyzer, DEFAULT_CODE_DOWNLOAD_DIR
+from model_sdk import ModelManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +22,19 @@ logger = logging.getLogger("mysql_extractor")
 
 # Process 5 tables as one document
 DEFAULT_SQL_BATCHSIZE = 5
+
+manager = ModelManager()
+
+llm = manager.get_llm(
+    provider=os.getenv("PROVIDER","openai_compatible"),
+    api_key=os.getenv("API_KEY"),
+    base_url=os.getenv("BASE_URL"),
+    model=os.getenv("Model"),
+    temperature=0.01,
+    extra_body={
+        "enable_thinking": False
+    },
+)
 
 def get_safe_batch_size():
     """Safely get batch size"""
@@ -44,42 +57,18 @@ def get_safe_batch_size():
         return DEFAULT_SQL_BATCHSIZE
 
 def extract_mysql(
-        reader: MySQLReader, 
+        sql_reader: MySQLReader, 
         descriptor: Dict[str, Any], 
         extract: Dict[str, Any], 
         prompts: Dict[str, Any], 
-        fingerprint_analyzer: FingerprintAnalyzer, 
-        fingerprint_client: FingerprintClient,
-        enable_allinone: str, 
+        codeRepo: Dict[str, Any], 
+        enable_allinone: str,
         enable_sample_data: str,
         sql_process_mode: str
-    ) -> List[DocumentModel]:
+    ) -> (List[DocumentModel], dict):
 
     results: List[DocumentModel] = []
-
     tables = extract.get('tables', [])
-
-    logger.debug(f"===========extract_mysql, tables = {tables}")
-
-    # If tables are specified, only get schemas of these tables, otherwise get all table schemas in the database.
-    schema_results:List[Dict[str, Any]] = []
-    if tables:
-        schema_results = reader.schema(tables)
-    else:
-        schema_results = reader.schema()
-
-    logger.debug(f"===========extract_mysql, schema_results = {schema_results}")
-
-    # Tables relationship
-    schema_relationship:Dict[str, Any] = {}
-    if tables:
-        schema_relationship = reader.schema_relationship(tables)
-    else:
-        schema_relationship = reader.schema_relationship()
-    schema_relationship_str = json.dumps(schema_relationship, ensure_ascii=False, indent=2)
-    schema_relationship_md = fingerprint_analyzer.generate_table_relationship(schema_relationship_str)
-
-    logger.debug(f"extract_mysql, schema_relationship = {schema_relationship_str}")
 
     background_knowledge = ""
     if prompts:
@@ -98,170 +87,129 @@ def extract_mysql(
             fewshots = fewshots.rstrip()
     logger.info(f"===========fewshots = {fewshots}")
 
-    # Use LLM to generate DD fingerprint, then send to fingerprint database, containing DD fingerprint
-    batch_size = get_safe_batch_size()
-    fingerprint_document, batch_fingerprints = fingerprint_analyzer.analyze(schema_results, datasource_type="mysql", batch_size=batch_size)
-    logger.debug(f"extract_mysql analyze, fingerprint_document = {fingerprint_document}")
+    # download code
+    local_repo_dir = ""
+    
+    if codeRepo and isinstance(codeRepo, dict):
+        code_repo_type = codeRepo.get('codeRepoType', 'github')
+        code_repo_path = codeRepo.get('codeRepoPath')
+        code_repo_branch = codeRepo.get('codeRepoBranch', 'main')
+        code_repo_token = codeRepo.get('codeRepoToken', '')
 
-    # Add fingerprint to fingerprint database
-    fingerprint = FingerprintData(
-            fingerprint_id=fingerprint_document.metadata["fingerprint_id"],
-            fingerprint_summary=fingerprint_document.page_content,
-            agent_info_name=fingerprint_document.metadata["agent_info_name"],
-            agent_info_description=fingerprint_document.metadata["agent_info_description"],
-            dd_namespace=descriptor.get('namespace'),
-            dd_name=descriptor.get('name')
-        )
-    fingerprint_client.create_fingerprint(fingerprint)
-    logger.info("========== extract_mysql, add fingerprint to fingerprint database success=")
+        logger.info(f"===========codeRepo = {codeRepo}")
 
-    # Build document, then send to dataservices. All-in-one
-    if enable_allinone == "enable":
-        schema_md_str = mysql_format_schema_to_markdown(schema_results)
-        logger.info(f"extract_mysql, schema_md_str = {schema_md_str}")
+        code_config = {
+            'token': code_repo_token
+        }
 
-        tables_document = ""
-        if enable_sample_data == "enable":
-            # If tables are specified, only get sample data of these tables, otherwise get all table sample data in the database.
-            sample_data_results = ""
-            if tables:
-                sample_data_results = reader.sample(tables)
-            else:
-                sample_data_results = reader.sample()
+        if code_repo_type == "github":
+            code_reader = GitHubReader(code_config)
 
-            tables_document = f"key information:\n{background_knowledge}\n\n{fingerprint_document.page_content} \n\ntable list:\n{schema_md_str} \n\ntable relationship:\n{schema_relationship_md}\n\nsample data:\n{sample_data_results}\n\nfewshots:\n{fewshots}\n\n"
-        else:
-            tables_document = f"key information:\n{background_knowledge}\n\n{fingerprint_document.page_content} \n\ntable list:\n{schema_md_str} \n\ntable relationship:\n{schema_relationship_md}\n\nfewshots:\n{fewshots}\n\n"
+        if code_repo_type == "gitee":
+            code_reader = GiteeReader(code_config)
+        
+        if code_repo_type == "gitlab":
+            code_reader = GitLabReader(code_config)
 
-        results = [
-            DocumentModel(
-                page_content=tables_document,
+        if code_repo_path:
+            local_repo_dir = code_reader.query(code_repo_path, branch=code_repo_branch)
+            logger.info(f"===========local_repo_dir = {local_repo_dir}")
+    
+    code_analyzer = CodeAnalyzer(llm, max_workers=50, batch_size=50)
+
+    sql_analyzer = SQLAnalyzer(llm, max_workers=20, batch_size=20)
+
+    logger.info("Starting concurrent database and code analysis...")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        db_future = executor.submit(sql_analyzer.analyze_database, sql_reader, tables, format_schema_to_markdown_with_tables)
+
+        code_future = executor.submit(code_analyzer.analyze_code, local_repo_dir)
+
+        try:
+            db_ddd_summary, schema_results, all_tables_schema_relationship_md, all_tables_details, batch_process_schemas_result = db_future.result(timeout=3600)
+            logger.info("Database analysis completed successfully.")
+
+            code_ddd_summary, analysis_results, module_files_group_result = code_future.result(timeout=3600)
+            logger.info("Code analysis completed successfully.")
+        except concurrent.futures.TimeoutError:
+            logger.error("Error: One or both analysis tasks timed out.")
+            return results, {}
+        except Exception as e:
+            logger.error(f"Error during concurrent analysis: {e}")
+            return results, {}
+
+    logger.info(f"=======db_ddd_summary: {db_ddd_summary}")
+
+    logger.info(f"=======code_ddd_summary: {code_ddd_summary}")
+
+    ddd_str = ""
+
+    if code_ddd_summary:
+        db_and_code = f"{db_ddd_summary["summary"]} \n\n{code_ddd_summary["summary"]}"
+        db_and_code_ddd_summary = code_analyzer.ddd(db_and_code)
+        logger.info(f"db_and_code_ddd_result:\n{db_and_code_ddd_summary["summary"]}")
+
+        ddd_str = db_and_code_ddd_summary["summary"]
+    else:
+        ddd_str = db_ddd_summary["summary"]
+
+    sql_summary, all_group_tables_for_chunk_summary = sql_analyzer.process(
+        sql_reader,
+        format_schema_to_markdown_with_tables,
+        background_knowledge,
+        fewshots,
+        schema_results,
+        all_tables_schema_relationship_md,
+        all_tables_details,
+        batch_process_schemas_result,
+        ddd_str
+    )
+
+    agent_card = sql_analyzer.agent_card(ddd_str)
+
+    # Finally package the converted results into documents.
+    results = convert_sql_summary_to_document_models(sql_summary, all_group_tables_for_chunk_summary, descriptor)
+
+    tables_schema_md_list = format_schema_to_markdown_with_all_tables(schema_results)
+
+    fingerprint_associated_info = {
+        "schema_results": schema_results,
+        "tables_schema_md_list": tables_schema_md_list,
+        "db_ddd" : db_ddd_summary.get("summary") if db_ddd_summary else None,
+        "code_ddd": code_ddd_summary.get("summary") if code_ddd_summary else None,
+        "ddd": ddd_str,
+        "tables_relationship": all_tables_schema_relationship_md,
+        "tables_detail": all_tables_details,
+        "agent_card": agent_card
+    }
+
+    return results, fingerprint_associated_info
+
+def convert_sql_summary_to_document_models(sql_summary, all_group_tables_for_chunk_summary, descriptor=None)-> List[DocumentModel]:
+    documents = []
+    
+    for item in sql_summary:
+        for module_name, content in item.items():
+
+            chunk_summary_content = None
+            
+            for chunk_item in all_group_tables_for_chunk_summary:
+                if isinstance(chunk_item, dict) and module_name in chunk_item:
+                    chunk_summary_content = chunk_item[module_name]
+                    break
+
+            document = DocumentModel(
+                page_content=content,
                 metadata={
                     "source_type": "mysql",
-                    "dd_namespace": descriptor.get('namespace'),
-                    "dd_name": descriptor.get('name'),
-                    "fingerprint_id": fingerprint_document.metadata["fingerprint_id"],
-                    "fingerprint_summary": fingerprint_document.metadata["fingerprint_summary"],
-
+                    "dd_namespace": descriptor.get('namespace') if descriptor else None,
+                    "dd_name": descriptor.get('name') if descriptor else None,
+                    "module_name": module_name,
+                    "summary": chunk_summary_content,
+                    "content_type": "database"
                 }
             )
-        ]
-    else:
-        if sql_process_mode=="batch":
-            # Build document, then send to dataservices. Some tables schema -> one document
-            batch_size = get_safe_batch_size()
-
-            total_batches = (len(schema_results) + batch_size - 1) // batch_size
-            for i in range(0, len(schema_results), batch_size):
-                batch = schema_results[i:i + batch_size]
-                batch_number = i // batch_size
-                
-                batch_sql_schema_md = mysql_format_schema_to_markdown(batch)
-
-                # Reuse already generated batch fingerprints
-                tables_fingerprint_id = ""
-                tables_fingerprint = ""
-                if batch_fingerprints and batch_number < len(batch_fingerprints):
-                    batch_fingerprint_info = None
-                    for bp in batch_fingerprints:
-                        if bp["batch_number"] == batch_number:
-                            batch_fingerprint_info = bp
-                            break
-
-                    tables_fingerprint_id = batch_fingerprint_info["fingerprint_id"]
-                    tables_fingerprint = batch_fingerprint_info["fingerprint_summary"]
-                else:
-                    logger.warning(f"Batch {batch_number + 1} fingerprint does not exist")
-
-                tables_document = ""
-                if enable_sample_data == "enable":
-                    batch_table_names = [table['table_name'] for table in batch]
-                    sample_data_results = reader.sample(batch_table_names)
-                    tables_document = f"{tables_fingerprint} \n\n {batch_sql_schema_md} \n\ntable relationship:\n{schema_relationship_md}\n\nsample data:\n{sample_data_results}"
-                else:
-                    tables_document = f"{tables_fingerprint} \n\n {batch_sql_schema_md} \n\ntable relationship:\n{schema_relationship_md}\n\n"
-
-                logger.info(f"extract_mysql processing batch {batch_number + 1}/{total_batches}, current batch count: {len(batch)}")
-
-                results.append(
-                    DocumentModel(
-                        page_content=tables_document,
-                        metadata={
-                            "source_type": "mysql",
-                            "dd_namespace": descriptor.get('namespace'),
-                            "dd_name": descriptor.get('name'),
-                            "fingerprint_id": tables_fingerprint_id
-                        }
-                    )
-                )
-        elif sql_process_mode == "dictionary":
-            # Build document, then send to dataservices. Some tables schema -> one document
-            batch_size = get_safe_batch_size()
-            total_batches = (len(schema_results) + batch_size - 1) // batch_size
-            
-            # Step 1: Collect markdown data for all batches
-            batch_tasks = []
-            for i in range(0, len(schema_results), batch_size):
-                batch = schema_results[i:i + batch_size]
-                batch_number = i // batch_size
-                logger.info(f"extract_mysql processing batch {batch_number + 1}/{total_batches} for schema_to_markdown, current batch count: {len(batch)}")
-                
-                batch_sql_schema_md = mysql_format_schema_to_markdown(batch)
-                if batch_sql_schema_md:
-                    batch_tasks.append((batch_number, batch_sql_schema_md))
-            
-            # Step 2: Use thread pool to parallel process generate_tables_summary
-            batch_results = []
-            
-            if batch_tasks:
-                # Set max concurrency based on actual situation, using min(CPU cores, total batches)
-                max_workers = 10
-                
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit all tasks, maintaining order
-                    future_to_index = {}
-                    for index, markdown in batch_tasks:
-                        future = executor.submit(fingerprint_analyzer.generate_tables_summary, markdown)
-                        future_to_index[future] = index
-                    
-                    # Collect results and sort by original order
-                    temp_results = [None] * len(batch_tasks)
-                    for future in concurrent.futures.as_completed(future_to_index):
-                        idx = future_to_index[future]
-                        try:
-                            batch_tables_summary = future.result()
-                            logger.info(f"extract_mysql processing batch {idx + 1}/{total_batches}, batch_tables_summary = {batch_tables_summary}")
-                            temp_results[idx] = batch_tables_summary
-                        except Exception as exc:
-                            logger.error(f"Batch {idx + 1} error generating table summary: {exc}")
-                            # Use empty string as placeholder when error occurs
-                            temp_results[idx] = ""
-                    
-                    # Add successful results to batch_results
-                    for result in temp_results:
-                        if result is not None:
-                            batch_results.append(result)
-            
-            # Step 3: Build final result
-            if not batch_results:
-                # If all batches failed, use empty result
-                batch_result_str = ""
-            else:
-                # Merge all batch results
-                batch_result_str = "\n".join(batch_results)
-            # Sample data is not used here; actual sample data collection is done in the expert agent based on selected tables.
-            tables_document = f"key information:\n{background_knowledge}\n\ntable list:\n{batch_result_str}\n\ntable relationship:\n{schema_relationship_md}\n\nfewshots:\n{fewshots}\n\n"
-            results = [
-                DocumentModel(
-                    page_content=tables_document,
-                    metadata={
-                        "source_type": "mysql",
-                        "dd_namespace": descriptor.get('namespace'),
-                        "dd_name": descriptor.get('name')
-                    }
-                )
-            ]
-        else:
-            pass
-            
-    return results
+            documents.append(document)
+    
+    return documents

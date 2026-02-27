@@ -1,0 +1,67 @@
+[project]
+name = "dac-data-services"
+version = "0.1.0"
+description = "A2A - MCP Resource Server"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "click>=8.1.8",
+    "httpx>=0.28.1",
+    "langchain>=0.3.26",
+    "langchain-mcp-adapters>=0.0.9",
+    "langchain_community==0.4",
+    "langchain-neo4j>=0.6.0",
+    "langchain-openai>=1.0.0",
+    "openai>=1.104.2",
+    "nest-asyncio>=1.6.0",
+    "networkx>=3.4.2",
+    "numpy>=2.2.5",
+    "pandas>=2.2.3",
+    "pydantic>=2.11.4",
+    "requests==2.32.5",
+    "python-dotenv",
+    "setuptools",
+    "wheel",
+    "dashscope==1.23.6",
+    "gevent~=24.11.1",
+    "tiktoken~=0.8.0",
+    "mem0ai==1.0.1",
+    "mem0ai[graph]",
+    "psycopg2-binary~=2.9.10",
+    "pymysql~=1.1.0",
+    "aiomysql~=0.2.0",
+    "DBUtils~=3.1.2",
+    "asyncpg~=0.30.0",
+]
+
+[project.scripts]
+dac-data-services = "dac_data_services.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dac_data_services"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pyright]
+include = ["dac_data_services"]
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.uv]
+dev-dependencies = []
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple/"

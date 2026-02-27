@@ -354,3 +354,27 @@ curl -X DELETE "http://192.168.xxx.xxx:22000/vector/test_vector123/delete_by_met
   "collection": "test_vector123"
 }
 
+# 8. Get document IDs by metadata field (query by metadata)
+
+# First add a doc with known metadata
+curl -X POST "http://192.168.xxx.xxx:22000/vector/test_vector123/add_documents" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "documents": [
+      {
+        "page_content": "Test agent for metadata query",
+        "metadata": {"agent_url": "http://my-agent:20001", "name": "TestAgent"}
+      }
+    ]
+  }' | jq .
+
+# Then query ids by metadata (key=agent_url, value=http://my-agent:20001)
+curl -X POST "http://192.168.3.7:22000/vector/expert_agent_cards/get_ids_by_metadata_field" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "agent_url",
+    "value": "http://192.168.3.238:20005/"
+  }' | jq .
+
+# expected: { "ids": ["<uuid>"] } (one or more ids)
+

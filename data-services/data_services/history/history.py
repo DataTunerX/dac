@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class AsyncHistoryService:
     def __init__(self, host: str = None, user: str = None, password: str = None, 
-                 database: str = None, port: int = None, pool_size: int = None):
+                 database: str = None, port: int = None, pool_size: int = None, pool = None):
         """
         Initialize database connection pool
 
@@ -27,6 +27,7 @@ class AsyncHistoryService:
             database: Database name
             port: Database port, default 3306
             pool_size: Connection pool size, default 50
+            pool: external connection pool
         """
         self.host = host or os.getenv('MYSQL_HOST', '')
         self.user = user or os.getenv('MYSQL_USER', 'root')
@@ -34,7 +35,7 @@ class AsyncHistoryService:
         self.database = database or os.getenv('MYSQL_HISTORY_DATABASE', 'history')
         self.port = port or int(os.getenv('MYSQL_PORT', '3307'))
         self.pool_size = pool_size or int(os.getenv('MYSQL_MAX_CONNECTION', '50'))
-        self.pool = None
+        self.pool = pool
         
         logger.info(f"Asynchronous MySQL connection pool configuration completed, maximum connections: {pool_size}")
     
@@ -55,7 +56,7 @@ class AsyncHistoryService:
             )
             logger.info("Asynchronous MySQL connection pool created successfully.")
             
-            await self._create_table_if_not_exists()
+        await self._create_table_if_not_exists()
     
     async def close(self):
         if self.pool:
@@ -113,7 +114,8 @@ class AsyncHistoryService:
             user_id VARCHAR(255) NOT NULL COMMENT 'User ID',
             agent_id VARCHAR(255) NOT NULL COMMENT 'Agent ID',
             run_id VARCHAR(255) COMMENT 'Run ID',
-            conversation TEXT COMMENT 'Conversation record',
+            conversation MEDIUMTEXT COMMENT 'Conversation record (role, content only)',
+            think MEDIUMTEXT COMMENT 'Think content per message (JSON array)',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT 'Creation time',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Update time',
             INDEX idx_user_id (user_id),
@@ -124,10 +126,27 @@ class AsyncHistoryService:
         try:
             async with self._get_cursor() as cursor:
                 await cursor.execute(create_table_query)
+                await self._add_think_column_if_missing(cursor)
             logger.info("History conversation table creation/check completed")
         except Error as e:
             logger.error(f"Table creation error: {e}")
             raise
+
+    async def _add_think_column_if_missing(self, cursor):
+        """Add think column for existing tables (migration)."""
+        try:
+            await cursor.execute("""
+                SELECT COUNT(*) as cnt FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'history' AND COLUMN_NAME = 'think'
+            """)
+            row = await cursor.fetchone()
+            if row and row.get('cnt', 0) == 0:
+                await cursor.execute("""
+                    ALTER TABLE history ADD COLUMN think MEDIUMTEXT COMMENT 'Think content per message (JSON array)' AFTER conversation
+                """)
+                logger.info("Added think column to history table")
+        except Error as e:
+            logger.warning(f"Could not add think column (may already exist): {e}")
     
     async def create(self, history_record: HistoryRecord) -> bool:
         """
@@ -141,8 +160,8 @@ class AsyncHistoryService:
         """
         insert_query = """
         INSERT INTO history 
-        (hid, user_id, agent_id, run_id, conversation)
-        VALUES (%s, %s, %s, %s, %s)
+        (hid, user_id, agent_id, run_id, conversation, think)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """
         
         try:
@@ -152,7 +171,8 @@ class AsyncHistoryService:
                     history_record.user_id,
                     history_record.agent_id,
                     history_record.run_id,
-                    history_record.conversation
+                    history_record.conversation,
+                    history_record.think
                 ))
                 return result > 0
         except Error as e:
@@ -171,15 +191,15 @@ class AsyncHistoryService:
         """
         insert_query = """
         INSERT INTO history 
-        (hid, user_id, agent_id, run_id, conversation)
-        VALUES (%s, %s, %s, %s, %s)
+        (hid, user_id, agent_id, run_id, conversation, think)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """
         
         try:
             async with self._get_connection() as connection:
                 async with connection.cursor() as cursor:
                     data = [(record.hid, record.user_id, record.agent_id, 
-                             record.run_id, record.conversation) 
+                             record.run_id, record.conversation, record.think) 
                             for record in history_records]
                     
                     affected_rows = 0
@@ -217,6 +237,7 @@ class AsyncHistoryService:
                         agent_id=result['agent_id'],
                         run_id=result['run_id'],
                         conversation=result['conversation'],
+                        think=result.get('think'),
                         created_at=result['created_at'],
                         updated_at=result['updated_at']
                     )
@@ -261,6 +282,99 @@ class AsyncHistoryService:
                         agent_id=result['agent_id'],
                         run_id=result['run_id'],
                         conversation=result['conversation'],
+                        think=result.get('think'),
+                        created_at=result['created_at'],
+                        updated_at=result['updated_at']
+                    ))
+                
+                return history_records
+        except Error as e:
+            logger.error(f"Query history records by user, agent, and run ID error: {e}")
+            return []
+
+    async def get_by_user_run(self, user_id: str, run_id: str, limit: int = None) -> List[HistoryRecord]:
+        """
+        Retrieve history records based on three conditions: user_id, and run_id
+        """
+        if limit is not None:
+            base_query = """
+            SELECT * FROM (
+                SELECT * FROM history 
+                WHERE user_id = %s AND run_id = %s 
+                ORDER BY created_at DESC 
+                LIMIT %s
+            ) AS recent_records 
+            ORDER BY created_at ASC
+            """
+            params = (user_id, run_id, limit)
+        else:
+            base_query = """
+            SELECT * FROM history 
+            WHERE user_id = %s AND run_id = %s 
+            ORDER BY created_at ASC
+            """
+            params = (user_id, run_id)
+        
+        try:
+            async with self._get_cursor() as cursor:
+                await cursor.execute(base_query, params)
+                results = await cursor.fetchall()
+                
+                history_records = []
+                for result in results:
+                    history_records.append(HistoryRecord(
+                        hid=result['hid'],
+                        user_id=result['user_id'],
+                        agent_id=result['agent_id'],
+                        run_id=result['run_id'],
+                        conversation=result['conversation'],
+                        think=result.get('think'),
+                        created_at=result['created_at'],
+                        updated_at=result['updated_at']
+                    ))
+                
+                return history_records
+        except Error as e:
+            logger.error(f"Query history records by user, agent, and run ID error: {e}")
+            return []
+
+    async def get_by_user(self, user_id: str, limit: int = None) -> List[HistoryRecord]:
+        """
+        Retrieve history records based on three conditions: user_id
+        """
+        if limit is not None:
+            base_query = """
+            SELECT * FROM (
+                SELECT * FROM history 
+                WHERE user_id = %s
+                ORDER BY created_at DESC 
+                LIMIT %s
+            ) AS recent_records 
+            ORDER BY created_at ASC
+            """
+            params = (user_id, limit)
+        else:
+            base_query = """
+            SELECT * FROM history 
+            WHERE user_id = %s
+            ORDER BY created_at ASC
+            """
+            params = (user_id)
+        
+        try:
+            async with self._get_cursor() as cursor:
+                await cursor.execute(base_query, params)
+                results = await cursor.fetchall()
+                
+                history_records = []
+                for result in results:
+                    history_records.append(HistoryRecord(
+                        hid=result['hid'],
+                        user_id=result['user_id'],
+                        agent_id=result['agent_id'],
+                        run_id=result['run_id'],
+                        conversation=result['conversation'],
+                        think=result.get('think'),
                         created_at=result['created_at'],
                         updated_at=result['updated_at']
                     ))

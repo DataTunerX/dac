@@ -3,46 +3,36 @@ from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
 from ..readers.fileserver.fileserver_reader import FileServerReader
 from ..api.base import DocumentModel
-from ..analyzers.fingerprint import FingerprintAnalyzer
-from ..client.knowledge_pyramid_client import KnowledgePyramidClient
-from ..client.vector_client import VectorClient
-from ..client.fingerprint_client import FingerprintClient, FingerprintData
+from model_sdk import ModelManager
+from .base import FileAnalyzer
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fileserver_extractor")
 
+manager = ModelManager()
+
+llm = manager.get_llm(
+    provider=os.getenv("PROVIDER","openai_compatible"),
+    api_key=os.getenv("API_KEY"),
+    base_url=os.getenv("BASE_URL"),
+    model=os.getenv("Model"),
+    temperature=0.01,
+    extra_body={
+        "enable_thinking": False
+    },
+)
+
 def extract_fileserver(
 		reader: FileServerReader, 
 		descriptor: Dict[str, Any], 
 		extract: Dict[str, Any], 
-		prompts: Dict[str, Any],
-		fingerprint_analyzer: FingerprintAnalyzer, 
-		fingerprint_client: FingerprintClient,
-		enable_allinone: str, 
-		enable_sample_data: str
+		prompts: Dict[str, Any]
 	) -> List[DocumentModel]:
 
     results: List[DocumentModel] = []
 
     files = extract.get('files')
-
-    background_knowledge = ""
-    if prompts:
-        background_knowledge_list = prompts.get('background_knowledge')
-        if background_knowledge_list:
-            background_knowledge = "\n".join([f"{i+1}. {item['description']}" for i, item in enumerate(background_knowledge_list)])
-    logger.info(f"===========background_knowledge = {background_knowledge}")
-
-    fewshots = ""
-    if prompts:
-        fewshots_list = prompts.get('fewshots')
-        if fewshots_list:
-            for i, item in enumerate(fewshots_list, 1):
-                fewshots += f"{i}. user input: {item['query']} \n   sql: {item['answer']} \n\n"
-
-            fewshots = fewshots.rstrip()
-    logger.info(f"===========fewshots = {fewshots}")
     
     if files is None:
         raise ValueError("files is None - 'files' key not found in extract dictionary")
@@ -68,4 +58,22 @@ def extract_fileserver(
             continue
 
     logger.info(f"Total results: {len(results)}")
-    return results
+
+    file_analyzer = FileAnalyzer(llm, max_workers=50, batch_size=50)
+
+    file_summary = file_analyzer.file_summary(results)
+
+    summary = file_summary.get("summary") if file_summary else ""
+
+    outline = file_summary.get("outline") if file_summary else ""
+
+    logger.info(f"file_extractor, summary = {summary}, outline = {outline}")
+
+    agent_card = file_analyzer.agent_card(outline)
+
+    fingerprint_associated_info = {
+        "ddd": summary,
+        "agent_card": agent_card
+    }
+
+    return results, fingerprint_associated_info

@@ -16,6 +16,7 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"github.com/lvyanru/dac-apiserver/internal/ent/discoveryjob"
 	"github.com/lvyanru/dac-apiserver/internal/ent/run"
 	"github.com/lvyanru/dac-apiserver/internal/ent/user"
 )
@@ -25,6 +26,8 @@ type Client struct {
 	config
 	// Schema is the client for creating, migrating and dropping schema.
 	Schema *migrate.Schema
+	// DiscoveryJob is the client for interacting with the DiscoveryJob builders.
+	DiscoveryJob *DiscoveryJobClient
 	// Run is the client for interacting with the Run builders.
 	Run *RunClient
 	// User is the client for interacting with the User builders.
@@ -40,6 +43,7 @@ func NewClient(opts ...Option) *Client {
 
 func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
+	c.DiscoveryJob = NewDiscoveryJobClient(c.config)
 	c.Run = NewRunClient(c.config)
 	c.User = NewUserClient(c.config)
 }
@@ -132,10 +136,11 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:    ctx,
-		config: cfg,
-		Run:    NewRunClient(cfg),
-		User:   NewUserClient(cfg),
+		ctx:          ctx,
+		config:       cfg,
+		DiscoveryJob: NewDiscoveryJobClient(cfg),
+		Run:          NewRunClient(cfg),
+		User:         NewUserClient(cfg),
 	}, nil
 }
 
@@ -153,17 +158,18 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:    ctx,
-		config: cfg,
-		Run:    NewRunClient(cfg),
-		User:   NewUserClient(cfg),
+		ctx:          ctx,
+		config:       cfg,
+		DiscoveryJob: NewDiscoveryJobClient(cfg),
+		Run:          NewRunClient(cfg),
+		User:         NewUserClient(cfg),
 	}, nil
 }
 
 // Debug returns a new debug-client. It's used to get verbose logging on specific operations.
 //
 //	client.Debug().
-//		Run.
+//		DiscoveryJob.
 //		Query().
 //		Count(ctx)
 func (c *Client) Debug() *Client {
@@ -185,6 +191,7 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
+	c.DiscoveryJob.Use(hooks...)
 	c.Run.Use(hooks...)
 	c.User.Use(hooks...)
 }
@@ -192,6 +199,7 @@ func (c *Client) Use(hooks ...Hook) {
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
+	c.DiscoveryJob.Intercept(interceptors...)
 	c.Run.Intercept(interceptors...)
 	c.User.Intercept(interceptors...)
 }
@@ -199,12 +207,147 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 // Mutate implements the ent.Mutator interface.
 func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 	switch m := m.(type) {
+	case *DiscoveryJobMutation:
+		return c.DiscoveryJob.mutate(ctx, m)
 	case *RunMutation:
 		return c.Run.mutate(ctx, m)
 	case *UserMutation:
 		return c.User.mutate(ctx, m)
 	default:
 		return nil, fmt.Errorf("ent: unknown mutation type %T", m)
+	}
+}
+
+// DiscoveryJobClient is a client for the DiscoveryJob schema.
+type DiscoveryJobClient struct {
+	config
+}
+
+// NewDiscoveryJobClient returns a client for the DiscoveryJob from the given config.
+func NewDiscoveryJobClient(c config) *DiscoveryJobClient {
+	return &DiscoveryJobClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `discoveryjob.Hooks(f(g(h())))`.
+func (c *DiscoveryJobClient) Use(hooks ...Hook) {
+	c.hooks.DiscoveryJob = append(c.hooks.DiscoveryJob, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `discoveryjob.Intercept(f(g(h())))`.
+func (c *DiscoveryJobClient) Intercept(interceptors ...Interceptor) {
+	c.inters.DiscoveryJob = append(c.inters.DiscoveryJob, interceptors...)
+}
+
+// Create returns a builder for creating a DiscoveryJob entity.
+func (c *DiscoveryJobClient) Create() *DiscoveryJobCreate {
+	mutation := newDiscoveryJobMutation(c.config, OpCreate)
+	return &DiscoveryJobCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of DiscoveryJob entities.
+func (c *DiscoveryJobClient) CreateBulk(builders ...*DiscoveryJobCreate) *DiscoveryJobCreateBulk {
+	return &DiscoveryJobCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *DiscoveryJobClient) MapCreateBulk(slice any, setFunc func(*DiscoveryJobCreate, int)) *DiscoveryJobCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &DiscoveryJobCreateBulk{err: fmt.Errorf("calling to DiscoveryJobClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*DiscoveryJobCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &DiscoveryJobCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for DiscoveryJob.
+func (c *DiscoveryJobClient) Update() *DiscoveryJobUpdate {
+	mutation := newDiscoveryJobMutation(c.config, OpUpdate)
+	return &DiscoveryJobUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *DiscoveryJobClient) UpdateOne(_m *DiscoveryJob) *DiscoveryJobUpdateOne {
+	mutation := newDiscoveryJobMutation(c.config, OpUpdateOne, withDiscoveryJob(_m))
+	return &DiscoveryJobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *DiscoveryJobClient) UpdateOneID(id uuid.UUID) *DiscoveryJobUpdateOne {
+	mutation := newDiscoveryJobMutation(c.config, OpUpdateOne, withDiscoveryJobID(id))
+	return &DiscoveryJobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for DiscoveryJob.
+func (c *DiscoveryJobClient) Delete() *DiscoveryJobDelete {
+	mutation := newDiscoveryJobMutation(c.config, OpDelete)
+	return &DiscoveryJobDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *DiscoveryJobClient) DeleteOne(_m *DiscoveryJob) *DiscoveryJobDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *DiscoveryJobClient) DeleteOneID(id uuid.UUID) *DiscoveryJobDeleteOne {
+	builder := c.Delete().Where(discoveryjob.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &DiscoveryJobDeleteOne{builder}
+}
+
+// Query returns a query builder for DiscoveryJob.
+func (c *DiscoveryJobClient) Query() *DiscoveryJobQuery {
+	return &DiscoveryJobQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeDiscoveryJob},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a DiscoveryJob entity by its id.
+func (c *DiscoveryJobClient) Get(ctx context.Context, id uuid.UUID) (*DiscoveryJob, error) {
+	return c.Query().Where(discoveryjob.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *DiscoveryJobClient) GetX(ctx context.Context, id uuid.UUID) *DiscoveryJob {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *DiscoveryJobClient) Hooks() []Hook {
+	return c.hooks.DiscoveryJob
+}
+
+// Interceptors returns the client interceptors.
+func (c *DiscoveryJobClient) Interceptors() []Interceptor {
+	return c.inters.DiscoveryJob
+}
+
+func (c *DiscoveryJobClient) mutate(ctx context.Context, m *DiscoveryJobMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&DiscoveryJobCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&DiscoveryJobUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&DiscoveryJobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&DiscoveryJobDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown DiscoveryJob mutation op: %q", m.Op())
 	}
 }
 
@@ -509,9 +652,9 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Run, User []ent.Hook
+		DiscoveryJob, Run, User []ent.Hook
 	}
 	inters struct {
-		Run, User []ent.Interceptor
+		DiscoveryJob, Run, User []ent.Interceptor
 	}
 )

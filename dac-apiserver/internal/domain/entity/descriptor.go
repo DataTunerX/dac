@@ -22,6 +22,10 @@ type DataDescriptor struct {
 	// Timestamps
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// Deletion
+	Deleting          bool
+	DeletionTimestamp *time.Time
 }
 
 // DataSource defines a data source configuration
@@ -31,6 +35,7 @@ type DataSource struct {
 	Metadata       map[string]string
 	Extract        *ExtractConfig
 	Prompts        *PromptsConfig
+	CodeRepo       *CodeRepoConfig
 	Processing     ProcessingConfig
 	Classification []Classification
 }
@@ -39,11 +44,21 @@ type DataSource struct {
 type ExtractConfig struct {
 	Tables []string
 	Querys []string
+	Files  []string
 }
 
 // PromptsConfig defines prompts configuration
 type PromptsConfig struct {
 	ConfigMapName string
+}
+
+// CodeRepoConfig defines code repository configuration (optional)
+// Mirrors execution-engine CRD field: spec.sources[].codeRepo
+type CodeRepoConfig struct {
+	CodeRepoType   string
+	CodeRepoPath   string
+	CodeRepoBranch string
+	CodeRepoToken  string
 }
 
 // ProcessingConfig defines data processing rules

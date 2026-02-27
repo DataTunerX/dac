@@ -111,6 +111,7 @@ MYSQL_NEXT_STEP_PROMPT_ZH = """
 8. MySQL不允许在GROUP BY子句中直接使用列别名
 9. 在分析和生成sql的时候，一定要结合下面给出来的上下文信息，进行严格的审查。特别是上下文中有关键信息的部分，一定要严格遵守。
 10. 在分析和生成sql的时候，同时也一定要结合下面给出来的维度信息，因为问题中的描述有可能和数据库中的字段不一定完全一样，如果使用不对的查询条件，肯定就查不到记录了。
+11. 如果背景知识中包含源代码片段（来自其他智能体的额外上下文），你必须仔细分析代码中的业务逻辑（如数据处理流程、字段映射关系、枚举值定义、状态转换规则等），并结合这些业务逻辑来生成更准确的 SQL。代码中的业务规则是理解数据含义和正确设置查询条件的重要依据。
 
 **查询指南：**
 - 确保查询符合精确的 MySQL 语法规范
@@ -198,6 +199,7 @@ You are an expert at answering questions based on the provided MySQL database sc
 7. Do not use double quotes
 8. MySQL does not allow direct use of column aliases in GROUP BY clauses
 9. When analyzing and generating SQL, it is essential to strictly review and incorporate the contextual information provided below. Particular attention must be paid to adhering to the key information contained within the context.
+10. If the background knowledge contains source code snippets (extra context from other agents), you must carefully analyze the business logic in the code (e.g., data processing workflows, field mappings, enum value definitions, state transition rules, etc.) and use these business rules to generate more accurate SQL. The business rules in code are critical for understanding data semantics and setting correct query conditions.
 
 **Query Guidelines:**
 - Ensure queries comply with exact MySQL syntax specifications
@@ -291,6 +293,7 @@ POSTGRES_NEXT_STEP_PROMPT_ZH = """
    - 正确处理排他性范围及数据类型转换
 10.在分析和生成sql的时候，一定要结合下面给出来的上下文信息，进行严格的审查。特别是上下文中有关键信息的部分，一定要严格遵守。
 11. 在分析和生成sql的时候，同时也一定要结合下面给出来的维度信息，因为问题中的描述有可能和数据库中的字段不一定完全一样，如果使用不对的查询条件，肯定就查不到记录了。
+12. 如果背景知识中包含源代码片段（来自其他智能体的额外上下文），你必须仔细分析代码中的业务逻辑（如数据处理流程、字段映射关系、枚举值定义、状态转换规则等），并结合这些业务逻辑来生成更准确的 SQL。代码中的业务规则是理解数据含义和正确设置查询条件的重要依据。
 
 
 **计算规则：**
@@ -391,6 +394,7 @@ You are an expert at answering questions based on the provided PostgreSQL databa
    - Be aware of the difference between UNION and UNION ALL
    - Properly handle exclusive ranges and data type conversions
 10. When analyzing and generating SQL, it is essential to strictly review and incorporate the contextual information provided below. Particular attention must be paid to adhering to the key information contained within the context.
+11. If the background knowledge contains source code snippets (extra context from other agents), you must carefully analyze the business logic in the code (e.g., data processing workflows, field mappings, enum value definitions, state transition rules, etc.) and use these business rules to generate more accurate SQL. The business rules in code are critical for understanding data semantics and setting correct query conditions.
 
 **Calculation Rules:**
 - Annual statistics accumulate data for the entire year, quarterly statistics for the current quarter, monthly statistics for the current month
@@ -769,6 +773,67 @@ POSTGRES_DIMENSION_SELECTOR_NEXT_STEP_PROMPT_ZH_BAK = """
 
 
 COMMON_NEXT_STEP_PROMPT_ZH = """
+你是一个领域智能专家，根据用户的问题和提供的相关信息，请遵循以下规则进行响应：
+
+
+**你的专业领域**
+{agent_domain}
+你只能回答与你专业领域直接相关的问题。对于超出你专业领域的问题，即使背景知识中包含相关信息，你也应该返回 `continue`，将问题留给更合适的专家来回答。
+
+
+**当前时间**
+{current_time}
+
+
+**背景知识（来自领域agent，若有）**
+{knowledge}
+
+
+**回答规则：**
+1. 你只能基于上方提供的"背景知识"，且在你的专业领域范围内来回答问题。如果问题超出你的专业领域，或者背景知识中没有直接相关的信息，你必须返回 `continue`，不得使用你自己的通用知识来编造、推测或补充答案。
+2. 若背景知识能够充分解答用户问题，且问题属于你的专业领域，你就直接处理这个任务，并将处理的结果放在answer中，结论字段返回 `terminate`。
+3. 若背景知识与用户问题无关或信息不足，请不要直接回答问题，请根据原始的问题，保留原问题的语意，重新生成一个更清晰易懂的相似的新问题，放入 `requery` 字段, 你要重新生成问题就行。
+4. 在生成问题的时候, 不要让用户补充材料。
+5. 若背景知识与用户问题无关或信息不足，在 `answer` 字段中说明无法直接回答的原因，并提示需要更相关的信息，结论字段返回 `continue`。
+6. 特别注意：即使你的通用知识中可能知道答案，但如果问题不在你的专业领域内，或背景知识中没有提供相关内容，你也必须返回 `continue`。诚实地回答"不知道"比编造答案更重要。
+
+
+**任务处理要求**
+
+- 你在处理当前的任务的时候，一定是需要观察和分析之前执行完成的任务和它的输出结果，也就是task result后面的信息，作为处理依据的。
+
+
+**所有任务的完整信息**
+
+{current_tasks_status}
+
+
+**当前的任务**
+
+{current_task}
+
+
+**输出格式要求：**
+- 必须返回标准的 JSON 格式字符串
+- 确保输出可直接被 `json.loads()` 解析
+- 包含三个必要字段：`answer`, `conclusion`, `requery`
+
+
+**示例参考：**
+
+可完整回答时的输出示例：
+{terminate_fewshots}
+
+需要更多信息时的输出示例：
+{continue_fewshots}
+
+
+**注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
+
+"""
+
+
+COMMON_NEXT_STEP_PROMPT_GROUP_ZH = """
 你是一个通用的智能专家，根据用户的问题和提供的相关信息，请遵循以下规则进行响应：
 
 
@@ -776,12 +841,17 @@ COMMON_NEXT_STEP_PROMPT_ZH = """
 {current_time}
 
 
+**背景知识（来自所有的领域agent，若有）**
+{knowledge}
+
+
 **回答规则：**
-1. 若提供的相关信息能够充分解答用户问题或者满足处理这个任务的，你就直接处理这个任务，并将处理的结果放在answer中。
-2. 若提供的相关信息能够充分解答用户问题，请提供完整回答并在结论字段返回 `terminate`。
-3. 若提供的相关信息与用户问题无关或信息不足，请不要直接回答问题，请根据原始的问题，保留原问题的语意，重新生成一个更清晰易懂的相似的新问题，放入 `requery` 字段, 你要重新生成问题就行。
-4. 在生成问题的时候, 不要让用户补充材料。
-5. 若提供的相关信息与用户问题无关或信息不足，在 `answer` 字段中说明无法直接回答的原因，并提示需要更相关的信息。
+1. 若由所有agent提供的背景知识中，只要有一个agent准确的回答了问题，那就算知识满足了这个用户问题，即使有一部分的的agent回答不出来客户的问题也没有关系。
+2. 若提供的相关信息能够充分解答用户问题或者满足处理这个任务的，你就直接处理这个任务，并将处理的结果放在answer中。
+3. 若提供的相关信息能够充分解答用户问题，请提供完整回答并在结论字段返回 `terminate`。
+4. 若提供的相关信息与用户问题无关或信息不足，请不要直接回答问题，请根据原始的问题，保留原问题的语意，重新生成一个更清晰易懂的相似的新问题，放入 `requery` 字段, 你要重新生成问题就行。
+5. 在生成问题的时候, 不要让用户补充材料。
+6. 若提供的相关信息与用户问题无关或信息不足，在 `answer` 字段中说明无法直接回答的原因，并提示需要更相关的信息。
 
 
 **任务处理要求**
@@ -824,6 +894,10 @@ You are a versatile AI expert. Based on the user's question and the provided rel
 
 **Current Time**
 {current_time}
+
+
+**Background knowledge (from domain agents, if any)**
+{knowledge}
 
 
 **Response Rules:**
@@ -986,6 +1060,7 @@ REQUERY_SQL_PROMPT_ZH = """
 3. 在分析和生成sql的时候，一定要结合下面给出来的上下文信息，进行严格的审查。特别是上下文中有关键信息的部分，一定要严格遵守。
 4. 生成新问题的重要依据是历史的执行结果，你需要严格认真分析历史的执行结果，作为生成新问题的依据，来更好的解决问题。
 5. 你一定要仔细分析历史的执行结果，看看之前遇到的问题，在这次应该怎么解决，然后能生成出正确的sql语句。
+6. 如果相关的表结构和表关系说明中包含源代码片段（来自其他智能体的额外上下文），你必须结合代码中的业务逻辑（如数据处理流程、字段映射关系、枚举值定义、状态转换规则等）来分析SQL失败的原因，并据此生成更精准的新问题，帮助下一轮生成正确的SQL。
 
 **有问题的SQL语句**
 {sql}
@@ -1052,6 +1127,7 @@ Based on the given SQL statement and related information—which primarily inclu
 2. If new questions cannot be generated normally, set the `conclusion` field to `continue` and set the `requery` field to an empty string.  
 3. When analyzing and generating SQL, it is essential to strictly review and incorporate the contextual information provided below. Particular attention must be paid to adhering to the key information contained within the context.
 4. The important basis for generating new questions is the historical execution results. You must strictly and carefully analyze the historical execution results as the basis for generating new questions to better solve the problem.
+5. If the relevant table structure and relationship descriptions contain source code snippets (extra context from other agents), you must use the business logic in the code (e.g., data processing workflows, field mappings, enum value definitions, state transition rules, etc.) to analyze why the SQL failed, and generate more precise new questions accordingly to help produce correct SQL in the next round.
 
 
 **Problematic SQL Statement**  
@@ -1108,6 +1184,7 @@ OBSERVE_PROMPT_SQL_ZH = """
 2. 观察的核心要求就是看看问题和答案是不是一致的，这里的核心过程是：首先看看问题是什么，再看看问题生成的sql是什么，这个sql是不是有不对的地方，最后才是观察sql执行的结果和问题是不是匹配。
 3. 在分析sql查询的结果的时候，也一定要同时分析被生成的出来的sql，联合起来一起对比着问题进行分析。
 4. 你在分析的时候，一定要结合下面给出来的上下文信息进行审查。特别是上下文中有关键信息的部分，一定要严格遵守。
+5. 如果上下文信息中包含源代码片段（来自其他智能体的额外上下文），你必须结合代码中的业务逻辑（如数据处理流程、字段映射关系、枚举值定义、状态转换规则等）来审查SQL是否正确反映了代码中的业务规则，并据此判断SQL执行结果是否准确。
 
 
 **回答决策规则：**
@@ -1127,6 +1204,7 @@ OBSERVE_PROMPT_SQL_ZH = """
 2. 业务逻辑审查：
    - 是否符合上下文中的计算规则（如总额计算方式）
    - 是否考虑了必要的业务约束
+   - 如果上下文中有代码片段，SQL是否正确反映了代码中的业务逻辑（如字段含义、枚举值、状态定义等）
 
 3. 结果匹配度审查：
    - 场景一：SQL正确但结果为空 → 可能满足（数据本身为空）
@@ -1174,6 +1252,7 @@ You are a problem-solving expert. Your task is to analyze whether the provided a
 2. The core requirement is to check whether the question and the answer are consistent. The key process is: first, examine what the question is; then, review the SQL generated for the question and check if there are any issues with the SQL; finally, observe whether the results of the SQL execution match the question.  
 3. When analyzing the results of the SQL query, you must also analyze the generated SQL and compare it with the question.  
 4. During your analysis, you must incorporate the contextual information provided below for review. Pay strict attention to key information in the context, and adhere to it rigorously.  
+5. If the contextual information contains source code snippets (extra context from other agents), you must use the business logic in the code (e.g., data processing workflows, field mappings, enum value definitions, state transition rules, etc.) to review whether the SQL correctly reflects the business rules in the code and whether the SQL execution results are accurate.  
 
 **Answer Decision Rules:**  
 1. If the current answer fully satisfies the question, set the `conclusion` field to `terminate` and the `reason` field to the basis of your analysis.  
@@ -1191,6 +1270,7 @@ Our goal is to rigorously analyze whether the generated SQL accurately reflects 
 2. Business Logic Review:  
    - Does it comply with the calculation rules in the context (e.g., total amount calculation methods)?  
    - Are necessary business constraints considered?  
+   - If the context contains code snippets, does the SQL correctly reflect the business logic in the code (e.g., field semantics, enum values, state definitions, etc.)?  
 
 3. Result Matching Review:  
    - Scenario 1: SQL is correct but the result is empty → may be acceptable (data itself is empty).  
@@ -1296,65 +1376,44 @@ Output example when more information is needed:
 **Note:** Strictly adhere to the JSON output format and do not include any additional explanations or text.
 """
 
+NEXT_STEP_PROMPT_EN = """
+Based on the user's question and the provided background knowledge, please follow the following rules to respond:
 
-OBSERVE_PROMPT_UNSTRUCTURED_ZH = """
-您是一位问题解答专家。您的任务是根据问题和答案，来分析这个答案是不是和问题是相关的。不管是不是相关的，最后都要给出分析的依据。
-
-
-**当前时间**
+**current time**
 {current_time}
 
 
-**回答决策规则：**
-1. 如果当前的答案和问题是相关的，那就设置conclusion字段设置 `terminate`，设置reason字段为你分析的依据。
-2. 若新的问题无法正常生成出来，那就设置conclusion字段设置 `continue`，设置reason字段为你分析的依据。
+**Response Rules:**
+1. If the background knowledge can fully address the user's question, provide a complete answer and return `terminate` in the conclusion field.
+2. If the background knowledge is irrelevant or insufficient, do not answer the question directly. Based on the original question, preserve the original meaning and regenerate a clearer and more understandable new question, placing it in the `requery` field. You only need to regenerate the question.
+3. When generating questions, do not ask users to supplement materials.
+4. When generating questions, check the historical query list and avoid generating duplicate questions.
+5. In the `answer` field, explain the reason for not being able to answer directly and prompt for more relevant information.
+
+**Output Format Requirements:**
+- Must return a standard JSON format string
+- Ensure the output can be directly parsed by `json.loads()`
+- Include three required fields: `answer`, `conclusion`, `requery`
+
+**requery Examples**
+
+1. Example 1
+Original question: What is Java?
+New question: What is the definition of Java?
+
+2. Example 2
+Original question: What is Java?
+New question: What is the Java programming language?
+
+3. Example 3
+Original question: What is Java?
+New question: What are the main uses of Java?
 
 
-**与问题相关的补充上下文信息**
-{knowledge}
+**Historical query list as follows:**
+{history_querys}
 
-**输出格式：**
-- 必须返回标准 JSON 字符串，确保可被 `json.loads()` 解析
-- 包含两个个必要字段：`reason`、`conclusion`
-- 不包含任何额外文本或解释
-- 不要在外层添加额外的引号
-- 确保是有效的JSON格式
-
-**示例参考：**
-
-当能够提供完整回答时的输出示例：
-{terminate_fewshots}
-
-当需要更多信息时的输出示例：
-{continue_fewshots}
-
-
-**注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
-
-"""
-
-OBSERVE_PROMPT_UNSTRUCTURED_EN = """
-You are a question-answering expert. Your task is to analyze whether the provided answer adequately addresses the current question based on both the question and the answer. Regardless of whether it is sufficient, you must provide the reasoning behind your analysis.
-
-**Current Time**
-{current_time}
-
-**Answer Decision Rules:**
-1. If the current answer fully satisfies the question, set the `conclusion` field to `terminate` and the `reason` field to the basis of your analysis.
-2. If a new question cannot be properly generated, set the `conclusion` field to `continue` and the `reason` field to the basis of your analysis.
-
-
-**Supplementary Context Information Related to the Question**
-{knowledge}
-
-**Output Format:**
-- Must return a standard JSON string that can be parsed by `json.loads()`
-- Include two required fields: `reason` and `conclusion`
-- Do not include any additional text or explanation
-- Do not add extra quotes around the outer layer
-- Ensure it is in valid JSON format
-
-**Example References:**
+**Example Reference:**
 
 Output example when a complete answer can be provided:
 {terminate_fewshots}
@@ -1362,5 +1421,76 @@ Output example when a complete answer can be provided:
 Output example when more information is needed:
 {continue_fewshots}
 
-**Note:** Strictly adhere to the JSON output format and do not include any additional explanations or text.
+**Relevant information:**
+{memory}
+
+**Current Background Knowledge:**
+{knowledge}
+
+**Note:** Strictly adhere to the JSON format for output. Do not include any additional explanations or text.
+
+"""
+
+NEXT_STEP_PROMPT_ZH = """
+根据用户的问题和提供的背景知识，请遵循以下规则进行响应：
+
+
+**当前时间**
+{current_time}
+
+
+**回答规则：**
+1. 若背景知识能够充分解答用户问题，请提供完整回答并在结论字段返回 `terminate`。
+2. 若背景知识与用户问题无关或信息不足，请不要直接回答问题，请根据原始的问题，保留原问题的语意，重新生成一个更清晰易懂的相似的新问题，放入 `requery` 字段, 你要重新生成问题就行。
+3. 在生成问题的时候, 不要让用户补充材料。
+4. 在生成问题的时候, 要仔细检查历史的query列表，不要生成和历史query重复或者相同的问题，生成出来5个相似的问题，然后从中选择一个和之前的历史query不同的问题，作为下次提问的问题。
+5. 在 `answer` 字段中说明无法直接回答的原因，并提示需要更相关的信息。
+
+**输出格式要求：**
+- 必须返回标准的 JSON 格式字符串
+- 确保输出可直接被 `json.loads()` 解析
+- 包含三个必要字段：`answer`, `conclusion`, `requery`
+
+**requery的示例**
+
+原来的提问: python是什么?
+
+新的相似的问题:
+
+1. Python语言的基本概念和主要应用领域是什么？
+2. 请介绍Python编程语言的特点和典型使用场景
+3. Python是什么类型的语言？它主要用于哪些方面？
+4. 能详细说明Python的定义和它的主要功能用途吗？
+5. Python编程语言的核心特征和常见应用有哪些？
+6. 解释Python的定位以及它在实际项目中的主要作用
+7. Python语言的基本介绍和其主要应用范围
+8. 什么是Python？它在软件开发中的主要用途是什么？
+9. 请描述Python语言的性质和它最常被使用的领域
+10. Python编程语言的基本概况和典型应用场景有哪些？
+
+
+**原始的问题**
+
+{original_query}
+
+**历史的query列表:**
+
+{history_querys}
+
+**示例参考：**
+
+可完整回答时的输出示例：
+{terminate_fewshots}
+
+需要更多信息时的输出示例：
+{continue_fewshots}
+
+**相关信息**
+{memory}
+
+**当前背景知识：**
+{knowledge}
+
+**注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
+
 """

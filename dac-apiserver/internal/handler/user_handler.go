@@ -57,6 +57,7 @@ func NewUserHandler(usecase domain.UserUsecase, jwtSecret string, logger *slog.L
 				return jwt.MapClaims{
 					"user_id":  user.ID,
 					"username": user.Username,
+					"role":     user.Role,
 				}
 			}
 			return jwt.MapClaims{}
@@ -68,6 +69,9 @@ func NewUserHandler(usecase domain.UserUsecase, jwtSecret string, logger *slog.L
 			if userID, ok := claims["user_id"].(string); ok {
 				// Store user_id in RequestContext for all handlers to use
 				c.Set("user_id", userID)
+				if role, ok := claims["role"].(string); ok {
+					c.Set("role", role)
+				}
 				return userID
 			}
 			return ""

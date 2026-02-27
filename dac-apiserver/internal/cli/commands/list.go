@@ -21,16 +21,10 @@ var (
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "list DataAgentContainers and DataDescriptors",
-	Long: `List DataAgentContainers and DataDescriptors in a tree view.
+	Long: `List DataAgentContainers (DAC) and DataDescriptors (DD) in a tree view.
 
-Displays all DataAgentContainers (DAC) and their associated DataDescriptors (DD)
-in a tree structure, showing relationships, status, and connection details.
-
-The output includes:
-  • DataAgentContainer names, endpoints, and status
-  • Associated DataDescriptors with database connections  
-  • Resource phase information (Creating, Ready, Error, etc.)
-  • Orphaned DataDescriptors (not referenced by any DAC)`,
+The output shows DACs with their related DataDescriptors, including endpoints,
+database connections, phases and orphaned descriptors.`,
 	Example: `  # List resources in default namespace
   $ dactl list
 
@@ -53,11 +47,16 @@ func init() {
 }
 
 func runList(cmd *cobra.Command, args []string) error {
-	// Validate arguments
+	// Handle common help invocations like `dactl list help`
 	if len(args) > 0 {
-		ui.PrintError("unexpected argument: %s", args[0])
-		fmt.Printf("\nRun '%s --help' for usage.\n", cmd.CommandPath())
-		return fmt.Errorf("invalid arguments")
+		switch args[0] {
+		case "help", "-h", "--help":
+			return cmd.Help()
+		default:
+			ui.PrintError("unexpected argument: %s", args[0])
+			ui.PrintInfo("Run '%s --help' for usage.", cmd.CommandPath())
+			return fmt.Errorf("invalid arguments")
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -72,7 +71,7 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	if !cfg.IsAuthenticated() {
 		ui.PrintError("not authenticated, please login first")
-		fmt.Println("\nRun 'dactl login' to authenticate.")
+		ui.PrintInfo("Run 'dactl login' to authenticate.")
 		return fmt.Errorf("authentication required")
 	}
 

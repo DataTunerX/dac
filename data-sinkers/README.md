@@ -24,11 +24,36 @@
 
 # Local Testing:
 
+tasks:
 
-worker:
+docker run --rm -e REDIS_HOST="192.168.3.7" -e REDIS_PORT="6389" -e REDIS_DB_BROKER="4" -e REDIS_DB_BACKEND="5" -e REDIS_PASSWORD="123" -e DATA_SERVICES="http://192.168.3.7:22000" -e PROVIDER="openai_compatible" -e API_KEY="sk-xxx" -e BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" -e Model="deepseek-v3.2" -e Temperature="0.01" -e ENABLE_ALLINONE="disable" -e "SQL_BATCHSIZE=2" -e "SQL_PROCESS_MODE=dictionary" -e ENABLE_SAMPLE_DATA="enable" -e MINERU_MODEL_SOURCE="local" -e MINERU_DEVICE_MODE="cpu" -e CELERY_WORKER_AMOUNT=10 -e CELERY_WORKER_CLASS=gevent -e regroup_batch_size="10" -e CELERY_HTTPSERVER_API_BASE_URL="http://192.168.3.7:20050" data-sinkers:v0.6.0-arm64
 
-docker run --rm -e REDIS_HOST="192.168.xxx.xxx" -e REDIS_PORT="6389" -e REDIS_DB_BROKER="2" -e REDIS_DB_BACKEND="3" -e REDIS_PASSWORD="123" -e DATA_SERVICES="http://192.168.xxx.xxx:22000" -e PROVIDER="openai_compatible" -e API_KEY="sk-xxx" -e BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" -e Model="qwen2.5-72b-instruct" -e Temperature="0.01" -e ENABLE_ALLINONE="disable" -e "SQL_BATCHSIZE=2" -e "SQL_PROCESS_MODE=dictionary" -e ENABLE_SAMPLE_DATA="enable" -e MINERU_MODEL_SOURCE="local" -e MINERU_DEVICE_MODE="cpu" -e CELERY_WORKER_AMOUNT=10 -e CELERY_WORKER_CLASS=gevent data-sinkers:v0.2.0-amd64
 
+job:
+
+docker run --rm -e DATA_SERVICES="http://192.168.3.7:22000" -e PROVIDER="openai_compatible" -e API_KEY="sk-xxx" -e BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1" -e Model="deepseek-v3.2" -e Temperature="0.01" -e ENABLE_ALLINONE="disable" -e "SQL_BATCHSIZE=2" -e "SQL_PROCESS_MODE=dictionary" -e ENABLE_SAMPLE_DATA="enable" -e MINERU_MODEL_SOURCE="local" -e MINERU_DEVICE_MODE="cpu"  -e regroup_batch_size="10" -e DATA_DESCRIPTOR="dac_dd202601281653" -v /Users/james/daocloud/code/dac/data-sinkers/data_sinkers/job-testdata.json:/app/data.json  -v /Users/james/daocloud/code/docker/status/status.json:/app/status/status.json data-sinkers-job:v0.6.0-arm64
+
+
+status:
+
+docker run --rm -p 8989:8000 -v /Users/james/daocloud/code/docker/status:/app/status data-sinkers-status:v0.5.0-amd64
+
+
+
+
+
+clean data：
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- 执行 TRUNCATE
+
+TRUNCATE `fingerprint`.`dd_group_relation`;
+
+TRUNCATE `fingerprint`.`semantic_groups`;
+
+-- 重新启用外键检查
+SET FOREIGN_KEY_CHECKS = 1;
 
 
 
@@ -41,55 +66,60 @@ export MINERU_MODEL_SOURCE=modelscope
 export MINERU_DEVICE_MODE="cpu"  
 
 
-# test case：
 
+# test case：
 
 ## mysql
 
-curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
   -H "Content-Type: application/json" \
   -d '{
   "data": {
     "operation": "AddOrUpdate",
-    "classification": [
-      {
-        "domain": "科学技术类",
-        "category": "计算机科学与技术",
-        "subcategory": "软件工程师",
-        "tags": [
-          {
-            "skill": ["编程", "算法"]
-          },
-          {
-            "industry": ["互联网"]
-          }
-        ]
-      }
-    ],
     "descriptor": {
-      "name": "dd-a04",
+      "name": "nextcloud_mysql_2",
       "namespace": "dac"
     },
     "extract": {
-      "tables": [],
-      "query": []
+      "tables": []
     },
-    "processing": {
-      "cleaning": [
-        {
-          "rule": "remove_duplicates",
-          "params": {
-            "fields": "user_id,timestamp"
-          }
-        },
-        {
-          "rule": "fill_missing",
-          "params": {
-            "field": "price",
-            "value": "0"
-          }
-        }
-      ]
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "source": {
+      "metadata": {
+        "database": "nextcloud",
+        "host": "10.17.0.41",
+        "password": "nextcloudpass",
+        "port": "32012",
+        "user": "nextcloud"
+      },
+      "name": "mysql-production",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+
+
+
+### bank
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "dd202601281653",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
     },
     "prompts": {
       "fewshots": [
@@ -107,7 +137,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
     "source": {
       "metadata": {
         "database": "dactest",
-        "host": "192.168.xxx.xxx",
+        "host": "192.168.3.7",
         "password": "123",
         "port": "3307",
         "user": "root"
@@ -120,37 +150,319 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
 
 
 
-## mysql no prompts
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "Delete",
+    "descriptor": {
+      "name": "bank2",
+      "namespace": "dac"
+    }
+  }
+}'
 
-curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
+
+
+### user_management
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
   -H "Content-Type: application/json" \
   -d '{
   "data": {
     "operation": "AddOrUpdate",
     "descriptor": {
-      "name": "dd-a05",
+      "name": "user_management",
       "namespace": "dac"
     },
     "extract": {
-      "tables": [],
-      "query": []
+      "tables": []
     },
-    "processing": {
-      "cleaning": [
-        {
-          "rule": "remove_duplicates",
-          "params": {
-            "fields": "user_id,timestamp"
-          }
-        },
-        {
-          "rule": "fill_missing",
-          "params": {
-            "field": "price",
-            "value": "0"
-          }
-        }
-      ]
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "source": {
+      "metadata": {
+        "database": "user_management",
+        "host": "192.168.3.7",
+        "password": "123",
+        "port": "3307",
+        "user": "root"
+      },
+      "name": "mysql-production",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "Delete",
+    "descriptor": {
+      "name": "user_management",
+      "namespace": "dac"
+    }
+  }
+}'
+
+
+
+
+### product_management
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "product_management",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
+    },
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "source": {
+      "metadata": {
+        "database": "product_management",
+        "host": "192.168.3.7",
+        "password": "123",
+        "port": "3307",
+        "user": "root"
+      },
+      "name": "mysql-production",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "Delete",
+    "descriptor": {
+      "name": "product_management",
+      "namespace": "dac"
+    }
+  }
+}'
+
+
+### order_management
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "order_management",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
+    },
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "source": {
+      "metadata": {
+        "database": "order_management",
+        "host": "192.168.3.7",
+        "password": "123",
+        "port": "3307",
+        "user": "root"
+      },
+      "name": "mysql-production",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "Delete",
+    "descriptor": {
+      "name": "order_management",
+      "namespace": "dac"
+    }
+  }
+}'
+
+
+### library_management
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "library_management",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
+    },
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "source": {
+      "metadata": {
+        "database": "library_management",
+        "host": "192.168.3.7",
+        "password": "123",
+        "port": "3307",
+        "user": "root"
+      },
+      "name": "mysql-production",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "Delete",
+    "descriptor": {
+      "name": "library_management",
+      "namespace": "dac"
+    }
+  }
+}'
+
+
+### corporate_hr
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "corporate_hr",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
+    },
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "source": {
+      "metadata": {
+        "database": "corporate_hr",
+        "host": "192.168.3.7",
+        "password": "123",
+        "port": "3307",
+        "user": "root"
+      },
+      "name": "mysql-production",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "Delete",
+    "descriptor": {
+      "name": "corporate_hr",
+      "namespace": "dac"
+    }
+  }
+}'
+
+
+
+
+==================================================================
+
+
+
+## mysql with code
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "ecommerce-system",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
+    },
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "codeRepo":{
+      "codeRepoType": "gitee",
+      "codeRepoPath": "https://gitee.com/jamesxiong888/test-code",
+      "codeRepoBranch": "main",
+      "codeRepoToken": ""
+    },
+    "source": {
+      "metadata": {
+        "database": "test1",
+        "host": "192.168.3.7",
+        "password": "123",
+        "port": "3307",
+        "user": "root"
+      },
+      "name": "mysql-production",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "ecommerce-system",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
     },
     "prompts": {
       "fewshots": null,
@@ -159,7 +471,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
     "source": {
       "metadata": {
         "database": "test1",
-        "host": "192.168.xxx.xxx",
+        "host": "192.168.3.7",
         "password": "123",
         "port": "3307",
         "user": "root"
@@ -172,9 +484,213 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
 
 
 
+## mysql with no code
+
+### test1
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "online-education",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
+    },
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "source": {
+      "metadata": {
+        "database": "online_edu_bi_test",
+        "host": "192.168.3.7",
+        "password": "123",
+        "port": "3307",
+        "user": "root"
+      },
+      "name": "mysql-production",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+### corporate_hr
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "org-project-management",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
+    },
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "source": {
+      "metadata": {
+        "database": "corporate_hr",
+        "host": "192.168.3.7",
+        "password": "123",
+        "port": "3307",
+        "user": "root"
+      },
+      "name": "corporate_hr",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+## mysql no prompts
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "dd-aa01",
+      "namespace": "dac"
+    },
+    "extract": {
+      "tables": []
+    },
+    "prompts": {
+      "fewshots": null,
+      "background_knowledge": null
+    },
+    "codeRepo":{
+      "codeRepoType": "github",
+      "codeRepoPath": "https://github.com/James-Dao/test-code",
+      "codeRepoBranch": "main",
+      "codeRepoToken": ""
+    },
+    "source": {
+      "metadata": {
+        "database": "test1",
+        "host": "192.168.3.7",
+        "password": "123",
+        "port": "3307",
+        "user": "root"
+      },
+      "name": "mysql-production",
+      "type": "mysql"
+    }
+  }
+}'
+
+
+
+## code github
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "dd-github-aa01",
+      "namespace": "dac"
+    },
+    "source": {
+      "metadata": {
+        "codeRepoPath": "https://github.com/James-Dao/test-code",
+        "codeRepoBranch": "main",
+        "codeRepoToken": ""
+      },
+      "name": "github-production",
+      "type": "github"
+    }
+  }
+}'
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "datatunerx",
+      "namespace": "dac"
+    },
+    "source": {
+      "metadata": {
+        "codeRepoPath": "https://gitee.com/jamesxiong888/datatunerx.git",
+        "codeRepoBranch": "main",
+        "codeRepoToken": ""
+      },
+      "name": "gitee",
+      "type": "gitee"
+    }
+  }
+}'
+
+
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "dd-github-datatunerx",
+      "namespace": "dac"
+    },
+    "source": {
+      "metadata": {
+        "codeRepoPath": "https://github.com/DataTunerX/datatunerx.git",
+        "codeRepoBranch": "main",
+        "codeRepoToken": ""
+      },
+      "name": "github-production",
+      "type": "github"
+    }
+  }
+}'
+
+
+
+
+## code gitee
+
+curl -X POST http://192.168.3.7:20030/trigger_task \
+  -H "Content-Type: application/json" \
+  -d '{
+  "data": {
+    "operation": "AddOrUpdate",
+    "descriptor": {
+      "name": "dd-gitee-aa01",
+      "namespace": "dac"
+    },
+    "source": {
+      "metadata": {
+        "codeRepoPath": "https://gitee.com/jamesxiong888/test-code.git",
+        "codeRepoBranch": "main",
+        "codeRepoToken": ""
+      },
+      "name": "gitee-production",
+      "type": "gitee"
+    }
+  }
+}'
+
+
+
 ## fileserver pdf
 
-curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
+curl -X POST http://192.168.3.7:20030/trigger_task \
   -H "Content-Type: application/json" \
   -d '{
   "data": {
@@ -209,7 +725,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
     },
     "source": {
       "metadata": {
-        "host": "192.168.xxx.xxx",
+        "host": "192.168.3.7",
         "port": "8000"
       },
       "name": "fileserver-production",
@@ -222,7 +738,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
 
 ## fileserver docx
 
-curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
+curl -X POST http://192.168.3.7:20030/trigger_task \
   -H "Content-Type: application/json" \
   -d '{
   "data": {
@@ -257,7 +773,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
     },
     "source": {
       "metadata": {
-        "host": "192.168.xxx.xxx",
+        "host": "192.168.3.7",
         "port": "8000"
       },
       "name": "fileserver-production",
@@ -271,7 +787,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
 
 ## fileserver excel
 
-curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
+curl -X POST http://192.168.3.7:20030/trigger_task \
   -H "Content-Type: application/json" \
   -d '{
   "data": {
@@ -306,7 +822,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
     },
     "source": {
       "metadata": {
-        "host": "192.168.xxx.xxx",
+        "host": "192.168.3.7",
         "port": "8000"
       },
       "name": "fileserver-production",
@@ -320,7 +836,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
 
 ## fileserver txt
 
-curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
+curl -X POST http://192.168.3.7:20030/trigger_task \
   -H "Content-Type: application/json" \
   -d '{
   "data": {
@@ -355,7 +871,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
     },
     "source": {
       "metadata": {
-        "host": "192.168.xxx.xxx",
+        "host": "192.168.3.7",
         "port": "8000"
       },
       "name": "fileserver-production",
@@ -369,7 +885,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
 
 ## fileserver md
 
-curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
+curl -X POST http://192.168.3.7:20030/trigger_task \
   -H "Content-Type: application/json" \
   -d '{
   "data": {
@@ -404,7 +920,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
     },
     "source": {
       "metadata": {
-        "host": "192.168.xxx.xxx",
+        "host": "192.168.3.7",
         "port": "8000"
       },
       "name": "fileserver-production",
@@ -417,7 +933,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
 
 ## fileserver csv
 
-curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
+curl -X POST http://192.168.3.7:20030/trigger_task \
   -H "Content-Type: application/json" \
   -d '{
   "data": {
@@ -452,7 +968,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
     },
     "source": {
       "metadata": {
-        "host": "192.168.xxx.xxx",
+        "host": "192.168.3.7",
         "port": "8000"
       },
       "name": "fileserver-production",
@@ -465,34 +981,17 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
 
 ## minio pdf
 
-curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
+curl -X POST http://192.168.3.7:20030/trigger_task \
   -H "Content-Type: application/json" \
   -d '{
   "data": {
     "operation": "AddOrUpdate",
     "descriptor": {
-      "name": "dd-e01",
+      "name": "dd-minio-01",
       "namespace": "dac"
     },
     "extract": {
       "files": ["naive.pdf"]
-    },
-    "processing": {
-      "cleaning": [
-        {
-          "rule": "remove_duplicates",
-          "params": {
-            "fields": "user_id,timestamp"
-          }
-        },
-        {
-          "rule": "fill_missing",
-          "params": {
-            "field": "price",
-            "value": "0"
-          }
-        }
-      ]
     },
     "prompts": {
       "fewshots": null,
@@ -500,7 +999,7 @@ curl -X POST http://192.168.xxx.xxx:20030/trigger_task \
     },
     "source": {
       "metadata": {
-        "host": "192.168.xxx.xxx:9000",
+        "host": "192.168.3.7:9100",
         "access_key": "minioadmin",
         "secret_key": "minioadmin",
         "bucket": "dactest"

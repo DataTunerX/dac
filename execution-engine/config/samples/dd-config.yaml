@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dd-configuration
+  namespace: dac
+data:
+  observation-base-url: "http://10.17.0.43:3000"
+  observation-secret-key: "sk-lf-a8cd7ec4-d08c-4f2b-a174-d458073d6d73"
+  observation-public-key: "pk-lf-ebed2fcd-31df-4c35-ba33-d6bf0ab399e5"
+  redis-host: "redis-server.dac.svc.cluster.local"
+  redis-port: "6379"
+  redis-password: "123"
+  data-services-url: "http://data-services.dac.svc.cluster.local:8000"
+  data-sinker-job-image: "registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers-job:v0.6.0-amd64"
+  data-sinker-status-image: "registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers-status:v0.6.0-amd64"
+  dac-data-services-image: "registry.cn-shanghai.aliyuncs.com/jamesxiong/dac-data-services:v0.6.0-amd64"
+  llm-config: "llm-deepseek-v32"

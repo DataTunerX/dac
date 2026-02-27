@@ -10,14 +10,13 @@ import (
 
 const version = "0.1.0"
 
-// rootCmd is the root command
 var rootCmd = &cobra.Command{
 	Use:     "dactl",
 	Short:   "Data Agent Container CLI",
 	Version: version,
-	Long: `A command-line tool for managing DataAgentContainers (DAC) and DataDescriptors (DD)
-in your Kubernetes cluster. Provides interactive chat, resource management, and
-observability for your data agents.`,
+	Long: `Command-line tool for managing DataAgentContainers (DAC) and DataDescriptors (DD)
+in a Kubernetes cluster. Supports authentication, resource management operations,
+and starting interactive chat sessions.`,
 	Example: `  # Authenticate with API server
   $ dactl login -s http://localhost:8080 -u admin
 
@@ -43,6 +42,10 @@ func Execute() error {
 func init() {
 	// Disable default completion command
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+
+	// Let commands control error and usage printing via ui package
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
 
 	// Add subcommands
 	rootCmd.AddCommand(loginCmd)

@@ -9,6 +9,18 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/ent"
 )
 
+// The DiscoveryJobFunc type is an adapter to allow the use of ordinary
+// function as DiscoveryJob mutator.
+type DiscoveryJobFunc func(context.Context, *ent.DiscoveryJobMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f DiscoveryJobFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.DiscoveryJobMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DiscoveryJobMutation", m)
+}
+
 // The RunFunc type is an adapter to allow the use of ordinary
 // function as Run mutator.
 type RunFunc func(context.Context, *ent.RunMutation) (ent.Value, error)

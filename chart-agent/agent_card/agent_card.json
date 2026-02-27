@@ -1,0 +1,54 @@
+{
+    "name": "ChartAgent",
+    "description": "根据用户描述与提供的数据判断是否可绘图；可生成饼图、柱状图、折线图、散点图、雷达图等 ECharts 配置。数据仅为定性描述或缺乏结构化数值时，会明确说明无法生成图表及原因。",
+    "url": "http://192.168.xxx.xxx:20002/",
+    "provider": null,
+    "version": "1.0.0",
+    "documentationUrl": null,
+    "capabilities": {
+        "streaming": "True",
+        "pushNotifications": "True",
+        "stateTransitionHistory": "False"
+    },
+    "authentication": {
+        "credentials": null,
+        "schemes": [
+            "public"
+        ]
+    },
+    "defaultInputModes": [
+        "text",
+        "text/plain"
+    ],
+    "defaultOutputModes": [
+        "text",
+        "text/plain"
+    ],
+    "skills": [
+        {
+            "id": "chart",
+            "name": "chart",
+            "description": "根据自然语言与结构化数据生成 ECharts 图表配置（饼图/柱状图/折线图/散点图/雷达图）；会先判断数据是否足以绘图，数据不足时返回说明而非编造数据。",
+            "tags": [
+                "chart",
+                "chart agent",
+                "visualization",
+                "echarts",
+                "pie",
+                "bar",
+                "line",
+                "scatter",
+                "radar"
+            ],
+            "examples": [
+                "画一个柱状图对比各季度利润",
+                "用销售数据画饼图看占比",
+                "根据近半年数据画折线图展示趋势",
+                "画直方图展示用户消费分布",
+                "用这份数据生成雷达图做多维度对比"
+            ],
+            "inputModes": ["text", "text/plain"],
+            "outputModes": ["text", "text/plain"]
+        }
+    ]
+}

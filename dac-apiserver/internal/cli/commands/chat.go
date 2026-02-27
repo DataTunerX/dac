@@ -16,18 +16,15 @@ import (
 var chatCmd = &cobra.Command{
 	Use:   "chat",
 	Short: "start interactive chat with Data Agent",
-	Long: `Start an interactive chat session with Data Agent Container.
+	Long: `Start an interactive chat session with the Data Agent Container in your terminal.
 
-Features:
-  • 实时流式输出
-  • 多轮对话上下文manage
-  • 终端 TUI，贴近 Claude Code 体验`,
+The session supports streaming responses and multi-turn conversations.`,
 	Example: `  # Start interactive chat
   $ dactl chat
 
   # Keyboard controls:
-  • 输入消息按 Enter 发送
-  • Esc 退出会话`,
+  • Press Enter to send your message
+  • Press Esc to exit the session`,
 	RunE: runChat,
 }
 
@@ -37,9 +34,14 @@ func init() {
 
 func runChat(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
-		ui.PrintError("unexpected argument: %s", args[0])
-		fmt.Println("\nRun 'dactl chat' to start interactive session.")
-		return fmt.Errorf("invalid arguments")
+		switch args[0] {
+		case "help", "-h", "--help":
+			return cmd.Help()
+		default:
+			ui.PrintError("unexpected argument: %s", args[0])
+			ui.PrintInfo("Run 'dactl chat' to start interactive session.")
+			return fmt.Errorf("invalid arguments")
+		}
 	}
 
 	cfg, err := config.Load()
@@ -50,7 +52,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	if !cfg.IsAuthenticated() {
 		ui.PrintError("not authenticated, please login first")
-		fmt.Println("\nRun 'dactl login' to authenticate.")
+		ui.PrintInfo("Run 'dactl login' to authenticate.")
 		return fmt.Errorf("authentication required")
 	}
 

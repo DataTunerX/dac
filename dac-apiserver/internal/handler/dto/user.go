@@ -29,6 +29,7 @@ type LoginResponse struct {
 type UserResponse struct {
 	ID          string  `json:"id"`
 	Username    string  `json:"username"`
+	Role        string  `json:"role"`
 	LastLoginAt *string `json:"last_login_at,omitempty"`
 	CreatedAt   string  `json:"created_at"`
 }
@@ -47,6 +48,7 @@ func ToUserResponse(user *entity.User) *UserResponse {
 	resp := &UserResponse{
 		ID:        user.ID,
 		Username:  user.Username,
+		Role:      user.Role,
 		CreatedAt: user.CreatedAt.Format(time.RFC3339),
 	}
 

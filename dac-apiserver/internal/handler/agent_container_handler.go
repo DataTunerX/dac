@@ -3,11 +3,12 @@ package handler
 import (
 	"context"
 	"log/slog"
-	"strconv"
+	"sort"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
+	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
 	"github.com/lvyanru/dac-apiserver/internal/handler/dto"
 	"github.com/lvyanru/dac-apiserver/internal/usecase"
 )
@@ -19,28 +20,30 @@ type AgentContainerHandler struct {
 }
 
 // NewAgentContainerHandler creates a new agent container handler
-func NewAgentContainerHandler(uc usecase.AgentContainerUsecase) *AgentContainerHandler {
+func NewAgentContainerHandler(uc usecase.AgentContainerUsecase, logger *slog.Logger) *AgentContainerHandler {
 	return &AgentContainerHandler{
 		usecase: uc,
-		logger:  slog.Default(),
+		logger:  logger,
 	}
 }
 
 // Create creates a new agent container
 //
-//	@Summary		Create Agent
-//	@Description	Create new Agent container resource in specified namespace
+//	@Summary		Create Agent Container
+//	@Description	Create a new AgentContainer resource in the specified namespace
 //	@Tags			Agent Management
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			namespace	path		string							true	"Kubernetes namespace"
-//	@Param			request		body		dto.CreateAgentContainerRequest		true	"Agent configuration"
-//	@Success		200			{object}	dto.AgentContainerResponse			"Created successfully"
+//	@Param			request		body		dto.CreateAgentContainerRequest		true	"AgentContainer configuration"
+//	@Success		201			{object}	dto.AgentContainerResponse			"AgentContainer created"
 //	@Failure		400			{object}	map[string]string				"Invalid request parameters"
 //	@Failure		401			{object}	map[string]string				"Unauthorized"
 //	@Router			/namespaces/{namespace}/agents [post]
 func (h *AgentContainerHandler) Create(ctx context.Context, c *app.RequestContext) {
+	namespace := c.Param("namespace")
+
 	var req dto.CreateAgentContainerRequest
 	if err := c.BindAndValidate(&req); err != nil {
 		h.logger.Error("invalid request", "error", err)
@@ -48,15 +51,40 @@ func (h *AgentContainerHandler) Create(ctx context.Context, c *app.RequestContex
 		return
 	}
 
+	skills := make([]entity.AgentSkill, 0, len(req.AgentCard.Skills))
+	for _, s := range req.AgentCard.Skills {
+		skills = append(skills, entity.AgentSkill{
+			ID:          s.ID,
+			Name:        s.Name,
+			Description: s.Description,
+			Tags:        s.Tags,
+			Examples:    s.Examples,
+		})
+	}
+
 	// Convert to domain request
 	domainReq := &domain.CreateAgentContainerRequest{
-		Name:                req.Name,
-		Namespace:           req.Namespace,
-		Labels:              req.Labels,
-		DataPolicy:          req.DataPolicy,
-		AgentCard:           req.AgentCard,
-		Model:               req.Model,
-		ExpertAgentMaxSteps: req.ExpertAgentMaxSteps,
+		Name:                      req.Name,
+		Namespace:                 namespace,
+		Labels:                    req.Labels,
+		DACType:                   req.DACType,
+		DataPolicy: entity.DataPolicy{
+			DataSourceType:     req.DataPolicy.DataSourceType,
+			SemanticGroupID:    req.DataPolicy.SemanticGroupID,
+			SourceNameSelector: req.DataPolicy.SourceNameSelector,
+		},
+		AgentCard: entity.AgentCard{
+			Name:        req.AgentCard.Name,
+			Description: req.AgentCard.Description,
+			Skills:      skills,
+		},
+		Model: entity.ModelSpec{
+			Embedding:  req.Model.Embedding,
+			ExpertLLM:  req.Model.ExpertLLM,
+			PlannerLLM: req.Model.PlannerLLM,
+		},
+		ExpertAgentMaxSteps:       req.ExpertAgentMaxSteps,
+		OrchestratorAgentMaxLoops: req.OrchestratorAgentMaxLoops,
 	}
 
 	container, err := h.usecase.Create(ctx, domainReq)
@@ -71,16 +99,16 @@ func (h *AgentContainerHandler) Create(ctx context.Context, c *app.RequestContex
 
 // Get retrieves an agent container
 //
-//	@Summary		Get Agent details
-//	@Description	based on名称Get detailed information of specified Agent
+//	@Summary		Get Agent Container
+//	@Description	Get details of an AgentContainer in the specified namespace
 //	@Tags			Agent Management
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			namespace	path		string					true	"Kubernetes namespace"
-//	@Param			name		path		string					true	"Agent 名称"
-//	@Success		200			{object}	dto.AgentContainerResponse	"Agent 详情"
-//	@Failure		404			{object}	map[string]string		"Agent not found"
+//	@Param			name		path		string					true	"Agent name"
+//	@Success		200			{object}	dto.AgentContainerResponse	"AgentContainer details"
+//	@Failure		404			{object}	map[string]string		"AgentContainer not found"
 //	@Failure		401			{object}	map[string]string		"Unauthorized"
 //	@Router			/namespaces/{namespace}/agents/{name} [get]
 func (h *AgentContainerHandler) Get(ctx context.Context, c *app.RequestContext) {
@@ -103,29 +131,26 @@ func (h *AgentContainerHandler) Get(ctx context.Context, c *app.RequestContext) 
 
 // ListAll lists agent containers across all namespaces
 //
-//	@Summary		所有命名空间of Agent list
-//	@Description	get所有命名空间下of Agent
+//	@Summary		List Agent Containers across all namespaces
+//	@Description	List AgentContainer resources across all namespaces in the cluster
 //	@Tags			Agent Management
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
-//	@Success		200			{object}	map[string]interface{}	"Agent list"
+//	@Success		200			{object}	map[string]interface{}	"AgentContainer list"
 //	@Failure		401			{object}	map[string]string		"Unauthorized"
 //	@Router			/agents [get]
 func (h *AgentContainerHandler) ListAll(ctx context.Context, c *app.RequestContext) {
+	lo := parseLimitOffset(c, 50, 200)
 	opts := domain.ListOptions{
 		AllNamespaces: true, // Explicit: list across all namespaces
 		LabelSelector: c.Query("labelSelector"),
 		FieldSelector: c.Query("fieldSelector"),
 	}
 
-	if limit := c.Query("limit"); limit != "" {
-		if l, err := strconv.ParseInt(limit, 10, 64); err == nil {
-			opts.Limit = l
-		}
-	}
-
-	opts.Continue = c.Query("continue")
+	// Offset-based pagination: fetch full list then stable-sort and slice.
+	opts.Limit = 0
+	opts.Continue = ""
 
 	// namespace parameter is ignored when AllNamespaces is true
 	containers, err := h.usecase.List(ctx, "", opts)
@@ -137,32 +162,42 @@ func (h *AgentContainerHandler) ListAll(ctx context.Context, c *app.RequestConte
 		return
 	}
 
-	// Convert to response DTOs
+	sort.Slice(containers, func(i, j int) bool {
+		if containers[i].Namespace != containers[j].Namespace {
+			return containers[i].Namespace < containers[j].Namespace
+		}
+		return containers[i].Name < containers[j].Name
+	})
+	totalCount := len(containers)
+	containers = paginateSlice(containers, lo.Offset, lo.Limit)
+
 	items := make([]dto.AgentContainerResponse, len(containers))
 	for i, container := range containers {
 		items[i] = dto.ToAgentContainerResponse(container)
 	}
-
 	SuccessResponse(c, map[string]interface{}{
-		"items": items,
-		"total": len(items),
+		"items":      items,
+		"totalCount": totalCount,
+		"limit":      lo.Limit,
+		"offset":     lo.Offset,
 	})
 }
 
 // List lists agent containers
 //
-//	@Summary		Agent list
-//	@Description	get指定命名空间下of所有 Agent
+//	@Summary		List Agent Containers
+//	@Description	List AgentContainer resources in the specified namespace
 //	@Tags			Agent Management
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			namespace	path		string	true	"Kubernetes namespace"
-//	@Success		200			{object}	map[string]interface{}	"Agent list"
+//	@Success		200			{object}	map[string]interface{}	"AgentContainer list"
 //	@Failure		401			{object}	map[string]string		"Unauthorized"
 //	@Router			/namespaces/{namespace}/agents [get]
 func (h *AgentContainerHandler) List(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
+	lo := parseLimitOffset(c, 50, 200)
 
 	opts := domain.ListOptions{
 		AllNamespaces: false, // Explicit: list single namespace
@@ -170,13 +205,8 @@ func (h *AgentContainerHandler) List(ctx context.Context, c *app.RequestContext)
 		FieldSelector: c.Query("fieldSelector"),
 	}
 
-	if limit := c.Query("limit"); limit != "" {
-		if l, err := strconv.ParseInt(limit, 10, 64); err == nil {
-			opts.Limit = l
-		}
-	}
-
-	opts.Continue = c.Query("continue")
+	opts.Limit = 0
+	opts.Continue = ""
 
 	containers, err := h.usecase.List(ctx, namespace, opts)
 	if err != nil {
@@ -188,32 +218,39 @@ func (h *AgentContainerHandler) List(ctx context.Context, c *app.RequestContext)
 		return
 	}
 
-	// Convert to response DTOs
+	sort.Slice(containers, func(i, j int) bool {
+		return containers[i].Name < containers[j].Name
+	})
+	totalCount := len(containers)
+	containers = paginateSlice(containers, lo.Offset, lo.Limit)
+
 	items := make([]dto.AgentContainerResponse, len(containers))
 	for i, container := range containers {
 		items[i] = dto.ToAgentContainerResponse(container)
 	}
 
 	SuccessResponse(c, map[string]interface{}{
-		"items": items,
-		"total": len(items),
+		"items":      items,
+		"totalCount": totalCount,
+		"limit":      lo.Limit,
+		"offset":     lo.Offset,
 	})
 }
 
 // Update updates an agent container
 //
-//	@Summary		Update Agent
-//	@Description	更new指定 Agent of配置
+//	@Summary		Update Agent Container
+//	@Description	Update the configuration of an AgentContainer in the specified namespace
 //	@Tags			Agent Management
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			namespace	path		string							true	"Kubernetes namespace"
-//	@Param			name		path		string							true	"Agent 名称"
-//	@Param			request		body		dto.UpdateAgentContainerRequest		true	"更new内容"
+//	@Param			name		path		string							true	"Agent name"
+//	@Param			request		body		dto.UpdateAgentContainerRequest		true	"Update payload"
 //	@Success		200			{object}	dto.AgentContainerResponse			"Updated successfully"
 //	@Failure		400			{object}	map[string]string				"Invalid request parameters"
-//	@Failure		404			{object}	map[string]string				"Agent not found"
+//	@Failure		404			{object}	map[string]string				"AgentContainer not found"
 //	@Failure		401			{object}	map[string]string				"Unauthorized"
 //	@Router			/namespaces/{namespace}/agents/{name} [put]
 func (h *AgentContainerHandler) Update(ctx context.Context, c *app.RequestContext) {
@@ -228,12 +265,51 @@ func (h *AgentContainerHandler) Update(ctx context.Context, c *app.RequestContex
 	}
 
 	// Convert to domain request
+	var dataPolicy *entity.DataPolicy
+	if req.DataPolicy != nil {
+		dataPolicy = &entity.DataPolicy{
+			DataSourceType:     req.DataPolicy.DataSourceType,
+			SemanticGroupID:    req.DataPolicy.SemanticGroupID,
+			SourceNameSelector: req.DataPolicy.SourceNameSelector,
+		}
+	}
+
+	var agentCard *entity.AgentCard
+	if req.AgentCard != nil {
+		skills := make([]entity.AgentSkill, 0, len(req.AgentCard.Skills))
+		for _, s := range req.AgentCard.Skills {
+			skills = append(skills, entity.AgentSkill{
+				ID:          s.ID,
+				Name:        s.Name,
+				Description: s.Description,
+				Tags:        s.Tags,
+				Examples:    s.Examples,
+			})
+		}
+		agentCard = &entity.AgentCard{
+			Name:        req.AgentCard.Name,
+			Description: req.AgentCard.Description,
+			Skills:      skills,
+		}
+	}
+
+	var model *entity.ModelSpec
+	if req.Model != nil {
+		model = &entity.ModelSpec{
+			Embedding:  req.Model.Embedding,
+			ExpertLLM:  req.Model.ExpertLLM,
+			PlannerLLM: req.Model.PlannerLLM,
+		}
+	}
+
 	domainReq := &domain.UpdateAgentContainerRequest{
-		Labels:              req.Labels,
-		DataPolicy:          req.DataPolicy,
-		AgentCard:           req.AgentCard,
-		Model:               req.Model,
-		ExpertAgentMaxSteps: req.ExpertAgentMaxSteps,
+		Labels:                    req.Labels,
+		DACType:                   req.DACType,
+		DataPolicy:                dataPolicy,
+		AgentCard:                 agentCard,
+		Model:                     model,
+		ExpertAgentMaxSteps:       req.ExpertAgentMaxSteps,
+		OrchestratorAgentMaxLoops: req.OrchestratorAgentMaxLoops,
 	}
 
 	container, err := h.usecase.Update(ctx, namespace, name, domainReq)
@@ -252,16 +328,16 @@ func (h *AgentContainerHandler) Update(ctx context.Context, c *app.RequestContex
 
 // Delete deletes an agent container
 //
-//	@Summary		Delete Agent
-//	@Description	删除指定of Agent 资源
+//	@Summary		Delete Agent Container
+//	@Description	Delete an AgentContainer from the specified namespace
 //	@Tags			Agent Management
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			namespace	path		string				true	"Kubernetes namespace"
-//	@Param			name		path		string				true	"Agent 名称"
+//	@Param			name		path		string				true	"Agent name"
 //	@Success		200			{object}	map[string]string	"Deleted successfully"
-//	@Failure		404			{object}	map[string]string	"Agent not found"
+//	@Failure		404			{object}	map[string]string	"AgentContainer not found"
 //	@Failure		401			{object}	map[string]string	"Unauthorized"
 //	@Router			/namespaces/{namespace}/agents/{name} [delete]
 func (h *AgentContainerHandler) Delete(ctx context.Context, c *app.RequestContext) {

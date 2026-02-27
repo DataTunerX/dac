@@ -1,73 +1,108 @@
 package dto
 
 import (
+	"time"
+
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
 )
+
+type DataPolicyDTO struct {
+	DataSourceType     string   `json:"dataSourceType,omitempty"`
+	SemanticGroupID    string   `json:"semanticGroupID,omitempty"`
+	SourceNameSelector []string `json:"sourceNameSelector,omitempty"`
+}
+
+type AgentSkillDTO struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Tags        []string `json:"tags,omitempty"`
+	Examples    []string `json:"examples,omitempty"`
+}
+
+type AgentCardDTO struct {
+	Name        string          `json:"name" binding:"required"`
+	Description string          `json:"description" binding:"required"`
+	Skills      []AgentSkillDTO `json:"skills,omitempty"`
+}
+
+type ModelSpecDTO struct {
+	Embedding  string `json:"embedding,omitempty"`
+	ExpertLLM  string `json:"expertLLM" binding:"required"`
+	PlannerLLM string `json:"plannerLLM" binding:"required"`
+}
 
 // CreateAgentContainerRequest represents the HTTP request for creating agent container
 type CreateAgentContainerRequest struct {
 	Name                string            `json:"name" binding:"required"`
-	Namespace           string            `json:"namespace" binding:"required"`
 	Labels              map[string]string `json:"labels,omitempty"`
-	DataPolicy          entity.DataPolicy `json:"dataPolicy" binding:"required"`
-	AgentCard           entity.AgentCard  `json:"agentCard" binding:"required"`
-	Model               entity.ModelSpec  `json:"model" binding:"required"`
-	ExpertAgentMaxSteps string            `json:"expertAgentMaxSteps,omitempty"`
+	DACType             string            `json:"dacType,omitempty"`
+	DataPolicy          DataPolicyDTO     `json:"dataPolicy" binding:"required"`
+	AgentCard           AgentCardDTO      `json:"agentCard" binding:"required"`
+	Model               ModelSpecDTO      `json:"model" binding:"required"`
+	ExpertAgentMaxSteps       string            `json:"expertAgentMaxSteps,omitempty"`
+	OrchestratorAgentMaxLoops string            `json:"orchestratorAgentMaxLoops,omitempty"`
 }
 
 // UpdateAgentContainerRequest represents the HTTP update request
 type UpdateAgentContainerRequest struct {
-	Labels              map[string]string  `json:"labels,omitempty"`
-	DataPolicy          *entity.DataPolicy `json:"dataPolicy,omitempty"`
-	AgentCard           *entity.AgentCard  `json:"agentCard,omitempty"`
-	Model               *entity.ModelSpec  `json:"model,omitempty"`
-	ExpertAgentMaxSteps *string            `json:"expertAgentMaxSteps,omitempty"`
+	Labels                    map[string]string  `json:"labels,omitempty"`
+	DACType                   *string            `json:"dacType,omitempty"`
+	DataPolicy                *DataPolicyDTO     `json:"dataPolicy,omitempty"`
+	AgentCard                 *AgentCardDTO      `json:"agentCard,omitempty"`
+	Model                     *ModelSpecDTO      `json:"model,omitempty"`
+	ExpertAgentMaxSteps       *string            `json:"expertAgentMaxSteps,omitempty"`
+	OrchestratorAgentMaxLoops *string            `json:"orchestratorAgentMaxLoops,omitempty"`
 }
 
 // AgentContainerResponse represents the HTTP response for agent container
 type AgentContainerResponse struct {
-	Name                  string                         `json:"name"`
-	Namespace             string                         `json:"namespace"`
-	Labels                map[string]string              `json:"labels,omitempty"`
-	DataPolicy            DataPolicyResponse             `json:"data_policy"`
-	AgentCard             AgentCardResponse              `json:"agent_card"`
-	Model                 ModelSpecResponse              `json:"model"`
-	ExpertAgentMaxSteps   string                         `json:"expert_agent_max_steps,omitempty"`
-	ActiveDataDescriptors []ActiveDataDescriptorResponse `json:"active_data_descriptors,omitempty"`
-	Endpoint              *EndpointResponse              `json:"endpoint,omitempty"`
-	Conditions            []ConditionResponse            `json:"conditions,omitempty"`
-	CreatedAt             string                         `json:"created_at"`
-	UpdatedAt             string                         `json:"updated_at"`
+	Name                      string                         `json:"name"`
+	Namespace                 string                         `json:"namespace"`
+	Labels                    map[string]string              `json:"labels,omitempty"`
+	DACType                   string                         `json:"dacType,omitempty"`
+	DataPolicy                DataPolicyResponse             `json:"dataPolicy"`
+	AgentCard                 AgentCardResponse              `json:"agentCard"`
+	Model                     ModelSpecResponse              `json:"model"`
+	ExpertAgentMaxSteps       string                         `json:"expertAgentMaxSteps,omitempty"`
+	OrchestratorAgentMaxLoops string                         `json:"orchestratorAgentMaxLoops,omitempty"`
+	ActiveDataDescriptors     []ActiveDataDescriptorResponse `json:"activeDataDescriptors,omitempty"`
+	Endpoint                  *EndpointResponse              `json:"endpoint,omitempty"`
+	Conditions                []ConditionResponse            `json:"conditions,omitempty"`
+	CreatedAt                 string                         `json:"createdAt"`
+	UpdatedAt                 string                         `json:"updatedAt"`
 }
 
 type DataPolicyResponse struct {
-	SourceNameSelector []string `json:"source_name_selector"`
+	DataSourceType     string   `json:"dataSourceType,omitempty"`
+	SemanticGroupID    string   `json:"semanticGroupID,omitempty"`
+	SourceNameSelector []string `json:"sourceNameSelector,omitempty"`
 }
 
 type AgentCardResponse struct {
 	Name        string               `json:"name"`
 	Description string               `json:"description"`
-	Skills      []AgentSkillResponse `json:"skills"`
+	Skills      []AgentSkillResponse `json:"skills,omitempty"`
 }
 
 type AgentSkillResponse struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Tags        []string `json:"tags"`
-	Examples    []string `json:"examples"`
+	Tags        []string `json:"tags,omitempty"`
+	Examples    []string `json:"examples,omitempty"`
 }
 
 type ModelSpecResponse struct {
-	Embedding  string `json:"embedding"`
-	ExpertLLM  string `json:"expert_llm"`
-	PlannerLLM string `json:"planner_llm"`
+	Embedding  string `json:"embedding,omitempty"`
+	ExpertLLM  string `json:"expertLLM"`
+	PlannerLLM string `json:"plannerLLM"`
 }
 
 type ActiveDataDescriptorResponse struct {
 	Name       string `json:"name"`
 	Namespace  string `json:"namespace"`
-	LastSynced string `json:"last_synced"`
+	LastSynced string `json:"lastSynced"`
 }
 
 type EndpointResponse struct {
@@ -79,9 +114,9 @@ type EndpointResponse struct {
 type ConditionResponse struct {
 	Type               string `json:"type"`
 	Status             string `json:"status"`
-	LastTransitionTime string `json:"last_transition_time"`
-	Reason             string `json:"reason"`
-	Message            string `json:"message"`
+	LastTransitionTime string `json:"lastTransitionTime"`
+	Reason             string `json:"reason,omitempty"`
+	Message            string `json:"message,omitempty"`
 }
 
 // ToAgentContainerResponse converts entity to response DTO
@@ -89,14 +124,18 @@ func ToAgentContainerResponse(container *entity.AgentContainer) AgentContainerRe
 	resp := AgentContainerResponse{
 		Name:                container.Name,
 		Namespace:           container.Namespace,
-		Labels:              container.Labels,
-		ExpertAgentMaxSteps: container.ExpertAgentMaxSteps,
-		CreatedAt:           container.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		Labels:                    container.Labels,
+		DACType:                   container.DACType,
+		ExpertAgentMaxSteps:       container.ExpertAgentMaxSteps,
+		OrchestratorAgentMaxLoops: container.OrchestratorAgentMaxLoops,
+		CreatedAt:                 container.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:           container.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	// DataPolicy
 	resp.DataPolicy = DataPolicyResponse{
+		DataSourceType:     container.DataPolicy.DataSourceType,
+		SemanticGroupID:    container.DataPolicy.SemanticGroupID,
 		SourceNameSelector: container.DataPolicy.SourceNameSelector,
 	}
 
@@ -149,10 +188,14 @@ func ToAgentContainerResponse(container *entity.AgentContainer) AgentContainerRe
 	if len(container.Conditions) > 0 {
 		resp.Conditions = make([]ConditionResponse, len(container.Conditions))
 		for i, cond := range container.Conditions {
+			lastTransition := ""
+			if !cond.LastTransitionTime.IsZero() {
+				lastTransition = cond.LastTransitionTime.Format(time.RFC3339)
+			}
 			resp.Conditions[i] = ConditionResponse{
 				Type:               cond.Type,
 				Status:             cond.Status,
-				LastTransitionTime: cond.LastTransitionTime.Format("2006-01-02T15:04:05Z07:00"),
+				LastTransitionTime: lastTransition,
 				Reason:             cond.Reason,
 				Message:            cond.Message,
 			}

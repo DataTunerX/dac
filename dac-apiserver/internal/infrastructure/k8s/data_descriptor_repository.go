@@ -191,26 +191,84 @@ func (r *dataDescriptorRepository) fromUnstructured(unst *unstructured.Unstructu
 		return nil, fmt.Errorf("failed to unmarshal to K8sDataDescriptor: %w", err)
 	}
 
-	// 转换为 domain entity
+	descriptor := k8sDataDescriptorToEntity(&k8sDesc)
+	descriptor.UpdatedAt = k8sDesc.Metadata.CreationTimestamp.Time
+	if !k8sDesc.Metadata.DeletionTimestamp.IsZero() {
+		descriptor.Deleting = true
+		t := k8sDesc.Metadata.DeletionTimestamp.Time
+		descriptor.DeletionTimestamp = &t
+		// Keep UpdatedAt meaningful during delete.
+		descriptor.UpdatedAt = t
+	}
+
+	return descriptor, nil
+}
+
+func k8sDataDescriptorToEntity(k8sDesc *K8sDataDescriptor) *entity.DataDescriptor {
+	if k8sDesc == nil {
+		return &entity.DataDescriptor{}
+	}
 	descriptor := &entity.DataDescriptor{
 		Name:           k8sDesc.Metadata.Name,
 		Namespace:      k8sDesc.Metadata.Namespace,
 		Labels:         k8sDesc.Metadata.Labels,
 		DescriptorType: k8sDesc.Spec.DescriptorType,
-		Sources:        k8sDesc.Spec.Sources,
+		Sources:        mapK8sSourcesToEntity(k8sDesc.Spec.Sources),
 		SourceStatuses: k8sDesc.Status.SourceStatuses,
 		ConsumedBy:     k8sDesc.Status.ConsumedBy,
 		OverallPhase:   k8sDesc.Status.OverallPhase,
 		Conditions:     k8sDesc.Status.Conditions,
 		CreatedAt:      k8sDesc.Metadata.CreationTimestamp.Time,
 	}
-	if !k8sDesc.Metadata.DeletionTimestamp.IsZero() {
-		descriptor.UpdatedAt = k8sDesc.Metadata.DeletionTimestamp.Time
-	} else {
-		descriptor.UpdatedAt = k8sDesc.Metadata.CreationTimestamp.Time
-	}
+	return descriptor
+}
 
-	return descriptor, nil
+func mapK8sSourcesToEntity(src []K8sDataSource) []entity.DataSource {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]entity.DataSource, 0, len(src))
+	for _, s := range src {
+		ds := entity.DataSource{
+			Type:     s.Type,
+			Name:     s.Name,
+			Metadata: s.Metadata,
+		}
+
+		if s.Extract != nil {
+			ds.Extract = &entity.ExtractConfig{
+				Tables: s.Extract.Tables,
+				Querys: s.Extract.Querys,
+				Files:  s.Extract.Files,
+			}
+		}
+
+		if s.Prompts != nil && s.Prompts.Prompts != nil && s.Prompts.Prompts.Name != "" {
+			ds.Prompts = &entity.PromptsConfig{ConfigMapName: s.Prompts.Prompts.Name}
+		}
+
+		if s.CodeRepo != nil {
+			if s.CodeRepo.CodeRepoType != "" || s.CodeRepo.CodeRepoPath != "" || s.CodeRepo.CodeRepoBranch != "" || s.CodeRepo.CodeRepoToken != "" {
+				ds.CodeRepo = &entity.CodeRepoConfig{
+					CodeRepoType:   s.CodeRepo.CodeRepoType,
+					CodeRepoPath:   s.CodeRepo.CodeRepoPath,
+					CodeRepoBranch: s.CodeRepo.CodeRepoBranch,
+					CodeRepoToken:  s.CodeRepo.CodeRepoToken,
+				}
+			}
+		}
+
+		if s.Processing != nil && len(s.Processing.Cleaning) > 0 {
+			ds.Processing = entity.ProcessingConfig{Cleaning: s.Processing.Cleaning}
+		}
+
+		if len(s.Classification) > 0 {
+			ds.Classification = s.Classification
+		}
+
+		out = append(out, ds)
+	}
+	return out
 }
 
 func (r *dataDescriptorRepository) sourcesToMap(sources []entity.DataSource) []interface{} {
@@ -225,13 +283,24 @@ func (r *dataDescriptorRepository) sourcesToMap(sources []entity.DataSource) []i
 			sourceMap["extract"] = map[string]interface{}{
 				"tables": source.Extract.Tables,
 				"querys": source.Extract.Querys,
+				"files":  source.Extract.Files,
 			}
 		}
+		configMapName := ""
 		if source.Prompts != nil {
-			sourceMap["prompts"] = map[string]interface{}{
-				"prompts": map[string]string{
-					"name": source.Prompts.ConfigMapName,
-				},
+			configMapName = source.Prompts.ConfigMapName
+		}
+		sourceMap["prompts"] = map[string]interface{}{
+			"prompts": map[string]string{
+				"name": configMapName,
+			},
+		}
+		if source.CodeRepo != nil {
+			sourceMap["codeRepo"] = map[string]interface{}{
+				"codeRepoType":   source.CodeRepo.CodeRepoType,
+				"codeRepoPath":   source.CodeRepo.CodeRepoPath,
+				"codeRepoBranch": source.CodeRepo.CodeRepoBranch,
+				"codeRepoToken":  source.CodeRepo.CodeRepoToken,
 			}
 		}
 		if len(source.Processing.Cleaning) > 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/bytedance/sonic"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -153,7 +154,10 @@ func (r *agentContainerRepository) toUnstructured(container *entity.AgentContain
 			"labels":    container.Labels,
 		},
 		"spec": map[string]interface{}{
+			"dacType": container.DACType,
 			"dataPolicy": map[string]interface{}{
+				"dataSourceType":     container.DataPolicy.DataSourceType,
+				"semanticGroupID":    container.DataPolicy.SemanticGroupID,
 				"sourceNameSelector": container.DataPolicy.SourceNameSelector,
 			},
 			"agentCard": map[string]interface{}{
@@ -166,7 +170,8 @@ func (r *agentContainerRepository) toUnstructured(container *entity.AgentContain
 				"expertLLM":  container.Model.ExpertLLM,
 				"plannerLLM": container.Model.PlannerLLM,
 			},
-			"expertAgentMaxSteps": container.ExpertAgentMaxSteps,
+			"expertAgentMaxSteps":       container.ExpertAgentMaxSteps,
+			"orchestratorAgentMaxLoops": container.OrchestratorAgentMaxLoops,
 		},
 	}
 
@@ -204,18 +209,80 @@ func (r *agentContainerRepository) fromUnstructured(unst *unstructured.Unstructu
 		return nil, fmt.Errorf("failed to unmarshal to K8sAgentContainer: %w", err)
 	}
 
+	skills := make([]entity.AgentSkill, 0, len(k8sContainer.Spec.AgentCard.Skills))
+	for _, s := range k8sContainer.Spec.AgentCard.Skills {
+		skills = append(skills, entity.AgentSkill{
+			ID:          s.ID,
+			Name:        s.Name,
+			Description: s.Description,
+			Tags:        s.Tags,
+			Examples:    s.Examples,
+		})
+	}
+
+	activeDDs := make([]entity.ActiveDataDescriptor, 0, len(k8sContainer.Status.ActiveDataDescriptors))
+	for _, d := range k8sContainer.Status.ActiveDataDescriptors {
+		activeDDs = append(activeDDs, entity.ActiveDataDescriptor{
+			Name:       d.Name,
+			Namespace:  d.Namespace,
+			LastSynced: d.LastSynced,
+		})
+	}
+
+	var endpoint *entity.Endpoint
+	if k8sContainer.Status.Endpoint != nil {
+		endpoint = &entity.Endpoint{
+			Address:  k8sContainer.Status.Endpoint.Address,
+			Port:     k8sContainer.Status.Endpoint.Port,
+			Protocol: k8sContainer.Status.Endpoint.Protocol,
+		}
+	}
+
+	conditions := make([]entity.Condition, 0, len(k8sContainer.Status.Conditions))
+	for _, c := range k8sContainer.Status.Conditions {
+		var lastTransition time.Time
+		if c.LastTransitionTime != "" {
+			if t, err := time.Parse(time.RFC3339, c.LastTransitionTime); err == nil {
+				lastTransition = t
+			} else if t, err := time.Parse(time.RFC3339Nano, c.LastTransitionTime); err == nil {
+				lastTransition = t
+			}
+		}
+		conditions = append(conditions, entity.Condition{
+			Type:               c.Type,
+			Status:             c.Status,
+			LastTransitionTime: lastTransition,
+			Reason:             c.Reason,
+			Message:            c.Message,
+		})
+	}
+
 	// 转换为 domain entity
 	container := &entity.AgentContainer{
 		Name:                  k8sContainer.Metadata.Name,
 		Namespace:             k8sContainer.Metadata.Namespace,
 		Labels:                k8sContainer.Metadata.Labels,
-		DataPolicy:            k8sContainer.Spec.DataPolicy,
-		AgentCard:             k8sContainer.Spec.AgentCard,
-		Model:                 k8sContainer.Spec.Model,
-		ExpertAgentMaxSteps:   k8sContainer.Spec.ExpertAgentMaxSteps,
-		ActiveDataDescriptors: k8sContainer.Status.ActiveDataDescriptors,
-		Endpoint:              k8sContainer.Status.Endpoint,
-		Conditions:            k8sContainer.Status.Conditions,
+		DACType:               k8sContainer.Spec.DACType,
+		DataPolicy: entity.DataPolicy{
+			DataSourceType:     k8sContainer.Spec.DataPolicy.DataSourceType,
+			SemanticGroupID:    k8sContainer.Spec.DataPolicy.SemanticGroupID,
+			SourceNameSelector: k8sContainer.Spec.DataPolicy.SourceNameSelector,
+		},
+		AgentCard: entity.AgentCard{
+			Name:        k8sContainer.Spec.AgentCard.Name,
+			Description: k8sContainer.Spec.AgentCard.Description,
+			Skills:      skills,
+		},
+		Model: entity.ModelSpec{
+			Embedding:  k8sContainer.Spec.Model.Embedding,
+			ExpertLLM:  k8sContainer.Spec.Model.ExpertLLM,
+			PlannerLLM: k8sContainer.Spec.Model.PlannerLLM,
+		},
+		ExpertAgentMaxSteps:       k8sContainer.Spec.ExpertAgentMaxSteps,
+		OrchestratorAgentMaxLoops: k8sContainer.Spec.OrchestratorAgentMaxLoops,
+		ActiveDataDescriptors:     activeDDs,
+		Endpoint:              endpoint,
+		Conditions:            conditions,
 		CreatedAt:             k8sContainer.Metadata.CreationTimestamp.Time,
 	}
 	if !k8sContainer.Metadata.DeletionTimestamp.IsZero() {

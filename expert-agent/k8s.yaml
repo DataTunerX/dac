@@ -38,7 +38,7 @@ spec:
           value: "pk-xxx"
         - name: LANGFUSE_BASE_URL
           value: "http://192.168.xxx.xxx:3000"
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/expert-agent:v0.2.0-amd64
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/expert-agent:v0.6.0-amd64
         imagePullPolicy: IfNotPresent
         name: expert-agent
         ports:

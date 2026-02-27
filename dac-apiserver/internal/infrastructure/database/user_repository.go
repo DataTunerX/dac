@@ -163,3 +163,24 @@ func (r *userRepository) UpdateLastLogin(ctx context.Context, userID string) err
 
 	return nil
 }
+
+// UpdateRole updates the user's role
+func (r *userRepository) UpdateRole(ctx context.Context, userID, role string) error {
+	uid, err := uuid.Parse(userID)
+	if err != nil {
+		return fmt.Errorf("invalid user id: %w", err)
+	}
+
+	err = r.client.User.UpdateOneID(uid).
+		SetRole(role).
+		Exec(ctx)
+
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return domain.NewNotFoundError("User", userID)
+		}
+		return fmt.Errorf("failed to update user role: %w", err)
+	}
+
+	return nil
+}
