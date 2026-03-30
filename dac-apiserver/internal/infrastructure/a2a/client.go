@@ -4,23 +4,31 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
 	a2aclient "trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
-// client A2A clientimplementation
+// DAC frame markers (aligned with Python is_internal_dac_frame): any line starting with dacFramePrefix
+// is a structured frame; payload is the substring after dacFrameSuffix.
+const (
+	dacFramePrefix = "[[DAC_"
+	dacFrameSuffix = "]]"
+)
+
+// client implements domain.A2AClient by delegating to the trpc A2A client.
 type client struct {
 	a2aClient *a2aclient.A2AClient
 	logger    *slog.Logger
 }
 
-// NewClient create A2A client
+// NewClient creates an A2A client that forwards stream messages and parses DAC frames.
 func NewClient(baseURL string, timeout time.Duration, logger *slog.Logger) domain.A2AClient {
-	// create官方 A2A client
 	a2aClient, err := a2aclient.NewA2AClient(
 		baseURL,
 		a2aclient.WithTimeout(timeout),
@@ -38,9 +46,8 @@ func NewClient(baseURL string, timeout time.Duration, logger *slog.Logger) domai
 	}
 }
 
-// SendMessageStreaming 发送消息并接收流式响应（带 metadata）
+// SendMessageStreaming sends a message and returns a channel of stream chunks (DAC frames as Progress, rest as Text).
 func (c *client) SendMessageStreaming(ctx context.Context, message *entity.ChatMessage, userID, runID string) (<-chan entity.StreamChunk, error) {
-	// 转换为官方库of Message 格式
 	parts := make([]protocol.Part, len(message.Parts))
 	for i, part := range message.Parts {
 		parts[i] = protocol.NewTextPart(part.Text)
@@ -51,10 +58,7 @@ func (c *client) SendMessageStreaming(ctx context.Context, message *entity.ChatM
 		parts,
 	)
 
-	// 设置 message ID
 	a2aMessage.MessageID = message.MessageID
-
-	// 构造 metadata（传递给 routing-agent）
 	metadata := map[string]interface{}{
 		"user_id": userID,
 		"run_id":  runID,
@@ -63,33 +67,89 @@ func (c *client) SendMessageStreaming(ctx context.Context, message *entity.ChatM
 	// 构造发送参数
 	params := protocol.SendMessageParams{
 		Message:  a2aMessage,
-		Metadata: metadata, // 添加 metadata
+		Metadata: metadata,
 	}
-
 	c.logger.Debug("sending message with metadata",
 		"user_id", userID,
 		"run_id", runID,
 		"message_id", message.MessageID,
 	)
-
-	// 发送流式消息
 	streamCh, err := c.a2aClient.StreamMessage(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send streaming message: %w", err)
+		return nil, fmt.Errorf("send streaming message: %w", err)
 	}
-
-	// create输出 channel
 	outputCh := make(chan entity.StreamChunk, 100)
-
-	// 在后台转换流式响应
 	go c.convertStreamResponse(streamCh, outputCh)
 
 	return outputCh, nil
 }
 
-// convertStreamResponse 转换官方库of流式响应为我们of格式
+// lineBuffer buffers incomplete lines and classifies complete lines as DAC frames or content.
+type lineBuffer struct {
+	buf string
+}
+
+type answerFrame struct {
+	Event   string `json:"event"`
+	Payload struct {
+		Text string `json:"text"`
+	} `json:"payload"`
+}
+
+type answerFrameState struct {
+	sawChunk bool
+}
+
+// feed appends text and returns structured-frame JSON payloads (all [[DAC_*]] lines) and content lines.
+// Frame payloads are later sent as StreamChunk.Progress so the handler can use payload["event"] as SSE event name.
+func (b *lineBuffer) feed(text string) (framePayloads []string, content []string) {
+	s := b.buf + text
+	b.buf = ""
+	parts := strings.Split(s, "\n")
+	for i := 0; i < len(parts)-1; i++ {
+		line := strings.TrimSpace(parts[i])
+		if line == "" {
+			continue
+		}
+		if payload, ok := extractDACFramePayload(line); ok {
+			if payload != "" {
+				framePayloads = append(framePayloads, payload)
+			}
+		} else {
+			content = append(content, parts[i])
+		}
+	}
+	b.buf = parts[len(parts)-1]
+	return framePayloads, content
+}
+
+// extractDACFramePayload returns the JSON payload after the first "]]" for a line starting with dacFramePrefix.
+func extractDACFramePayload(line string) (string, bool) {
+	if !strings.HasPrefix(line, dacFramePrefix) {
+		return "", false
+	}
+	idx := strings.Index(line, dacFrameSuffix)
+	if idx == -1 {
+		return "", false
+	}
+	payload := strings.TrimSpace(line[idx+len(dacFrameSuffix):])
+	return payload, true
+}
+
+// flush returns any remaining buffer as a single content part (may be empty).
+func (b *lineBuffer) flush() string {
+	s := b.buf
+	b.buf = ""
+	return s
+}
+
+// convertStreamResponse maps upstream A2A stream events to domain StreamChunk.
+// DAC answer frames are converted into explicit Content chunks here so downstream
+// handlers/frontend can render them with normal token streaming behavior.
 func (c *client) convertStreamResponse(inputCh <-chan protocol.StreamingMessageEvent, outputCh chan<- entity.StreamChunk) {
 	defer close(outputCh)
+	var lineBuf lineBuffer
+	var answerState answerFrameState
 
 	for event := range inputCh {
 		result := event.Result
@@ -97,47 +157,105 @@ func (c *client) convertStreamResponse(inputCh <-chan protocol.StreamingMessageE
 			continue
 		}
 
-		// 优先使用类型断言（Go 惯用方式），避免依赖string kind
 		switch v := result.(type) {
 		case *protocol.TaskArtifactUpdateEvent:
-			// Artifact 更new事件 - 包含实际响应内容
-			c.handleArtifactUpdate(v, outputCh)
+			c.handleArtifactUpdate(v, outputCh, &lineBuf, &answerState)
 			if v.LastChunk != nil && *v.LastChunk {
-				return // 最后一块，结束
+				if remainder := lineBuf.flush(); remainder != "" {
+					outputCh <- entity.StreamChunk{Text: remainder}
+				}
+				outputCh <- entity.StreamChunk{IsEnd: true}
+				return
 			}
 
 		case *protocol.TaskStatusUpdateEvent:
-			// 状态更new事件 - 任务完成/failure
+			if remainder := lineBuf.flush(); remainder != "" {
+				outputCh <- entity.StreamChunk{Text: remainder}
+			}
 			if c.handleStatusUpdate(v, outputCh) {
-				return // 任务结束
+				return
 			}
 
+		// Add new upstream event types here when the protocol adds them, e.g.:
+		// case *protocol.SomeNewEvent: c.handleSomeNewEvent(v, outputCh, &lineBuf)
 		default:
-			// 未知事件类型 - 只记录，不阻塞
 			c.logger.Debug("received unhandled event type",
 				"type", fmt.Sprintf("%T", result),
 				"kind", result.GetKind())
 		}
 	}
 
-	// 正常结束：channel 关闭
+	if remainder := lineBuf.flush(); remainder != "" {
+		outputCh <- entity.StreamChunk{Text: remainder}
+	}
 	outputCh <- entity.StreamChunk{IsEnd: true}
 }
 
-// handleArtifactUpdate 处理 Artifact 更new事件
-func (c *client) handleArtifactUpdate(event *protocol.TaskArtifactUpdateEvent, outputCh chan<- entity.StreamChunk) {
-	text := c.extractTextFromArtifact(&event.Artifact)
-	if text != "" {
-		outputCh <- entity.StreamChunk{Text: text}
-		c.logger.Debug("sent text chunk", "length", len(text))
+// parseAnswerFramePayload extracts DAC answer frame event/text from JSON payload.
+func parseAnswerFramePayload(payload string) (eventName string, text string, ok bool) {
+	var frame answerFrame
+	if err := sonic.Unmarshal([]byte(payload), &frame); err != nil {
+		return "", "", false
+	}
+	eventName = strings.TrimSpace(frame.Event)
+	if eventName == "" {
+		return "", "", false
+	}
+	return eventName, frame.Payload.Text, true
+}
+
+// handleFramePayload converts DAC_ANSWER final output into explicit content chunks and keeps
+// non-answer DAC frames as progress JSON payloads.
+func (c *client) handleFramePayload(payload string, outputCh chan<- entity.StreamChunk, state *answerFrameState) {
+	eventName, text, ok := parseAnswerFramePayload(payload)
+	if !ok {
+		outputCh <- entity.StreamChunk{Progress: payload}
+		c.logger.Debug("sent progress chunk")
+		return
 	}
 
-	if event.LastChunk != nil && *event.LastChunk {
-		outputCh <- entity.StreamChunk{IsEnd: true}
+	switch eventName {
+	case "final_answer_chunk":
+		if text == "" {
+			return
+		}
+		state.sawChunk = true
+		outputCh <- entity.StreamChunk{Content: text}
+		c.logger.Debug("sent answer content chunk", "length", len(text))
+	case "final_answer":
+		if text == "" || state.sawChunk {
+			return
+		}
+		outputCh <- entity.StreamChunk{Content: text}
+		c.logger.Debug("sent final answer fallback chunk", "length", len(text))
+	default:
+		outputCh <- entity.StreamChunk{Progress: payload}
+		c.logger.Debug("sent progress chunk")
 	}
 }
 
-// handleStatusUpdate 处理状态更new事件，返回 true indicates应结束流
+// handleArtifactUpdate parses artifact text into DAC frame payloads and content lines, sends StreamChunks.
+func (c *client) handleArtifactUpdate(
+	event *protocol.TaskArtifactUpdateEvent,
+	outputCh chan<- entity.StreamChunk,
+	lineBuf *lineBuffer,
+	answerState *answerFrameState,
+) {
+	text := c.extractTextFromArtifact(&event.Artifact)
+	if text == "" {
+		return
+	}
+	framePayloads, contentLines := lineBuf.feed(text)
+	for _, payload := range framePayloads {
+		c.handleFramePayload(payload, outputCh, answerState)
+	}
+	for _, line := range contentLines {
+		outputCh <- entity.StreamChunk{Text: line + "\n"}
+		c.logger.Debug("sent content chunk", "length", len(line)+1)
+	}
+}
+
+// handleStatusUpdate processes status events; returns true if the stream should end.
 func (c *client) handleStatusUpdate(event *protocol.TaskStatusUpdateEvent, outputCh chan<- entity.StreamChunk) bool {
 	state := event.Status.State
 
@@ -156,7 +274,7 @@ func (c *client) handleStatusUpdate(event *protocol.TaskStatusUpdateEvent, outpu
 	return false
 }
 
-// extractTextFromArtifact 从 Artifact 中提取文本
+// extractTextFromArtifact returns the first TextPart text from the artifact, or empty string.
 func (c *client) extractTextFromArtifact(artifact *protocol.Artifact) string {
 	if artifact == nil || artifact.Parts == nil {
 		return ""

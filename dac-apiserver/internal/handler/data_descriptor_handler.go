@@ -186,7 +186,7 @@ func (h *DataDescriptorHandler) ListAll(ctx context.Context, c *app.RequestConte
 	for i, descriptor := range descriptors {
 		items[i] = dto.ToDataDescriptorResponse(descriptor)
 	}
-	SuccessResponse(c, map[string]interface{}{
+	SuccessResponse(c, map[string]any{
 		"items":      items,
 		"totalCount": totalCount,
 		"limit":      lo.Limit,
@@ -229,7 +229,7 @@ func (h *DataDescriptorHandler) List(ctx context.Context, c *app.RequestContext)
 		items[i] = dto.ToDataDescriptorResponse(descriptor)
 	}
 
-	SuccessResponse(c, map[string]interface{}{
+	SuccessResponse(c, map[string]any{
 		"items":      items,
 		"totalCount": totalCount,
 		"limit":      lo.Limit,
@@ -329,7 +329,7 @@ func (h *DataDescriptorHandler) SearchKnowledge(ctx context.Context, c *app.Requ
 		return
 	}
 
-	SuccessResponse(c, map[string]interface{}{
+	SuccessResponse(c, map[string]any{
 		"results": results,
 		"total": len(results),
 	})
@@ -347,7 +347,7 @@ func (h *DataDescriptorHandler) GetKnowledge(ctx context.Context, c *app.Request
 		return
 	}
 
-	SuccessResponse(c, map[string]interface{}{
+	SuccessResponse(c, map[string]any{
 		"results": results,
 		"total":   len(results),
 	})

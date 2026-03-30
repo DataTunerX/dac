@@ -1,11 +1,20 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
-import { useParams, useRouter } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
+import useSWR from "swr"
 import { api } from "@/lib/api"
+import { listAgentsAll } from "@/lib/agents-api"
+import { getSemanticGroupWithMembers } from "@/lib/semantic-groups-api"
+import type {
+  SemanticGroupResponse,
+  SemanticGroupInfoResponse,
+  DDGroupRelationResponse,
+} from "@/lib/api-types"
 import { toast } from "sonner"
 import { Markdown, defaultMarkdownComponents } from "@/components/markdown"
+import { RbacWrapper } from "@/components/rbac"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -26,28 +35,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { ArrowLeft, ChevronRight, Layers, Link2, RefreshCw, Trash2, X, FileText, Database, Maximize2, Scan } from "lucide-react"
-
-type UnknownRecord = Record<string, unknown>
-function isRecord(v: unknown): v is UnknownRecord {
-  return Boolean(v) && typeof v === "object" && !Array.isArray(v)
-}
-
-type SemanticGroup = {
-  id: string
-  group_name: string
-  description?: string
-  agent_card?: string
-  version?: string
-  created_at?: string
-}
-
-type DDGroupRelation = {
-  id: number
-  sd_id: string
-  group_id: string
-  association_reason?: string
-}
+import { ArrowLeft, ChevronRight, Database, Layers, Link2, RefreshCw, Trash2, X, FileText, Maximize2, Scan, Loader2 } from "lucide-react"
+import { RelationGraph, REL_GRAPH } from "@/components/relation-graph"
 
 function shortID(id: string) {
   const s = String(id || "")
@@ -55,69 +44,94 @@ function shortID(id: string) {
   return `${s.slice(0, 8)}…${s.slice(-6)}`
 }
 
-type SemanticDomainMeta = {
-  dd_namespace: string
-  dd_name: string
+/** First segment of description before the first comma (ASCII or Chinese ，); empty if absent. */
+function descriptionLead(description?: string): string {
+  const s = String(description ?? "").trim()
+  if (!s) return ""
+  const commaAscii = s.indexOf(",")
+  const commaZh = s.indexOf("，")
+  const comma =
+    commaAscii === -1 && commaZh === -1
+      ? -1
+      : commaAscii === -1
+        ? commaZh
+        : commaZh === -1
+          ? commaAscii
+          : Math.min(commaAscii, commaZh)
+  return comma === -1 ? s : s.slice(0, comma).trim()
 }
 
-const REL_GRAPH = {
-  width: 1080,
-  minWidthClass: "min-w-[1080px]",
-  // This is a cap; actual maxHeight is computed from viewport.
-  maxHeight: 560,
-  // layout
-  groupX: 190,
-  sdX: 560, // legacy (kept to avoid noisy refactors)
-  ddX: 900,
-  rowStartY: 92, // legacy
-  rowGapY: 76, // legacy
-  minHeight: 320,
-  paddingY: 96,
-  // node sizes
-  nodeW: 280,
-  nodeH: 96,
-  // edge tuning
-  edgeGap: 10,
-  sgCurve: 120,
-  sdCurve: 90,
-  // background grid
-  // Keep it subtle so the canvas feels clean.
-  gridDotOpacity: 0.1,
-  gridDotSize: 20,
-  // colors
-  // Keep all edges the same blue (project-consistent, not “fancy”).
-  sgStart: "#2563eb", // blue-600
-  sgEnd: "#2563eb",
-  ddStart: "#2563eb",
-  ddEnd: "#2563eb",
-  sgArrow: "#2563eb",
-  ddArrow: "#2563eb",
-  // Keep main stroke slim and crisp.
-  strokeWidth: 2.2,
-} as const
+async function fetcherGroupWithMembers(id: string) {
+  const data = await getSemanticGroupWithMembers(id)
+  if (!data?.group) return null
+  return data
+}
 
-function bezier(startX: number, startY: number, endX: number, endY: number, curve: number) {
-  const c1 = startX + curve
-  const c2 = endX - curve
-  return `M ${startX} ${startY} C ${c1} ${startY}, ${c2} ${endY}, ${endX} ${endY}`
+/** Parse hierarchy path from query; last segment must match current id. */
+function parsePathQuery(pathQuery: string | null, currentId: string): string[] {
+  if (!currentId) return []
+  if (!pathQuery?.trim()) return [currentId]
+  const segments = pathQuery.split(",").map((s) => s.trim()).filter(Boolean)
+  if (segments.length === 0) return [currentId]
+  if (segments[segments.length - 1] !== currentId) return [currentId]
+  return segments
+}
+
+/** Build path query for a given path array (no leading/trailing comma). */
+function pathQueryFromIds(ids: string[]): string {
+  return ids.filter(Boolean).join(",")
 }
 
 export default function SemanticGroupDetailPage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
+  const searchParams = useSearchParams()
   const groupId = String(params?.id ?? "")
+  const pathQuery = searchParams.get("path")
+  const pathIds = useMemo(() => parsePathQuery(pathQuery, groupId), [pathQuery, groupId])
+  const parentId = pathIds.length > 1 ? pathIds[pathIds.length - 2]! : null
+  const backHref = parentId
+    ? `/semantic-groups/${parentId}?path=${pathQueryFromIds(pathIds.slice(0, -1))}`
+    : "/semantic-groups"
+  const hrefForChild = (childId: string) =>
+    `/semantic-groups/${encodeURIComponent(childId)}?path=${pathQueryFromIds([...pathIds, childId])}`
 
-  const [group, setGroup] = useState<SemanticGroup | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
+  const swrKey = groupId ? (["semantic-group", groupId] as const) : null
+  const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
+    swrKey,
+    ([, id]) => fetcherGroupWithMembers(id)
+  )
 
-  const [relations, setRelations] = useState<DDGroupRelation[]>([])
-  const [isLoadingRelations, setIsLoadingRelations] = useState(false)
+  const group = useMemo(() => swrData?.group ?? null, [swrData])
+  const childGroups = useMemo(() => swrData?.child_groups ?? [], [swrData])
+  const relations = useMemo(() => {
+    const mems = swrData?.members ?? []
+    return mems
+      .map((m) => m.relation)
+      .filter((r): r is DDGroupRelationResponse => Boolean(r && Number(r.id) > 0))
+  }, [swrData])
+  const sdMeta = useMemo(() => {
+    const meta: Record<string, { dd_namespace: string; dd_name: string }> = {}
+    const mems = swrData?.members ?? []
+    for (const m of mems) {
+      const sd = m.semantic_domain
+      const sid = m.relation?.sd_id
+      if (sid && sd?.dd_namespace != null && sd?.dd_name != null) {
+        meta[sid] = { dd_namespace: sd.dd_namespace, dd_name: sd.dd_name }
+      }
+    }
+    return meta
+  }, [swrData])
 
   const [deleteRelOpen, setDeleteRelOpen] = useState(false)
-  const [deletingRel, setDeletingRel] = useState<DDGroupRelation | null>(null)
+  const [deletingRel, setDeletingRel] = useState<DDGroupRelationResponse | null>(null)
   const [reasonOpen, setReasonOpen] = useState(false)
-  const [reasonRel, setReasonRel] = useState<DDGroupRelation | null>(null)
-  const [sdMeta, setSdMeta] = useState<Record<string, SemanticDomainMeta>>({})
+  const [reasonRel, setReasonRel] = useState<DDGroupRelationResponse | null>(null)
+  const [deleteGroupOpen, setDeleteGroupOpen] = useState(false)
+  const [showDependencyDialog, setShowDependencyDialog] = useState(false)
+  const [checkingDependency, setCheckingDependency] = useState(false)
+  const [isDeletingGroup, setIsDeletingGroup] = useState(false)
+  const [dependentAgents, setDependentAgents] = useState<Array<{ name: string; namespace: string }>>([])
   const [graphMaxHeight, setGraphMaxHeight] = useState<number>(REL_GRAPH.maxHeight)
   const [graphFullscreenOpen, setGraphFullscreenOpen] = useState(false)
   const [fullscreenScale, setFullscreenScale] = useState(1)
@@ -203,7 +217,7 @@ export default function SemanticGroupDetailPage() {
       key: string
       dd_namespace: string
       dd_name: string
-      items: DDGroupRelation[]
+      items: DDGroupRelationResponse[]
       hasDD: boolean
       isLoading: boolean
     }
@@ -261,13 +275,18 @@ export default function SemanticGroupDetailPage() {
     const topPad = 56
     const bottomPad = 56
     const gapY = 22
-    // Slightly over-estimate to avoid visual overflow; body can still scroll.
     const headerH = 88
     const rowH = 76
-    const heights = ddBuckets.map((b) => Math.max(REL_GRAPH.nodeH, headerH + b.items.length * rowH))
-    const total = heights.reduce((a, x) => a + x, 0) + Math.max(0, heights.length - 1) * gapY
-    return Math.max(REL_GRAPH.minHeight, topPad + total + bottomPad)
-  }, [ddBuckets])
+    const childBlockH =
+      childGroups.length > 0
+        ? childGroups.length * REL_GRAPH.nodeH + (childGroups.length - 1) * gapY
+        : 0
+    const ddHeights = ddBuckets.map((b) => Math.max(REL_GRAPH.nodeH, headerH + b.items.length * rowH))
+    const ddTotal = ddHeights.reduce((a, x) => a + x, 0) + Math.max(0, ddHeights.length - 1) * gapY
+    const midGap = childBlockH > 0 && ddTotal > 0 ? gapY : 0
+    const contentH = childBlockH + midGap + ddTotal
+    return Math.max(REL_GRAPH.minHeight, topPad + contentH + bottomPad)
+  }, [ddBuckets, childGroups.length])
 
   // Fullscreen zoom helpers (industry standard: zoom +/- + fit + reset).
   const clampScale = (v: number) => Math.max(0.25, Math.min(2.5, v))
@@ -281,102 +300,29 @@ export default function SemanticGroupDetailPage() {
     setFsScale(Math.min(w / REL_GRAPH.width, h / graphHeight) * 0.98)
   }
 
-  const loadGroup = async () => {
-    if (!groupId) return
-    setIsLoading(true)
-    try {
-      const res = await api.get(`/semantic-groups/${encodeURIComponent(groupId)}`)
-      const data = res.data as unknown
-      const r = isRecord(data) ? data : {}
-      setGroup({
-        id: String(r.id ?? groupId),
-        group_name: String(r.group_name ?? ""),
-        description: typeof r.description === "string" ? r.description : "",
-        agent_card: typeof r.agent_card === "string" ? r.agent_card : "",
-        version: typeof r.version === "string" ? r.version : "",
-        created_at: typeof r.created_at === "string" ? r.created_at : "",
-      })
-    } catch (e) {
-      console.error("load semantic group failed", e)
-      toast.error("加载语义组失败")
-      setGroup(null)
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const loadRelations = async () => {
-    if (!groupId) return
-    setIsLoadingRelations(true)
-    try {
-      const res = await api.get(`/dd-group-relations/group/${encodeURIComponent(groupId)}`)
-      const data = res.data as unknown
-      const r = isRecord(data) ? data : {}
-      const list = Array.isArray(r.items) ? (r.items as unknown[]) : []
-      const adapted: DDGroupRelation[] = list
-        .map((x) => (isRecord(x) ? x : {}))
-        .map((x) => ({
-          id: Number(x.id ?? 0),
-          sd_id: String(x.sd_id ?? ""),
-          group_id: String(x.group_id ?? ""),
-          association_reason: typeof x.association_reason === "string" ? x.association_reason : "",
-        }))
-        .filter((x) => x.id > 0)
-      setRelations(adapted)
-    } catch (e) {
-      console.error("load relations failed", e)
-      toast.error("加载关联关系失败")
-      setRelations([])
-    } finally {
-      setIsLoadingRelations(false)
-    }
-  }
-
   useEffect(() => {
-    void loadGroup()
-    void loadRelations()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupId])
+    if (swrError) toast.error("加载语义组失败")
+  }, [swrError])
 
+  // Optional: correct path when API parent_id disagrees with path (e.g. direct visit with wrong path)
   useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      const missing = relations
-        .map((r) => r.sd_id)
-        .filter((id) => id && !sdMeta[id])
-      if (missing.length === 0) return
+    if (!group || pathIds.length < 2 || groupId !== group.id) return
+    const expectedParent = group.parent_id
+    if (expectedParent == null) return
+    const pathParent = pathIds[pathIds.length - 2]
+    if (pathParent === expectedParent) return
+    const corrected = [expectedParent, groupId]
+    router.replace(`/semantic-groups/${encodeURIComponent(groupId)}?path=${pathQueryFromIds(corrected)}`, { scroll: false })
+  }, [group, groupId, pathIds, router])
 
-      for (const id of missing) {
-        try {
-          const res = await api.get(`/semantic-domains/${encodeURIComponent(id)}`)
-          const data = res.data as unknown
-          const r = isRecord(data) ? data : {}
-          const ns = typeof r.dd_namespace === "string" ? r.dd_namespace : ""
-          const nm = typeof r.dd_name === "string" ? r.dd_name : ""
-          if (!cancelled) {
-            setSdMeta((prev) => ({ ...prev, [id]: { dd_namespace: ns, dd_name: nm } }))
-          }
-        } catch (e) {
-          console.warn("load semantic domain failed", id, e)
-          if (!cancelled) {
-            setSdMeta((prev) => ({ ...prev, [id]: { dd_namespace: "", dd_name: "" } }))
-          }
-        }
-      }
-    }
-    void run()
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relations])
+  const refreshData = () => mutate()
 
-  const openDeleteRel = (r: DDGroupRelation) => {
+  const openDeleteRel = (r: DDGroupRelationResponse) => {
     setDeletingRel(r)
     setDeleteRelOpen(true)
   }
 
-  const openReason = (r: DDGroupRelation) => {
+  const openReason = (r: DDGroupRelationResponse) => {
     setReasonRel(r)
     setReasonOpen(true)
   }
@@ -393,7 +339,7 @@ export default function SemanticGroupDetailPage() {
       toast.success("已解除关联")
       setDeleteRelOpen(false)
       setDeletingRel(null)
-      await loadRelations()
+      await mutate()
     } catch (e) {
       console.error("delete relation failed", e)
       const err = e as { response?: { data?: { message?: string } } }
@@ -401,53 +347,121 @@ export default function SemanticGroupDetailPage() {
     }
   }
 
+  const openDeleteGroup = async () => {
+    if (!group?.id || checkingDependency) return
+    setCheckingDependency(true)
+    try {
+      const { items } = await listAgentsAll()
+      const deps = items
+        .filter((agent) => agent.dataPolicy?.semanticGroupID === group.id)
+        .map((agent) => ({
+          name: agent.name,
+          namespace: agent.namespace,
+        }))
+
+      if (deps.length > 0) {
+        setDependentAgents(deps)
+        setShowDependencyDialog(true)
+        return
+      }
+
+      setDeleteGroupOpen(true)
+    } catch (err) {
+      console.error("check group DAC dependencies failed", err)
+      toast.error("检查依赖关系失败")
+    } finally {
+      setCheckingDependency(false)
+    }
+  }
+
+  const confirmDeleteGroup = async () => {
+    if (!group?.id || isDeletingGroup) return
+    setIsDeletingGroup(true)
+    try {
+      await api.delete(`/semantic-groups/${encodeURIComponent(group.id)}`)
+      toast.success("删除成功")
+      router.push(backHref)
+    } catch (e) {
+      console.error("delete semantic group failed", e)
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || "删除失败")
+    } finally {
+      setIsDeletingGroup(false)
+      setDeleteGroupOpen(false)
+    }
+  }
+
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6">
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => router.back()}
-              className="-ml-2 h-8 px-2 text-slate-500 hover:text-slate-900"
+            <Link
+              href={backHref}
+              className="inline-flex items-center -ml-2 h-8 px-2 text-content-muted hover:text-content text-sm"
             >
               <ArrowLeft className="w-4 h-4 mr-1" />
               返回
-            </Button>
-            <nav className="flex items-center text-sm text-slate-500 min-w-0" aria-label="Breadcrumb">
-              <Link href="/semantic-groups" className="hover:text-slate-900">
+            </Link>
+            <nav className="flex items-center text-sm text-content-muted min-w-0 flex-wrap gap-y-1" aria-label="Breadcrumb">
+              <Link href="/semantic-groups" className="hover:text-content">
                 语义组
               </Link>
-              <ChevronRight className="w-4 h-4 mx-2 text-slate-400 shrink-0" />
-              <span className="font-medium text-slate-900 truncate">{group?.group_name || groupId}</span>
+              {pathIds.slice(0, -1).map((pid, i) => (
+                <span key={pid} className="flex items-center shrink-0">
+                  <ChevronRight className="w-4 h-4 mx-1 text-content-muted" />
+                  <Link
+                    href={`/semantic-groups/${encodeURIComponent(pid)}?path=${pathQueryFromIds(pathIds.slice(0, i + 1))}`}
+                    className="hover:text-content truncate max-w-[120px] inline-block"
+                  >
+                    {shortID(pid)}
+                  </Link>
+                </span>
+              ))}
+              <ChevronRight className="w-4 h-4 mx-2 text-content-muted shrink-0" />
+              <span className="font-medium text-content truncate">{group?.group_name || groupId}</span>
             </nav>
           </div>
 
-          <Button variant="outline" size="icon" onClick={() => { void loadGroup(); void loadRelations() }} title="刷新">
-            <RefreshCw className={`w-4 h-4 ${(isLoading || isLoadingRelations) ? "animate-spin" : ""}`} />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="icon" onClick={() => void refreshData()} title="刷新" aria-label="刷新">
+              <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
+            </Button>
+            <RbacWrapper requiredRole="admin">
+              <Button
+                variant="outline"
+                onClick={() => void openDeleteGroup()}
+                disabled={!group?.id || checkingDependency || isDeletingGroup}
+                className="bg-surface hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+              >
+                {checkingDependency || isDeletingGroup
+                  ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  : <Trash2 className="w-4 h-4 mr-2" />}
+                删除
+              </Button>
+            </RbacWrapper>
+          </div>
         </div>
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-          <Layers className="w-4 h-4 text-slate-500" />
+        <div className="flex items-center gap-2 text-sm font-medium text-content">
+          <Layers className="w-4 h-4 text-content-muted" />
           基本信息
         </div>
-        <Card className="p-6 border-slate-200">
+        <Card className="p-6 border-line">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="space-y-1 min-w-0">
-              <div className="text-xs text-slate-500">名称</div>
-              <div className="text-sm text-slate-900 truncate">{group?.group_name || "-"}</div>
+              <div className="text-xs text-content-muted">名称</div>
+              <div className="text-sm text-content truncate">{group?.group_name || "-"}</div>
             </div>
             <div className="space-y-1 min-w-0">
-              <div className="text-xs text-slate-500">版本</div>
-              <div className="text-sm text-slate-900 truncate">{group?.version || "-"}</div>
+              <div className="text-xs text-content-muted">版本</div>
+              <div className="text-sm text-content truncate">{group?.version || "-"}</div>
             </div>
             <div className="space-y-1 min-w-0">
-              <div className="text-xs text-slate-500">创建时间</div>
-              <div className="text-sm text-slate-900 truncate">
+              <div className="text-xs text-content-muted">创建时间</div>
+              <div className="text-sm text-content truncate">
                 {group?.created_at ? new Date(group.created_at).toLocaleString() : "-"}
               </div>
             </div>
@@ -456,31 +470,99 @@ export default function SemanticGroupDetailPage() {
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-          <FileText className="w-4 h-4 text-slate-500" />
+        <div className="flex items-center gap-2 text-sm font-medium text-content">
+          <FileText className="w-4 h-4 text-content-muted" />
           描述
         </div>
-        <Card className="p-6 border-slate-200">
+        <Card className="p-6 border-line">
           {group?.description ? (
             <Markdown>{group.description}</Markdown>
           ) : (
-            <div className="text-sm text-slate-500">-</div>
+            <div className="text-sm text-content-muted">-</div>
+          )}
+        </Card>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 text-sm font-medium text-content">
+          <Layers className="w-4 h-4 text-content-muted" />
+          层级成员列表
+        </div>
+        <Card className="border-line overflow-hidden">
+          {isLoading && !group ? (
+            <div className="px-4 py-6 text-sm text-content-muted">加载中…</div>
+          ) : !group?.parent_id && childGroups.length > 0 ? (
+            <ul className="list-none divide-y divide-[var(--color-line)]" role="list">
+              {childGroups.map((cg) => (
+                <li key={cg.id}>
+                  <Link
+                    href={hrefForChild(cg.id)}
+                    className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface-muted/60 transition-colors min-w-0"
+                  >
+                    <span className="flex items-center gap-3 min-w-0">
+                      <span className="w-8 h-8 rounded-full bg-surface-muted flex items-center justify-center text-content-muted shrink-0">
+                        <Layers className="w-4 h-4" />
+                      </span>
+                      <span className="font-medium text-content truncate">{cg.group_name || cg.id}</span>
+                      <span className="text-xs text-content-muted truncate hidden sm:inline">{descriptionLead(cg.description) || "—"}</span>
+                    </span>
+                    <ChevronRight className="w-4 h-4 text-content-muted shrink-0" aria-hidden />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : ddBuckets.length > 0 ? (
+            <ul className="list-none divide-y divide-[var(--color-line)]" role="list">
+              {ddBuckets.map((b) => {
+                const href = b.hasDD
+                  ? `/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`
+                  : "#"
+                const isClickable = b.hasDD
+                return (
+                  <li key={b.key}>
+                    <Link
+                      href={href}
+                      className={`flex items-center justify-between gap-3 px-4 py-3 border-l-2 border-l-transparent min-w-0 ${
+                        isClickable
+                          ? "hover:bg-surface-muted/60 transition-colors"
+                          : "bg-surface-muted/40 cursor-not-allowed opacity-70"
+                      }`}
+                      onClick={isClickable ? undefined : (e) => e.preventDefault()}
+                      aria-disabled={!isClickable}
+                    >
+                      <span className="flex items-center gap-3 min-w-0">
+                        <span className="w-8 h-8 rounded-full bg-surface-muted flex items-center justify-center text-content-muted shrink-0">
+                          <Database className="w-4 h-4" />
+                        </span>
+                        <span className="font-medium text-content truncate">
+                          {b.hasDD ? `${b.dd_namespace} / ${b.dd_name}` : "加载中…"}
+                        </span>
+                        <span className="text-xs text-content-muted shrink-0">{b.items.length} 个关联</span>
+                      </span>
+                      {isClickable && <ChevronRight className="w-4 h-4 text-content-muted shrink-0" aria-hidden />}
+                    </Link>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <div className="px-4 py-6 text-sm text-content-muted">暂无成员</div>
           )}
         </Card>
       </div>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-            <Link2 className="w-4 h-4 text-slate-500" />
+          <div className="flex items-center gap-2 text-sm font-medium text-content">
+            <Link2 className="w-4 h-4 text-content-muted" />
             组成员
           </div>
         </div>
 
-        <Card className="border-slate-200">
+        <Card className="border-line">
           <div
             className={[
-              "relative overflow-auto bg-slate-50/40",
+              "relative overflow-auto bg-surface-muted/40",
               isPanning ? "cursor-grabbing" : "cursor-grab",
             ].join(" ")}
             ref={graphViewportInlineRef}
@@ -497,7 +579,7 @@ export default function SemanticGroupDetailPage() {
               <Button
                 variant="outline"
                 size="icon"
-                className="pointer-events-auto h-8 w-8 border border-slate-200 bg-white/90 backdrop-blur shadow-sm"
+                className="pointer-events-auto h-8 w-8 border border-line bg-surface/90 backdrop-blur shadow-sm"
                 title="Fullscreen"
                 onClick={() => setGraphFullscreenOpen(true)}
                 aria-label="Fullscreen"
@@ -506,238 +588,19 @@ export default function SemanticGroupDetailPage() {
               </Button>
             </div>
 
-            <div
-              className={`relative ${REL_GRAPH.minWidthClass} mx-auto`}
-              style={{ height: graphHeight, width: REL_GRAPH.width }}
-            >
-              {/* edges */}
-              <svg
-                className="absolute left-0 top-0"
-                width={REL_GRAPH.width}
-                height={graphHeight}
-                viewBox={`0 0 ${REL_GRAPH.width} ${graphHeight}`}
-                aria-hidden="true"
-                shapeRendering="geometricPrecision"
-              >
-                <defs>
-                  <style>{`
-                    @keyframes flow {
-                      from { stroke-dashoffset: 0; }
-                      to { stroke-dashoffset: -48; }
-                    }
-                    .flow-line {
-                      stroke-dasharray: 8 10;
-                      animation: flow 1.4s linear infinite;
-                    }
-                    @media (prefers-reduced-motion: reduce) {
-                      .flow-line { animation: none; }
-                    }
-                  `}</style>
-                  <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-                    <path d="M0,0 L8,4 L0,8 z" fill={REL_GRAPH.sgArrow} opacity="0.9" />
-                  </marker>
-                </defs>
-                {(() => {
-                  const topPad = 56
-                  const gapY = 22
-                  const headerH = 88
-                  const rowH = 76
-                  const ddCardW = 380
-                  const ddCardX = REL_GRAPH.ddX
-
-                  const groupCenterY = graphHeight / 2
-                  const groupOutX = REL_GRAPH.groupX + REL_GRAPH.nodeW / 2 + REL_GRAPH.edgeGap
-                  const ddInX = ddCardX - ddCardW / 2 - REL_GRAPH.edgeGap
-
-                  let yCursor = topPad
-                  return ddBuckets.map((b) => {
-                    const h = Math.max(REL_GRAPH.nodeH, headerH + b.items.length * rowH)
-                    const centerY = yCursor + h / 2
-                    yCursor += h + gapY
-                    const d = bezier(groupOutX, groupCenterY, ddInX, centerY, 180)
-                    return (
-                      <path
-                        key={b.key}
-                        d={d}
-                        fill="none"
-                        stroke={REL_GRAPH.sgStart}
-                        strokeWidth={REL_GRAPH.strokeWidth}
-                        opacity={1}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        markerEnd="url(#arrow)"
-                        vectorEffect="non-scaling-stroke"
-                        className="flow-line"
-                      />
-                    )
-                  })
-                })()}
-              </svg>
-
-              {/* group node */}
-              <div
-                className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
-                style={{ left: REL_GRAPH.groupX, width: REL_GRAPH.nodeW, height: REL_GRAPH.nodeH, pointerEvents: "auto" }}
-              >
-                <div className="h-full rounded-xl border border-slate-200 bg-white shadow-sm px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 shrink-0">
-                      <Layers className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs text-slate-500">语义组</div>
-                      <div className="mt-0.5 text-sm font-medium text-slate-900 truncate">{group?.group_name || groupId}</div>
-                      <div className="text-[11px] text-slate-500 font-mono truncate">{groupId}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* DD buckets (result-focused): show each DD once, list SD mappings inside */}
-              {isLoadingRelations && relations.length === 0 ? (
-                <div className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-sm text-slate-500" style={{ left: REL_GRAPH.ddX }}>
-                  加载中...
-                </div>
-              ) : ddBuckets.length === 0 ? (
-                <div className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-sm text-slate-500" style={{ left: REL_GRAPH.ddX }}>
-                  暂无关联
-                </div>
-              ) : (
-                (() => {
-                  const topPad = 56
-                  const gapY = 22
-                  const headerH = 88
-                  const rowH = 76
-                  const ddCardW = 380
-
-                  let yCursor = topPad
-                  return ddBuckets.map((b) => {
-                    const h = Math.max(REL_GRAPH.nodeH, headerH + b.items.length * rowH)
-                    const centerY = yCursor + h / 2
-                    const topY = yCursor
-                    yCursor += h + gapY
-
-                    const ddFull = b.hasDD ? `${b.dd_namespace}/${b.dd_name}` : ""
-                    return (
-                      <div
-                        key={b.key}
-                        className={[
-                          "absolute -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col",
-                          b.hasDD ? "hover:border-indigo-200" : "opacity-80",
-                        ].join(" ")}
-                        style={{ top: centerY, left: REL_GRAPH.ddX, width: ddCardW, height: h }}
-                      >
-                        <div className="px-4 py-3 border-b border-slate-100">
-                          <button
-                            type="button"
-                            disabled={!b.hasDD}
-                            onClick={() => {
-                              if (!b.hasDD) return
-                              router.push(`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`)
-                            }}
-                            onKeyDown={(e) => {
-                              if (!b.hasDD) return
-                              if (e.key !== "Enter" && e.key !== " ") return
-                              e.preventDefault()
-                              router.push(`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`)
-                            }}
-                            className={[
-                              "relative w-full flex items-center gap-2 text-left rounded-lg",
-                              "focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200",
-                              b.hasDD ? "cursor-pointer" : "cursor-default",
-                            ].join(" ")}
-                            title={b.hasDD ? ddFull : (b.isLoading ? "DD 信息加载中" : "未关联数据源")}
-                          >
-                            {b.dd_namespace ? (
-                              <Badge
-                                variant="secondary"
-                                className="absolute right-0 top-0 translate-y-[-2px] translate-x-[2px] bg-white border border-slate-200 text-slate-600 font-mono text-[10px] h-5 px-2"
-                              >
-                                {b.dd_namespace}
-                              </Badge>
-                            ) : null}
-                            <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 shrink-0">
-                              <Database className="w-4 h-4" />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-xs text-slate-500">data descriptor</div>
-                              <div className="mt-0.5 text-sm font-medium text-slate-900 truncate">
-                                {!b.hasDD ? (b.isLoading ? "加载中..." : "未关联") : b.dd_name || "-"}
-                              </div>
-                              <div className="text-[11px] text-slate-500 truncate">
-                                由 {b.items.length} 个 semantic domain 映射到此数据源
-                              </div>
-                            </div>
-                          </button>
-                        </div>
-
-                        <div className="flex-1 min-h-0 overflow-auto divide-y divide-slate-100">
-                          {b.items.map((r) => (
-                            <div
-                              key={r.id}
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => openReason(r)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault()
-                                  openReason(r)
-                                }
-                              }}
-                              className="group px-4 py-2.5 flex items-start justify-between gap-3 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
-                              title="点击查看分组策略"
-                            >
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-7 h-7 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 shrink-0">
-                                    <Link2 className="w-4 h-4" />
-                                  </div>
-                                  <div className="min-w-0">
-                                    <div className="text-xs text-slate-500 whitespace-nowrap">semantic domain</div>
-                                    <div className="mt-0.5 text-sm font-medium text-slate-900 truncate">{shortID(r.sd_id)}</div>
-                                  </div>
-                                </div>
-                                <div className="mt-1.5 text-xs text-slate-500 line-clamp-1" title={r.association_reason || ""}>
-                                  {r.association_reason ? `分组策略：${r.association_reason}` : <span className="text-slate-400 italic">暂无分组策略</span>}
-                                </div>
-                              </div>
-                              <div className="shrink-0 flex items-center gap-1.5">
-                                {b.hasDD ? (
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-8 w-8 text-slate-600 hover:text-slate-900 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      router.push(`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`)
-                                    }}
-                                    title={ddFull ? `查看数据源：${ddFull}` : "查看数据源"}
-                                  >
-                                    <ChevronRight className="w-4 h-4" />
-                                  </Button>
-                                ) : null}
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-8 w-8 text-red-600 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    openDeleteRel(r)
-                                  }}
-                                  title="解除关联"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })
-                })()
-              )}
-            </div>
+            <RelationGraph
+              group={group}
+              groupId={groupId}
+              childGroups={childGroups}
+              ddBuckets={ddBuckets}
+              graphHeight={graphHeight}
+              isLoading={isLoading}
+              markerId="arrow"
+              onOpenReason={openReason}
+              onDeleteRel={openDeleteRel}
+              onNavigateToGroup={(id) => router.push(hrefForChild(id))}
+              onNavigateToDataSource={(ns, name) => router.push(`/datasources/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)}
+            />
           </div>
         </Card>
       </div>
@@ -746,7 +609,6 @@ export default function SemanticGroupDetailPage() {
       <Dialog
         open={graphFullscreenOpen}
         onOpenChange={(v) => {
-          setGraphFullscreenOpen(v)
           if (v) {
             // Default to "fit" when opening fullscreen.
             setTimeout(() => fitFsAll(), 0)
@@ -756,13 +618,13 @@ export default function SemanticGroupDetailPage() {
         }}
       >
         <DialogContent className="w-[min(98vw,1280px)] max-w-[98vw] h-[92vh] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
-          <DialogHeader className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
             <div className="flex items-center justify-between gap-3">
               <DialogTitle>组成员</DialogTitle>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-slate-500 hover:text-slate-900"
+                className="h-8 w-8 text-content-muted hover:text-content"
                 onClick={() => setGraphFullscreenOpen(false)}
                 aria-label="关闭"
                 title="关闭"
@@ -775,7 +637,7 @@ export default function SemanticGroupDetailPage() {
           <div className="flex-1 min-h-0">
             <div
               className={[
-                "relative h-full overflow-auto bg-slate-50/40",
+                "relative h-full overflow-auto bg-surface-muted/40",
                 isPanning ? "cursor-grabbing" : "cursor-grab",
               ].join(" ")}
               ref={graphViewportFullscreenRef}
@@ -795,7 +657,7 @@ export default function SemanticGroupDetailPage() {
               }}
             >
               <div className="sticky top-0 z-20 flex justify-end p-2 pointer-events-none">
-                <div className="pointer-events-auto flex items-center gap-1 rounded-lg border border-slate-200 bg-white/90 backdrop-blur px-1.5 py-1 shadow-sm">
+                <div className="pointer-events-auto flex items-center gap-1 rounded-lg border border-line bg-surface/90 backdrop-blur px-1.5 py-1 shadow-sm">
                   <Button
                     variant="ghost"
                     size="icon"
@@ -806,7 +668,7 @@ export default function SemanticGroupDetailPage() {
                   >
                     <Scan className="w-4 h-4" />
                   </Button>
-                  <div className="text-[11px] tabular-nums text-slate-600 w-[52px] text-center select-none">
+                  <div className="text-[11px] tabular-nums text-content w-[52px] text-center select-none">
                     {Math.round(fullscreenScale * 100)}%
                   </div>
                 </div>
@@ -828,232 +690,19 @@ export default function SemanticGroupDetailPage() {
                     transformOrigin: "top left",
                   }}
                 >
-                  {/* edges */}
-              <svg
-                className="absolute left-0 top-0"
-                width={REL_GRAPH.width}
-                    height={graphHeight}
-                    viewBox={`0 0 ${REL_GRAPH.width} ${graphHeight}`}
-                    aria-hidden="true"
-                    shapeRendering="geometricPrecision"
-                  >
-                    <defs>
-                      <style>{`
-                        @keyframes flow {
-                          from { stroke-dashoffset: 0; }
-                          to { stroke-dashoffset: -48; }
-                        }
-                        .flow-line {
-                          stroke-dasharray: 8 10;
-                          animation: flow 1.4s linear infinite;
-                        }
-                        @media (prefers-reduced-motion: reduce) {
-                          .flow-line { animation: none; }
-                        }
-                      `}</style>
-                      <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-                        <path d="M0,0 L8,4 L0,8 z" fill={REL_GRAPH.sgArrow} opacity="0.9" />
-                      </marker>
-                    </defs>
-                    {(() => {
-                      const topPad = 56
-                      const gapY = 22
-                      const headerH = 88
-                      const rowH = 76
-                      const ddCardW = 380
-                      const ddCardX = REL_GRAPH.ddX
-
-                      const groupCenterY = graphHeight / 2
-                      const groupOutX = REL_GRAPH.groupX + REL_GRAPH.nodeW / 2 + REL_GRAPH.edgeGap
-                      const ddInX = ddCardX - ddCardW / 2 - REL_GRAPH.edgeGap
-
-                      let yCursor = topPad
-                      return ddBuckets.map((b) => {
-                        const h = Math.max(REL_GRAPH.nodeH, headerH + b.items.length * rowH)
-                        const centerY = yCursor + h / 2
-                        yCursor += h + gapY
-                        const d = bezier(groupOutX, groupCenterY, ddInX, centerY, 180)
-                        return (
-                          <path
-                            key={b.key}
-                            d={d}
-                            fill="none"
-                            stroke={REL_GRAPH.sgStart}
-                            strokeWidth={REL_GRAPH.strokeWidth}
-                            opacity={1}
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            markerEnd="url(#arrow)"
-                            vectorEffect="non-scaling-stroke"
-                            className="flow-line"
-                          />
-                        )
-                      })
-                    })()}
-                  </svg>
-
-                  {/* group node */}
-                  <div
-                    className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
-                    style={{ left: REL_GRAPH.groupX, width: REL_GRAPH.nodeW, height: REL_GRAPH.nodeH, pointerEvents: "auto" }}
-                  >
-                    <div className="h-full rounded-xl border border-slate-200 bg-white shadow-sm px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 shrink-0">
-                          <Layers className="w-4 h-4" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-xs text-slate-500">语义组</div>
-                          <div className="mt-0.5 text-sm font-medium text-slate-900 truncate">{group?.group_name || groupId}</div>
-                          <div className="text-[11px] text-slate-500 font-mono truncate">{groupId}</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* DD buckets */}
-                  {isLoadingRelations && relations.length === 0 ? (
-                    <div className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-sm text-slate-500" style={{ left: REL_GRAPH.ddX }}>
-                      加载中...
-                    </div>
-                  ) : ddBuckets.length === 0 ? (
-                    <div className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-sm text-slate-500" style={{ left: REL_GRAPH.ddX }}>
-                      暂无关联
-                    </div>
-                  ) : (
-                    (() => {
-                      const topPad = 56
-                      const gapY = 22
-                      const headerH = 88
-                      const rowH = 76
-                      const ddCardW = 380
-
-                      let yCursor = topPad
-                      return ddBuckets.map((b) => {
-                        const h = Math.max(REL_GRAPH.nodeH, headerH + b.items.length * rowH)
-                        const centerY = yCursor + h / 2
-                        yCursor += h + gapY
-
-                        const ddFull = b.hasDD ? `${b.dd_namespace}/${b.dd_name}` : ""
-                        return (
-                          <div
-                            key={b.key}
-                            className={[
-                              "absolute -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col",
-                              b.hasDD ? "hover:border-indigo-200" : "opacity-80",
-                            ].join(" ")}
-                            style={{ top: centerY, left: REL_GRAPH.ddX, width: ddCardW, height: h }}
-                          >
-                            <div className="px-4 py-3 border-b border-slate-100">
-                              <button
-                                type="button"
-                                disabled={!b.hasDD}
-                                onClick={() => {
-                                  if (!b.hasDD) return
-                                  router.push(`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`)
-                                }}
-                                onKeyDown={(e) => {
-                                  if (!b.hasDD) return
-                                  if (e.key !== "Enter" && e.key !== " ") return
-                                  e.preventDefault()
-                                  router.push(`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`)
-                                }}
-                                className={[
-                                  "relative w-full flex items-center gap-2 text-left rounded-lg",
-                                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200",
-                                  b.hasDD ? "cursor-pointer" : "cursor-default",
-                                ].join(" ")}
-                                title={b.hasDD ? ddFull : (b.isLoading ? "DD 信息加载中" : "未关联数据源")}
-                              >
-                                {b.dd_namespace ? (
-                                  <Badge
-                                    variant="secondary"
-                                    className="absolute right-0 top-0 translate-y-[-2px] translate-x-[2px] bg-white border border-slate-200 text-slate-600 font-mono text-[10px] h-5 px-2"
-                                  >
-                                    {b.dd_namespace}
-                                  </Badge>
-                                ) : null}
-                                <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 shrink-0">
-                                  <Database className="w-4 h-4" />
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="text-xs text-slate-500">data descriptor</div>
-                                  <div className="mt-0.5 text-sm font-medium text-slate-900 truncate">
-                                    {!b.hasDD ? (b.isLoading ? "加载中..." : "未关联") : b.dd_name || "-"}
-                                  </div>
-                                  <div className="text-[11px] text-slate-500 truncate">
-                                    由 {b.items.length} 个 semantic domain 映射到此数据源
-                                  </div>
-                                </div>
-                              </button>
-                            </div>
-
-                            <div className="flex-1 min-h-0 overflow-auto divide-y divide-slate-100">
-                              {b.items.map((r) => (
-                                <div
-                                  key={r.id}
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={() => openReason(r)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.preventDefault()
-                                      openReason(r)
-                                    }
-                                  }}
-                                  className="group px-4 py-2.5 flex items-start justify-between gap-3 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
-                                  title="点击查看分组策略"
-                                >
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      <div className="w-7 h-7 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 shrink-0">
-                                        <Link2 className="w-4 h-4" />
-                                      </div>
-                                      <div className="min-w-0">
-                                        <div className="text-xs text-slate-500 whitespace-nowrap">semantic domain</div>
-                                        <div className="mt-0.5 text-sm font-medium text-slate-900 truncate">{shortID(r.sd_id)}</div>
-                                      </div>
-                                    </div>
-                                    <div className="mt-1.5 text-xs text-slate-500 line-clamp-1" title={r.association_reason || ""}>
-                                      {r.association_reason ? `分组策略：${r.association_reason}` : <span className="text-slate-400 italic">暂无分组策略</span>}
-                                    </div>
-                                  </div>
-                                  <div className="shrink-0 flex items-center gap-1.5">
-                                    {b.hasDD ? (
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-8 w-8 text-slate-600 hover:text-slate-900 opacity-0 group-hover:opacity-100 transition-opacity"
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          router.push(`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`)
-                                        }}
-                                        title={ddFull ? `查看数据源：${ddFull}` : "查看数据源"}
-                                      >
-                                        <ChevronRight className="w-4 h-4" />
-                                      </Button>
-                                    ) : null}
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-8 w-8 text-red-600 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity"
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        openDeleteRel(r)
-                                      }}
-                                      title="解除关联"
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                    </Button>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )
-                      })
-                    })()
-                  )}
+                  <RelationGraph
+                    group={group}
+                    groupId={groupId}
+                    childGroups={childGroups}
+                    ddBuckets={ddBuckets}
+                    graphHeight={graphHeight}
+                    isLoading={isLoading}
+                    markerId="arrow-fs"
+                    onOpenReason={openReason}
+                    onDeleteRel={openDeleteRel}
+                    onNavigateToGroup={(id) => router.push(hrefForChild(id))}
+                    onNavigateToDataSource={(ns, name) => router.push(`/datasources/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)}
+                  />
                 </div>
               </div>
             </div>
@@ -1072,13 +721,13 @@ export default function SemanticGroupDetailPage() {
         }}
       >
         <DialogContent className="w-[min(96vw,48rem)] max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
-          <DialogHeader className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
             <div className="flex items-center justify-between gap-3">
               <DialogTitle>分组策略</DialogTitle>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-slate-500 hover:text-slate-900"
+                className="h-8 w-8 text-content-muted hover:text-content"
                 onClick={closeReason}
                 aria-label="关闭"
                 title="关闭"
@@ -1090,33 +739,33 @@ export default function SemanticGroupDetailPage() {
 
           <div className="space-y-4 flex-1 min-h-0 overflow-y-auto px-6 py-6">
             <div className="space-y-1.5">
-              <div className="text-xs text-slate-500">semantic domain id</div>
+              <div className="text-xs text-content-muted">semantic domain id</div>
               {reasonRel?.sd_id ? (
-                <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-mono text-slate-900 break-words">
+                <div className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-mono text-content break-words">
                   {reasonRel.sd_id}
                 </div>
               ) : (
-                <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-mono text-slate-900 break-words">
+                <div className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-mono text-content break-words">
                   -
                 </div>
               )}
             </div>
             <div className="space-y-1.5">
-              <div className="text-xs text-slate-500">data descriptor</div>
-              <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-mono text-slate-900 break-words">
+              <div className="text-xs text-content-muted">data descriptor</div>
+              <div className="rounded-md border border-line bg-surface px-3 py-2 text-sm font-mono text-content break-words">
                 {(() => {
                   const id = reasonRel?.sd_id || ""
                   const meta = id ? sdMeta[id] : undefined
                   if (!id) return "-"
-                  if (!meta) return "加载中..."
+                  if (!meta) return "加载中…"
                   if (!meta.dd_namespace && !meta.dd_name) return "-"
                   return `${meta.dd_namespace || "-"} / ${meta.dd_name || "-"}`
                 })()}
               </div>
             </div>
             <div className="space-y-1.5">
-              <div className="text-xs text-slate-500">分组策略</div>
-              <div className="rounded-md border border-slate-200 bg-slate-50/50 px-3 py-2 max-h-[50vh] overflow-auto">
+              <div className="text-xs text-content-muted">分组策略</div>
+              <div className="rounded-md border border-line bg-surface-muted/50 px-3 py-2 max-h-[50vh] overflow-auto">
                 <Markdown components={defaultMarkdownComponents}>
                   {reasonRel?.association_reason?.trim() ? reasonRel.association_reason : "-"}
                 </Markdown>
@@ -1131,7 +780,7 @@ export default function SemanticGroupDetailPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>确认解除关联？</AlertDialogTitle>
             <AlertDialogDescription>
-              将解除该语义组与 semantic domain <span className="font-mono text-slate-900">{deletingRel?.sd_id || "-"}</span> 的关联。
+              将解除该语义组与 semantic domain <span className="font-mono text-content">{deletingRel?.sd_id || "-"}</span> 的关联。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1139,6 +788,77 @@ export default function SemanticGroupDetailPage() {
             <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={confirmDeleteRel}>
               解除
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={deleteGroupOpen} onOpenChange={setDeleteGroupOpen}>
+        <AlertDialogContent className="w-[min(96vw,36rem)] max-w-xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除语义组？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将删除语义组 <span className="font-medium text-content">{group?.group_name || "-"}</span>。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingGroup}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={confirmDeleteGroup}
+              disabled={isDeletingGroup}
+            >
+              {isDeletingGroup ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showDependencyDialog} onOpenChange={setShowDependencyDialog}>
+        <AlertDialogContent className="w-[min(96vw,56rem)] max-w-4xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>无法删除 - 存在关联的智能体</AlertDialogTitle>
+            <AlertDialogDescription>
+              语义组 <span className="font-medium text-content">{group?.group_name || "-"}</span> 正在被以下 {dependentAgents.length} 个智能体使用，无法删除。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="mt-4 space-y-3 px-6">
+            <div className="max-h-[320px] w-full overflow-auto rounded-md border border-line">
+              <table className="w-full table-fixed text-sm">
+                <thead>
+                  <tr className="bg-surface-muted text-left">
+                    <th className="w-auto px-4 py-3 font-medium">智能体名称</th>
+                    <th className="w-28 px-4 py-3 font-medium">命名空间</th>
+                    <th className="w-28 px-4 py-3 font-medium text-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dependentAgents.map((agent, idx) => (
+                    <tr key={`${agent.namespace}/${agent.name}/${idx}`} className="border-t border-line">
+                      <td className="px-4 py-3 font-medium whitespace-normal break-all">{agent.name}</td>
+                      <td className="px-4 py-3 text-content-muted">{agent.namespace}</td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setShowDependencyDialog(false)
+                            router.push(`/agents/${encodeURIComponent(agent.namespace)}/${encodeURIComponent(agent.name)}`)
+                          }}
+                          className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"
+                        >
+                          查看详情 →
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="text-sm text-content">请先删除这些智能体或修改其关联的语义组，然后再删除。</div>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setShowDependencyDialog(false)}>知道了</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

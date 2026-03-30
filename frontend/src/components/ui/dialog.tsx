@@ -28,7 +28,7 @@ export function DialogContent({ className, children }: { className?: string; chi
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={() => ctx.onOpenChange?.(false)}>
       <div
-        className={cn("w-full rounded-lg border border-slate-200 bg-white shadow-lg", className)}
+        className={cn("w-full rounded-lg border border-line bg-surface shadow-lg", className)}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {children}
@@ -42,11 +42,11 @@ export function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLD
 }
 
 export function DialogTitle({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("text-base font-semibold text-slate-900", className)} {...props} />
+  return <div className={cn("text-base font-semibold text-content", className)} {...props} />
 }
 
 export function DialogDescription({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("mt-1 text-sm text-slate-500", className)} {...props} />
+  return <div className={cn("mt-1 text-sm text-content-muted", className)} {...props} />
 }
 
 export function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {

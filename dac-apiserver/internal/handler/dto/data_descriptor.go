@@ -3,8 +3,8 @@ package dto
 import (
 	"time"
 
+	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
-	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 )
 
 // CreateDataDescriptorRequest defines the request to create a data descriptor.
@@ -218,20 +218,20 @@ func toDataSourceResponse(s entity.DataSource) DataSourceResponse {
 	return resp
 }
 
-// DataDescriptorSignatureResponse is a thin passthrough of data-services signature payload.
+// DataDescriptorSignatureResponse is the signature payload for a data descriptor (domain type).
 type DataDescriptorSignatureResponse struct {
-	Data *dataservices.Signature `json:"data"`
+	Data *domain.Signature `json:"data"`
 }
 
-func ToDataDescriptorSignatureResponse(sig *dataservices.Signature) DataDescriptorSignatureResponse {
+func ToDataDescriptorSignatureResponse(sig *domain.Signature) DataDescriptorSignatureResponse {
 	return DataDescriptorSignatureResponse{Data: sig}
 }
 
-// DataDescriptorSemanticDomainResponse is a thin passthrough of data-services semantic_domain payload.
+// DataDescriptorSemanticDomainResponse is the semantic_domain payload for a data descriptor (domain type).
 type DataDescriptorSemanticDomainResponse struct {
-	Data *dataservices.SemanticDomain `json:"data"`
+	Data *domain.SemanticDomain `json:"data"`
 }
 
-func ToDataDescriptorSemanticDomainResponse(sd *dataservices.SemanticDomain) DataDescriptorSemanticDomainResponse {
+func ToDataDescriptorSemanticDomainResponse(sd *domain.SemanticDomain) DataDescriptorSemanticDomainResponse {
 	return DataDescriptorSemanticDomainResponse{Data: sd}
 }

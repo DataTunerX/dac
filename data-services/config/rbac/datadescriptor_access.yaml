@@ -1,0 +1,33 @@
+# RBAC for data-services HTTP APIs that read/patch DataDescriptor CRs (dd-sync-observer path).
+# Your logs showed: User "system:serviceaccount:dac:default" cannot get datadescriptors in namespace "default".
+#
+# Adjust subjects to match the ServiceAccount your data-services Deployment actually uses
+# (namespace + name). The sample k8s.yaml leaves serviceAccountName unset → default SA in dac.
+#
+# kubectl apply -f datadescriptor_access.yaml
+#
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: data-services-datadescriptor-sync
+rules:
+  - apiGroups:
+      - dac.dac.io
+    resources:
+      - datadescriptors
+    verbs:
+      - get
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: data-services-datadescriptor-sync
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: data-services-datadescriptor-sync
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: dac

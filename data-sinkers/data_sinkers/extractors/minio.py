@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
@@ -54,9 +56,26 @@ def extract_minio(
 
     agent_card = file_analyzer.agent_card(outline)
 
+    # Compute object list hash for change detection (path + etag/size)
+    object_list_hash = None
+    try:
+        bucket = reader.config.get("bucket")
+        items = []
+        for obj_name in object_names:
+            try:
+                stat = reader.client.conn.stat_object(bucket, obj_name)
+                items.append((obj_name, stat.etag or "", stat.size))
+            except Exception:
+                items.append((obj_name, "", 0))
+        items.sort(key=lambda x: x[0])
+        object_list_hash = hashlib.md5(json.dumps(items).encode()).hexdigest()
+    except Exception as e:
+        logger.warning("Failed to compute object_list_hash: %s", e)
+
     fingerprint_associated_info = {
         "ddd": summary,
-        "agent_card": agent_card
+        "agent_card": agent_card,
+        "object_list_hash": object_list_hash,
     }
 
     return results, fingerprint_associated_info

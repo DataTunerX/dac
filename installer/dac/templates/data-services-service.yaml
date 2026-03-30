@@ -1,0 +1,17 @@
+{{- if .Values.dataServices.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.dataServices.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "data-services") | nindent 4 }}
+spec:
+  type: {{ .Values.dataServices.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.dataServices.service.port }}
+      targetPort: {{ .Values.dataServices.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "data-services") | nindent 4 }}
+{{- end }}

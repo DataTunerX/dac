@@ -71,8 +71,8 @@ class WordProcessor:
 
         file_size = os.path.getsize(file_path)
 
-        return "unstructured"
-        # return "langchain"
+        # return "unstructured"
+        return "langchain"
     
     def batch_process(
         self,

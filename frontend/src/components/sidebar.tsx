@@ -10,10 +10,13 @@ import {
   Settings2,
   Plus,
   Network,
-  Layers
+  Layers,
+  X,
+  Menu
 } from "lucide-react"
-import { Suspense, useEffect, useMemo, useState } from "react"
-import { api } from "@/lib/api"
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { listConversations } from "@/lib/chat-api"
+import type { ConversationResponse } from "@/lib/api-types"
 import { format, startOfDay, subDays } from "date-fns"
 import { REFRESH_CHAT_LIST_EVENT, NewChatEventDetail } from "@/lib/events"
 
@@ -25,19 +28,21 @@ const sidebarItems = [
   { icon: Settings2, label: "配置管理", href: "/configmaps" },
 ]
 
-interface Conversation {
-  id: string
-  title: string
-  created_at: string
-}
+/** Shared base and selected styles for sidebar nav + history so they stay in sync (white raised). */
+const sidebarLinkBase =
+  "flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-colors duration-150 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-surface [-webkit-tap-highlight-color:transparent]"
+const sidebarLinkSelected =
+  "bg-surface text-brand border border-line"
+const sidebarLinkDefault =
+  "text-content-muted hover:bg-surface-active hover:text-content border border-transparent"
 
-type ConversationWithDate = Conversation & { createdAt: Date }
+type ConversationWithDate = ConversationResponse & { createdAt: Date }
 
 function isValidDate(d: Date) {
   return Number.isFinite(d.getTime())
 }
 
-function groupConversationsByTime(conversations: Conversation[]) {
+function groupConversationsByTime(conversations: ConversationResponse[]) {
   const now = new Date()
   const todayStart = startOfDay(now)
   const sevenDaysAgoStart = startOfDay(subDays(now, 7))
@@ -91,19 +96,20 @@ function groupConversationsByTime(conversations: Conversation[]) {
 }
 
 function ConversationList() {
+  const conversationWindowDays = 10
   const searchParams = useSearchParams()
   const currentRunId = searchParams.get("run_id")
-  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [conversations, setConversations] = useState<ConversationResponse[]>([])
   const groupedConversations = useMemo(() => groupConversationsByTime(conversations), [conversations])
 
   useEffect(() => {
     const fetchConversations = async () => {
       try {
-        const res = await api.get('/chat/conversations')
-        if (res.data.items) {
+        const res = await listConversations({ days: conversationWindowDays })
+        if (res.items?.length) {
           setConversations(prev => {
-            const newItems = res.data.items as Conversation[]
-            return newItems.map(newItem => {
+            const newItems = res.items
+            return newItems.map((newItem: ConversationResponse) => {
               if (!newItem.title) {
                 const existing = prev.find(p => p.id === newItem.id)
                 if (existing && existing.title) {
@@ -136,7 +142,8 @@ function ConversationList() {
           return [{
             id: detail.id,
             title: detail.title,
-            created_at: detail.created_at
+            created_at: detail.created_at,
+            updated_at: detail.created_at,
           }, ...next]
         })
         return
@@ -148,11 +155,11 @@ function ConversationList() {
     return () => {
       window.removeEventListener(REFRESH_CHAT_LIST_EVENT, handleRefresh)
     }
-  }, [])
+  }, [conversationWindowDays])
 
   if (conversations.length === 0) {
     return (
-      <div className="px-3 py-2 text-xs text-slate-400">
+      <div className="px-3 py-2 text-xs text-content-muted">
         暂无历史记录
       </div>
     )
@@ -162,7 +169,7 @@ function ConversationList() {
     <>
       {groupedConversations.map((group, groupIdx) => (
         <div key={group.key} className={groupIdx === 0 ? "" : "mt-4"}>
-          <div className="px-3 mb-1 text-xs font-medium text-slate-400">
+          <div className="px-3 mb-1 text-xs font-medium text-content-muted">
             {group.label}
           </div>
            <div className="space-y-1">
@@ -172,14 +179,14 @@ function ConversationList() {
                  <Link
                    key={conv.id}
                    href={`/?run_id=${conv.id}`}
+                   prefetch={false}
                    className={cn(
-                     "w-full text-left flex items-center gap-2 px-3 py-2 text-sm rounded-md truncate transition-colors outline-none",
-                     isActive 
-                       ? "bg-blue-50 text-blue-600 font-medium" 
-                       : "text-slate-600 hover:bg-slate-100"
+                     sidebarLinkBase,
+                     "w-full text-left truncate",
+                     isActive ? sidebarLinkSelected : sidebarLinkDefault
                    )}
                  >
-                   <MessageSquare className={cn("w-4 h-4 shrink-0", isActive ? "text-blue-500" : "text-slate-400")} />
+                   <MessageSquare className={cn("w-4 h-4 shrink-0", isActive && "text-brand")} />
                    <span className="truncate">
                      {conv.title || format(conv.createdAt, "MM-dd HH:mm")}
                    </span>
@@ -195,47 +202,137 @@ function ConversationList() {
 
 export function Sidebar() {
   const pathname = usePathname()
+  const [isMobileOpen, setIsMobileOpen] = useState(false)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
 
-  return (
-    <div className="w-64 bg-slate-50 h-full flex flex-col border-r border-slate-200">
+  // Close mobile drawer on route change
+  useEffect(() => {
+    setIsMobileOpen(false)
+  }, [pathname])
+
+  // Lock body scroll when mobile drawer is open
+  useEffect(() => {
+    if (isMobileOpen) {
+      document.body.style.overflow = "hidden"
+    } else {
+      document.body.style.overflow = ""
+    }
+    return () => {
+      document.body.style.overflow = ""
+    }
+  }, [isMobileOpen])
+
+  // Close on Escape; focus close button when drawer opens (a11y)
+  useEffect(() => {
+    if (!isMobileOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsMobileOpen(false)
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    closeButtonRef.current?.focus()
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [isMobileOpen])
+
+  const sidebarContent = (
+    <div className="h-full flex flex-col" data-sidebar-nav>
       <div className="p-4 pb-0">
-          <Link 
-            href="/" 
-            className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 shadow-sm text-slate-700 rounded-full hover:bg-slate-50 hover:text-blue-600 hover:border-blue-200 transition-all font-medium text-sm group justify-center outline-none"
-          >
-          <Plus className="w-4 h-4 text-slate-500 group-hover:text-blue-600 transition-colors" />
+        <Link
+          href="/"
+          prefetch={true}
+          onClick={() => setIsMobileOpen(false)}
+          className={cn(
+            "flex items-center justify-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-colors duration-150 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-surface [-webkit-tap-highlight-color:transparent]",
+            "bg-surface-muted text-content border border-line shadow-sm hover:bg-surface-active"
+          )}
+        >
+          <Plus className="w-4 h-4 shrink-0" />
           开启新对话
         </Link>
       </div>
 
-      <div className="flex-1 py-4 px-3 flex flex-col min-h-0">
+      <div className="flex-1 py-5 px-3 flex flex-col min-h-0">
         <div className="space-y-1">
-          {sidebarItems.map((item) => (
-            (() => {
-              const active = pathname === item.href || pathname.startsWith(item.href + "/")
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    "flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors outline-none border",
-                    active
-                      ? "bg-white text-blue-600 shadow-sm border-slate-100"
-                      : "bg-slate-50 text-slate-600 border-transparent hover:bg-slate-100 hover:text-slate-900"
-                  )}
-                >
-                  <item.icon className="w-4 h-4" />
-                  {item.label}
-                </Link>
-              )
-            })()
-          ))}
+          {sidebarItems.map((item) => {
+            const active = pathname === item.href || pathname.startsWith(item.href + "/")
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                prefetch={true}
+                onClick={() => setIsMobileOpen(false)}
+                className={cn(
+                  sidebarLinkBase,
+                  active ? sidebarLinkSelected : sidebarLinkDefault
+                )}
+              >
+                <item.icon className={cn("w-4 h-4 shrink-0", active && "text-brand")} />
+                {item.label}
+              </Link>
+            )
+          })}
         </div>
 
         <div className="mt-6 flex-1 min-h-0 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-          <Suspense fallback={<div className="px-3 py-2 text-xs text-slate-400">加载历史记录...</div>}>
+          <Suspense fallback={<div className="px-3 py-2 text-xs text-content-muted">加载历史记录…</div>}>
             <ConversationList />
           </Suspense>
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="h-full w-0 shrink-0 lg:w-64">
+      {/* Mobile menu button - visible only on small screens */}
+      <button
+        type="button"
+        onClick={() => setIsMobileOpen(true)}
+        className="lg:hidden fixed top-16 left-4 z-40 min-w-[44px] min-h-[44px] p-2 rounded-lg bg-surface border border-line shadow-sm text-content-muted hover:text-content hover:bg-surface-muted transition-colors cursor-pointer inline-flex items-center justify-center"
+        aria-label="打开菜单"
+      >
+        <Menu className="w-5 h-5" />
+      </button>
+
+      {/* Desktop sidebar - hidden on mobile */}
+      <div className="hidden lg:block w-64 bg-surface h-full flex flex-col border-r border-line shadow-sm z-10 shrink-0">
+        {sidebarContent}
+      </div>
+
+      {/* Mobile drawer overlay */}
+      {isMobileOpen && (
+        <div 
+          className="lg:hidden fixed inset-0 z-50 bg-black/50 backdrop-blur-sm [animation:sidebar-overlay-in_0.2s_ease-out]"
+          onClick={() => setIsMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Mobile drawer: dialog semantics and keyboard close */}
+      <div 
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sidebar-drawer-title"
+        className={cn(
+          "lg:hidden fixed top-0 left-0 h-full w-72 bg-surface border-r border-line shadow-xl z-50 transform transition-transform duration-300 ease-out",
+          isMobileOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
+        <div className="h-14 flex items-center justify-between px-4 border-b border-line shrink-0">
+          <span id="sidebar-drawer-title" className="font-bold text-content">导航</span>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={() => setIsMobileOpen(false)}
+            className="min-w-[44px] min-h-[44px] p-2 rounded-lg text-content-muted hover:text-content hover:bg-surface-muted transition-colors cursor-pointer inline-flex items-center justify-center"
+            aria-label="关闭菜单"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {sidebarContent}
         </div>
       </div>
     </div>

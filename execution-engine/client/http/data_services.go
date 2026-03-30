@@ -271,6 +271,7 @@ type SemanticGroupRecord struct {
 	Description string `json:"description"`
 	AgentCard   string `json:"agent_card"`
 	Version     string `json:"version"`
+	ParentID    string `json:"parent_id"`
 }
 
 type SemanticGroupResponse struct {

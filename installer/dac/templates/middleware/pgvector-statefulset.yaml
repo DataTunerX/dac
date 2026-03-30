@@ -1,0 +1,73 @@
+{{- if .Values.pgvector.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "dac.pgvector.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "pgvector") | nindent 4 }}
+spec:
+  serviceName: {{ include "dac.pgvector.serviceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "pgvector") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "pgvector") | nindent 8 }}
+    spec:
+      containers:
+        - name: pgvector
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.pgvector.image.repository "tag" .Values.pgvector.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.pgvector.user | quote }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.pgvector.password | quote }}
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.pgvector.user | quote }}]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.pgvector.user | quote }}]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.pgvector.resources | nindent 12 }}
+      volumes:
+        - name: initdb
+          configMap:
+            name: {{ include "dac.pgvector.serviceName" . }}-initdb
+            defaultMode: 0755
+        {{- if not .Values.pgvector.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if .Values.pgvector.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- $sc := .Values.pgvector.persistence.storageClass | default .Values.global.storageClass }}
+        {{- if $sc }}
+        storageClassName: {{ $sc | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.pgvector.persistence.size }}
+  {{- end }}
+{{- end }}

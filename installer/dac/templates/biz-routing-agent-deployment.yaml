@@ -1,0 +1,51 @@
+{{- if .Values.bizRoutingAgent.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dac.bizRoutingAgent.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "biz-routing-agent") | nindent 4 }}
+spec:
+  replicas: {{ .Values.bizRoutingAgent.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "biz-routing-agent") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "biz-routing-agent") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: biz-routing-agent
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.bizRoutingAgent.image.repository "tag" .Values.bizRoutingAgent.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.bizRoutingAgent.service.targetPort }}
+          env:
+            - name: Agent_Host
+              value: "{{ include "dac.bizRoutingAgent.serviceName" . }}"
+            - name: Agent_Port
+              value: {{ .Values.bizRoutingAgent.service.targetPort | quote }}
+            - name: AgentRegistry
+              value: "http://{{ include "dac.orchestratorRegistry.serviceName" . }}:{{ .Values.orchestratorRegistry.service.port }}"
+            - name: AgentRegistryCollection
+              value: {{ .Values.bizRoutingAgent.config.registryCollection | quote }}
+            - name: max_retries
+              value: {{ .Values.bizRoutingAgent.config.maxRetries | quote }}
+          args:
+            - "--redis-host"
+            - {{ include "dac.redis.serviceName" . | quote }}
+            - "--redis-port"
+            - {{ .Values.redis.port | quote }}
+            - "--redis-db"
+            - {{ .Values.bizRoutingAgent.config.redisDb | quote }}
+            - "--password"
+            - {{ .Values.redis.password | quote }}
+            {{- include "dac.llmArgs" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.bizRoutingAgent.resources | nindent 12 }}
+{{- end }}

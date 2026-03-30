@@ -4,7 +4,7 @@
 // We make this page dynamic to avoid prerender failures in production builds.
 export const dynamic = "force-dynamic"
 
-import React, { useState, useRef, useEffect, Suspense, memo, Fragment } from "react"
+import React, { useState, useRef, useEffect, useMemo, useCallback, Suspense, memo, Fragment } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -12,9 +12,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   ArrowDown,
-  ArrowUp,
   Bot,
-  StopCircle,
   Copy,
   Check,
   XCircle,
@@ -26,17 +24,36 @@ import {
   BrainCircuit,
 } from "lucide-react"
 import { toast } from "sonner"
-import Cookies from "js-cookie"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import type { HTMLAttributes, ReactNode } from "react"
+import nextDynamic from "next/dynamic"
 import { REFRESH_CHAT_LIST_EVENT, NewChatEventDetail } from "@/lib/events"
-import { ChartBlock } from "@/components/chart-block/index"
-import { MermaidBlock } from "@/components/mermaid-block/index"
+import type { ChatProgressPayload } from "@/lib/api-types"
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
+import { cn } from "@/lib/utils"
+import { getProgressRowDisplay, shouldShowProgressItem } from "@/lib/chat-progress"
+import { parseHistoryThink } from "@/lib/history-think"
+import { parseChatSSELine } from "@/lib/parse-chat-sse"
+import { ChatInput } from "@/components/chat/ChatInput"
+import { normalizeMarkdown } from "@/components/markdown"
+import { clearAuthToken, getAuthToken, redirectToLogin } from "@/lib/auth-session"
+
+const ChartBlock = nextDynamic(
+  () => import("@/components/chart-block/index").then((m) => ({ default: m.ChartBlock })),
+  { ssr: false }
+)
+const MermaidBlock = nextDynamic(
+  () => import("@/components/mermaid-block/index").then((m) => ({ default: m.MermaidBlock })),
+  { ssr: false }
+)
 
 type MarkdownCodeProps = HTMLAttributes<HTMLElement> & {
   inline?: boolean
@@ -45,13 +62,13 @@ type MarkdownCodeProps = HTMLAttributes<HTMLElement> & {
 }
 
 function handleUnauthorized() {
-  Cookies.remove("dac_token")
+  clearAuthToken()
   if (typeof window !== "undefined") {
     const path = window.location.pathname || "/"
     const search = window.location.search || ""
     const hash = window.location.hash || ""
     const next = `${path}${search}${hash}`
-    window.location.href = `/login?next=${encodeURIComponent(next)}`
+    redirectToLogin(next)
   }
 }
 
@@ -88,39 +105,6 @@ function wrapReasoningCodeRefs(text: string): string {
       out.push(line)
     }
   }
-  return out.join("\n")
-}
-
-function normalizeGfmTables(input: string) {
-  // GFM tables often fail to parse if they directly follow a non-empty line.
-  // Ensure there's a blank line before the table header (but never touch fenced code blocks).
-  const lines = input.split("\n")
-  const out: string[] = []
-  let inFence = false
-
-  const isFence = (line: string) => /^\s*```/.test(line)
-  const isSeparator = (line: string) => {
-    const t = line.trim()
-    if (!t.includes("|") || !t.includes("-")) return false
-    return /^[|:\-\s]+$/.test(t)
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    const next = i + 1 < lines.length ? lines[i + 1] : ""
-
-    if (isFence(line)) inFence = !inFence
-
-    const looksLikeTableHeader = !inFence && line.includes("|") && isSeparator(next)
-    const prev = out.length ? out[out.length - 1] : ""
-    const prevNonEmpty = prev.trim().length > 0
-
-    if (looksLikeTableHeader && prevNonEmpty) {
-      out.push("")
-    }
-    out.push(line)
-  }
-
   return out.join("\n")
 }
 
@@ -183,10 +167,36 @@ function safeDispatchEvent<T>(event: CustomEvent<T>) {
   }
 }
 
+/**
+ * Single message in the conversation. Assistant messages may carry frozen progress
+ * (progressList) once the stream ends so progress cards remain visible.
+ */
 interface Message {
+  id?: string
   role: "user" | "assistant" | "system"
   content: string
   reasoning_content?: string
+  /** Progress events for this assistant reply; set when stream ends so cards stay visible. */
+  progressList?: readonly ChatProgressPayload[]
+}
+
+/** Stable empty array for progress list to avoid unnecessary re-renders (rerender-best-practice). */
+const EMPTY_PROGRESS: readonly ChatProgressPayload[] = []
+
+/** API response shape for GET /api/v1/chat/conversations/:runId (history). */
+interface ConversationHistoryResponse {
+  messages?: Array<{
+    role?: string
+    content?: string
+    think?: string
+    reasoning_content?: string
+    /** 后端返回的进度事件列表，用于在历史消息中还原 ThinkingProcess 的进度卡片展示 */
+    progress_list?: Array<Record<string, unknown>>
+  }>
+}
+
+function isAbortError(err: unknown): err is Error & { name: "AbortError" } {
+  return err instanceof Error && err.name === "AbortError"
 }
 
 async function copyToClipboard(text: string) {
@@ -217,6 +227,39 @@ async function copyToClipboard(text: string) {
   if (!ok) throw new Error("copy failed")
 }
 
+// 抽到模块级，避免在 ThinkingProcess 内定义导致每次父组件重渲染（如滚动）时被当作新组件 remount、state 丢失
+function chevronIcon(open: boolean, className = "w-4 h-4 text-content-muted shrink-0") {
+  return open ? <ChevronDown className={className} /> : <ChevronRight className={className} />
+}
+function CollapsibleSection({
+  defaultOpen = false,
+  summary,
+  children,
+  className = "",
+  summaryClassName = "list-none [&::-webkit-details-marker]:hidden cursor-pointer select-none rounded-md -ml-1 px-1 hover:bg-surface-muted transition-colors",
+}: {
+  defaultOpen?: boolean
+  summary: (open: boolean) => ReactNode
+  children: ReactNode
+  className?: string
+  summaryClassName?: string
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  useEffect(() => {
+    setOpen(defaultOpen)
+  }, [defaultOpen])
+  return (
+    <details
+      className={className}
+      open={open}
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary className={summaryClassName}>{summary(open)}</summary>
+      {children}
+    </details>
+  )
+}
+
 // Note: we no longer parse planning logs out of assistant `content` on the frontend.
 // The backend is responsible for emitting thought process via `reasoning_content`
 // (and conversation history may use `think`, mapped to `reasoning_content` in this page).
@@ -228,16 +271,73 @@ const ThinkingProcess = ({
   content,
   isThinking,
   isLive,
+  progressList = EMPTY_PROGRESS,
 }: {
   content: string
   isThinking?: boolean
   isLive?: boolean
+  /** Progress events shown under "思考中" (cards with event · agent · message). */
+  progressList?: readonly ChatProgressPayload[]
 }) => {
   const [userExpanded, setUserExpanded] = useState(false)
+  const wasThinkingOrLiveRef = useRef(false)
+  useEffect(() => {
+    const now = Boolean(isLive || isThinking)
+    if (now && !wasThinkingOrLiveRef.current) setUserExpanded(true)
+    wasThinkingOrLiveRef.current = now
+  }, [isThinking, isLive])
   const startedAtRef = useRef<number | null>(null)
   const [duration, setDuration] = useState(0)
+  const [expandedAgent, setExpandedAgent] = useState<string | null>(null)
+  const [openProgressSteps, setOpenProgressSteps] = useState<string[]>([])
+  const previousProgressCountRef = useRef(0)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollThinkingToBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: "auto" })
+  }, [])
+  useEffect(() => {
+    setOpenProgressSteps((prev) => {
+      const validOpenSteps = prev.filter((value) => {
+        const index = Number(value)
+        return Number.isInteger(index) && index >= 0 && index < progressList.length
+      })
 
-  const parsed = (() => {
+      if (progressList.length <= previousProgressCountRef.current) {
+        previousProgressCountRef.current = progressList.length
+        return validOpenSteps
+      }
+
+      const next = [...validOpenSteps]
+      for (let i = previousProgressCountRef.current; i < progressList.length; i += 1) {
+        next.push(String(i))
+      }
+      previousProgressCountRef.current = progressList.length
+      return next
+    })
+  }, [progressList.length])
+
+  // Wait until the panel and accordion content finish laying out, then pin to bottom.
+  useEffect(() => {
+    if (!userExpanded || !scrollRef.current) return
+
+    let raf1 = 0
+    let raf2 = 0
+
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        scrollThinkingToBottom()
+      })
+    })
+
+    return () => {
+      window.cancelAnimationFrame(raf1)
+      window.cancelAnimationFrame(raf2)
+    }
+  }, [userExpanded, isThinking, isLive, content, progressList.length, scrollThinkingToBottom])
+
+  const parsed = useMemo(() => {
     const raw = (content || "").replace(/\r\n/g, "\n")
     const lines = raw.split("\n")
     // 后端顺序：plan 的 allTask 可能有多个 task；每个 task 可能独立再带 allTask（如子智能体），按返回顺序解析，不猜测
@@ -385,9 +485,9 @@ const ThinkingProcess = ({
       const t = line.trim()
       if (!t) {
         currentSectionRef.current?.buf.push("")
-        // Preserve empty lines inside an ongoing answer capture.
         if (currentTaskKey) {
           const exec = ensureExec(currentTaskKey)
+          exec.logs.push(line)
           const cap = exec._cap
           if (cap && cap.mode === "answer") cap.buf.push("")
         }
@@ -497,7 +597,11 @@ const ThinkingProcess = ({
         const rest = rest0.trim()
         const mAgent = rest.match(/^(.*?)(?:\s*-\s*\[([^\]]+)\])?\s*;?\s*$/)
         const text = (mAgent?.[1] || rest).trim()
-        const agent = mAgent?.[2]?.trim()
+        let agent = mAgent?.[2]?.trim()
+        if (!agent) {
+          const planItem = planById.get(id)
+          if (planItem?.agent) agent = planItem.agent
+        }
 
         const base = `${planEpoch}:${id}`
         const seq = (execKeySeq.get(base) || 0) + 1
@@ -507,6 +611,7 @@ const ThinkingProcess = ({
         const exec = ensureExec(key, id)
         exec.text = exec.text || text
         exec.agent = exec.agent || agent
+        exec.logs.push(line)
         currentTaskKey = key
         inPlan = false
         execNodes.push({ type: "task", taskKey: key })
@@ -632,7 +737,7 @@ const ThinkingProcess = ({
       timeline,
       started: { plan: planStarted, exec: execStarted, flow: flowStarted, timeline: timelineStarted },
     }
-  })()
+  }, [content, isThinking])
 
   useEffect(() => {
     if (isThinking) {
@@ -662,12 +767,14 @@ const ThinkingProcess = ({
   // only before answer content starts (i.e. while msg.content is still empty).
   const reasoningActive = Boolean(isLive && isThinking)
 
-  // If we're not thinking and there's no content to show, don't render.
-  // While thinking, render a placeholder header even if content is still empty.
-  if (!isThinking && !content) return null
+  const hasProgress = progressList.length > 0
+  const hasReasoning = content.trim().length > 0
 
-  // During live generation, keep it expanded by default.
-  const isExpanded = Boolean(isLive) || Boolean(isThinking) ? true : userExpanded
+  // Keep the panel visible after streaming if we have frozen progress cards,
+  // even when the backend didn't emit textual reasoning_content.
+  if (!isThinking && !hasReasoning && !hasProgress) return null
+
+  const isExpanded = userExpanded
   const Chip = ({
     children,
     tone = "neutral",
@@ -679,7 +786,7 @@ const ThinkingProcess = ({
       className={
         tone === "success"
           ? "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200"
-          : "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-50 text-slate-700 border border-slate-200"
+          : "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-muted text-content border border-line"
       }
     >
       {children}
@@ -688,7 +795,7 @@ const ThinkingProcess = ({
 
   const AgentChip = ({ name }: { name: string }) => (
     <Chip>
-      <Bot className="w-3 h-3 text-slate-500" />
+      <Bot className="w-3 h-3 text-content-muted" />
       <span className="text-[11px] leading-5">{name}</span>
     </Chip>
   )
@@ -698,7 +805,7 @@ const ThinkingProcess = ({
   }: {
     state: "idle" | "running" | "done" | "warn" | "fail"
   }) => {
-    if (state === "running") return <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />
+    if (state === "running") return <Loader2 className="w-3.5 h-3.5 animate-spin text-content-muted" />
     if (state === "done") return <Check className="w-3.5 h-3.5 text-emerald-600" />
     if (state === "warn") return <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
     if (state === "fail") return <XCircle className="w-3.5 h-3.5 text-rose-600" />
@@ -721,83 +828,49 @@ const ThinkingProcess = ({
       className={
         tone === "success"
           ? "flex items-center gap-2 py-1 text-emerald-900"
-          : "flex items-center gap-2 py-1 text-slate-900"
+          : "flex items-center gap-2 py-1 text-content"
       }
     >
-      {icon !== undefined ? icon : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0 group-open/section:rotate-90 transition-transform" />}
+      {icon !== undefined ? icon : <ChevronRight className="w-4 h-4 text-content-muted shrink-0 group-open/section:rotate-90 transition-transform" />}
       <div className="flex-1 text-[12px] font-medium">{title}</div>
       {right ? <div className="shrink-0">{right}</div> : null}
     </div>
   )
 
-  const chevronIcon = (open: boolean, className = "w-4 h-4 text-slate-400 shrink-0") =>
-    open ? <ChevronDown className={className} /> : <ChevronRight className={className} />
-
-  const CollapsibleSection = ({
-    defaultOpen = false,
-    summary,
-    children,
-    className = "",
-    summaryClassName = "list-none [&::-webkit-details-marker]:hidden cursor-pointer select-none rounded-md -ml-1 px-1 hover:bg-slate-50 transition-colors",
-  }: {
-    defaultOpen?: boolean
-    summary: (open: boolean) => ReactNode
-    children: ReactNode
-    className?: string
-    summaryClassName?: string
-  }) => {
-    const [open, setOpen] = useState(defaultOpen)
-    useEffect(() => {
-      setOpen(defaultOpen)
-    }, [defaultOpen])
-    return (
-      <details
-        className={className}
-        open={open}
-        onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
-      >
-        <summary className={summaryClassName}>{summary(open)}</summary>
-        {children}
-      </details>
-    )
-  }
-
   const ShimmerLine = ({ w = "w-full" }: { w?: string }) => (
-    <div className={`relative overflow-hidden h-3 rounded bg-slate-200/60 ${w}`}>
-      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/60 to-transparent [animation:dacShimmer_1.2s_infinite] will-change-transform" />
+    <div className={`relative overflow-hidden h-3 rounded bg-surface-active/60 ${w}`}>
+      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent [animation:dacShimmer_1.5s_ease-in-out_infinite] will-change-transform" />
     </div>
   )
 
   return (
-    <div className="mb-3">
+    <div className="mb-3 min-w-0 overflow-hidden">
       <style jsx global>{`
         @keyframes dacShimmer {
-          0% {
-            transform: translateX(-100%);
-          }
-          100% {
-            transform: translateX(100%);
-          }
+          0% { transform: translateX(-100%); }
+          50% { transform: translateX(0%); }
+          100% { transform: translateX(100%); }
         }
       `}</style>
       <button
         type="button"
-        className="w-full flex items-center py-2 text-left transition-colors select-none"
+        className="w-full flex items-center py-2 text-left transition-colors select-none cursor-pointer"
         onClick={() => setUserExpanded((v) => !v)}
         aria-expanded={isExpanded}
+        aria-label={isExpanded ? "收起思考过程" : "展开思考过程"}
       >
-        <div className="flex items-center gap-2 text-base text-slate-700">
+        <div className="flex items-center gap-2 text-base text-content">
           {isThinking ? (
-            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+            <Loader2 className="w-4 h-4 animate-spin text-cta" />
           ) : (
-            <BrainCircuit className="w-4 h-4 text-blue-600" />
+            <BrainCircuit className="w-4 h-4 text-cta" />
           )}
           <span className="font-medium flex items-center gap-1.5">
             <span>
               {isThinking ? "思考中" : "已思考"}
-              {duration > 0 ? <span className="text-slate-500 font-normal">（用时 {duration} 秒）</span> : null}
+              {duration > 0 ? <span className="text-content-muted font-normal">（用时 {duration} 秒）</span> : null}
             </span>
-            <span className="text-slate-400">
+            <span className="text-content-muted">
               {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </span>
           </span>
@@ -805,478 +878,235 @@ const ThinkingProcess = ({
       </button>
 
       {isExpanded ? (
-        <div className="mt-2 pl-3 border-l border-slate-100/80 text-[13px] text-slate-700 leading-6">
-          {isThinking && !(parsed.raw || "").trim() ? (
-            <div className="mt-1">
-              <div className="text-[12px] text-slate-500 flex items-center gap-2">
-                <span>正在生成规划与任务过程</span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block w-1 h-1 rounded-full bg-slate-400 animate-pulse" />
-                  <span className="inline-block w-1 h-1 rounded-full bg-slate-400 animate-pulse [animation-delay:150ms]" />
-                  <span className="inline-block w-1 h-1 rounded-full bg-slate-400 animate-pulse [animation-delay:300ms]" />
-                </span>
-              </div>
-              <div className="mt-3 space-y-2">
-                <ShimmerLine w="w-2/3" />
-                <ShimmerLine w="w-5/6" />
-                <ShimmerLine w="w-1/2" />
-              </div>
+        <div ref={scrollRef} className="mt-2 max-h-[60vh] overflow-y-auto rounded-lg border border-line/60 bg-surface-muted/20 p-3">
+          <div className="border-l border-line/80 pl-2 min-w-0 overflow-hidden">
+          {progressList.length > 0 ? (
+            <Accordion
+              type="multiple"
+              className="space-y-2"
+              value={openProgressSteps}
+              onValueChange={setOpenProgressSteps}
+            >
+              {progressList.map((payload, i) => {
+                const { agent, layer, event, message } = getProgressRowDisplay(payload)
+                const isLast = i === progressList.length - 1
+                const showShimmerOnRow = isLast && isThinking
+                const triggerParts: ReactNode[] = []
+                if (agent)
+                  triggerParts.push(
+                    <span key="a" className="font-medium text-content">
+                      {agent}
+                    </span>
+                  )
+                if (layer)
+                  triggerParts.push(
+                    <span key="l" className="text-content-muted text-[12px]">
+                      {layer}
+                    </span>
+                  )
+                if (event)
+                  triggerParts.push(
+                    <span key="e" className="text-content-muted text-[12px]">
+                      {event}
+                    </span>
+                  )
+                const triggerLabel = (
+                  <>
+                    {triggerParts.map((node, j) => (
+                      <span key={j}>
+                        {j > 0 ? (
+                          <span className="text-content-muted mx-1.5">·</span>
+                        ) : null}
+                        {node}
+                      </span>
+                    ))}
+                  </>
+                )
+                return (
+                  <AccordionItem
+                    key={i}
+                    value={String(i)}
+                    className="rounded-lg border border-line bg-surface shadow-sm overflow-hidden last:border-b"
+                  >
+                    <AccordionTrigger
+                      className={cn(
+                        "px-3 py-2.5 hover:no-underline hover:bg-surface-muted/50 rounded-t-lg [&[data-state=open]]:rounded-b-none",
+                        showShimmerOnRow && "relative overflow-hidden"
+                      )}
+                    >
+                      {triggerLabel}
+                      {showShimmerOnRow ? (
+                        <div
+                          className="absolute inset-0 pointer-events-none bg-gradient-to-r from-transparent via-white to-transparent [animation:dacShimmer_1.5s_ease-in-out_infinite] will-change-transform rounded-t-lg opacity-90"
+                          aria-hidden
+                        />
+                      ) : null}
+                    </AccordionTrigger>
+                    <AccordionContent className="px-3 pb-3 pt-0">
+                      <div className="rounded-b-lg border-t border-line/60 bg-surface-muted/30 py-2 px-2.5">
+                        {message ? (
+                          <span className="font-mono text-[12px] text-content leading-relaxed whitespace-pre-wrap break-words">
+                            {message}
+                          </span>
+                        ) : (
+                          <span className="text-content-muted text-[12px]">—</span>
+                        )}
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                )
+              })}
+            </Accordion>
+          ) : isThinking ? (
+            <div className="space-y-2">
+              <ShimmerLine w="w-4/5" />
+              <ShimmerLine w="w-full" />
+              <ShimmerLine w="w-3/4" />
             </div>
           ) : null}
-
-          <div className="text-[12px] text-slate-600">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium text-slate-800">概览</span>
-              {parsed.started.plan || (parsed.planBlocks || []).length > 0 ? (
-                <Chip>规划 {(parsed.planBlocks || []).length > 0 ? (parsed.planBlocks || []).length : "…"}</Chip>
-              ) : null}
-              {parsed.started.exec || parsed.exec.length > 0 ? (
-                <Chip>任务 {parsed.exec.length > 0 ? parsed.exec.length : "…"}</Chip>
-              ) : null}
-              {parsed.started.flow || (parsed.flow || []).length > 0 ? (
-                <Chip>重规划 {(parsed.flow || []).length > 0 ? (parsed.flow || []).length : "…"}</Chip>
-              ) : null}
-              {/* "运行日志" 已并入 "执行"；不再单独展示 */}
-              {parsed.completions.length > 0 ? <Chip tone="success">已完成</Chip> : null}
-            </div>
-            <div className="h-px bg-slate-200/70 mt-2" />
           </div>
 
+          <div className="mt-2 pl-3 border-l border-line/80 text-[13px] text-content leading-6 min-w-0 overflow-hidden">
           <div className="mt-2 space-y-2">
-            {/* Plan blocks are part of execution; no separate "计划" section. */}
-
-            {parsed.exec.length > 0 || parsed.started.exec ? (
-              <CollapsibleSection
-                defaultOpen={!!isLive}
-                className="group/section"
-                summary={(open) => (
-                  <SummaryRow
-                    icon={chevronIcon(open)}
-                    title={
-                      <span className="inline-flex items-center gap-2">
-                        <StatusMark
-                          state={
-                            reasoningActive
-                              ? "running"
-                              : parsed.exec.length > 0
-                                ? "done"
-                                : "idle"
-                          }
-                        />
-                        <span>规划</span>
-                      </span>
-                    }
-                  />
-                )}
-              >
-                {/* Reuse the original task UI; show hierarchy by plan blocks.
-                    Plan -> (tasks / retries / failure analysis ...) in backend order. */}
-                {(parsed.execNodes || []).length > 0 ? (
-                  <div className="mt-2 space-y-2">
-                    {(() => {
-                      const nodes = (parsed.execNodes || []) as Array<
-                        | { type: "plan"; planBlockIndex: number }
-                        | { type: "flow"; flowIndex: number }
-                        | { type: "marker"; text: string }
-                        | { type: "task"; taskKey: string }
+            {(() => {
+              const agentToTasks = new Map<string, string[]>()
+              const addTask = (agent: string, text: string) => {
+                if (!agent) return
+                const t = (text || "").trim()
+                if (!t) return
+                if (!agentToTasks.has(agent)) agentToTasks.set(agent, [])
+                const list = agentToTasks.get(agent)!
+                if (!list.includes(t)) list.push(t)
+              }
+              for (const block of parsed.planBlocks || []) {
+                for (const item of block.items || []) {
+                  if (item.agent) addTask(String(item.agent), item.text)
+                }
+              }
+              for (const t of parsed.exec || []) {
+                if (t.agent && t.text) addTask(String(t.agent), t.text)
+              }
+              const agents = [...agentToTasks.keys()]
+              const getWhat = (agent: string) => {
+                const list = agentToTasks.get(agent)
+                if (!list || list.length === 0) return null
+                return list.length === 1 ? list[0] : list.map((s, i) => `${i + 1}. ${s}`).join("\n")
+              }
+              const getAgentRawLog = (agent: string) => {
+                const tasks = (parsed.exec || []).filter((t) => t.agent === agent)
+                const lines = tasks.flatMap((t) => t.logs || [])
+                return lines.join("\n")
+              }
+              const allTasksItems: { id: string; text: string; agent?: string }[] = []
+              for (const block of parsed.planBlocks || []) {
+                for (const item of block.items || []) {
+                  allTasksItems.push({
+                    id: item.id,
+                    text: (item.text || "").trim(),
+                    agent: item.agent?.trim(),
+                  })
+                }
+              }
+              return (
+                <div className="flex flex-col gap-2">
+                  {allTasksItems.length > 0 ? (
+                    <div className="rounded-lg border border-line bg-surface-muted/50 px-4 py-3">
+                      <p className="text-[11px] font-medium text-content-muted mb-2">任务列表</p>
+                      <ul className="space-y-2">
+                        {allTasksItems.map((item) => (
+                          <li key={`${item.id}-${item.text}-${item.agent || ""}`} className="flex items-start gap-2 text-[12px] text-content">
+                            <span className="text-content-muted font-mono shrink-0">[{item.id}]</span>
+                            <span className="flex-1 min-w-0">{item.text}</span>
+                            {item.agent ? (
+                              <span className="shrink-0 text-[11px] text-content-muted bg-surface-muted px-1.5 py-0.5 rounded">
+                                {item.agent}
+                              </span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {agents.map((agent) => {
+                    const what = getWhat(agent)
+                    const rawLog = getAgentRawLog(agent)
+                    const isOpen = expandedAgent === agent
+                    const hasLog = !!(rawLog && rawLog.trim())
+                    const showShimmer = isThinking && !hasLog
+                    return (
+                      <div
+                        key={agent}
+                        className="rounded-lg border border-line bg-surface overflow-hidden"
                       >
-                      type Group = { planIdx: number; title: string; items: any[]; nodes: typeof nodes; parentTaskKey?: string }
-                      const groups: Group[] = []
-                      let current: Group | null = null
-
-                      for (const n of nodes) {
-                        if (n.type === "plan") {
-                          const b = (parsed.planBlocks || [])[n.planBlockIndex]
-                          const title = b?.title || "任务"
-                          const items = b?.items || []
-                          const parentTaskKey = b?.parentTaskKey
-                          current = { planIdx: n.planBlockIndex, title, items, nodes: [], parentTaskKey }
-                          groups.push(current)
-                          continue
-                        }
-                        if (!current) {
-                          current = { planIdx: -1, title: "任务", items: [], nodes: [] }
-                          groups.push(current)
-                        }
-                        current.nodes.push(n)
-                      }
-
-                      const lastNode = nodes[nodes.length - 1] || null
-                      const topLevelGroups = groups.filter((gr) => !gr.parentTaskKey)
-
-                      const renderPlanGroup = (g: Group, keyPrefix: string): ReactNode => {
-                        const planCount = (g.items || []).length
-                        return (
-                          <CollapsibleSection
-                            key={keyPrefix}
-                            defaultOpen={!!isLive}
-                            className="group/plan pl-3 border-l border-slate-100/80"
-                            summary={(open) => (
-                              <div className="flex items-center gap-2">
-                                {chevronIcon(open)}
-                                <StatusMark state={!isLive && planCount > 0 ? "done" : "idle"} />
-                                <span className="text-slate-800 text-[12px] font-medium flex-1 truncate">
-                                  {String(g.title || "").replaceAll("新计划", "重规划").replaceAll("新规划", "重规划").replaceAll("任务计划", "任务")}
-                                </span>
-                              </div>
-                            )}
-                          >
-
-                            {planCount > 0 ? (
-                              <ul className="mt-2 space-y-1">
-                                {g.items.map((t: any) => (
-                                  <li key={`${g.title}:${t.id}:${t.text}:${t.agent || ""}`} className="flex items-start gap-2">
-                                    <span className="text-slate-400 font-mono shrink-0">[{t.id}]</span>
-                                    <span className="text-slate-700 flex-1">{t.text}</span>
-                                    {t.agent ? <AgentChip name={t.agent} /> : null}
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : isLive ? (
-                              <div className="mt-2 space-y-2">
-                                <ShimmerLine w="w-5/6" />
-                                <ShimmerLine w="w-2/3" />
+                        <button
+                          type="button"
+                          onClick={() => setExpandedAgent((a) => (a === agent ? null : agent))}
+                          className="w-full px-4 py-3 text-left flex items-start gap-3 hover:bg-surface-muted/50 transition-colors cursor-pointer"
+                          aria-label={expandedAgent === agent ? "收起智能体" : "展开智能体"}
+                        >
+                          <span className="text-content-muted mt-0.5 shrink-0">
+                            {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            {showShimmer ? (
+                              <div className="space-y-2">
+                                <ShimmerLine w="w-3/4" />
+                                <ShimmerLine w="w-full" />
+                                <ShimmerLine w="w-4/5" />
                               </div>
                             ) : (
-                              <div className="mt-2 text-[12px] text-slate-500">暂无任务输出</div>
-                            )}
-
-                            {g.nodes.length > 0 ? (
-                                  <div className="mt-2 space-y-2">
-                                    {g.nodes.map((n) => {
-                                      if (n.type === "flow") {
-                                        const x = (parsed.flow || [])[n.flowIndex]
-                                        if (!x) return null
-                                        const title = String(x.title || "事件")
-                                        const body = String(x.body || "")
-                                        const lines = body ? body.split("\n").filter((l) => l.trim().length > 0).length : 0
-                                        const isLast = lastNode != null && n === lastNode
-                                        const kind = x.kind
-
-                                        const parseFailureAnalysis = (rawText: string) => {
-                                          const txt = String(rawText || "").replace(/\r\n/g, "\n")
-                                          const ls = txt.split("\n")
-                                          const taskLine = ls.find((l) => /^\s*Task\s+\d+\s*\(/i.test(l)) || ""
-                                          const queryLine =
-                                            ls.find((l) => /\bquery\s*:/i.test(l) && /step\s*\d+\s*\/\s*\d+\s*:/i.test(l)) ||
-                                            ls.find((l) => /^\s*query\s*:/i.test(l)) ||
-                                            ""
-                                          const answerIdx = ls.findIndex((l) => /^\s*answer\s*:\s*/i.test(l))
-                                          const answerLines = answerIdx >= 0 ? ls.slice(answerIdx) : []
-                                          const answerBody = answerLines
-                                            .join("\n")
-                                            .replace(/^\s*answer\s*:\s*/i, "")
-                                            .trim()
-                                          const taskMatch = taskLine.match(
-                                            /^\s*Task\s+(\d+)\s*\((.*?)\)\s*assign\s+to\s*([A-Za-z0-9_]+).*?fail\.?/i,
-                                          )
-                                          return {
-                                            taskId: taskMatch?.[1] || "",
-                                            taskText: taskMatch?.[2] || "",
-                                            agent: taskMatch?.[3] || "",
-                                            taskLine: taskLine.trim(),
-                                            queryText: String(queryLine || "")
-                                              .replace(/^.*?\bquery\s*:\s*/i, "")
-                                              .trim(),
-                                            answerBody,
-                                          }
-                                        }
-
-                                        // Failure analysis is always expanded (no fold UI).
-                                        if (kind === "analysis") {
-                                          const meaningful = String(body || "")
-                                            .split("\n")
-                                            .filter((l) => !/^\s*失败分析[:：]?\s*$/i.test(l.trim()))
-                                            .join("\n")
-                                            .trim()
-                                          const p = parseFailureAnalysis(meaningful)
-                                          return (
-                                            <div
-                                              key={`flow:${n.flowIndex}:${title}`}
-                                              className="pl-3 border-l border-slate-100/80"
-                                            >
-                                              <div className="flex items-center gap-2 py-1">
-                                                <StatusMark state={meaningful ? "fail" : (isLive ? "running" : "idle")} />
-                                                <span className="text-slate-800 text-[12px] font-medium flex-1 truncate" title={title}>
-                                                  {title}
-                                                </span>
-                                                {lines > 0 ? <Chip>{lines} 行</Chip> : null}
-                                              </div>
-
-                                              {p.taskLine ? (
-                                                <div className="mt-1 text-[12px] text-slate-700">
-                                                  <div className="flex items-center gap-2">
-                                                    {p.taskId ? (
-                                                      <span className="text-slate-400 font-mono shrink-0">[{p.taskId}]</span>
-                                                    ) : null}
-                                                    <span className="flex-1 truncate" title={p.taskText || p.taskLine}>
-                                                      {p.taskText || p.taskLine}
-                                                    </span>
-                                                    {p.agent ? <AgentChip name={p.agent} /> : null}
-                                                  </div>
-                                                </div>
-                                              ) : null}
-
-                                              {p.queryText ? (
-                                                <div className="mt-2 pl-3 border-l border-slate-200/80">
-                                                  <div className="text-[11px] font-medium text-slate-700">Query</div>
-                                                  <div className="mt-1 text-[12px] leading-5 text-slate-700 whitespace-pre-wrap">
-                                                    {p.queryText}
-                                                  </div>
-                                                </div>
-                                              ) : null}
-
-                                              {p.answerBody ? (
-                                                <div className="mt-2 pl-3 border-l border-blue-200/70">
-                                                  <div className="text-[11px] font-medium text-slate-700">输出</div>
-                                                  <pre className="mt-1 text-[12px] leading-5 text-slate-700 whitespace-pre-wrap">
-                                                    {p.answerBody}
-                                                  </pre>
-                                                </div>
-                                              ) : meaningful ? (
-                                                <pre className="mt-2 text-[12px] leading-5 text-slate-700 whitespace-pre-wrap">
-                                                  {meaningful}
-                                                </pre>
-                                              ) : isLive ? (
-                                                <div className="mt-2 space-y-2">
-                                                  <ShimmerLine w="w-5/6" />
-                                                  <ShimmerLine w="w-2/3" />
-                                                </div>
-                                              ) : (
-                                                <div className="mt-2 text-[12px] text-slate-500">暂无输出</div>
-                                              )}
-                                            </div>
-                                          )
-                                        }
-
-                                        return (
-                                          <CollapsibleSection
-                                            key={`flow:${n.flowIndex}:${title}`}
-                                            defaultOpen={!!(isLive && isLast)}
-                                            className="group/ctl pl-3 border-l border-slate-100/80"
-                                            summary={(open) => (
-                                              <div className="flex items-center gap-2">
-                                                {chevronIcon(open)}
-                                                <StatusMark state={reasoningActive && isLast ? "running" : body ? "done" : "idle"} />
-                                                <span className="text-slate-800 text-[12px] font-medium flex-1 truncate" title={title}>
-                                                  {title}
-                                                </span>
-                                                {lines > 0 ? <Chip>{lines} 行</Chip> : null}
-                                              </div>
-                                            )}
-                                          >
-                                            {body ? (
-                                              <div className="mt-2 text-[12px] leading-5 text-slate-700 prose prose-slate max-w-none prose-pre:my-1 prose-pre:p-2 prose-pre:bg-slate-50 prose-pre:rounded prose-code:before:content-none prose-code:after:content-none prose-code:text-[11px]">
-                                                <MarkdownAnswer value={wrapReasoningCodeRefs(body)} />
-                                              </div>
-                                            ) : isLive ? (
-                                              <div className="mt-2 space-y-2">
-                                                <ShimmerLine w="w-5/6" />
-                                                <ShimmerLine w="w-2/3" />
-                                              </div>
-                                            ) : (
-                                              <div className="mt-2 text-[12px] text-slate-500">暂无输出</div>
-                                            )}
-                                          </CollapsibleSection>
-                                        )
-                                      }
-
-                                      if (n.type === "marker") {
-                                        const title = String(n.text || "").trim()
-                                        const isLast = lastNode != null && n === lastNode
-                                        if (!title) return null
-                                        const lower = title.toLowerCase()
-                                        const isWarn =
-                                          title.startsWith("⚠️") ||
-                                          lower.includes("遇到问题") ||
-                                          lower.includes("停止重试") ||
-                                          lower.includes("重试")
-                                        const isFail =
-                                          lower.includes("失败") && !lower.includes("失败分析")
-                                        const state =
-                                          reasoningActive && isLast
-                                            ? "running"
-                                            : isFail
-                                              ? "fail"
-                                              : isWarn
-                                                ? "warn"
-                                                : "idle"
-                                        return (
-                                          <div
-                                            key={`marker:${title}:${isLast ? "last" : ""}`}
-                                            className="pl-3 border-l border-slate-100/80"
-                                          >
-                                            <div className="flex items-center gap-2 py-1">
-                                              <StatusMark state={state} />
-                                              <div className="text-[12px] text-slate-700 font-medium flex-1 truncate" title={title}>
-                                                {title}
-                                              </div>
-                                            </div>
-                                          </div>
-                                        )
-                                      }
-
-                                      if (n.type === "task") {
-                                        const t = parsed.execMap?.get(n.taskKey)
-                                        if (!t) return null
-                                        const childGroups = groups.filter((gr) => gr.parentTaskKey === n.taskKey)
-                                        return (
-                                          <Fragment key={`task-wrap-${t.key}`}>
-                                            <CollapsibleSection
-                                              key={`task-${t.key}`}
-                                              defaultOpen={!!(isLive && parsed.activeTaskKey === t.key)}
-                                              className="group/task pl-3 border-l border-slate-100/80"
-                                              summary={(open) => (
-                                                <div className="flex items-center gap-2">
-                                                  {chevronIcon(open)}
-                                                  <StatusMark
-                                                    state={
-                                                      reasoningActive && parsed.activeTaskKey === t.key
-                                                        ? "running"
-                                                        : !isLive && (t.answers.length > 0 || t.steps.length > 0)
-                                                          ? "done"
-                                                          : "idle"
-                                                    }
-                                                  />
-                                                  <span className="text-slate-400 font-mono shrink-0">[{t.id}]</span>
-                                                  <span className="text-slate-800 text-[12px] font-medium flex-1 truncate">
-                                                    {t.text || "-"}
-                                                  </span>
-                                                  {t.agent ? <AgentChip name={t.agent} /> : null}
-                                                  {t.steps.length > 0 ? <Chip>steps {t.steps.length}</Chip> : null}
-                                                </div>
-                                              )}
-                                            >
-
-                                            {(t.query || "").trim() ? (
-                                              <div className="mt-2 pl-3 border-l border-slate-200/80">
-                                                <div className="text-[11px] font-medium text-slate-700">Query</div>
-                                                <div className="mt-1 text-[12px] leading-5 text-slate-700 whitespace-pre-wrap">
-                                                  {t.query}
-                                                </div>
-                                              </div>
-                                            ) : null}
-
-                                            {t.answers.length > 0 ||
-                                            (t.inProgressAnswer || "").trim() ||
-                                            (isLive && parsed.activeTaskKey === t.key) ? (
-                                              <div className="mt-2 pl-3 border-l border-blue-200/70">
-                                                <div className="text-[11px] font-medium text-slate-700">输出</div>
-                                                <div className="mt-1 space-y-2 prose prose-slate max-w-none prose-pre:my-1 prose-code:before:content-none prose-code:after:content-none prose-code:text-[11px]">
-                                                  {t.answers.map((a, idx) => (
-                                                    <div key={`${t.id}:answer:${idx}`} className="text-[12px] leading-5 text-slate-700">
-                                                      <MarkdownAnswer value={wrapReasoningCodeRefs(a)} />
-                                                    </div>
-                                                  ))}
-                                                  {(t.inProgressAnswer || "").trim() ? (
-                                                    <div className="text-[12px] leading-5 text-slate-700">
-                                                      <MarkdownAnswer value={wrapReasoningCodeRefs(t.inProgressAnswer ?? "")} />
-                                                      <div className="mt-2 space-y-1">
-                                                        <ShimmerLine w="w-2/3" />
-                                                      </div>
-                                                    </div>
-                                                  ) : isLive && parsed.activeTaskKey === t.key ? (
-                                                    <div className="mt-2 space-y-2">
-                                                      <ShimmerLine w="w-5/6" />
-                                                      <ShimmerLine w="w-2/3" />
-                                                    </div>
-                                                  ) : null}
-                                                </div>
-                                              </div>
-                                            ) : null}
-
-                                            {t.steps.length > 0 ? (
-                                              <ul className="mt-2 space-y-1">
-                                                {t.steps.map((s, idx) => (
-                                                  <li key={`${t.id}:${idx}:${s.idx}`} className="text-slate-700">
-                                                    <span className="text-slate-400 font-mono mr-2">
-                                                      {s.idx}/{s.total}
-                                                    </span>
-                                                    <span className="font-mono text-[12px]">{s.text}</span>
-                                                  </li>
-                                                ))}
-                                              </ul>
-                                            ) : isLive && parsed.activeTaskKey === t.key && !(t.query || "").trim() ? (
-                                              <div className="mt-2 space-y-2">
-                                                <ShimmerLine w="w-1/2" />
-                                                <ShimmerLine w="w-2/3" />
-                                              </div>
-                                            ) : !(t.query || "").trim() ? (
-                                              <div className="mt-2 text-[12px] text-slate-500">暂无 step 输出</div>
-                                            ) : null}
-
-                                            {t.logs.length > 0 ? (
-                                              <CollapsibleSection
-                                                defaultOpen={false}
-                                                className="group/sub mt-2"
-                                                summary={(open) => (
-                                                  <div className="flex items-center gap-2 py-1 text-slate-900">
-                                                    {chevronIcon(open)}
-                                                    <div className="flex-1 text-[12px] font-medium">该任务原始日志</div>
-                                                  </div>
-                                                )}
-                                              >
-                                                <pre className="mt-2 text-[12px] leading-5 text-slate-700 whitespace-pre-wrap">
-                                                  {t.logs.join("\n")}
-                                                </pre>
-                                              </CollapsibleSection>
-                                            ) : null}
-                                            </CollapsibleSection>
-                                            {childGroups.length > 0 ? (
-                                              <div className="mt-2 pl-3 border-l border-slate-100/80 space-y-2">
-                                                {childGroups.map((gr, i) => renderPlanGroup(gr, `plan-${n.taskKey}-${i}`))}
-                                              </div>
-                                            ) : null}
-                                          </Fragment>
-                                        )
-                                      }
-                                      return null
-                                    })}
+                              <>
+                                <div className="text-[13px] font-medium text-content">{agent}</div>
+                                {what ? (
+                                  <div className="mt-2 text-[12px] text-content whitespace-pre-wrap">
+                                    <span className="text-[11px] text-content-muted font-medium">任务：</span>
+                                    {what}
                                   </div>
                                 ) : null}
-                          </CollapsibleSection>
-                        )
-                      }
-
-                      return (
-                        <div className="space-y-2">
-                          {topLevelGroups.map((g, gIdx) => renderPlanGroup(g, `plan-top-${gIdx}`))}
-                        </div>
-                      )
-                    })()}
-                  </div>
-                ) : parsed.started.exec && isLive ? (
-                  <div className="mt-2 space-y-2 pl-3 border-l border-slate-100/80">
-                    <ShimmerLine w="w-5/6" />
-                    <ShimmerLine w="w-3/4" />
-                  </div>
-                ) : parsed.started.exec ? (
-                  <div className="mt-2 text-[12px] text-slate-500">暂无执行输出</div>
-                ) : null}
-              </CollapsibleSection>
-            ) : null}
-
-            {/* "运行日志" 已并入 "执行"；不再单独渲染 */}
-
-            <CollapsibleSection
-              defaultOpen={false}
-              className="group/section"
-              summary={(open) => <SummaryRow icon={chevronIcon(open)} title="原始日志" />}
-            >
-              <pre className="mt-2 text-[12px] leading-5 text-slate-700 whitespace-pre-wrap">
-                {parsed.raw || ""}
-              </pre>
-            </CollapsibleSection>
+                              </>
+                            )}
+                          </div>
+                        </button>
+                        {isOpen ? (
+                          <div className="border-t border-line bg-surface-muted/50">
+                            <pre className="px-4 py-3 max-h-64 overflow-auto text-[11px] leading-5 text-content whitespace-pre-wrap break-all">
+                              {(rawLog.trim() || "暂无该智能体执行日志").replace(/answer:\s*\n\s*(?=【智能体\s*\d+】)/gi, "answer: ")}
+                            </pre>
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
           </div>
+        </div>
         </div>
       ) : null}
     </div>
   )
 }
 
-// 代码块组件（带复制功能）
+// 代码块组件（带复制功能）。SyntaxHighlighter 按需动态加载以减小主 chunk（Vercel React Best Practices 2.4）
 const CodeBlock = ({ language, children }: { language: string, children: string }) => {
   const [copied, setCopied] = useState(false)
+  const [Highlighter, setHighlighter] = useState<typeof import("react-syntax-highlighter").Prism | null>(null)
+  const [highlightStyle, setHighlightStyle] = useState<Record<string, React.CSSProperties> | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      import("react-syntax-highlighter").then((m) => m.Prism),
+      import("react-syntax-highlighter/dist/esm/styles/prism").then((m) => m.vscDarkPlus),
+    ]).then(([Prism, vscDarkPlus]) => {
+      if (!cancelled) {
+        setHighlighter(() => Prism)
+        setHighlightStyle(vscDarkPlus)
+      }
+    }).catch(() => { if (!cancelled) setHighlightStyle({}) })
+    return () => { cancelled = true }
+  }, [])
 
   const handleCopy = async () => {
     try {
@@ -1291,26 +1121,33 @@ const CodeBlock = ({ language, children }: { language: string, children: string 
 
   return (
     <div className="rounded-lg overflow-hidden my-3 border border-slate-700 bg-[#1e1e1e] shadow-sm group">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[#252526] border-b border-slate-700 text-xs text-slate-400 select-none">
-        <span className="font-mono">{language || 'text'}</span>
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#252526] border-b border-slate-700 text-xs text-content-muted select-none">
+        <span className="font-mono">{language || "text"}</span>
         <button
           type="button"
           onClick={handleCopy}
-          className="flex items-center gap-1.5 hover:text-white transition-colors"
+          className="flex items-center gap-1.5 hover:text-content-inverse transition-colors cursor-pointer"
+          aria-label={copied ? "已复制" : "复制代码"}
         >
           {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-          <span>{copied ? 'Copied' : 'Copy'}</span>
+          <span>{copied ? "Copied" : "Copy"}</span>
         </button>
       </div>
-      <SyntaxHighlighter
-        language={language}
-        style={vscDarkPlus}
-        customStyle={{ margin: 0, padding: '1rem', fontSize: '0.875rem', lineHeight: '1.5' }}
-        wrapLines={true}
-        wrapLongLines={true} 
-      >
-        {children}
-      </SyntaxHighlighter>
+      {Highlighter && highlightStyle ? (
+        <Highlighter
+          language={language}
+          style={highlightStyle}
+          customStyle={{ margin: 0, padding: "1rem", fontSize: "0.875rem", lineHeight: "1.5" }}
+          wrapLines={true}
+          wrapLongLines={true}
+        >
+          {children}
+        </Highlighter>
+      ) : (
+        <pre className="m-0 p-4 text-sm leading-relaxed overflow-x-auto">
+          <code>{children}</code>
+        </pre>
+      )}
     </div>
   )
 }
@@ -1340,7 +1177,7 @@ const MARKDOWN_COMPONENTS = {
       <CodeBlock language={language}>{raw}</CodeBlock>
     ) : (
       <code
-        className="bg-slate-100 px-1 py-0.5 rounded text-[12px] font-mono text-slate-700 border border-slate-200"
+        className="bg-surface-muted px-1 py-0.5 rounded text-[12px] font-mono text-content border border-line"
         {...props}
       >
         {children}
@@ -1348,35 +1185,35 @@ const MARKDOWN_COMPONENTS = {
     )
   },
   p({children}: { children?: ReactNode }) {
-    return <p className="text-sm text-slate-700 leading-6 mb-2 last:mb-0">{children}</p>
+    return <p className="text-sm text-content leading-6 mb-2 last:mb-0">{children}</p>
   },
   ul({children}: { children?: ReactNode }) {
-    return <ul className="text-sm text-slate-700 leading-6 list-disc pl-5 space-y-1 my-2">{children}</ul>
+    return <ul className="text-sm text-content leading-6 list-disc pl-5 space-y-1 my-2">{children}</ul>
   },
   ol({children}: { children?: ReactNode }) {
-    return <ol className="text-sm text-slate-700 leading-6 list-decimal pl-5 space-y-1 my-2">{children}</ol>
+    return <ol className="text-sm text-content leading-6 list-decimal pl-5 space-y-1 my-2">{children}</ol>
   },
   li({children}: { children?: ReactNode }) {
-    return <li className="pl-1 marker:text-slate-400">{children}</li>
+    return <li className="pl-1 marker:text-content-muted">{children}</li>
   },
   // 标题（h1-h6）- 渐进式字号和间距
   h1({children}: { children?: ReactNode }) {
-    return <h1 className="text-xl font-semibold text-slate-900 mt-6 mb-3">{children}</h1>
+    return <h1 className="text-xl font-semibold text-content mt-6 mb-3">{children}</h1>
   },
   h2({children}: { children?: ReactNode }) {
-    return <h2 className="text-lg font-semibold text-slate-900 mt-5 mb-2.5">{children}</h2>
+    return <h2 className="text-lg font-semibold text-content mt-5 mb-2.5">{children}</h2>
   },
   h3({children}: { children?: ReactNode }) {
-    return <h3 className="text-base font-semibold text-slate-900 mt-4 mb-2">{children}</h3>
+    return <h3 className="text-base font-semibold text-content mt-4 mb-2">{children}</h3>
   },
   h4({children}: { children?: ReactNode }) {
-    return <h4 className="text-sm font-semibold text-slate-900 mt-3 mb-2">{children}</h4>
+    return <h4 className="text-sm font-semibold text-content mt-3 mb-2">{children}</h4>
   },
   h5({children}: { children?: ReactNode }) {
-    return <h5 className="text-sm font-semibold text-slate-700 mt-3 mb-2">{children}</h5>
+    return <h5 className="text-sm font-semibold text-content mt-3 mb-2">{children}</h5>
   },
   h6({children}: { children?: ReactNode }) {
-    return <h6 className="text-sm font-semibold text-slate-600 mt-3 mb-2">{children}</h6>
+    return <h6 className="text-sm font-semibold text-content mt-3 mb-2">{children}</h6>
   },
   // 链接 - 蓝色可点击，外部链接新窗口打开
   a({href, children}: { href?: string; children?: ReactNode }) {
@@ -1384,7 +1221,7 @@ const MARKDOWN_COMPONENTS = {
     return (
       <a 
         href={href}
-        className="text-blue-600 hover:text-blue-800 underline cursor-pointer transition-colors"
+        className="text-cta hover:text-cta/90 underline cursor-pointer transition-colors"
         target={isExternal ? "_blank" : undefined}
         rel={isExternal ? "noopener noreferrer" : undefined}
       >
@@ -1394,53 +1231,108 @@ const MARKDOWN_COMPONENTS = {
   },
   // 引用块 - 左侧竖线 + 浅色背景
   blockquote({children}: { children?: ReactNode }) {
-    return <blockquote className="border-l-4 border-slate-200 pl-4 py-2 my-3 italic text-sm text-slate-600 bg-slate-50 rounded-r">{children}</blockquote>
+    return <blockquote className="border-l-4 border-line pl-4 py-2 my-3 italic text-sm text-content bg-surface-muted rounded-r">{children}</blockquote>
   },
   // 分隔线
   hr() {
-    return <hr className="border-slate-300 my-6" />
+    return <hr className="border-line-hover my-6" />
   },
   // 强调 - 明确样式
   strong({children}: { children?: ReactNode }) {
-    return <strong className="font-bold text-slate-900">{children}</strong>
+    return <strong className="font-bold text-content">{children}</strong>
   },
   em({children}: { children?: ReactNode }) {
-    return <em className="italic text-slate-700">{children}</em>
+    return <em className="italic text-content">{children}</em>
   },
   // 删除线 - GFM 支持
   del({children}: { children?: ReactNode }) {
-    return <del className="line-through text-slate-400">{children}</del>
+    return <del className="line-through text-content-muted">{children}</del>
   },
   // 表格 - 使用现代样式
   table({children}: { children?: ReactNode }) {
-    return <div className="overflow-x-auto my-4"><table className="min-w-full border-collapse border border-slate-200">{children}</table></div>
+    return <div className="overflow-x-auto my-4"><table className="min-w-full border-collapse border border-line">{children}</table></div>
   },
   thead({children}: { children?: ReactNode }) {
-    return <thead className="bg-slate-50">{children}</thead>
+    return <thead className="bg-surface-muted">{children}</thead>
   },
   tbody({children}: { children?: ReactNode }) {
-    return <tbody className="bg-white divide-y divide-slate-200">{children}</tbody>
+    return <tbody className="bg-surface divide-y divide-line">{children}</tbody>
   },
   tr({children}: { children?: ReactNode }) {
-    return <tr className="hover:bg-slate-50 transition-colors">{children}</tr>
+    return <tr className="hover:bg-surface-muted transition-colors">{children}</tr>
   },
   th({children}: { children?: ReactNode }) {
-    return <th className="border border-slate-200 px-4 py-2 text-left text-sm font-semibold text-slate-700">{children}</th>
+    return <th className="border border-line px-4 py-2 text-left text-sm font-semibold text-content">{children}</th>
   },
   td({children}: { children?: ReactNode }) {
-    return <td className="border border-slate-200 px-4 py-2 text-sm text-slate-600">{children}</td>
+    return <td className="border border-line px-4 py-2 text-sm text-content">{children}</td>
   }
 }
 
 const MarkdownAnswer = memo(function MarkdownAnswer({ value }: { value: string }) {
   return (
-    <ReactMarkdown
-      remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-      rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
-      components={MARKDOWN_COMPONENTS}
-    >
-      {value}
-    </ReactMarkdown>
+    <div className="min-w-0 overflow-hidden">
+      <ReactMarkdown
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        components={MARKDOWN_COMPONENTS}
+      >
+        {value}
+      </ReactMarkdown>
+    </div>
+  )
+})
+
+/** Props for the assistant message body (progress cards + thinking + answer). */
+interface AssistantMessageBodyProps {
+  readonly msg: Message
+  readonly index: number
+  readonly messagesLength: number
+  readonly isStreaming: boolean
+  readonly streamProgressList: readonly ChatProgressPayload[]
+}
+
+/** Renders one assistant message: progress list (append-only), thinking block, then answer. */
+const AssistantMessageBody = memo(function AssistantMessageBody({
+  msg,
+  index,
+  messagesLength,
+  isStreaming,
+  streamProgressList,
+}: AssistantMessageBodyProps) {
+  const thinking = (msg.reasoning_content ?? "").trim()
+  const answer = msg.content ?? ""
+  const isLastMessage = index === messagesLength - 1
+  // Treat whitespace-only chunks as "not visible yet" so we don't collapse the
+  // thinking block before the user can actually see answer content.
+  const hasVisibleAnswer = answer.trim().length > 0
+  const isThinkingNow = isLastMessage && isStreaming && !hasVisibleAnswer
+
+  const progressList = useMemo<readonly ChatProgressPayload[]>(() => {
+    // 非最后一条消息：使用冻结在 msg 上的 progressList（来自历史或流式结束时的快照）
+    if (!isLastMessage) return msg.progressList ?? EMPTY_PROGRESS
+    // 最后一条消息：优先使用冻结数据，其次使用实时流数据
+    if (msg.progressList && msg.progressList.length > 0) return msg.progressList
+    if (streamProgressList.length > 0) return streamProgressList
+    return EMPTY_PROGRESS
+  }, [isLastMessage, msg.progressList, streamProgressList])
+
+  const hasProgress = progressList.length > 0
+  // 任何有 reasoning 或 progress 的消息都展示 ThinkingProcess；仅最后一条消息在流式中展示"思考中"动画
+  const showThinking = thinking.length > 0 || hasProgress || (isThinkingNow && isLastMessage)
+
+  return (
+    <>
+      {showThinking ? (
+        <ThinkingProcess
+          content={thinking}
+          isThinking={isThinkingNow}
+          isLive={isLastMessage && isStreaming}
+          progressList={progressList}
+        />
+      ) : null}
+      <MarkdownAnswer value={normalizeMarkdown(normalizeMathDelimiters(answer))} />
+    </>
   )
 })
 
@@ -1465,7 +1357,18 @@ function ChatContent() {
   // Streaming perf: batch tiny SSE deltas into a single React update every ~40ms.
   const streamPendingRef = useRef<{ content: string; reasoning: string }>({ content: "", reasoning: "" })
   const streamFlushTimerRef = useRef<number | null>(null)
-  
+  // Progress from SSE `event: progress`; append each event, clear when starting a new request or after freezing into message.
+  const [streamProgressList, setStreamProgressList] = useState<ChatProgressPayload[]>([])
+  const streamProgressListRef = useRef<ChatProgressPayload[]>([])
+  /** 当前进行中的历史拉取：发消息开始流式时会 abort，避免返回后覆盖当前会话 */
+  const historyAbortControllerRef = useRef<AbortController | null>(null)
+  /**
+   * 刚完成流式的 runId，用于防止 finally 清理 ref 后、React 提交 isStreaming=false 之前的时间窗口内
+   * shouldLoadHistoryForRunId 误判为 true 而触发历史拉取覆盖本地消息。
+   * 在 finally 中设置，下一个事件循环 tick 清除。
+   */
+  const justFinishedRunIdRef = useRef<string | null>(null)
+
   // 获取 URL 参数
   const searchParams = useSearchParams()
   const runId = searchParams.get('run_id')
@@ -1482,57 +1385,66 @@ function ChatContent() {
     isLoadingRef.current = isLoading
   }, [isLoading])
 
-  // 加载历史会话
+  /**
+   * 是否应当为当前 runId 拉取历史？
+   * 只有「用户导航到某会话」时才拉取；若 runId 是我们刚创建或正在流式回复的会话，则用本地 state 即可，不覆盖。
+   * @param id - run_id from URL (or null for new chat)
+   * @returns true if we should fetch and apply history for this id
+   */
+  const shouldLoadHistoryForRunId = useCallback((id: string | null): boolean => {
+    if (!id) return false
+    // 我们正在为此会话流式回复 → 不拉历史，用本地 state
+    if (inFlightRunIdRef.current === id && isStreamingRef.current && messagesRef.current.length > 0)
+      return false
+    // 流刚结束、React 尚未提交 isStreaming=false → 不拉历史，避免旧数据覆盖本地消息
+    if (justFinishedRunIdRef.current === id) return false
+    // 我们刚创建的会话（乐观 run_id）：setMessages 可能尚未提交，不能依赖 messagesRef.length，一律不拉
+    if (optimisticRunIdsRef.current.has(id)) return false
+    return true
+  }, [])
+
+  /**
+   * 历史拉取：仅在「导航到某会话」时拉取并应用；若用户在该会话里发消息（开始流式），
+   * 会取消本次拉取，避免请求返回后用旧数据覆盖当前对话。
+   */
   useEffect(() => {
+    const nextRunId = runId
+    const isSameConversation =
+      Boolean(nextRunId && inFlightRunIdRef.current && nextRunId === inFlightRunIdRef.current)
+
+    if (!isSameConversation && abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+      requestSeqRef.current += 1
+      setIsStreaming(false)
+      setIsLoading(false)
+    }
+    activeRunIdRef.current = nextRunId ?? null
+
+    if (!nextRunId) {
+      setMessages([])
+      return
+    }
+    if (!shouldLoadHistoryForRunId(nextRunId)) return
+
+    historyAbortControllerRef.current?.abort()
+    const controller = new AbortController()
+    historyAbortControllerRef.current = controller
+
     const fetchHistory = async () => {
-      // Switching conversation: stop any in-flight stream to avoid "cross-thread" appends.
-      // IMPORTANT: When creating a brand new chat, we update URL with run_id and start streaming.
-      // That run_id change should NOT cancel the in-flight request for the same run_id.
-      const nextRunId = runId
-      const inFlightRunId = inFlightRunIdRef.current
-      const isSameConversation = Boolean(nextRunId && inFlightRunId && nextRunId === inFlightRunId)
-
-      if (!isSameConversation && abortControllerRef.current) {
-        abortControllerRef.current.abort()
-        abortControllerRef.current = null
-        requestSeqRef.current += 1 // invalidate any in-flight stream loops
-        setIsStreaming(false)
-        setIsLoading(false)
-      }
-
-      activeRunIdRef.current = nextRunId
-
-      if (!runId) {
-        setMessages([])
-        return
-      }
-
-      // If we are streaming the very first message for an optimistically created run_id,
-      // there is nothing to "load" yet and the backend may transiently 404.
-      if (isSameConversation && isStreamingRef.current && messagesRef.current.length > 0) {
-        return
-      }
-
       try {
-        const token = Cookies.get("dac_token")
-        const response = await fetch(`/api/v1/chat/conversations/${runId}`, {
-          headers: {
-            "Authorization": token ? `Bearer ${token}` : "",
-          },
+        const token = getAuthToken()
+        const response = await fetch(`/api/v1/chat/conversations/${nextRunId}`, {
+          headers: { Authorization: token ? `Bearer ${token}` : "" },
+          signal: controller.signal,
         })
-
-      if (response.status === 401) {
-        handleUnauthorized()
-        return
-      }
-
+        if (response.status === 401) {
+          handleUnauthorized()
+          return
+        }
         if (!response.ok) {
           if (response.status === 404) {
-            // For optimistically created runs, the conversation may not exist yet.
-            if (optimisticRunIdsRef.current.has(runId)) {
-              return
-            }
-            // Otherwise, treat as invalid run_id navigation.
+            if (optimisticRunIdsRef.current.has(nextRunId)) return
             console.warn("Conversation not found, redirecting to new chat")
             router.replace("/")
             return
@@ -1540,49 +1452,64 @@ function ChatContent() {
           console.error("Failed to load history:", response.statusText)
           return
         }
-
-        const data = await response.json()
-        if (data && data.messages) {
-            // 转换后端消息格式到前端格式
-            const rawMessages = Array.isArray(data.messages) ? (data.messages as unknown[]) : []
-            const historyMessages: Message[] = rawMessages
-              .map((m): Message | null => {
-                const r = typeof m === "object" && m !== null ? (m as Record<string, unknown>) : {}
-                const role = r.role
-                const content = r.content
-                if (
-                  (role !== "user" && role !== "assistant" && role !== "system") ||
-                  typeof content !== "string"
-                ) {
-                  return null
-                }
-                const think = typeof r.think === "string" ? r.think : undefined
-                const reasoning = typeof r.reasoning_content === "string" ? r.reasoning_content : undefined
-                return {
-                  role,
-                  content,
-                  reasoning_content: think || reasoning,
-                }
-              })
-              .filter((x): x is Message => Boolean(x))
-            setMessages(historyMessages)
-        }
+        const data = (await response.json()) as ConversationHistoryResponse
+        if (!data?.messages) return
+        if (controller.signal.aborted) return
+        if (activeRunIdRef.current !== nextRunId) return
+        const rawMessages = Array.isArray(data.messages) ? data.messages : []
+        const historyMessages: Message[] = rawMessages
+          .map((m, i): Message | null => {
+            const r = typeof m === "object" && m !== null ? (m as Record<string, unknown>) : {}
+            const role = r.role
+            const content = r.content
+            if (
+              (role !== "user" && role !== "assistant" && role !== "system") ||
+              typeof content !== "string"
+            )
+              return null
+            const think = typeof r.think === "string" ? r.think : undefined
+            const reasoning =
+              typeof r.reasoning_content === "string" ? r.reasoning_content : undefined
+            const rawProgress = r.progress_list
+            const progressList: ChatProgressPayload[] | undefined =
+              Array.isArray(rawProgress) && rawProgress.length > 0
+                ? (rawProgress as ChatProgressPayload[])
+                : undefined
+            const parsedThink = parseHistoryThink(think)
+            return {
+              id: `${nextRunId}-${i}`,
+              role,
+              content,
+              reasoning_content: parsedThink.reasoning || reasoning || "",
+              ...((progressList && progressList.length > 0)
+                ? { progressList }
+                : (parsedThink.progressList.length > 0 ? { progressList: parsedThink.progressList } : {})),
+            }
+          })
+          .filter((x): x is Message => Boolean(x))
+        if (controller.signal.aborted) return
+        if (activeRunIdRef.current !== nextRunId) return
+        setMessages(historyMessages)
       } catch (error) {
+        if (isAbortError(error)) return
         console.error("Error loading history:", error)
         toast.error("加载历史会话失败")
       }
     }
-
     fetchHistory()
-  }, [runId])
+    return () => {
+      controller.abort()
+      if (historyAbortControllerRef.current === controller) historyAbortControllerRef.current = null
+    }
+  }, [runId, shouldLoadHistoryForRunId])
 
-  const scrollToBottom = (behavior: ScrollBehavior = "auto") => {
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const el = scrollRef.current
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior })
-  }
+  }, [])
 
-  const resumeAutoScroll = (behavior: ScrollBehavior = "auto") => {
+  const resumeAutoScroll = useCallback((behavior: ScrollBehavior = "auto") => {
     autoScrollRef.current = true
     setShowJumpToBottom(false)
     // Ensure we scroll after DOM paints (important when switching from "new chat" view).
@@ -1591,7 +1518,7 @@ function ChatContent() {
         scrollToBottom(behavior)
       })
     })
-  }
+  }, [scrollToBottom])
 
   // "粘底"滚动：用户在底部时自动跟随；用户上翻则暂停并显示“回到底部”
   useEffect(() => {
@@ -1625,12 +1552,23 @@ function ChatContent() {
     }
   }, [runId])
 
-  // When messages update, keep following only if user hasn't scrolled up.
+  // When messages or progress list update, keep following only if user hasn't scrolled up.
+  // Defer scroll to after layout so scrollHeight includes new content (fixes "answer not in view").
   useEffect(() => {
     if (!autoScrollRef.current) return
-    // While streaming, don't animate (avoids jitter).
-    scrollToBottom(isStreaming ? "auto" : "smooth")
-  }, [messages, isStreaming])
+    const behavior = isStreaming ? "auto" : "smooth"
+    let rafId2: number | undefined
+    const rafId1 = window.requestAnimationFrame(() => {
+      rafId2 = window.requestAnimationFrame(() => {
+        if (!autoScrollRef.current) return
+        scrollToBottom(behavior)
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(rafId1)
+      if (typeof rafId2 === "number") window.cancelAnimationFrame(rafId2)
+    }
+  }, [messages, isStreaming, streamProgressList.length, scrollToBottom])
 
   const handleRegenerate = async () => {
     if (isLoading || messages.length === 0) return
@@ -1646,7 +1584,7 @@ function ChatContent() {
     // Insert an empty assistant placeholder immediately so the message-area "思考中" can show
     // before the backend streams the first token.
     resumeAutoScroll("auto")
-    setMessages([...messagesHistory, { role: "assistant", content: "", reasoning_content: "" }])
+    setMessages([...messagesHistory, { id: safeUUID(), role: "assistant", content: "", reasoning_content: "" }])
     setIsLoading(true)
     setIsStreaming(true)
     
@@ -1656,7 +1594,11 @@ function ChatContent() {
   const processChatRequest = async (messagesPayload: Message[], currentRunId?: string) => {
     const myReqSeq = ++requestSeqRef.current
     inFlightRunIdRef.current = currentRunId || null
+    historyAbortControllerRef.current?.abort()
+    historyAbortControllerRef.current = null
     abortControllerRef.current = new AbortController()
+    setStreamProgressList([])
+    streamProgressListRef.current = []
 
     const clearFlushTimer = () => {
       if (streamFlushTimerRef.current != null) {
@@ -1703,7 +1645,7 @@ function ChatContent() {
     }
 
     try {
-      const token = Cookies.get("dac_token")
+      const token = getAuthToken()
 
       const response = await fetch("/v1/chat/completions", {
         method: "POST",
@@ -1769,6 +1711,7 @@ function ChatContent() {
       const decoder = new TextDecoder("utf-8")
       let done = false
       let textBuffer = ""
+      let lastEventType = ""
 
       while (!done) {
         const { value, done: doneReading } = await reader.read()
@@ -1780,60 +1723,101 @@ function ChatContent() {
         textBuffer = lines.pop() || ""
 
         for (const line of lines) {
-          if (line.trim() === "") continue
-          if (line.trim().startsWith("data:")) {
-            const dataStr = line.trim().replace(/^data:\s*/, "")
-            if (dataStr === "[DONE]") {
-              done = true
-              break
+          const result = parseChatSSELine(line, lastEventType)
+          if (result === null) continue
+          if (result.kind === "event") {
+            lastEventType = result.eventType
+            continue
+          }
+          if (result.kind === "progress") {
+            lastEventType = ""
+            if (myReqSeq === requestSeqRef.current && shouldShowProgressItem(result.payload)) {
+              const payload = result.payload
+              setStreamProgressList((prev) => [...prev, payload])
+              streamProgressListRef.current = [...streamProgressListRef.current, payload]
             }
-            try {
-              const data = JSON.parse(dataStr)
-              const delta = data.choices?.[0]?.delta || {}
-              const content = delta.content ?? ""
-              const reasoning = delta.reasoning_content ?? ""
-              // 严格按后端顺序追加：返回啥渲染啥，不重排、不猜测
-              if (content || reasoning) {
-                streamPendingRef.current.content += content
-                streamPendingRef.current.reasoning += reasoning
-                scheduleFlush()
-              }
-            } catch (e) {
-              console.error("Error parsing stream data", e)
+            continue
+          }
+          if (result.kind === "done") {
+            done = true
+            break
+          }
+          if (result.kind === "chunk") {
+            // 消费完带 event 的 data 行后重置，避免后续无 event 前缀的 data 行被误判
+            if (lastEventType.length > 0) lastEventType = ""
+            if (result.content || result.reasoning) {
+              streamPendingRef.current.content += result.content
+              streamPendingRef.current.reasoning += result.reasoning
+              scheduleFlush()
             }
           }
         }
       }
 
-      // Final flush so UI shows the tail immediately.
+      // Single atomic update: flush any remaining pending content AND freeze progressList.
+      // (Two separate setMessages would be batched in React 18; the second updater would see
+      // stale prev and overwrite the last message without the final flush content.)
       clearFlushTimer()
-      flushPending()
+      const pendingContent = streamPendingRef.current.content
+      const pendingReasoning = streamPendingRef.current.reasoning
+      streamPendingRef.current = { content: "", reasoning: "" }
+      const frozen = streamProgressListRef.current
+      const frozenCopy: ChatProgressPayload[] = frozen.length > 0 ? [...frozen] : []
+
+      setMessages((prev) => {
+        if (myReqSeq !== requestSeqRef.current) return prev
+        const next = [...prev]
+        const last = next[next.length - 1]
+        if (last?.role === "assistant") {
+          next[next.length - 1] = {
+            ...last,
+            content: (last.content || "") + pendingContent,
+            reasoning_content: (last.reasoning_content || "") + pendingReasoning,
+            ...(frozenCopy.length > 0 ? { progressList: frozenCopy } : {}),
+          }
+        }
+        return next
+      })
+      setStreamProgressList([])
+      streamProgressListRef.current = []
     } catch (err: unknown) {
-      const e = err as { name?: string }
-      if (e?.name === "AbortError") {
+      if (isAbortError(err)) {
         console.log("Stream aborted")
-      } else {
-        console.error("Chat failed", err)
-        toast.error("对话请求失败")
-        // 如果出错时还没显示气泡，补一个错误提示
-        setMessages((prev) => {
-             if (myReqSeq !== requestSeqRef.current) return prev
-             // 检查最后一条是不是用户发的，如果是，说明 AI 还没回复就挂了
-             if (prev.length > 0 && prev[prev.length - 1].role === 'user') {
-                 return [...prev, { role: 'assistant', content: "⚠️ Error: Failed to get response." }]
-             }
-             return prev
-        })
+        return
       }
+      console.error("Chat failed", err)
+      toast.error("对话请求失败")
+      setMessages((prev) => {
+        if (myReqSeq !== requestSeqRef.current) return prev
+        if (prev.length > 0 && prev[prev.length - 1].role === "user") {
+          return [
+            ...prev,
+            { id: safeUUID(), role: "assistant", content: "⚠️ Error: Failed to get response." },
+          ]
+        }
+        return prev
+      })
     } finally {
       clearFlushTimer()
-      // Don't keep leftover deltas around across requests.
       streamPendingRef.current = { content: "", reasoning: "" }
       if (myReqSeq === requestSeqRef.current) {
+        const finishedRunId = inFlightRunIdRef.current
+        // 先标记 justFinishedRunIdRef，防止 shouldLoadHistoryForRunId 在 isStreamingRef 异步更新前误判
+        if (finishedRunId) {
+          justFinishedRunIdRef.current = finishedRunId
+          // 下一个事件循环 tick 清除（此时 React 已提交 isStreaming=false，isStreamingRef useEffect 已执行）
+          const captured = finishedRunId
+          setTimeout(() => {
+            if (justFinishedRunIdRef.current === captured) {
+              justFinishedRunIdRef.current = null
+            }
+          }, 0)
+        }
         setIsLoading(false)
         setIsStreaming(false)
         abortControllerRef.current = null
         inFlightRunIdRef.current = null
+        if (finishedRunId) optimisticRunIdsRef.current.delete(finishedRunId)
       }
     }
   }
@@ -1841,22 +1825,22 @@ function ChatContent() {
   const handleSend = async () => {
     if (!input.trim()) return
 
-    const userMsg: Message = { role: "user", content: input }
+    const userMsg: Message = { id: safeUUID(), role: "user", content: input }
     const newMessages = [...messages, userMsg]
-    // Insert an empty assistant placeholder immediately so the message-area "思考中" can show
-    // before the backend streams the first token.
+    setMessages([...newMessages, { id: safeUUID(), role: "assistant", content: "", reasoning_content: "" }])
     resumeAutoScroll("auto")
-    setMessages([...newMessages, { role: "assistant", content: "", reasoning_content: "" }])
     setInput("")
     setIsLoading(true)
     setIsStreaming(true)
 
     let currentRunId = runId
-    // Zero-latency update: Generate ID on client if new chat
     if (!currentRunId) {
       currentRunId = safeUUID()
+      // 先设 ref 再改 URL，这样 runId 变化触发的 effect 里 shouldLoadHistoryForRunId 会跳过拉取
+      inFlightRunIdRef.current = currentRunId
+      activeRunIdRef.current = currentRunId
       optimisticRunIdsRef.current.add(currentRunId)
-      
+
       // 1. Update URL immediately
       router.replace(`/?run_id=${encodeURIComponent(currentRunId)}`)
       
@@ -1889,103 +1873,39 @@ function ChatContent() {
 
   const isNewChat = messages.length === 0
 
-  const renderInputBox = () => (
-    <div className="relative bg-white rounded-2xl shadow-sm border border-slate-200 transition-all">
-        <textarea 
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault()
-                    handleSend()
-                }
-            }}
-            placeholder={isLoading ? "正在思考中..." : "给 DAC 发送消息"}
-            className="w-full min-h-[48px] max-h-[160px] border-0 focus:ring-0 resize-none bg-transparent text-[15px] placeholder:text-slate-400 px-4 pt-3 pb-1 focus-visible:outline-none"
-            disabled={isLoading}
-            rows={1}
-            style={{ height: 'auto', minHeight: '48px' }}
-            onInput={(e) => {
-                const target = e.target as HTMLTextAreaElement;
-                target.style.height = 'auto';
-                target.style.height = `${Math.min(target.scrollHeight, 160)}px`;
-            }}
-        />
-        <div className="flex items-center justify-end px-4 pb-3">
-
-          {isStreaming ? (
-            <button
-              type="button"
-              onClick={handleStop}
-              className="h-10 w-10 rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors inline-flex items-center justify-center"
-              aria-label="停止生成"
-              title="停止生成"
-            >
-              <StopCircle className="w-5 h-5" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleSend}
-              disabled={!input.trim()}
-              className="h-10 w-10 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 transition-colors inline-flex items-center justify-center"
-              aria-label="发送"
-              title="发送"
-            >
-              <ArrowUp className="w-5 h-5" />
-            </button>
-          )}
-        </div>
-    </div>
-  )
-
   return (
-    <div className="h-full flex flex-col relative bg-white">
+    <div className="h-full flex flex-col relative bg-surface">
       {/* 消息区域 */}
       <div className={`flex-1 overflow-hidden relative ${isNewChat ? "hidden" : "block"}`}>
-        <ScrollArea ref={scrollRef} className="h-full px-4 py-8 md:px-10 bg-white">
+        <ScrollArea ref={scrollRef} className="h-full px-4 py-8 md:px-10 bg-surface">
           <div className="space-y-8 pb-6 max-w-4xl mx-auto">
             {messages.map((msg, index) => (
-              <div key={index} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`flex flex-col max-w-[92%] md:max-w-[78%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
+              <div key={msg.id ?? index} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div className={`flex flex-col min-w-0 max-w-[92%] md:max-w-[78%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
                   <div
                     className={
                       msg.role === "user"
-                        ? "px-5 py-3 rounded-2xl bg-blue-50 text-slate-900 border border-blue-100 text-base leading-7"
-                        : "text-slate-900 w-full text-base"
+                        ? "px-5 py-3 rounded-2xl bg-cta/10 text-content text-base leading-7"
+                        : "text-content w-full min-w-0 overflow-hidden text-base"
                     }
                   >
                                 {msg.role === 'user' ? (
                                     msg.content
                                 ) : (
                                     <>
-                                        {(() => {
-                                          const thinking = (msg.reasoning_content || "").trim()
-                                          const answer = msg.content || ""
-                                          const isThinkingNow =
-                                            index === messages.length - 1 && isStreaming && (msg.content || "") === ""
-                                          return (
-                                            <>
-                                              {/* 思维链可视化（reasoning + planning logs） */}
-                                              {(thinking || isThinkingNow) && (
-                                                <ThinkingProcess
-                                                  content={thinking}
-                                                  isThinking={isThinkingNow}
-                                                  isLive={index === messages.length - 1 && isStreaming}
-                                                />
-                                              )}
-
-                                              {/* 正文（把 planning logs 从正文里剔除） */}
-                                              <MarkdownAnswer value={normalizeGfmTables(normalizeMathDelimiters(answer))} />
-                                            </>
-                                          )
-                                        })()}
+                                        <AssistantMessageBody
+                                          msg={msg}
+                                          index={index}
+                                          messagesLength={messages.length}
+                                          isStreaming={isStreaming}
+                                          streamProgressList={streamProgressList}
+                                        />
                                         <div className="flex items-center gap-2 mt-3">
                                             <Button 
                                                 type="button"
                                                 variant="ghost" 
                                                 size="icon" 
-                                                className="h-6 w-6 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md"
+                                                className="h-6 w-6 text-content-muted hover:text-content hover:bg-surface-muted rounded-md"
                                                 onClick={async () => {
                                                   try {
                                                     await copyToClipboard(msg.content || "")
@@ -1996,6 +1916,7 @@ function ChatContent() {
                                                   }
                                                 }}
                                                 title="复制内容"
+                                                aria-label="复制内容"
                                             >
                                                 <Copy className="w-3.5 h-3.5" />
                                             </Button>
@@ -2004,9 +1925,10 @@ function ChatContent() {
                                                     type="button"
                                                     variant="ghost" 
                                                     size="icon" 
-                                                    className="h-6 w-6 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md"
+                                                    className="h-6 w-6 text-content-muted hover:text-content hover:bg-surface-muted rounded-md"
                                                     onClick={handleRegenerate}
                                                     title="重新生成"
+                                                    aria-label="重新生成"
                                                 >
                                                     <RefreshCw className="w-3.5 h-3.5" />
                                                 </Button>
@@ -2022,7 +1944,7 @@ function ChatContent() {
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="h-6 w-6 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md"
+                        className="h-6 w-6 text-content-muted hover:text-content hover:bg-surface-muted rounded-md"
                         onClick={async () => {
                           try {
                             await copyToClipboard(msg.content || "")
@@ -2033,6 +1955,7 @@ function ChatContent() {
                           }
                         }}
                         title="复制内容"
+                        aria-label="复制内容"
                       >
                         <Copy className="w-3.5 h-3.5" />
                       </Button>
@@ -2056,7 +1979,7 @@ function ChatContent() {
                 setShowJumpToBottom(false)
                 scrollToBottom("smooth")
               }}
-              className="h-10 px-3 rounded-full bg-white/90 backdrop-blur border border-slate-200 shadow-sm text-slate-700 hover:bg-white hover:shadow transition flex items-center gap-2"
+              className="min-h-[44px] h-10 px-4 py-2 rounded-full bg-surface/90 backdrop-blur border border-line shadow-sm text-content hover:bg-surface hover:shadow transition flex items-center gap-2 cursor-pointer touch-manipulation"
               aria-label="回到底部"
               title="回到底部"
             >
@@ -2069,15 +1992,22 @@ function ChatContent() {
 
       {/* 新对话居中视图 */}
       {isNewChat && (
-        <div className="flex-1 flex flex-col items-center justify-center p-4 -mt-20">
+        <div className="flex-1 flex flex-col items-center justify-center p-4 sm:-mt-20">
              <div className="flex items-center gap-3 mb-8">
-                 <div className="w-10 h-10 bg-white border border-slate-200 shadow-sm rounded-xl flex items-center justify-center text-blue-600 font-bold text-xl">D</div>
-                 <h1 className="text-2xl font-semibold text-slate-900">今天有什么可以帮到你？</h1>
+                 <div className="w-10 h-10 bg-surface border border-line shadow-sm rounded-xl flex items-center justify-center text-cta font-bold text-xl" aria-hidden="true">D</div>
+                 <h1 className="text-2xl font-semibold text-content">今天有什么可以帮到你？</h1>
             </div>
             
             <div className="w-full px-4 md:px-10">
               <div className="max-w-4xl mx-auto">
-                {renderInputBox()}
+                <ChatInput
+                  value={input}
+                  onChange={setInput}
+                  onSend={handleSend}
+                  onStop={handleStop}
+                  isLoading={isLoading}
+                  isStreaming={isStreaming}
+                />
               </div>
             </div>
         </div>
@@ -2087,8 +2017,15 @@ function ChatContent() {
       {!isNewChat && (
         <div className="w-full px-4 md:px-10 py-6 bg-transparent">
           <div className="max-w-4xl mx-auto">
-            {renderInputBox()}
-            <div className="text-center mt-3 text-xs text-slate-400">
+            <ChatInput
+              value={input}
+              onChange={setInput}
+              onSend={handleSend}
+              onStop={handleStop}
+              isLoading={isLoading}
+              isStreaming={isStreaming}
+            />
+            <div className="text-center mt-3 text-xs text-content-muted">
               内容由 AI 生成，请仔细甄别
             </div>
           </div>
@@ -2102,7 +2039,7 @@ export default function ChatPage() {
   return (
     <Suspense fallback={
         <div className="flex h-full items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+            <Loader2 className="h-6 w-6 animate-spin text-content-muted" />
         </div>
     }>
         <ChatContent />

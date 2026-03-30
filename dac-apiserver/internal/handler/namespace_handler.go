@@ -30,7 +30,7 @@ func NewNamespaceHandler(uc domain.NamespaceUsecase, logger *slog.Logger) *Names
 //	@Tags			Namespace
 //	@Produce		json
 //	@Security		BearerAuth
-//	@Success		200	{object}	map[string]interface{}
+//	@Success		200	{object}	map[string]any
 //	@Router			/namespaces [get]
 func (h *NamespaceHandler) List(ctx context.Context, c *app.RequestContext) {
 	items, err := h.usecase.List(ctx)
@@ -45,7 +45,7 @@ func (h *NamespaceHandler) List(ctx context.Context, c *app.RequestContext) {
 		resp = append(resp, dto.ToNamespaceResponse(ns))
 	}
 
-	SuccessResponse(c, map[string]interface{}{"items": resp})
+	SuccessResponse(c, map[string]any{"items": resp})
 }
 
 

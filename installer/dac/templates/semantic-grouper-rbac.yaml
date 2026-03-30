@@ -1,0 +1,34 @@
+{{- if .Values.semanticGrouper.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "semantic-grouper-worker") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "semantic-grouper-worker") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "semantic-grouper-dd-notifier") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "semantic-grouper-worker") | nindent 4 }}
+rules:
+  - apiGroups: ["dac.dac.io"]
+    resources: ["datadescriptors"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "semantic-grouper-dd-notifier") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "semantic-grouper-worker") | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dac.componentName" (dict "context" . "name" "semantic-grouper-worker") }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "dac.componentName" (dict "context" . "name" "semantic-grouper-dd-notifier") }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

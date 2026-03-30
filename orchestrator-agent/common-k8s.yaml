@@ -23,7 +23,7 @@ spec:
         - name: Agent_Port
           value: "32000"
         - name: AgentRegistry
-          value: "http://expert-registry.dac.svc.cluster.local:8000"
+          value: "http://biz-orchestrator-registry.dac.svc.cluster.local:8000"
         - name: Agent_Name
           value: "CommonAgent"
         - name: Agent_Description
@@ -39,7 +39,7 @@ spec:
         - name: REGISTER_AGENT
           value: "no"
         - name: CollectionName
-          value: "expert_agent_cards"
+          value: "orchestrator_agent_cards"
         - name: LANGFUSE_BASE_URL
           value: "http://10.17.0.43:3000"
         - name: LANGFUSE_SECRET_KEY
@@ -64,7 +64,7 @@ spec:
           - "--provider"
           - "openai_compatible"
           - "--api-key"
-          - "sk-xxx"
+          - "sk-7f6c05a219b14b4ba5850bfeb49575b2"
           - "--base-url"
           - "https://dashscope.aliyuncs.com/compatible-mode/v1"
           - "--model"
@@ -72,10 +72,71 @@ spec:
         resources:
           limits:
             cpu: 500m
-            memory: 2Gi
+            memory: 2000Mi
           requests:
             cpu: 100m
-            memory: 1Gi
+            memory: 256Mi
+      - name: expert
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/expert-agent:v0.8.0-amd64
+        args:
+          - '--port'
+          - '10101'
+          - '--redis-host'
+          - redis-server.dac.svc.cluster.local
+          - '--redis-port'
+          - '6379'
+          - '--redis-db'
+          - '3'
+          - '--password'
+          - '123'
+          - '--provider'
+          - openai_compatible
+          - '--api-key'
+          - sk-7f6c05a219b14b4ba5850bfeb49575b2
+          - '--base-url'
+          - https://dashscope.aliyuncs.com/compatible-mode/v1
+          - '--model'
+          - deepseek-v3.2
+          - '--max-steps'
+          - '1'
+        ports:
+          - name: expert
+            containerPort: 10101
+            protocol: TCP
+        env:
+          - name: Agent_Host
+            value: common-orchestrator-agent.default.svc.cluster.local
+          - name: Agent_Port
+            value: '10101'
+          - name: Agent_Name
+            value: CommonAgent
+          - name: Agent_Description
+            value: I am a common system intelligent agent that can answer user-related questions.
+          - name: DataSourceType
+            value: SemanticGroup
+          - name: REGISTER_AGENT
+            value: 'false'
+          - name: SemanticGroupID
+            value: 00000000-0000-0000-0000-000000000000
+          - name: LeafAgentRegistry
+            value: http://orchestrator-registry.dac.svc.cluster.local:8000
+          - name: DataServicesURL
+            value: http://data-services.dac.svc.cluster.local:8000
+          - name: Enable_History
+            value: enable
+          - name: LANGFUSE_BASE_URL
+            value: http://10.17.0.43:3000
+          - name: LANGFUSE_SECRET_KEY
+            value: sk-lf-a8cd7ec4-d08c-4f2b-a174-d458073d6d73
+          - name: LANGFUSE_PUBLIC_KEY
+            value: pk-lf-ebed2fcd-31df-4c35-ba33-d6bf0ab399e5
+        resources:
+          limits:
+            cpu: '1'
+            memory: 2000Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
       restartPolicy: Always
 
 ---

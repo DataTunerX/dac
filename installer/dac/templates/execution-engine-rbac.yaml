@@ -1,0 +1,144 @@
+{{- if .Values.executionEngine.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "execution-engine") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "execution-engine") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "execution-engine") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "execution-engine") | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - services
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - pods
+  verbs:
+  - delete
+  - deletecollection
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - replicasets
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments/finalizers
+  verbs:
+  - delete
+  - deletecollection
+  - update
+- apiGroups:
+  - dac.dac.io
+  resources:
+  - dataagentcontainers
+  - datadescriptors
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - dac.dac.io
+  resources:
+  - dataagentcontainers/finalizers
+  - datadescriptors/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - dac.dac.io
+  resources:
+  - dataagentcontainers/status
+  - datadescriptors/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "execution-engine") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "execution-engine") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "dac.componentName" (dict "context" . "name" "execution-engine") }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "dac.componentName" (dict "context" . "name" "execution-engine") }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

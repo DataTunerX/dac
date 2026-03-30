@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { api } from "@/lib/api";
+import { getGraphBySource } from "@/lib/knowledge-graph-api";
+import type { KnowledgeGraphBySourceResponse } from "@/lib/api-types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Copy, Loader2, Maximize2, Minimize2, X } from "lucide-react";
@@ -28,6 +29,19 @@ type GraphRelDto = {
   end: string;
   type?: string;
   raw: UnknownRecord;
+};
+
+/** Force-graph node shape (augmented with neighbors/links in our code); used only for our own graph data. */
+type ForceGraphNode = Record<string, unknown> & {
+  id: string;
+  x?: number;
+  y?: number;
+  val?: number;
+  color?: string;
+  name?: string;
+  textColor?: string;
+  neighbors?: Set<string>;
+  links?: Set<unknown>;
 };
 
 // --- Neo4j Colors ---
@@ -86,60 +100,45 @@ function pickNodeName(raw: UnknownRecord, id: string) {
   return name;
 }
 
+type RawGraphNode = UnknownRecord & { labels?: unknown[]; data_source?: string; source?: string };
+
 function fixedFieldValue(raw: UnknownRecord, id: string) {
-  const labels = Array.isArray((raw as any).labels)
-    ? ((raw as any).labels as unknown[]).map(String)
-    : [];
+  const r = raw as RawGraphNode;
+  const labels = Array.isArray(r.labels) ? r.labels.map(String) : [];
   const name = pickNodeName(raw, id);
   const source =
-    (typeof (raw as any).data_source === "string" &&
-      String((raw as any).data_source)) ||
-    (typeof (raw as any).source === "string" && String((raw as any).source)) ||
+    (typeof r.data_source === "string" && String(r.data_source)) ||
+    (typeof r.source === "string" && String(r.source)) ||
     "";
   return { id, name, labels, source };
 }
+
+type RelRaw = { start_id?: string; start?: string; end_id?: string; end?: string; type?: string };
 
 function extractGraph(payload: unknown): {
   nodes: GraphNodeDto[];
   rels: GraphRelDto[];
 } {
-  const root = isRecord(payload) ? payload : {};
-  const nodesRaw = Array.isArray((root as any).nodes)
-    ? ((root as any).nodes as unknown[])
-    : [];
-  const relsRaw = Array.isArray((root as any).relationships)
-    ? ((root as any).relationships as unknown[])
-    : [];
+  const root: KnowledgeGraphBySourceResponse = isRecord(payload) ? (payload as KnowledgeGraphBySourceResponse) : {};
+  const nodesRaw = root.nodes ?? [];
+  const relsRaw = root.relationships ?? [];
 
   const nodes: GraphNodeDto[] = nodesRaw
-    .map((x) => (isRecord(x) ? x : {}))
+    .map((x): UnknownRecord => (isRecord(x) ? x : {}))
     .map((x) => ({
       id: typeof x.id === "string" ? x.id : "",
-      labels: Array.isArray(x.labels)
-        ? (x.labels as unknown[]).map(String)
-        : undefined,
+      labels: Array.isArray(x.labels) ? (x.labels as unknown[]).map(String) : undefined,
       raw: x,
     }))
     .filter((n) => Boolean(n.id));
 
-  const rels: GraphRelDto[] = relsRaw
-    .map((x) => (isRecord(x) ? x : {}))
+  const rels: GraphRelDto[] = (relsRaw as RelRaw[])
+    .map((x): RelRaw => (isRecord(x) ? (x as RelRaw) : {}))
     .map((x) => {
-      const start =
-        typeof (x as any).start_id === "string"
-          ? String((x as any).start_id)
-          : typeof (x as any).start === "string"
-            ? String((x as any).start)
-            : "";
-      const end =
-        typeof (x as any).end_id === "string"
-          ? String((x as any).end_id)
-          : typeof (x as any).end === "string"
-            ? String((x as any).end)
-            : "";
-      const type =
-        typeof (x as any).type === "string" ? String((x as any).type) : "";
-      return { start, end, type, raw: x };
+      const start = typeof x.start_id === "string" ? x.start_id : typeof x.start === "string" ? x.start : "";
+      const end = typeof x.end_id === "string" ? x.end_id : typeof x.end === "string" ? x.end : "";
+      const type = typeof x.type === "string" ? x.type : "";
+      return { start, end, type, raw: x as UnknownRecord };
     })
     .filter((r) => Boolean(r.start && r.end));
 
@@ -157,13 +156,14 @@ export function KnowledgeGraphView({
   nodeLimit?: number;
   relLimit?: number;
 }) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- react-force-graph-2d ref type is strict; we only use zoomToFit and d3ReheatSimulation
   const fgRef = useRef<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [graphRaw, setGraphRaw] = useState<unknown>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState({ w: 800, h: 560 });
-  const [hoverNode, setHoverNode] = useState<any | null>(null);
+  const [hoverNode, setHoverNode] = useState<ForceGraphNode | null>(null);
 
   const [selected, setSelected] = useState<
     | { kind: "node"; id: string }
@@ -194,12 +194,12 @@ export function KnowledgeGraphView({
     setIsLoading(true);
     setError(null);
     try {
-      const res = await api.post("/knowledge-graph/get-graph-by-source", {
+      const data = await getGraphBySource({
         source: s,
         node_limit: nodeLimit,
         rel_limit: relLimit,
       });
-      setGraphRaw(res.data);
+      setGraphRaw(data);
     } catch (e) {
       console.error("load graph failed", e);
       setGraphRaw(null);
@@ -221,7 +221,7 @@ export function KnowledgeGraphView({
     if (fullscreen) window.addEventListener("keydown", onKey);
     // 切换后等 canvas 更新再 zoomToFit
     const timer = setTimeout(() => {
-      fgRef.current?.zoomToFit(400, 50);
+      fgRef.current?.zoomToFit?.(400);
     }, 300);
     return () => {
       window.removeEventListener("keydown", onKey);
@@ -236,7 +236,7 @@ export function KnowledgeGraphView({
   //   if (fgRef.current && extracted.nodes.length > 0) {
   //     // Small delay to ensure canvas is ready
   //     const timer = setTimeout(() => {
-  //       fgRef.current?.zoomToFit(400, 50);
+  //       fgRef.current?.zoomToFit?.(400);
   //     }, 200);
   //     return () => clearTimeout(timer);
   //   }
@@ -300,15 +300,15 @@ export function KnowledgeGraphView({
     // Build neighbor map for hover highlighting
     const nodeMap = new Map();
     nodes.forEach((n) => {
-      (n as any).neighbors = new Set();
-      (n as any).links = new Set();
+      (n as ForceGraphNode).neighbors = new Set();
+      (n as ForceGraphNode).links = new Set();
       nodeMap.set(n.id, n);
     });
 
     links.forEach((link) => {
-      const a = nodeMap.get(link.source);
-      const b = nodeMap.get(link.target);
-      if (a && b) {
+      const a = nodeMap.get(link.source) as ForceGraphNode | undefined;
+      const b = nodeMap.get(link.target) as ForceGraphNode | undefined;
+      if (a?.neighbors && b?.neighbors && a?.links && b?.links) {
         a.neighbors.add(b.id);
         b.neighbors.add(a.id);
         a.links.add(link);
@@ -321,16 +321,22 @@ export function KnowledgeGraphView({
 
   // Node paint logic to look like Neo4j
   const paintNode = useCallback(
-    (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const { x, y, val, color, name, textColor } = node;
-      const size = val || 4;
-      const isSelected = selected?.kind === "node" && selected.id === node.id;
+    (node: Record<string, unknown>, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const x = (node.x as number | undefined) ?? 0;
+      const y = (node.y as number | undefined) ?? 0;
+      const val = (node.val as number | undefined) ?? 4;
+      const color = (node.color as string | undefined) ?? "#68BDF6";
+      const name = (node.name as string | undefined) ?? "";
+      const textColor = node.textColor as string | undefined;
+      const size = val;
+      const nodeId = String(node.id ?? "");
+      const isSelected = selected?.kind === "node" && selected.id === nodeId;
 
       // Hover Logic: Dim if hovering something else AND this node is not a neighbor
       const isHovered = hoverNode === node;
       const isNeighbor =
         hoverNode &&
-        (hoverNode.neighbors?.has(node.id) || hoverNode.links?.has(node)); // neighbors check
+        (hoverNode.neighbors?.has(nodeId) || hoverNode.links?.has(node)); // neighbors check
       const dim = hoverNode && !isHovered && !isNeighbor;
 
       ctx.globalAlpha = dim ? 0.1 : 1; // Fade out
@@ -345,8 +351,8 @@ export function KnowledgeGraphView({
 
       // Draw circle
       ctx.beginPath();
-      ctx.arc(x, y, size, 0, 2 * Math.PI, false);
-      ctx.fillStyle = color;
+        ctx.arc(x, y, size, 0, 2 * Math.PI, false);
+      ctx.fillStyle = color ?? "#68BDF6";
       ctx.fill();
 
       // Reset shadow for border/text
@@ -376,7 +382,7 @@ export function KnowledgeGraphView({
         true;
 
       if (showText) {
-        const label = truncateNodeCaption(name);
+        const label = truncateNodeCaption(String(name));
         const fontSize = 12 / globalScale;
         ctx.font = `${isSelected || isHovered ? "bold" : "normal"} ${fontSize}px Sans-Serif`;
         ctx.textAlign = "center";
@@ -399,11 +405,11 @@ export function KnowledgeGraphView({
 
   return (
     <div className={cn("space-y-3", className)}>
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-surface rounded-xl border border-line shadow-sm overflow-hidden">
         {isLoading ? (
-          <div className="py-20 flex items-center justify-center text-slate-500">
-            <Loader2 className="w-6 h-6 animate-spin mr-2 text-blue-600" />
-            加载中...
+          <div className="py-20 flex items-center justify-center text-content-muted">
+            <Loader2 className="w-6 h-6 animate-spin mr-2 text-cta" />
+            加载中…
           </div>
         ) : error ? (
           <div className="p-6 text-sm text-red-700 bg-red-50 border-t border-red-100">
@@ -411,7 +417,7 @@ export function KnowledgeGraphView({
           </div>
         ) : extracted.nodes.length === 0 ? (
           <div className="relative h-[560px]">
-            <div className="h-full flex items-center justify-center text-slate-500">
+            <div className="h-full flex items-center justify-center text-content-muted">
               <div className="text-sm">暂无知识图谱数据</div>
             </div>
           </div>
@@ -420,15 +426,17 @@ export function KnowledgeGraphView({
             className={cn(
               "relative",
               fullscreen
-                ? "fixed inset-0 z-50 bg-white h-screen w-screen"
+                ? "fixed inset-0 z-50 bg-surface h-screen w-screen"
                 : "h-[560px]"
             )}
             ref={containerRef}
           >
             {/* 放大 / 缩小 按钮 */}
             <button
-              className="absolute top-3 right-3 z-40 p-2 rounded-lg bg-white/90 border border-slate-200 shadow-sm hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+              type="button"
+              className="absolute top-3 right-3 z-40 p-2 rounded-lg bg-surface/90 border border-line shadow-sm hover:bg-surface-muted text-content hover:text-content transition-colors cursor-pointer"
               title={fullscreen ? "退出全屏" : "全屏查看"}
+              aria-label={fullscreen ? "退出全屏" : "全屏查看"}
               onClick={() => setFullscreen((v) => !v)}
             >
               {fullscreen ? (
@@ -445,7 +453,7 @@ export function KnowledgeGraphView({
               nodeLabel="name"
               nodeCanvasObject={paintNode}
               // Link styling
-              linkColor={(link: any) => {
+              linkColor={(link: unknown) => {
                 if (hoverNode && !hoverNode.links?.has(link))
                   return "#E5E7EB"; // Dim non-connected links
                 return "#A5ABB6";
@@ -456,16 +464,16 @@ export function KnowledgeGraphView({
               // Link Label & Custom Arrow
               linkLabel="type"
               linkCanvasObjectMode={() => "after"}
-              linkCanvasObject={(link: any, ctx, globalScale) => {
-                const start = link.source;
-                const end = link.target;
-                if (!start || !end || !start.x || !end.x || !start.y || !end.y)
-                  return;
+              linkCanvasObject={(link: unknown, ctx, globalScale) => {
+                const l = link as { source?: { x?: number; y?: number; val?: number }; target?: { x?: number; y?: number; val?: number } };
+                const start = l.source;
+                const end = l.target;
+                if (!start || !end || start.x == null || start.y == null || end.x == null || end.y == null) return;
 
                 // Check visibility
                 const isConnected =
                   hoverNode &&
-                  (link.source === hoverNode || link.target === hoverNode);
+                  ((l as { source?: unknown; target?: unknown }).source === hoverNode || (l as { source?: unknown; target?: unknown }).target === hoverNode);
                 const dim = hoverNode && !isConnected;
                 ctx.globalAlpha = dim ? 0.1 : 1;
 
@@ -476,7 +484,7 @@ export function KnowledgeGraphView({
 
                 // --- 1. Draw Arrow ---
                 // Node radius is stored in val (default 4)
-                const rEnd = end.val || 4;
+                const rEnd = end.val ?? 4;
 
                 // Only draw arrow if nodes are far enough
                 if (dist > rEnd) {
@@ -508,7 +516,7 @@ export function KnowledgeGraphView({
 
                 // --- 2. Draw Label ---
                 // Manually draw label on link
-                const label = link.type;
+                const label = String((link as { type?: unknown }).type ?? "");
 
                 // Calculate midpoint
                 const textPos = Object.assign({}, start, {
@@ -552,33 +560,33 @@ export function KnowledgeGraphView({
                 ctx.globalAlpha = 1;
               }}
               // Interaction
-              onNodeHover={(node: any) => {
-                setHoverNode(node || null);
+              onNodeHover={(node: unknown) => {
+                setHoverNode((node ?? null) as ForceGraphNode | null);
                 if (containerRef.current) {
                   containerRef.current.style.cursor = node
                     ? "pointer"
                     : "default";
                 }
               }}
-              onNodeClick={(node: any) => {
-                setSelected({ kind: "node", id: node.id });
+              onNodeClick={(node: unknown) => {
+                setSelected({ kind: "node", id: String((node as { id?: unknown }).id ?? "") });
                 // fgRef.current?.centerAt(node.x, node.y, 1000);
                 // fgRef.current?.zoom(2, 1000);
               }}
               onBackgroundClick={() => setSelected(null)}
               // warmupTicks={100}
               cooldownTicks={100}
-              onNodeDrag={(node: any) => {
+              onNodeDrag={(node: unknown) => {
                 // Keep the simulation active while dragging to allow neighbors to adjust
-                fgRef.current?.d3ReheatSimulation();
+                fgRef.current?.d3ReheatSimulation?.();
               }}
-              onNodeDragEnd={(node: any) => {
-                // Fix node position after drag (like Neo4j)
-                node.fx = node.x;
-                node.fy = node.y;
+              onNodeDragEnd={(node: unknown) => {
+                const n = node as { fx?: number; fy?: number; x?: number; y?: number };
+                if (n.x != null) n.fx = n.x;
+                if (n.y != null) n.fy = n.y;
               }}
               onEngineStop={() => {
-                fgRef.current?.zoomToFit(400, 50);
+                fgRef.current?.zoomToFit?.(400);
               }}
             />
 
@@ -624,8 +632,8 @@ function GraphLegend({ nodes }: { nodes: GraphNodeDto[] }) {
 
   return (
     <div className="absolute bottom-4 right-4 z-20 max-h-[300px] overflow-y-auto w-[200px] pointer-events-auto">
-      <div className="rounded-xl border border-slate-200 bg-white/90 backdrop-blur shadow-sm p-3 space-y-2">
-        <div className="text-xs font-semibold text-slate-500 mb-2">
+      <div className="rounded-xl border border-line bg-surface/90 backdrop-blur shadow-sm p-3 space-y-2">
+        <div className="text-xs font-semibold text-content-muted mb-2">
           图例 (节点类型)
         </div>
         <div className="space-y-1.5">
@@ -638,12 +646,12 @@ function GraphLegend({ nodes }: { nodes: GraphNodeDto[] }) {
                   style={{ backgroundColor: color.bg }}
                 ></span>
                 <span
-                  className="font-medium text-slate-700 truncate flex-1"
+                  className="font-medium text-content truncate flex-1"
                   title={label}
                 >
                   {label}
                 </span>
-                <span className="text-slate-400">{count}</span>
+                <span className="text-content-muted">{count}</span>
               </div>
             );
           })}
@@ -681,12 +689,14 @@ function InspectorPanel({
 
   return (
     <div className="absolute right-4 top-4 z-30 w-[380px] max-w-[calc(100%-2rem)]">
-      <div className="rounded-xl border border-slate-200 bg-white/95 backdrop-blur shadow-md overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
-          <div className="text-sm font-semibold text-slate-900">{title}</div>
+      <div className="rounded-xl border border-line bg-surface/95 backdrop-blur shadow-md overflow-hidden">
+        <div className="px-4 py-3 border-b border-line flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold text-content">{title}</div>
           <button
-            className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+            type="button"
+            className="p-1.5 rounded-md text-content-muted hover:text-content hover:bg-surface-muted cursor-pointer"
             title="关闭"
+            aria-label="关闭"
             onClick={onClose}
           >
             <X className="w-4 h-4" />
@@ -729,13 +739,13 @@ function NodeInspector({ raw, id }: { raw: UnknownRecord; id: string }) {
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <div className="text-xs font-medium text-slate-500">基础信息</div>
-        <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-3">
+        <div className="text-xs font-medium text-content-muted">基础信息</div>
+        <div className="rounded-lg border border-line bg-surface p-3 space-y-3">
           <FieldRow label="ID" value={fixed.id} mono onCopy={() => void copyText(fixed.id)} />
           <FieldRow label="Name" value={fixed.name} onCopy={() => void copyText(fixed.name)} />
           {fixed.labels.length > 0 ? (
             <div className="space-y-1">
-              <div className="text-[11px] text-slate-500">Labels</div>
+              <div className="text-[11px] text-content-muted">Labels</div>
               <div className="flex flex-wrap gap-2">
                 {fixed.labels.map((lb) => {
                   const c = colorForLabel(lb);
@@ -755,13 +765,13 @@ function NodeInspector({ raw, id }: { raw: UnknownRecord; id: string }) {
         </div>
       </div>
       <div className="space-y-2">
-        <div className="text-xs font-medium text-slate-500">其他属性</div>
+        <div className="text-xs font-medium text-content-muted">其他属性</div>
         {entries.length === 0 ? (
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+          <div className="rounded-lg border border-line bg-surface-muted p-3 text-sm text-content-muted">
             无其他属性
           </div>
         ) : (
-          <div className="rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+          <div className="rounded-lg border border-line bg-surface divide-y divide-line">
             {entries.map(([k, v]) => (
               <KeyValueRow keyName={k} value={v} key={k} />
             ))}
@@ -786,10 +796,10 @@ function FieldRow({
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
-        <div className="text-[11px] text-slate-500">{label}</div>
+        <div className="text-[11px] text-content-muted">{label}</div>
         <div
           className={cn(
-            "text-sm text-slate-900 break-words whitespace-pre-wrap",
+            "text-sm text-content break-words whitespace-pre-wrap",
             mono ? "font-mono" : "font-semibold",
           )}
         >
@@ -797,8 +807,10 @@ function FieldRow({
         </div>
       </div>
       <button
-        className="shrink-0 p-1.5 rounded-md text-slate-400 hover:text-blue-600 hover:bg-blue-50"
+        type="button"
+        className="shrink-0 p-1.5 rounded-md text-content-muted hover:text-cta hover:bg-cta/10 cursor-pointer"
         title="复制"
+        aria-label="复制"
         onClick={onCopy}
       >
         <Copy className="w-4 h-4" />
@@ -817,38 +829,40 @@ function KeyValueRow({ keyName, value }: { keyName: string; value: unknown }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 w-full">
           <div className="flex items-center gap-2">
-            <div className="font-mono text-xs text-slate-500">{keyName}</div>
+            <div className="font-mono text-xs text-content-muted">{keyName}</div>
             {pv.kind !== "scalar" ? (
-              <span className="text-[11px] text-slate-400">{pv.text}</span>
+              <span className="text-[11px] text-content-muted">{pv.text}</span>
             ) : null}
           </div>
           {isEmbedding ? (
             <details className="mt-2">
-              <summary className="cursor-pointer text-sm text-slate-600 select-none">
+              <summary className="cursor-pointer text-sm text-content select-none">
                 {pv.text}（点击展开）
               </summary>
-              <pre className="mt-2 rounded-md border border-slate-200 bg-slate-50/50 p-3 text-xs font-mono whitespace-pre-wrap break-words max-h-[240px] overflow-auto">
+              <pre className="mt-2 rounded-md border border-line bg-surface-muted/50 p-3 text-xs font-mono whitespace-pre-wrap break-words max-h-[240px] overflow-auto">
                 {JSON.stringify(value, null, 2)}
               </pre>
             </details>
           ) : pv.kind === "scalar" ? (
-            <div className="mt-1 text-sm text-slate-800 break-words whitespace-pre-wrap">
+            <div className="mt-1 text-sm text-content break-words whitespace-pre-wrap">
               {pv.text}
             </div>
           ) : (
             <details className="mt-2">
-              <summary className="cursor-pointer text-sm text-slate-600 select-none">
+              <summary className="cursor-pointer text-sm text-content select-none">
                 展开查看
               </summary>
-              <pre className="mt-2 rounded-md border border-slate-200 bg-slate-50/50 p-3 text-xs font-mono whitespace-pre-wrap break-words max-h-[240px] overflow-auto">
+              <pre className="mt-2 rounded-md border border-line bg-surface-muted/50 p-3 text-xs font-mono whitespace-pre-wrap break-words max-h-[240px] overflow-auto">
                 {JSON.stringify(value, null, 2)}
               </pre>
             </details>
           )}
         </div>
         <button
-          className="shrink-0 p-1.5 rounded-md text-slate-400 hover:text-blue-600 hover:bg-blue-50"
+          type="button"
+          className="shrink-0 p-1.5 rounded-md text-content-muted hover:text-cta hover:bg-cta/10 cursor-pointer"
           title="复制"
+          aria-label="复制"
           onClick={() => void copyText(copyVal)}
         >
           <Copy className="w-4 h-4" />

@@ -70,7 +70,7 @@ class SemanticDomainServiceTester:
                 expected_columns = {
                     'semantic_domain_id', 'semantic_domain', 'agent_card',
                     'dd_namespace', 'dd_name', 'descriptor_type',
-                    'created_at', 'updated_at'
+                    'version', 'created_at', 'updated_at'
                 }
                 
                 missing_columns = expected_columns - column_names
@@ -357,7 +357,8 @@ class SemanticDomainServiceTester:
                 semantic_domain="Updated semantic domain",
                 agent_card="Updated agent card",
                 dd_namespace="updated_namespace",
-                dd_name="updated_name"
+                dd_name="updated_name",
+                version="2"
             )
             
             success = await self.service.update(test_domain.semantic_domain_id, updated_domain)
@@ -365,9 +366,10 @@ class SemanticDomainServiceTester:
             if success:
                 # Verify update
                 retrieved = await self.service.get_by_id(test_domain.semantic_domain_id)
-                if retrieved and retrieved.semantic_domain == "Updated semantic domain":
+                if retrieved and retrieved.semantic_domain == "Updated semantic domain" and retrieved.version == "2":
                     print(f"✓ Record updated successfully - Domain ID: {test_domain.semantic_domain_id}")
                     print(f"  Updated DD info: {retrieved.dd_namespace}/{retrieved.dd_name}")
+                    print(f"  Version: {retrieved.version}")
                     return True
                 else:
                     print("✗ Update succeeded but data doesn't match")
@@ -377,6 +379,47 @@ class SemanticDomainServiceTester:
                 return False
         except Exception as e:
             print(f"✗ Update exception: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    async def test_create_and_update_version(self):
+        """Test that create sets version=1 and update increments version"""
+        print("\n" + "=" * 50)
+        print("Testing version field on create and update")
+        print("=" * 50)
+        
+        try:
+            domain = self.generate_test_domain()
+            domain.version = "1"
+            success = await self.service.create(domain)
+            if not success:
+                print("✗ Create failed")
+                return False
+            
+            self.test_domains.append(domain)
+            retrieved = await self.service.get_by_id(domain.semantic_domain_id)
+            if retrieved.version != "1":
+                print(f"✗ Expected version '1' after create, got '{retrieved.version}'")
+                return False
+            
+            updated = SemanticDomain(
+                semantic_domain="v2 content",
+                agent_card="v2 card",
+                dd_namespace=domain.dd_namespace,
+                dd_name=domain.dd_name,
+                version="2"
+            )
+            await self.service.update(domain.semantic_domain_id, updated)
+            retrieved2 = await self.service.get_by_id(domain.semantic_domain_id)
+            if retrieved2.version != "2":
+                print(f"✗ Expected version '2' after update, got '{retrieved2.version}'")
+                return False
+            
+            print("✓ Version field works correctly on create and update")
+            return True
+        except Exception as e:
+            print(f"✗ Version test exception: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -616,6 +659,7 @@ async def run_all_tests():
         ("Initialize", tester.test_initialize),
         ("Table Structure", tester.test_table_structure),
         ("Create", tester.test_create),
+        ("Create and update version", tester.test_create_and_update_version),
         ("Create with descriptor_type", tester.test_create_with_descriptor_type),
         ("Create with ID", tester.test_create_with_id),
         ("Batch Create", tester.test_batch_create),

@@ -90,9 +90,10 @@ func (c *Client) doJSON(ctx context.Context, method, urlStr string, body any, ou
 
 // --- Knowledge Graph ---
 
-// KnowledgeGraphAddWithSource proxies /knowledge_graph/add_with_source.
-func (c *Client) KnowledgeGraphAddWithSource(ctx context.Context, req map[string]any) (map[string]any, error) {
-	u, err := c.buildURL("/knowledge_graph/add_with_source")
+// doKnowledgeGraph calls a knowledge_graph sub-path with the given method and request,
+// then normalises the response (nil Data, _message, _status) for UI use.
+func (c *Client) doKnowledgeGraph(ctx context.Context, pathSuffix, method string, req map[string]any) (map[string]any, error) {
+	u, err := c.buildURL("/knowledge_graph/" + pathSuffix)
 	if err != nil {
 		return nil, err
 	}
@@ -101,82 +102,35 @@ func (c *Client) KnowledgeGraphAddWithSource(ctx context.Context, req map[string
 		Message string         `json:"message"`
 		Data    map[string]any `json:"data"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, u, req, &resp); err != nil {
+	if err := c.doJSON(ctx, method, u, req, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Data == nil {
 		resp.Data = map[string]any{}
 	}
-	// Keep message for UI if needed.
 	resp.Data["_message"] = resp.Message
 	resp.Data["_status"] = resp.Status
 	return resp.Data, nil
+}
+
+// KnowledgeGraphAddWithSource proxies /knowledge_graph/add_with_source.
+func (c *Client) KnowledgeGraphAddWithSource(ctx context.Context, req map[string]any) (map[string]any, error) {
+	return c.doKnowledgeGraph(ctx, "add_with_source", http.MethodPost, req)
 }
 
 // KnowledgeGraphSearchWithSource proxies /knowledge_graph/search_with_source.
 func (c *Client) KnowledgeGraphSearchWithSource(ctx context.Context, req map[string]any) (map[string]any, error) {
-	u, err := c.buildURL("/knowledge_graph/search_with_source")
-	if err != nil {
-		return nil, err
-	}
-	var resp struct {
-		Status  string         `json:"status"`
-		Message string         `json:"message"`
-		Data    map[string]any `json:"data"`
-	}
-	if err := c.doJSON(ctx, http.MethodPost, u, req, &resp); err != nil {
-		return nil, err
-	}
-	if resp.Data == nil {
-		resp.Data = map[string]any{}
-	}
-	resp.Data["_message"] = resp.Message
-	resp.Data["_status"] = resp.Status
-	return resp.Data, nil
+	return c.doKnowledgeGraph(ctx, "search_with_source", http.MethodPost, req)
 }
 
 // KnowledgeGraphGetGraphBySource proxies /knowledge_graph/get_graph_by_source.
 func (c *Client) KnowledgeGraphGetGraphBySource(ctx context.Context, req map[string]any) (map[string]any, error) {
-	u, err := c.buildURL("/knowledge_graph/get_graph_by_source")
-	if err != nil {
-		return nil, err
-	}
-	var resp struct {
-		Status  string         `json:"status"`
-		Message string         `json:"message"`
-		Data    map[string]any `json:"data"`
-	}
-	if err := c.doJSON(ctx, http.MethodPost, u, req, &resp); err != nil {
-		return nil, err
-	}
-	if resp.Data == nil {
-		resp.Data = map[string]any{}
-	}
-	resp.Data["_message"] = resp.Message
-	resp.Data["_status"] = resp.Status
-	return resp.Data, nil
+	return c.doKnowledgeGraph(ctx, "get_graph_by_source", http.MethodPost, req)
 }
 
 // KnowledgeGraphDeleteWithSource proxies /knowledge_graph/delete_with_source.
 func (c *Client) KnowledgeGraphDeleteWithSource(ctx context.Context, req map[string]any) (map[string]any, error) {
-	u, err := c.buildURL("/knowledge_graph/delete_with_source")
-	if err != nil {
-		return nil, err
-	}
-	var resp struct {
-		Status  string         `json:"status"`
-		Message string         `json:"message"`
-		Data    map[string]any `json:"data"`
-	}
-	if err := c.doJSON(ctx, http.MethodDelete, u, req, &resp); err != nil {
-		return nil, err
-	}
-	if resp.Data == nil {
-		resp.Data = map[string]any{}
-	}
-	resp.Data["_message"] = resp.Message
-	resp.Data["_status"] = resp.Status
-	return resp.Data, nil
+	return c.doKnowledgeGraph(ctx, "delete_with_source", http.MethodDelete, req)
 }
 
 // --- Semantic Groups ---
@@ -322,6 +276,40 @@ func (c *Client) SemanticGroupCount(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return resp.Data.TotalCount, nil
+}
+
+// GetSemanticGroupWithMembers returns the group plus its member semantic domains (via dd_group_relations) and child groups.
+// Uses GET /semantic_groups/:id/with_members so root groups show members correctly.
+func (c *Client) GetSemanticGroupWithMembers(ctx context.Context, id string) (*SemanticGroupWithMembersData, error) {
+	u, err := c.buildURL("/semantic_groups/" + url.PathEscape(id) + "/with_members")
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Status string                      `json:"status"`
+		Data   SemanticGroupWithMembersData `json:"data"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, u, nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.Data, nil
+}
+
+// ListSemanticGroupRoots returns all root groups (parent_id IS NULL).
+func (c *Client) ListSemanticGroupRoots(ctx context.Context) ([]SemanticGroup, int, error) {
+	u, err := c.buildURL("/semantic_groups_roots")
+	if err != nil {
+		return nil, 0, err
+	}
+	var resp struct {
+		Status string          `json:"status"`
+		Data   []SemanticGroup `json:"data"`
+		Count  int             `json:"count"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, u, nil, &resp); err != nil {
+		return nil, 0, err
+	}
+	return resp.Data, resp.Count, nil
 }
 
 // --- DD Group Relations ---

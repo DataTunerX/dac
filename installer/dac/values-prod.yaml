@@ -1,0 +1,81 @@
+# =============================================================================
+# DAC Helm Chart - Production Overrides
+# Usage: helm install dac ./installer/dac -f ./installer/dac/values-prod.yaml -n dac
+# =============================================================================
+
+# -- Increase replicas for core services
+apiserver:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+frontend:
+  replicas: 2
+  ingress:
+    enabled: true
+    className: "nginx"
+    hosts:
+      - host: dac.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: dac-tls
+        hosts:
+          - dac.example.com
+
+dataServices:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+semanticGrouper:
+  api:
+    replicas: 2
+  worker:
+    replicas: 2
+    celeryWorkerAmount: "4"
+
+# -- Larger persistence volumes for production
+mysql:
+  persistence:
+    size: 100Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+redis:
+  persistence:
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+pgvector:
+  persistence:
+    size: 100Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi

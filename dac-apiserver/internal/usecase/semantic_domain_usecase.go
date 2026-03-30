@@ -2,19 +2,17 @@ package usecase
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
-	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 )
 
 type semanticDomainUsecase struct {
-	dsClient *dataservices.Client
+	dsClient domain.DataServicesClient
 	logger   *slog.Logger
 }
 
-func NewSemanticDomainUsecase(dsClient *dataservices.Client, logger *slog.Logger) domain.SemanticDomainUsecase {
+func NewSemanticDomainUsecase(dsClient domain.DataServicesClient, logger *slog.Logger) domain.SemanticDomainUsecase {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -24,7 +22,7 @@ func NewSemanticDomainUsecase(dsClient *dataservices.Client, logger *slog.Logger
 	}
 }
 
-func (u *semanticDomainUsecase) Create(ctx context.Context, req *domain.CreateSemanticDomainRequest) (*dataservices.SemanticDomain, error) {
+func (u *semanticDomainUsecase) Create(ctx context.Context, req *domain.CreateSemanticDomainRequest) (*domain.SemanticDomain, error) {
 	if req == nil || req.SemanticDomain == "" || req.DDNamespace == "" || req.DDName == "" {
 		return nil, domain.NewInvalidInputError("semantic_domain, dd_namespace and dd_name are required")
 	}
@@ -56,33 +54,21 @@ func (u *semanticDomainUsecase) BatchCreate(ctx context.Context, req []domain.Cr
 	return u.dsClient.BatchCreateSemanticDomains(ctx, dsReq)
 }
 
-func (u *semanticDomainUsecase) Get(ctx context.Context, id string) (*dataservices.SemanticDomain, error) {
+func (u *semanticDomainUsecase) Get(ctx context.Context, id string) (*domain.SemanticDomain, error) {
 	if id == "" {
 		return nil, domain.NewInvalidInputError("id is required")
 	}
-	sd, err := u.dsClient.GetSemanticDomain(ctx, id)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return nil, domain.NewNotFoundError("semantic domain", id)
-		}
-		return nil, err
-	}
-	return sd, nil
+	return u.dsClient.GetSemanticDomain(ctx, id)
 }
 
-func (u *semanticDomainUsecase) SearchByDD(ctx context.Context, req *domain.SearchSemanticDomainByDDRequest) ([]dataservices.SemanticDomain, int, error) {
+func (u *semanticDomainUsecase) SearchByDD(ctx context.Context, req *domain.SearchSemanticDomainByDDRequest) ([]domain.SemanticDomain, int, error) {
 	if req == nil || req.DDNamespace == "" || req.DDName == "" {
 		return nil, 0, domain.NewInvalidInputError("dd_namespace and dd_name are required")
 	}
-	items, total, err := u.dsClient.SearchSemanticDomainsByDD(ctx, req.DDNamespace, req.DDName)
-	if err != nil {
-		return nil, 0, err
-	}
-	return items, total, nil
+	return u.dsClient.SearchSemanticDomainsByDD(ctx, req.DDNamespace, req.DDName)
 }
 
-func (u *semanticDomainUsecase) Update(ctx context.Context, id string, req *domain.UpdateSemanticDomainRequest) (*dataservices.SemanticDomain, error) {
+func (u *semanticDomainUsecase) Update(ctx context.Context, id string, req *domain.UpdateSemanticDomainRequest) (*domain.SemanticDomain, error) {
 	if id == "" {
 		return nil, domain.NewInvalidInputError("id is required")
 	}
@@ -102,30 +88,14 @@ func (u *semanticDomainUsecase) Update(ctx context.Context, id string, req *doma
 	if req.DDName != nil {
 		dsReq["dd_name"] = *req.DDName
 	}
-	sd, err := u.dsClient.UpdateSemanticDomain(ctx, id, dsReq)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return nil, domain.NewNotFoundError("semantic domain", id)
-		}
-		return nil, err
-	}
-	return sd, nil
+	return u.dsClient.UpdateSemanticDomain(ctx, id, dsReq)
 }
 
 func (u *semanticDomainUsecase) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return domain.NewInvalidInputError("id is required")
 	}
-	err := u.dsClient.DeleteSemanticDomain(ctx, id)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return domain.NewNotFoundError("semantic domain", id)
-		}
-		return err
-	}
-	return nil
+	return u.dsClient.DeleteSemanticDomain(ctx, id)
 }
 
 func (u *semanticDomainUsecase) DeleteByDDInfo(ctx context.Context, ddNamespace, ddName string) error {
@@ -139,30 +109,14 @@ func (u *semanticDomainUsecase) Exists(ctx context.Context, id string) (bool, er
 	if id == "" {
 		return false, domain.NewInvalidInputError("id is required")
 	}
-	ok, err := u.dsClient.SemanticDomainExists(ctx, id)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return false, nil
-		}
-		return false, err
-	}
-	return ok, nil
+	return u.dsClient.SemanticDomainExists(ctx, id)
 }
 
 func (u *semanticDomainUsecase) ExistsByDDInfo(ctx context.Context, ddNamespace, ddName string) (bool, error) {
 	if ddNamespace == "" || ddName == "" {
 		return false, domain.NewInvalidInputError("dd_namespace and dd_name are required")
 	}
-	ok, err := u.dsClient.SemanticDomainExistsByDDInfo(ctx, ddNamespace, ddName)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return false, nil
-		}
-		return false, err
-	}
-	return ok, nil
+	return u.dsClient.SemanticDomainExistsByDDInfo(ctx, ddNamespace, ddName)
 }
 
 func (u *semanticDomainUsecase) Count(ctx context.Context) (int, error) {

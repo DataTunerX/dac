@@ -1,9 +1,12 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
+import { listDescriptorsAll } from "@/lib/descriptors-api"
+import type { DataDescriptorResponse, DataSourceResponse } from "@/lib/api-types"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -32,12 +35,11 @@ import {
   Clock, 
   Target,
   List,
-  Link,
   Link as LinkIcon
 } from "lucide-react"
 import type { DiscoveryJobResponse, DiscoveryJobStatus, DiscoveredService } from "@/lib/discovery"
 import { deleteDiscoveryScan, getDiscoveryScan, updateDiscoveryScan } from "@/lib/discovery"
-import { CreateDataSourceDialog } from "@/components/data-source-forms"
+import { CreateDataSourceDialog, type DataSourceFormValues } from "@/components/data-source-forms"
 import { cn } from "@/lib/utils"
 import { BrandIcon } from "@/components/brand-icon"
 
@@ -89,14 +91,14 @@ function formatDuration(start?: number, end?: number, status?: DiscoveryJobStatu
   return `${minutes}m ${remainingSeconds}s`
 }
 
-function InfoItem({ label, value, icon: Icon, fullWidth = false }: { label: string; value: React.ReactNode; icon?: any; fullWidth?: boolean }) {
+function InfoItem({ label, value, icon: Icon, fullWidth = false }: { label: string; value: React.ReactNode; icon?: React.ComponentType<{ className?: string }>; fullWidth?: boolean }) {
   return (
     <div className={cn("space-y-1.5", fullWidth ? "md:col-span-2" : "")}>
-      <div className="text-xs font-medium text-slate-500 flex items-center gap-1.5">
-        {Icon && <Icon className="w-3.5 h-3.5" />}
+      <div className="text-xs font-medium text-content-muted flex items-center gap-1.5">
+        {Icon ? <Icon className="w-3.5 h-3.5" /> : null}
         {label}
       </div>
-      <div className="flex items-center px-3 py-2 rounded-md border border-slate-200 bg-white text-sm text-slate-700 font-normal shadow-sm min-h-[38px]">
+      <div className="flex items-center px-3 py-2 rounded-md border border-line bg-surface text-sm text-content font-normal shadow-sm min-h-[38px]">
         {value}
       </div>
     </div>
@@ -104,14 +106,13 @@ function InfoItem({ label, value, icon: Icon, fullWidth = false }: { label: stri
 }
 
 function LinkItem({ href, label }: { href: string; label: string }) {
-  const router = useRouter()
   return (
-    <button 
-      onClick={() => router.push(href)}
-      className="flex items-center hover:text-blue-600 transition-colors"
+    <Link
+      href={href}
+      className="flex items-center hover:text-cta transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cta focus-visible:ring-offset-2 rounded cursor-pointer"
     >
       {label}
-    </button>
+    </Link>
   )
 }
 
@@ -171,11 +172,11 @@ function inferServiceIcon(s: DiscoveredService): ServiceIconKind {
 function ServiceIconCell({ s }: { s: DiscoveredService }) {
   const icon = inferServiceIcon(s)
   return (
-    <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center shrink-0">
+    <div className="w-8 h-8 rounded-full bg-cta/10 flex items-center justify-center shrink-0">
       {icon.kind === "brand" ? (
         <BrandIcon slug={icon.slug} size={16} />
       ) : (
-        <Server className="w-4 h-4 text-blue-600" />
+        <Server className="w-4 h-4 text-cta" />
       )}
     </div>
   )
@@ -216,29 +217,25 @@ export default function InfraDiscoveryDetailPage() {
 
   const fetchExistingDataSources = async () => {
     try {
-      const res = await api.get(`/descriptors`, { params: { limit: 1000 } })
-      // Handle various API response envelopes
-      const data = res.data?.data ?? res.data
-      const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
-      
-      const parsed: DataSourceRef[] = items.map((item: any) => {
-        const sources = item.sources || []
-        if (sources.length === 0) return null
-        const s = sources[0]
-        const meta = s.metadata || {}
-        const host = meta.host
-        const port = meta.port
-        
-        if (!host || !port) return null
-
-        return {
-          name: item.name,
-          namespace: item.namespace || "default",
-          type: s.type,
-          host: String(host),
-          port: String(port),
-        }
-      }).filter(Boolean)
+      const { items } = await listDescriptorsAll({ limit: 1000 })
+      const parsed: DataSourceRef[] = items
+        .map((item: DataDescriptorResponse) => {
+          const sources = item.sources ?? []
+          if (sources.length === 0) return null
+          const s = sources[0] as DataSourceResponse
+          const meta = s.metadata ?? {}
+          const host = meta.host
+          const port = meta.port
+          if (!host || !port) return null
+          return {
+            name: item.name,
+            namespace: item.namespace ?? "default",
+            type: s.type ?? "",
+            host: String(host),
+            port: String(port),
+          }
+        })
+        .filter((r): r is DataSourceRef => r != null)
       setExistingDataSources(parsed)
     } catch (e) {
       console.error("Failed to fetch existing data sources", e)
@@ -256,7 +253,7 @@ export default function InfraDiscoveryDetailPage() {
   const [isDeleting, setIsDeleting] = useState(false)
 
   const [isCreateOpen, setIsCreateOpen] = useState(false)
-  const [createInitial, setCreateInitial] = useState<Record<string, unknown> | null>(null)
+  const [createInitial, setCreateInitial] = useState<Partial<DataSourceFormValues> | null>(null)
 
   const services = useMemo(() => {
     const items = job?.services || []
@@ -325,7 +322,7 @@ export default function InfraDiscoveryDetailPage() {
     setIsCreateOpen(true)
   }
 
-  const handleCreate = async (data: any) => {
+  const handleCreate = async (data: DataSourceFormValues & { enableCodeRepo?: boolean }) => {
     const namespace = String(data.namespace || "default").trim() || "default"
     const t = String(data.type || "").trim()
     const isStructuredDB = t === "mysql" || t === "postgres"
@@ -500,7 +497,7 @@ export default function InfraDiscoveryDetailPage() {
   const title = job?.name || id
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6">
       {/* Header Section */}
       <div className="space-y-4">
         {/* Breadcrumb */}
@@ -510,15 +507,15 @@ export default function InfraDiscoveryDetailPage() {
               variant="ghost"
               size="sm"
               onClick={() => router.back()}
-              className="-ml-2 h-8 px-2 text-slate-500 hover:text-slate-900"
+              className="-ml-2 h-8 px-2 text-content-muted hover:text-content"
             >
               <ArrowLeft className="w-4 h-4 mr-1" />
               返回
             </Button>
-            <nav className="flex items-center text-sm text-slate-500 min-w-0" aria-label="Breadcrumb">
+            <nav className="flex items-center text-sm text-content-muted min-w-0" aria-label="Breadcrumb">
               <LinkItem href="/infra" label="资产探测" />
-              <ChevronRight className="w-4 h-4 mx-2 text-slate-400 shrink-0" />
-              <span className="font-medium text-slate-900 truncate">{id}</span>
+              <ChevronRight className="w-4 h-4 mx-2 text-content-muted shrink-0" />
+              <span className="font-medium text-content truncate">{id}</span>
             </nav>
           </div>
         </div>
@@ -527,7 +524,7 @@ export default function InfraDiscoveryDetailPage() {
         <div className="flex items-start justify-between">
           <div className="space-y-1">
             <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
+              <h1 className="text-2xl font-bold text-content">{title}</h1>
               {job && (
                 <Badge variant={statusBadgeVariant(job.status)} className="font-mono text-xs">
                   {statusLabel(job.status)}
@@ -535,19 +532,19 @@ export default function InfraDiscoveryDetailPage() {
               )}
             </div>
             {job?.startedAt && (
-              <div className="text-sm text-slate-500">
+              <div className="text-sm text-content-muted">
                 开始于 <span className="font-mono">{new Date(job.startedAt < 100000000000 ? job.startedAt * 1000 : job.startedAt).toLocaleString()}</span>
               </div>
             )}
           </div>
           
           <div className="flex items-center gap-2">
-             <Button variant="outline" onClick={() => void fetchJob()} disabled={isLoading} className="bg-white hover:bg-slate-50">
+             <Button variant="outline" onClick={() => void fetchJob()} disabled={isLoading} className="bg-surface hover:bg-surface-muted">
               <RefreshCw className={cn("w-4 h-4 mr-2", (isPolling || isLoading) && "animate-spin")} />
               刷新
             </Button>
             <RbacWrapper requiredRole="admin">
-              <Button variant="outline" onClick={() => setIsDeleteOpen(true)} className="bg-white hover:bg-red-50 hover:text-red-600 hover:border-red-200">
+              <Button variant="outline" onClick={() => setIsDeleteOpen(true)} className="bg-surface hover:bg-red-50 hover:text-red-600 hover:border-red-200">
                 <Trash2 className="w-4 h-4 mr-2" />
                 删除
               </Button>
@@ -559,15 +556,15 @@ export default function InfraDiscoveryDetailPage() {
       {/* Main Content */}
       <div>
         {isLoading && !job ? (
-           <div className="flex flex-col items-center justify-center py-20 text-slate-500">
-             <Loader2 className="w-8 h-8 animate-spin mb-4 text-blue-600" />
-             <p>正在加载扫描信息...</p>
+           <div className="flex flex-col items-center justify-center py-20 text-content-muted">
+             <Loader2 className="w-8 h-8 animate-spin mb-4 text-cta" />
+             <p>正在加载扫描信息…</p>
            </div>
         ) : !job ? (
-          <div className="rounded-lg border border-dashed border-slate-300 p-12 text-center">
-            <Network className="mx-auto h-12 w-12 text-slate-300" />
-            <h3 className="mt-2 text-sm font-semibold text-slate-900">未找到扫描记录</h3>
-            <p className="mt-1 text-sm text-slate-500">该记录不存在或已被删除。</p>
+          <div className="rounded-lg border border-dashed border-line-hover p-12 text-center">
+            <Network className="mx-auto h-12 w-12 text-content-muted" />
+            <h3 className="mt-2 text-sm font-semibold text-content">未找到扫描记录</h3>
+            <p className="mt-1 text-sm text-content-muted">该记录不存在或已被删除。</p>
             <div className="mt-6">
               <Button variant="outline" onClick={() => router.push("/infra")}>返回列表</Button>
             </div>
@@ -576,28 +573,28 @@ export default function InfraDiscoveryDetailPage() {
           <div className="space-y-8">
             {/* Section 1: Basic Info */}
             <section className="space-y-3">
-              <h3 className="text-sm font-medium text-slate-900 flex items-center gap-2">
-                <Target className="w-4 h-4 text-slate-500" />
+              <h3 className="text-sm font-medium text-content flex items-center gap-2">
+                <Target className="w-4 h-4 text-content-muted" />
                 基础信息
               </h3>
-              <div className="bg-white rounded-lg border border-slate-200 p-5 shadow-sm">
+              <div className="bg-surface rounded-lg border border-line p-5 shadow-sm">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <div className="space-y-1.5">
-                    <div className="text-xs font-medium text-slate-500 flex items-center gap-1.5">
+                    <div className="text-xs font-medium text-content-muted flex items-center gap-1.5">
                       <Target className="w-3.5 h-3.5" />
                       扫描目标
                     </div>
-                    <div className="flex items-center px-3 py-2 rounded-md border border-slate-200 bg-white text-sm text-slate-700 font-normal shadow-sm font-mono">
+                    <div className="flex items-center px-3 py-2 rounded-md border border-line bg-surface text-sm text-content font-normal shadow-sm font-mono">
                       {job.target}
                     </div>
                   </div>
                   
                   <div className="space-y-1.5">
-                    <div className="text-xs font-medium text-slate-500 flex items-center gap-1.5">
+                    <div className="text-xs font-medium text-content-muted flex items-center gap-1.5">
                       <Activity className="w-3.5 h-3.5" />
                       当前状态
                     </div>
-                    <div className="flex items-center px-3 py-2 rounded-md border border-slate-200 bg-white text-sm shadow-sm">
+                    <div className="flex items-center px-3 py-2 rounded-md border border-line bg-surface text-sm shadow-sm">
                       <span className={cn("inline-flex items-center gap-1.5", 
                         job.status === "FAILED" ? "text-red-600" : 
                         job.status === "SUCCEEDED" ? "text-emerald-600" : "text-blue-600"
@@ -608,16 +605,16 @@ export default function InfraDiscoveryDetailPage() {
                         )} />
                         {statusLabel(job.status)}
                       </span>
-                      {job.error && <span className="ml-2 text-red-500 text-xs truncate" title={job.error}>{job.error}</span>}
+                      {job.error ? <span className="ml-2 text-red-500 text-xs truncate" title={job.error}>{job.error}</span> : null}
                     </div>
                   </div>
 
                   <div className="space-y-1.5">
-                    <div className="text-xs font-medium text-slate-500 flex items-center gap-1.5">
+                    <div className="text-xs font-medium text-content-muted flex items-center gap-1.5">
                       <Clock className="w-3.5 h-3.5" />
                       任务耗时
                     </div>
-                     <div className="flex items-center px-3 py-2 rounded-md border border-slate-200 bg-white text-sm text-slate-700 font-normal shadow-sm">
+                     <div className="flex items-center px-3 py-2 rounded-md border border-line bg-surface text-sm text-content font-normal shadow-sm">
                       {formatDuration(job.startedAt, job.finishedAt, job.status)}
                     </div>
                   </div>
@@ -628,19 +625,19 @@ export default function InfraDiscoveryDetailPage() {
             {/* Section 2: Discovered Services */}
             <section className="space-y-3">
                <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium text-slate-900 flex items-center gap-2">
-                 <List className="w-4 h-4 text-slate-500" />
+                <h3 className="text-sm font-medium text-content flex items-center gap-2">
+                 <List className="w-4 h-4 text-content-muted" />
                  发现的服务
                </h3>
-               <Badge variant="secondary" className="bg-white border-slate-200 text-slate-600">
+               <Badge variant="secondary" className="bg-surface border-line text-content">
                   共 {services.length} 个
                </Badge>
              </div>
              
-             <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+             <div className="bg-surface rounded-lg border border-line shadow-sm overflow-hidden">
              <Table>
                 <TableHeader>
-                  <TableRow className="bg-slate-50/50">
+                  <TableRow className="bg-surface-muted/50">
                     <TableHead className="w-[180px]">地址</TableHead>
                     <TableHead className="w-[100px]">端口</TableHead>
                     <TableHead className="w-[200px]">服务识别</TableHead>
@@ -651,10 +648,10 @@ export default function InfraDiscoveryDetailPage() {
                 <TableBody>
                   {services.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="h-32 text-center text-sm text-slate-500">
+                      <TableCell colSpan={5} className="h-32 text-center text-sm text-content-muted">
                         {job?.status === "RUNNING" || job?.status === "PENDING" ? (
                           <div className="flex flex-col items-center gap-2">
-                            <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+                            <Loader2 className="w-6 h-6 animate-spin text-cta" />
                             <span>正在扫描中，请稍候...</span>
                           </div>
                         ) : (
@@ -667,35 +664,35 @@ export default function InfraDiscoveryDetailPage() {
                       const hints = s.metadata ? Object.entries(s.metadata).slice(0, 3) : []
                       const canCreate = !!detectCreateType(s)
                       return (
-                        <TableRow key={`${s.host}:${s.port}`} className="hover:bg-slate-50">
+                        <TableRow key={`${s.host}:${s.port}`} className="hover:bg-surface-muted">
                           <TableCell className="font-mono text-sm">{s.host}</TableCell>
-                          <TableCell className="font-mono text-sm text-slate-600">{s.port}</TableCell>
+                          <TableCell className="font-mono text-sm text-content">{s.port}</TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2 min-w-0">
                               <ServiceIconCell s={s} />
-                              <Badge variant="outline" className="font-normal text-slate-700 bg-white truncate">
+                              <Badge variant="outline" className="font-normal text-content bg-surface truncate">
                                 {servicePill(s)}
                               </Badge>
                             </div>
                           </TableCell>
                           <TableCell>
                              {s.tls ? (
-                              <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100">
+                              <Badge variant="secondary" className="text-xs bg-cta/10 text-cta border-cta/20 hover:bg-cta/20">
                                 TLS
                               </Badge>
                             ) : (
-                              <span className="text-slate-300">-</span>
+                              <span className="text-content-muted">-</span>
                             )}
                           </TableCell>
                           <TableCell className="text-sm">
                              <div className="flex items-start justify-between gap-4">
                                 <div className="space-y-1 pt-1">
                                   {hints.length === 0 ? (
-                                    <span className="text-slate-400 text-xs">-</span>
+                                    <span className="text-content-muted text-xs">-</span>
                                   ) : (
                                     hints.map(([k, v]) => (
-                                      <div key={k} className="text-xs text-slate-600 flex gap-2">
-                                        <span className="text-slate-400 font-medium shrink-0">{k}:</span> 
+                                      <div key={k} className="text-xs text-content flex gap-2">
+                                        <span className="text-content-muted font-medium shrink-0">{k}:</span> 
                                         <span className="truncate max-w-[200px]" title={String(v)}>{String(v)}</span>
                                       </div>
                                     ))
@@ -708,8 +705,8 @@ export default function InfraDiscoveryDetailPage() {
                                       <Button
                                         variant="outline"
                                         size="sm"
-                                        onClick={() => router.push(`/datasources/${match.namespace}/${match.name}`)}
-                                        className="shrink-0 h-8 text-blue-600 border-blue-200 hover:bg-blue-50"
+                                        onClick={() => router.push(`/datasources/${encodeURIComponent(match.namespace)}/${encodeURIComponent(match.name)}`)}
+                                        className="shrink-0 h-8 text-cta border-cta/20 hover:bg-cta/10 cursor-pointer"
                                       >
                                         <LinkIcon className="w-3.5 h-3.5 mr-1.5" />
                                         已关联
@@ -725,7 +722,7 @@ export default function InfraDiscoveryDetailPage() {
                                       disabled={!canCreate}
                                       className={cn(
                                         "shrink-0 h-8",
-                                        canCreate ? "bg-[#1e293b] hover:bg-[#0f172a] text-white" : "text-slate-400"
+                                        canCreate ? "bg-[#1e293b] hover:bg-[#0f172a] text-content-inverse" : "text-content-muted"
                                       )}
                                       requiredRole="admin"
                                       fallbackTitle="无权限：仅管理员可创建数据源"
@@ -768,7 +765,7 @@ export default function InfraDiscoveryDetailPage() {
         open={isCreateOpen}
         onOpenChange={setIsCreateOpen}
         onSubmit={handleCreate}
-        initialValues={createInitial as any}
+        initialValues={createInitial ?? undefined}
         title="从扫描结果创建数据源"
       />
     </div>

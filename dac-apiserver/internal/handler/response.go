@@ -1,3 +1,6 @@
+// Package handler provides HTTP handlers for the DAC API (Hertz).
+// Handlers bind request data, call usecases, and return unified JSON responses
+// via SuccessResponse, CreatedResponse, ErrorResponse.
 package handler
 
 import (
@@ -7,7 +10,7 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 )
 
-// Response 统一响应结构
+// Response is the unified JSON response envelope for all API responses.
 type Response struct {
 	Code    string      `json:"code"`
 	Message string      `json:"message"`

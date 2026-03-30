@@ -1,0 +1,18 @@
+{{- if .Values.executionEngine.enabled }}
+{{- range $i, $cfg := .Values.executionEngine.llmConfigs }}
+{{- $name := $cfg.name | default "llm-default" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" $ "name" "llm-config") | nindent 4 }}
+data:
+  provider: {{ $cfg.provider | default $.Values.global.llm.provider | quote }}
+  api-key: {{ $cfg.apiKey | default $.Values.global.llm.apiKey | quote }}
+  base-url: {{ $cfg.baseUrl | default $.Values.global.llm.baseUrl | quote }}
+  model: {{ $cfg.model | default $.Values.global.llm.model | quote }}
+{{- end }}
+{{- end }}

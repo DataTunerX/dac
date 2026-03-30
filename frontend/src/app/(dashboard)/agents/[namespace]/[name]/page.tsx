@@ -1,9 +1,18 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState, Fragment, type ReactNode } from "react"
+import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
+import useSWR from "swr"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
+import { getAgent } from "@/lib/agents-api"
+import { getSemanticGroupWithMembers } from "@/lib/semantic-groups-api"
+import type {
+  SemanticGroupResponse,
+  SemanticGroupInfoResponse,
+  DDGroupRelationResponse,
+} from "@/lib/api-types"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -22,46 +31,138 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { ArrowLeft, Loader2, Trash2, RefreshCw, Server, Database, Shield, Sparkles, ChevronRight, ChevronDown, Info, Wrench, Layers, Link2 } from "lucide-react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ArrowLeft, Loader2, Trash2, RefreshCw, Server, Database, Shield, Sparkles, ChevronRight, ChevronDown, Info, Wrench, Layers, Maximize2, X } from "lucide-react"
 
-type UnknownRecord = Record<string, unknown>
-
-function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === "object" && v !== null
+/** 单个根（语义组）及其子节点；多根时横向排列，风格与数据管理详情页「血缘关系」一致。 */
+type DataSourceLineageRootItem = {
+  group: SemanticGroupResponse
+  childGroups: SemanticGroupInfoResponse[]
+  memberDescriptors: Array<{ key: string; dd_namespace: string; dd_name: string; sdCount: number; hasDD: boolean; isLoading: boolean }>
 }
 
-function asString(v: unknown): string | undefined {
-  return typeof v === "string" ? v : undefined
-}
+function DataSourceLineageBlock({
+  root,
+  onNavigateToGroup,
+  onNavigateToDataSource,
+}: {
+  root: DataSourceLineageRootItem
+  onNavigateToGroup: (id: string) => void
+  onNavigateToDataSource: (namespace: string, name: string) => void
+}) {
+  const { group, childGroups, memberDescriptors } = root
+  const groupId = group.id ?? ""
+  const hasChildren = childGroups.length > 0 || memberDescriptors.length > 0
 
-type SemanticGroup = {
-  id: string
-  group_name: string
-  version?: string
-  created_at?: string
-}
+  return (
+    <div className="min-w-0 flex-1 flex flex-col items-center p-6">
+      {/* 当前节点（根语义组）— 与血缘关系页「Current Node」一致 */}
+      <div className="relative z-10 bg-surface border border-cta/30 rounded-xl shadow-sm p-4 w-64 text-center">
+        <div className="flex items-center justify-center w-9 h-9 bg-cta/10 text-cta rounded-full mx-auto mb-2">
+          <Layers className="w-5 h-5" />
+        </div>
+        <div className="font-semibold text-content text-sm truncate" title={group.group_name || groupId}>
+          {group.group_name || groupId || "-"}
+        </div>
+        {groupId ? (
+          <Link
+            href={`/semantic-groups/${encodeURIComponent(groupId)}`}
+            className="mt-3 inline-flex items-center justify-center h-8 w-full rounded-md px-3 text-xs font-medium border border-line bg-surface shadow-sm hover:bg-surface-muted text-content"
+          >
+            查看
+          </Link>
+        ) : (
+          <Button type="button" variant="outline" size="sm" className="mt-3 w-full" disabled>
+            查看
+          </Button>
+        )}
+      </div>
 
-type DDGroupRelation = {
-  id: number
-  sd_id: string
-  group_id: string
-  association_reason?: string
-}
+      {/* 连接竖线 */}
+      {hasChildren && <div className="h-16 w-0.5 bg-surface-active my-2 shrink-0" aria-hidden />}
 
-type SemanticDomainMeta = {
-  dd_namespace: string
-  dd_name: string
+      {/* 子节点卡片横向排列（子分组 + 数据源）— 与血缘关系「Consumers」一致 */}
+      {hasChildren && (
+        <div className="flex flex-wrap gap-6 justify-center">
+          {childGroups.map((cg) => (
+            <div
+              key={cg.id}
+              className="relative z-10 bg-surface border border-line rounded-xl shadow-sm p-4 w-64 text-center hover:border-cta/30 hover:shadow-md transition-all cursor-pointer"
+              onClick={() => onNavigateToGroup(cg.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && onNavigateToGroup(cg.id)}
+              title="查看语义组"
+            >
+              <div className="flex items-center justify-center w-9 h-9 bg-cta/10 text-cta rounded-full mx-auto mb-2">
+                <Layers className="w-4 h-4" />
+              </div>
+              <div className="font-medium text-content text-sm truncate" title={cg.group_name || cg.id}>
+                {cg.group_name || cg.id}
+              </div>
+              <Link
+                href={`/semantic-groups/${encodeURIComponent(cg.id)}`}
+                className="mt-3 inline-flex items-center justify-center h-8 w-full rounded-md px-3 text-xs font-medium border border-line bg-surface shadow-sm hover:bg-surface-muted text-content"
+                onClick={(e) => e.stopPropagation()}
+              >
+                查看
+              </Link>
+            </div>
+          ))}
+          {memberDescriptors.map((b) => (
+            <div
+              key={b.key}
+              className={`relative z-10 bg-surface border border-line rounded-xl shadow-sm p-4 w-64 text-center transition-all ${b.hasDD ? "hover:border-cta/30 hover:shadow-md cursor-pointer" : ""}`}
+              onClick={() => b.hasDD && onNavigateToDataSource(b.dd_namespace, b.dd_name)}
+              role={b.hasDD ? "button" : undefined}
+              tabIndex={b.hasDD ? 0 : undefined}
+              onKeyDown={b.hasDD ? (e) => e.key === "Enter" && onNavigateToDataSource(b.dd_namespace, b.dd_name) : undefined}
+              title={b.hasDD ? "查看数据源" : undefined}
+            >
+              <div className="flex items-center justify-center w-9 h-9 bg-indigo-50 text-indigo-600 rounded-full mx-auto mb-2">
+                <Database className="w-4 h-4" />
+              </div>
+              <div className="font-medium text-content text-sm truncate" title={b.hasDD ? `${b.dd_namespace}/${b.dd_name}` : ""}>
+                {b.hasDD ? b.dd_name : b.isLoading ? "加载中…" : "-"}
+              </div>
+              <div className="text-xs text-content-muted mt-1">
+                <span className="bg-surface-muted px-1.5 py-0.5 rounded text-[10px]">Data Source</span>
+              </div>
+              {b.hasDD ? (
+                <Link
+                  href={`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`}
+                  className="mt-3 inline-flex items-center justify-center h-8 w-full rounded-md px-3 text-xs font-medium border border-line bg-surface shadow-sm hover:bg-surface-muted text-content"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  查看
+                </Link>
+              ) : (
+                <Button type="button" variant="outline" size="sm" className="mt-3 w-full" disabled>
+                  查看
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function InfoItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="space-y-1.5">
-      <div className="text-xs font-medium text-slate-500">{label}</div>
-      <div className="flex items-center px-3 py-2 rounded-md border border-slate-200 bg-white text-sm text-slate-700 font-normal shadow-sm min-h-[38px]">
+      <div className="text-xs font-medium text-content-muted">{label}</div>
+      <div className="flex items-center px-3 py-2 rounded-md border border-line bg-surface text-sm text-content font-normal shadow-sm min-h-[38px]">
         <div className="min-w-0 w-full">{value}</div>
       </div>
     </div>
   )
+}
+
+async function fetcherAgent(_key: readonly [string, string, string]) {
+  const [, ns, nm] = _key
+  return getAgent(ns, nm)
 }
 
 export default function AgentDetailPage() {
@@ -70,39 +171,25 @@ export default function AgentDetailPage() {
   const namespace = decodeURIComponent(params?.namespace || "default")
   const name = decodeURIComponent(params?.name || "")
 
-  const [isLoading, setIsLoading] = useState(false)
-  const [agent, setAgent] = useState<UnknownRecord | null>(null)
+  const swrKey = namespace && name ? (["agent", namespace, name] as const) : null
+  const { data: agent, error: swrError, isLoading, mutate } = useSWR(swrKey, fetcherAgent)
+
   const [isDeleting, setIsDeleting] = useState(false)
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [skillQuery, setSkillQuery] = useState("")
   const [expandedSkillIds, setExpandedSkillIds] = useState<Record<string, boolean>>({})
-
-  const displayName = useMemo(() => {
-    const card = agent?.agentCard
-    if (isRecord(card) && typeof card.name === "string" && card.name) return card.name
-    return name
-  }, [agent, name])
-
-  const load = async () => {
-    if (!name) return
-    setIsLoading(true)
-    try {
-      const res = await api.get(`/namespaces/${encodeURIComponent(namespace)}/agents/${encodeURIComponent(name)}`)
-      const data = res.data as unknown
-      setAgent(isRecord(data) ? data : {})
-    } catch (e) {
-      console.error("load agent failed", e)
-      toast.error("加载智能体详情失败")
-      setAgent(null)
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  const [isLineageZoomOpen, setIsLineageZoomOpen] = useState(false)
 
   useEffect(() => {
-    void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [namespace, name])
+    if (swrError) toast.error("加载智能体详情失败")
+  }, [swrError])
+
+  const displayName = useMemo(() => {
+    const cardName = agent?.agentCard?.name
+    return (typeof cardName === "string" && cardName) ? cardName : name
+  }, [agent, name])
+
+  const refreshData = () => mutate()
 
   const onDelete = async () => {
     if (!name || isDeleting) return
@@ -120,31 +207,18 @@ export default function AgentDetailPage() {
     }
   }
 
-  const model = useMemo(() => {
-    const m = agent?.model
-    return isRecord(m) ? m : null
-  }, [agent])
+  const model = agent?.model ?? null
+  const agentCard = agent?.agentCard ?? null
+  const dataPolicy = agent?.dataPolicy ?? null
+  const dataSourceType = dataPolicy?.dataSourceType ?? ""
+  const semanticGroupID = dataPolicy?.semanticGroupID ?? ""
+  const isSemanticGroupAgent =
+    dataSourceType === "SemanticGroup" || (Boolean(semanticGroupID) && dataSourceType !== "SemanticDomain")
 
-  const agentCard = useMemo(() => {
-    const c = agent?.agentCard
-    return isRecord(c) ? c : null
-  }, [agent])
-
-  const dataPolicy = useMemo(() => {
-    const p = agent?.dataPolicy
-    return isRecord(p) ? p : null
-  }, [agent])
-
-  const dataSourceType = useMemo(() => asString(dataPolicy?.dataSourceType) || "", [dataPolicy])
-  const semanticGroupID = useMemo(() => asString(dataPolicy?.semanticGroupID) || "", [dataPolicy])
-  const isSemanticGroupAgent = useMemo(
-    () => dataSourceType === "SemanticGroup" || (Boolean(semanticGroupID) && dataSourceType !== "SemanticDomain"),
-    [dataSourceType, semanticGroupID],
-  )
-
-  const [semanticGroup, setSemanticGroup] = useState<SemanticGroup | null>(null)
-  const [relations, setRelations] = useState<DDGroupRelation[]>([])
-  const [sdMeta, setSdMeta] = useState<Record<string, SemanticDomainMeta>>({})
+  const [semanticGroup, setSemanticGroup] = useState<SemanticGroupResponse | null>(null)
+  const [childGroups, setChildGroups] = useState<SemanticGroupInfoResponse[]>([])
+  const [relations, setRelations] = useState<DDGroupRelationResponse[]>([])
+  const [sdMeta, setSdMeta] = useState<Record<string, { dd_namespace: string; dd_name: string }>>({})
   const [isLoadingSg, setIsLoadingSg] = useState(false)
   const [isLoadingRelations, setIsLoadingRelations] = useState(false)
 
@@ -154,31 +228,25 @@ export default function AgentDetailPage() {
   }, [dataPolicy])
 
   const activeDescriptors = useMemo(() => {
-    const raw = agent?.activeDataDescriptors
-    if (!Array.isArray(raw)) return []
+    const raw = agent?.activeDataDescriptors ?? []
     return raw
-      .map((x) => (isRecord(x) ? x : null))
-      .filter((x): x is UnknownRecord => Boolean(x))
       .map((x) => ({
-        name: asString(x.name) || "",
-        namespace: asString(x.namespace) || "default",
-        lastSynced: asString(x.lastSynced) || "",
+        name: x.name ?? "",
+        namespace: x.namespace ?? "default",
+        lastSynced: x.lastSynced ?? "",
       }))
       .filter((x) => x.name)
   }, [agent])
 
   const conditions = useMemo(() => {
-    const raw = agent?.conditions
-    if (!Array.isArray(raw)) return []
+    const raw = agent?.conditions ?? []
     return raw
-      .map((x) => (isRecord(x) ? x : null))
-      .filter((x): x is UnknownRecord => Boolean(x))
       .map((x) => ({
-        type: asString(x.type) || "",
-        status: asString(x.status) || "",
-        reason: asString(x.reason) || "",
-        message: asString(x.message) || "",
-        lastTransitionTime: asString(x.lastTransitionTime) || "",
+        type: x.type ?? "",
+        status: x.status ?? "",
+        reason: x.reason ?? "",
+        message: x.message ?? "",
+        lastTransitionTime: x.lastTransitionTime ?? "",
       }))
       .filter((x) => x.type)
   }, [agent])
@@ -195,24 +263,21 @@ export default function AgentDetailPage() {
 
   const endpoint = useMemo(() => {
     const raw = agent?.endpoint
-    if (!isRecord(raw)) return null
+    if (!raw) return null
     return {
-      address: asString(raw.address) || "",
-      port: typeof raw.port === "number" ? raw.port : Number(raw.port),
-      protocol: asString(raw.protocol) || "",
+      address: raw.address ?? "",
+      port: raw.port ?? 0,
+      protocol: raw.protocol ?? "",
     }
   }, [agent])
 
   const skills = useMemo(() => {
-    const raw = agentCard?.skills
-    if (!Array.isArray(raw)) return []
+    const raw = agentCard?.skills ?? []
     return raw
-      .map((x) => (isRecord(x) ? x : null))
-      .filter((x): x is UnknownRecord => Boolean(x))
       .map((x) => ({
-        id: asString(x.id) || "",
-        name: asString(x.name) || "",
-        description: asString(x.description) || "",
+        id: x.id ?? "",
+        name: x.name ?? "",
+        description: x.description ?? "",
         tags: Array.isArray(x.tags) ? x.tags.filter((t): t is string => typeof t === "string") : [],
         examples: Array.isArray(x.examples) ? x.examples.filter((t): t is string => typeof t === "string") : [],
       }))
@@ -271,61 +336,64 @@ export default function AgentDetailPage() {
     return arr
   }, [relations, sdMeta])
 
+  const dataSourceLineageRoots = useMemo((): DataSourceLineageRootItem[] => {
+    if (!semanticGroup) return []
+    return [{ group: semanticGroup, childGroups, memberDescriptors }]
+  }, [semanticGroup, childGroups, memberDescriptors])
+
   useEffect(() => {
     if (!isSemanticGroupAgent || !semanticGroupID) {
       setSemanticGroup(null)
+      setChildGroups([])
       setRelations([])
       setSdMeta({})
       return
     }
 
     let cancelled = false
-    const loadSg = async () => {
-      setIsLoadingSg(true)
+    setIsLoadingSg(true)
+    setIsLoadingRelations(true)
+    const load = async () => {
       try {
-        const res = await api.get(`/semantic-groups/${encodeURIComponent(semanticGroupID)}`)
-        const data = (res.data?.data ?? res.data) as unknown
-        const r = isRecord(data) ? data : {}
+        const data = await getSemanticGroupWithMembers(semanticGroupID)
         if (cancelled) return
-        setSemanticGroup({
-          id: String(r.id ?? semanticGroupID),
-          group_name: String(r.group_name ?? ""),
-          version: typeof r.version === "string" ? r.version : "",
-          created_at: typeof r.created_at === "string" ? r.created_at : "",
-        })
-      } catch (e) {
-        if (!cancelled) setSemanticGroup(null)
+        if (!data?.group) {
+          setSemanticGroup(null)
+          setChildGroups([])
+          setRelations([])
+          setSdMeta({})
+          return
+        }
+        setSemanticGroup(data.group)
+        setChildGroups(data.child_groups ?? [])
+        const mems = data.members ?? []
+        const adapted: DDGroupRelationResponse[] = mems
+          .map((m) => m.relation)
+          .filter((r) => r && Number(r.id) > 0 && r.sd_id)
+        setRelations(adapted)
+        const meta: Record<string, { dd_namespace: string; dd_name: string }> = {}
+        for (const m of mems) {
+          const sd = m.semantic_domain
+          const sid = m.relation?.sd_id
+          if (sid && sd?.dd_namespace != null && sd?.dd_name != null) {
+            meta[sid] = { dd_namespace: sd.dd_namespace, dd_name: sd.dd_name }
+          }
+        }
+        setSdMeta((prev) => ({ ...prev, ...meta }))
+      } catch {
+        if (!cancelled) {
+          setSemanticGroup(null)
+          setChildGroups([])
+          setRelations([])
+        }
       } finally {
-        if (!cancelled) setIsLoadingSg(false)
+        if (!cancelled) {
+          setIsLoadingSg(false)
+          setIsLoadingRelations(false)
+        }
       }
     }
-
-    const loadRel = async () => {
-      setIsLoadingRelations(true)
-      try {
-        const res = await api.get(`/dd-group-relations/group/${encodeURIComponent(semanticGroupID)}`)
-        const data = (res.data?.data ?? res.data) as unknown
-        const r = isRecord(data) ? data : {}
-        const list = Array.isArray((r as UnknownRecord).items) ? ((r as UnknownRecord).items as unknown[]) : []
-        const adapted: DDGroupRelation[] = list
-          .map((x) => (isRecord(x) ? x : {}))
-          .map((x) => ({
-            id: Number(x.id ?? 0),
-            sd_id: String(x.sd_id ?? ""),
-            group_id: String(x.group_id ?? ""),
-            association_reason: typeof x.association_reason === "string" ? x.association_reason : "",
-          }))
-          .filter((x) => x.id > 0 && x.sd_id)
-        if (!cancelled) setRelations(adapted)
-      } catch (e) {
-        if (!cancelled) setRelations([])
-      } finally {
-        if (!cancelled) setIsLoadingRelations(false)
-      }
-    }
-
-    void loadSg()
-    void loadRel()
+    void load()
     return () => {
       cancelled = true
     }
@@ -340,21 +408,26 @@ export default function AgentDetailPage() {
         .filter((id) => id && !sdMeta[id])
       if (missing.length === 0) return
 
-      for (const id of missing) {
-        try {
-          const res = await api.get(`/semantic-domains/${encodeURIComponent(id)}`)
-          const data = (res.data?.data ?? res.data) as unknown
-          const r = isRecord(data) ? data : {}
-          const ns = typeof (r as UnknownRecord).dd_namespace === "string" ? ((r as UnknownRecord).dd_namespace as string) : ""
-          const nm = typeof (r as UnknownRecord).dd_name === "string" ? ((r as UnknownRecord).dd_name as string) : ""
-          if (!cancelled) {
-            setSdMeta((prev) => ({ ...prev, [id]: { dd_namespace: ns, dd_name: nm } }))
+      const results = await Promise.all(
+        missing.map(async (id) => {
+          try {
+            const res = await api.get<{ dd_namespace?: string; dd_name?: string }>(
+              `/semantic-domains/${encodeURIComponent(id)}`
+            )
+            const r = res.data ?? {}
+            const ns = typeof r.dd_namespace === "string" ? r.dd_namespace : ""
+            const nm = typeof r.dd_name === "string" ? r.dd_name : ""
+            return { id, dd_namespace: ns, dd_name: nm }
+          } catch {
+            return { id, dd_namespace: "", dd_name: "" }
           }
-        } catch {
-          if (!cancelled) {
-            setSdMeta((prev) => ({ ...prev, [id]: { dd_namespace: "", dd_name: "" } }))
-          }
-        }
+        })
+      )
+      if (!cancelled) {
+        setSdMeta((prev) => ({
+          ...prev,
+          ...Object.fromEntries(results.map(({ id, dd_namespace, dd_name }) => [id, { dd_namespace, dd_name }])),
+        }))
       }
     }
     void run()
@@ -365,20 +438,20 @@ export default function AgentDetailPage() {
   }, [relations, isSemanticGroupAgent])
 
   return (
-    <div className="p-8 space-y-6">
-      <div className="flex items-center justify-between gap-4">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
-          <Button variant="ghost" size="sm" onClick={() => router.back()} className="-ml-2 h-8 px-2 text-slate-500 hover:text-slate-900">
+          <Button variant="ghost" size="sm" onClick={() => router.back()} className="-ml-2 h-8 px-2 text-content-muted hover:text-content">
             <ArrowLeft className="w-4 h-4 mr-1" />
             返回
           </Button>
           <div className="min-w-0">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-600 min-w-0">
-              <span className="text-slate-700 shrink-0">智能体</span>
-              <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-              <span className="font-mono text-slate-700 shrink-0">{namespace}</span>
-              <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-              <span className="text-slate-700 truncate" title={displayName}>
+            <div className="flex items-center gap-2 text-sm font-medium text-content min-w-0">
+              <span className="text-content shrink-0">智能体</span>
+              <ChevronRight className="w-4 h-4 text-content-muted shrink-0" />
+              <span className="font-mono text-content shrink-0">{namespace}</span>
+              <ChevronRight className="w-4 h-4 text-content-muted shrink-0" />
+              <span className="text-content truncate" title={displayName}>
                 {displayName}
               </span>
             </div>
@@ -386,7 +459,7 @@ export default function AgentDetailPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" onClick={() => void load()} disabled={isLoading}>
+          <Button variant="outline" size="icon" onClick={() => void refreshData()} disabled={isLoading} aria-label="刷新">
             <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
           <RbacWrapper requiredRole="admin">
@@ -394,7 +467,7 @@ export default function AgentDetailPage() {
               variant="outline"
               onClick={() => setIsDeleteOpen(true)}
               disabled={isLoading}
-              className="bg-white hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+              className="bg-surface hover:bg-red-50 hover:text-red-600 hover:border-red-200"
             >
               <Trash2 className="w-4 h-4 mr-2" />
               删除
@@ -404,21 +477,21 @@ export default function AgentDetailPage() {
       </div>
 
       {isLoading && !agent ? (
-        <div className="rounded-lg border border-slate-200 bg-white p-6">
-          <div className="text-sm text-slate-500 inline-flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin" /> 加载中...
+        <div className="rounded-lg border border-line bg-surface p-6">
+          <div className="text-sm text-content-muted inline-flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin" /> 加载中…
           </div>
         </div>
       ) : !agent ? (
-        <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500">未找到该智能体。</div>
+        <div className="rounded-lg border border-line bg-surface p-6 text-sm text-content-muted">未找到该智能体。</div>
       ) : (
         <>
         <div className="space-y-3">
-          <div className="text-sm font-medium text-slate-900 flex items-center gap-2">
-            <Info className="w-4 h-4 text-slate-500" />
+          <div className="text-sm font-medium text-content flex items-center gap-2">
+            <Info className="w-4 h-4 text-content-muted" />
             基础信息
           </div>
-          <Card className="rounded-lg border border-slate-200">
+          <Card className="rounded-lg border border-line">
             <CardContent className="pt-6">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 <InfoItem
@@ -447,16 +520,16 @@ export default function AgentDetailPage() {
                         overallStatus === "AVAILABLE"
                           ? "bg-green-50 text-green-700 border-green-200"
                           : overallStatus === "CREATING"
-                            ? "bg-blue-50 text-blue-700 border-blue-200"
-                            : "bg-slate-50 text-slate-600 border-slate-200"
+                            ? "bg-cta/10 text-cta border-cta/20"
+                            : "bg-surface-muted text-content border-line"
                       }
                     >
                       {overallStatus}
                     </Badge>
                   }
                 />
-                <InfoItem label="规划模型" value={<span className="font-mono text-xs">{asString(model?.plannerLLM) || "-"}</span>} />
-                <InfoItem label="专家模型" value={<span className="font-mono text-xs">{asString(model?.expertLLM) || "-"}</span>} />
+                <InfoItem label="规划模型" value={<span className="font-mono text-xs">{model?.plannerLLM ?? "-"}</span>} />
+                <InfoItem label="专家模型" value={<span className="font-mono text-xs">{model?.expertLLM ?? "-"}</span>} />
                 <InfoItem
                   label="服务地址"
                   value={
@@ -482,143 +555,72 @@ export default function AgentDetailPage() {
 
         <div className="space-y-6">
           <div className="space-y-3">
-            <div className="text-sm font-medium text-slate-900 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-slate-500" />
+            <div className="text-sm font-medium text-content flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-content-muted" />
               概览
             </div>
-            <Card className="rounded-lg border border-slate-200">
-              <CardContent className="pt-6 text-sm text-slate-700 leading-7">
-              <Markdown>{asString(agentCard?.description) || "暂无描述"}</Markdown>
+            <Card className="rounded-lg border border-line">
+              <CardContent className="pt-6 text-sm text-content leading-7">
+              <Markdown>{agentCard?.description ?? "暂无描述"}</Markdown>
               </CardContent>
             </Card>
           </div>
 
           <div className="space-y-3">
-            <div className="text-sm font-medium text-slate-900 flex items-center gap-2">
+            <div className="text-sm font-medium text-content flex items-center gap-2">
               {isSemanticGroupAgent ? (
-                <Layers className="w-4 h-4 text-slate-500" />
+                <Layers className="w-4 h-4 text-content-muted" />
               ) : (
-                <Database className="w-4 h-4 text-slate-500" />
+                <Database className="w-4 h-4 text-content-muted" />
               )}
-              数据源
+              {isSemanticGroupAgent ? "语义关系" : "数据源"}
             </div>
-            <Card className="rounded-lg border border-slate-200">
+            <Card className="rounded-lg border border-line relative">
               <CardContent className="pt-6 space-y-4">
               {isSemanticGroupAgent ? (
                 <>
-                  <div>
-                    <div className="text-xs font-medium text-slate-500 mb-2">语义组</div>
-                    <div className="rounded-md border border-slate-200 bg-white px-4 py-3 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 shrink-0">
-                          <Layers className="w-4 h-4" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-slate-900 truncate">
-                            {semanticGroup?.group_name || (isLoadingSg ? "加载中..." : (semanticGroupID || "-"))}
-                          </div>
-                          <div className="text-[11px] font-mono text-slate-500 truncate">
-                            {semanticGroupID || "-"}
-                            {semanticGroup?.version ? ` · v${semanticGroup.version}` : ""}
-                          </div>
-                        </div>
+                  {isLoadingRelations && !semanticGroup ? (
+                    <div className="text-sm text-content-muted">加载中…</div>
+                  ) : dataSourceLineageRoots.length === 0 ? (
+                    <div className="text-sm text-content-muted">暂无语义关系数据</div>
+                  ) : (
+                    <>
+                      <div className="absolute right-3 top-3 z-10">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7 bg-surface/90 backdrop-blur"
+                          onClick={() => setIsLineageZoomOpen(true)}
+                          aria-label="放大"
+                          title="放大"
+                        >
+                          <Maximize2 className="w-3.5 h-3.5" />
+                        </Button>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          if (!semanticGroupID) return
-                          router.push(`/semantic-groups/${encodeURIComponent(semanticGroupID)}`)
-                        }}
-                        disabled={!semanticGroupID}
-                      >
-                        查看语义组
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-2">
-                      <Link2 className="w-3.5 h-3.5 text-slate-400" />
-                      语义组成员
-                    </div>
-                    {isLoadingRelations && memberDescriptors.length === 0 ? (
-                      <div className="text-sm text-slate-500">加载中...</div>
-                    ) : memberDescriptors.length === 0 ? (
-                      <div className="text-sm text-slate-500">-</div>
-                    ) : (
-                      <div className="rounded-md border border-slate-200 overflow-hidden">
-                        <Table>
-                          <TableHeader>
-                            <TableRow className="bg-slate-50">
-                              <TableHead>数据源</TableHead>
-                              <TableHead className="w-[1%] whitespace-nowrap">命名空间</TableHead>
-                              <TableHead className="w-[1%] whitespace-nowrap" title="Semantic Domain 的数量">
-                                Semantic Domain 数
-                              </TableHead>
-                              <TableHead className="w-[96px] text-right">操作</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {memberDescriptors.map((b) => {
-                              const ddFull = b.hasDD ? `${b.dd_namespace}/${b.dd_name}` : ""
-                              return (
-                                <TableRow key={b.key} className={b.hasDD ? "cursor-pointer hover:bg-slate-50" : ""}>
-                                  <TableCell
-                                    className="min-w-0"
-                                    onClick={() => {
-                                      if (!b.hasDD) return
-                                      router.push(`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`)
-                                    }}
-                                  >
-                                    <div className="flex items-center gap-2 min-w-0">
-                                      <div className="w-7 h-7 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 shrink-0">
-                                        <Database className="w-4 h-4" />
-                                      </div>
-                                      <div className="min-w-0">
-                                        <div className="text-xs text-slate-500">data descriptor</div>
-                                        <div className="text-sm font-medium text-slate-900 truncate" title={ddFull || ""}>
-                                          {b.hasDD ? (b.dd_name || "-") : (b.isLoading ? "加载中..." : "-")}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </TableCell>
-                                  <TableCell className="font-mono text-xs text-slate-600 whitespace-nowrap w-[1%]">
-                                    {b.hasDD ? (b.dd_namespace || "-") : "-"}
-                                  </TableCell>
-                                  <TableCell className="text-xs text-slate-700 tabular-nums whitespace-nowrap w-[1%]">
-                                    {b.sdCount}
-                                  </TableCell>
-                                  <TableCell className="text-right">
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="text-blue-600 hover:text-blue-800"
-                                      disabled={!b.hasDD}
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        if (!b.hasDD) return
-                                        router.push(`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`)
-                                      }}
-                                    >
-                                      查看
-                                    </Button>
-                                  </TableCell>
-                                </TableRow>
-                              )
-                            })}
-                          </TableBody>
-                        </Table>
+                      <div className="min-h-[280px] flex flex-wrap items-start justify-center gap-6">
+                      {dataSourceLineageRoots.map((root, i) => (
+                        <Fragment key={root.group.id ?? i}>
+                          {i > 0 && (
+                            <div className="w-px self-stretch min-h-[200px] border-l border-dashed border-line" aria-hidden />
+                          )}
+                          <DataSourceLineageBlock
+                            root={root}
+                            onNavigateToGroup={(id) => router.push(`/semantic-groups/${encodeURIComponent(id)}`)}
+                            onNavigateToDataSource={(ns, name) => router.push(`/datasources/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)}
+                          />
+                        </Fragment>
+                      ))}
                       </div>
-                    )}
-                  </div>
+                    </>
+                  )}
                 </>
               ) : (
                 <>
                   <div>
-                    <div className="text-xs font-medium text-slate-500 mb-2">数据源选择器</div>
+                    <div className="text-xs font-medium text-content-muted mb-2">数据源选择器</div>
                     {sourceSelector.length === 0 ? (
-                      <div className="text-sm text-slate-500">-</div>
+                      <div className="text-sm text-content-muted">-</div>
                     ) : (
                       <div className="flex flex-wrap gap-1.5">
                         {sourceSelector.map((s) => (
@@ -631,14 +633,14 @@ export default function AgentDetailPage() {
                   </div>
 
                   <div>
-                    <div className="text-xs font-medium text-slate-500 mb-2">已激活数据描述符</div>
+                    <div className="text-xs font-medium text-content-muted mb-2">已激活数据描述符</div>
                     {activeDescriptors.length === 0 ? (
-                      <div className="text-sm text-slate-500">-</div>
+                      <div className="text-sm text-content-muted">-</div>
                     ) : (
-                      <div className="rounded-md border border-slate-200 overflow-hidden">
+                      <div className="rounded-md border border-line overflow-hidden">
                         <Table>
                           <TableHeader>
-                            <TableRow className="bg-slate-50">
+                            <TableRow className="bg-surface-muted">
                               <TableHead>名称</TableHead>
                               <TableHead className="w-[120px]">命名空间</TableHead>
                             </TableRow>
@@ -647,7 +649,7 @@ export default function AgentDetailPage() {
                             {activeDescriptors.map((d) => (
                               <TableRow key={`${d.namespace}/${d.name}`}>
                                 <TableCell className="font-mono text-xs">{d.name}</TableCell>
-                                <TableCell className="font-mono text-xs text-slate-600">{d.namespace}</TableCell>
+                                <TableCell className="font-mono text-xs text-content">{d.namespace}</TableCell>
                               </TableRow>
                             ))}
                           </TableBody>
@@ -662,19 +664,19 @@ export default function AgentDetailPage() {
           </div>
 
           <div className="space-y-3">
-            <div className="text-sm font-medium text-slate-900 flex items-center gap-2">
-              <Shield className="w-4 h-4 text-slate-500" />
+            <div className="text-sm font-medium text-content flex items-center gap-2">
+              <Shield className="w-4 h-4 text-content-muted" />
               状态与条件
             </div>
-            <Card className="rounded-lg border border-slate-200">
+            <Card className="rounded-lg border border-line">
               <CardContent className="pt-6 max-h-[520px] overflow-auto pr-2">
               {conditions.length === 0 ? (
-                <div className="text-sm text-slate-500">暂无条件信息。</div>
+                <div className="text-sm text-content-muted">暂无条件信息。</div>
               ) : (
-                <div className="rounded-md border border-slate-200 overflow-hidden">
+                <div className="rounded-md border border-line overflow-hidden">
                   <Table>
                     <TableHeader>
-                      <TableRow className="bg-slate-50">
+                      <TableRow className="bg-surface-muted">
                         <TableHead className="w-[140px]">类型</TableHead>
                         <TableHead className="w-[120px]">状态</TableHead>
                         <TableHead className="w-[160px]">原因</TableHead>
@@ -693,14 +695,14 @@ export default function AgentDetailPage() {
                                   ? "bg-green-50 text-green-700 border-green-200"
                                   : c.status === "False"
                                     ? "bg-red-50 text-red-700 border-red-200"
-                                    : "bg-slate-50 text-slate-600 border-slate-200"
+                                    : "bg-surface-muted text-content border-line"
                               }
                             >
                               {c.status || "-"}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-xs text-slate-700">{c.reason || "-"}</TableCell>
-                          <TableCell className="text-xs text-slate-600">{c.message || "-"}</TableCell>
+                          <TableCell className="text-xs text-content">{c.reason || "-"}</TableCell>
+                          <TableCell className="text-xs text-content">{c.message || "-"}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -714,8 +716,8 @@ export default function AgentDetailPage() {
 
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-4">
-            <div className="text-sm font-medium text-slate-900 flex items-center gap-2">
-              <Wrench className="w-4 h-4 text-slate-500" />
+            <div className="text-sm font-medium text-content flex items-center gap-2">
+              <Wrench className="w-4 h-4 text-content-muted" />
               技能
             </div>
             <div className="w-full max-w-sm">
@@ -726,36 +728,37 @@ export default function AgentDetailPage() {
               />
             </div>
           </div>
-          <Card className="rounded-lg border border-slate-200">
+          <Card className="rounded-lg border border-line">
             <CardContent className="pt-6">
             {skills.length === 0 ? (
-              <div className="text-sm text-slate-500">暂无技能信息。</div>
+              <div className="text-sm text-content-muted">暂无技能信息。</div>
             ) : filteredSkills.length === 0 ? (
-              <div className="text-sm text-slate-500">未找到匹配的技能。</div>
+              <div className="text-sm text-content-muted">未找到匹配的技能。</div>
             ) : (
               <div className="space-y-3">
                 {filteredSkills.map((s) => {
                   const key = s.id || s.name
                   const expanded = Boolean(expandedSkillIds[key])
                   return (
-                    <div key={`${s.id}:${s.name}`} className="rounded-md border border-slate-200 bg-white">
+                    <div key={`${s.id}:${s.name}`} className="rounded-md border border-line bg-surface">
                       <button
                         type="button"
-                        className="w-full px-4 py-3 flex items-start justify-between gap-3 text-left hover:bg-slate-50/60 transition-colors"
+                        className="w-full px-4 py-3 flex items-start justify-between gap-3 text-left hover:bg-surface-muted/60 transition-colors cursor-pointer"
                         onClick={() => setExpandedSkillIds((m) => ({ ...m, [key]: !expanded }))}
                         aria-expanded={expanded}
+                        aria-label={expanded ? "收起技能" : "展开技能"}
                       >
                         <div className="min-w-0">
-                          <div className="font-medium text-sm text-slate-900 truncate">
+                          <div className="font-medium text-sm text-content truncate">
                             {s.name || s.id}
                           </div>
-                          <div className="mt-0.5 font-mono text-[11px] text-slate-500 truncate">
+                          <div className="mt-0.5 font-mono text-[11px] text-content-muted truncate">
                             {s.id}
                           </div>
                         </div>
                         <div className="shrink-0 flex items-center gap-2">
                           <Badge variant="outline" className="text-xs">{s.tags.length} 标签</Badge>
-                          <span className="text-slate-400">
+                          <span className="text-content-muted">
                             <ChevronDown className={`w-4 h-4 transition-transform ${expanded ? "rotate-180" : ""}`} />
                           </span>
                         </div>
@@ -763,7 +766,7 @@ export default function AgentDetailPage() {
                       {expanded ? (
                         <div className="px-4 pb-4">
                           {s.description ? (
-                            <div className="mt-2 text-xs text-slate-600 whitespace-pre-wrap leading-6">
+                            <div className="mt-2 text-xs text-content whitespace-pre-wrap leading-6">
                               {s.description}
                             </div>
                           ) : null}
@@ -777,7 +780,7 @@ export default function AgentDetailPage() {
                             </div>
                           ) : null}
                           {s.examples.length > 0 ? (
-                            <div className="mt-2 text-[11px] text-slate-500">
+                            <div className="mt-2 text-[11px] text-content-muted">
                               示例：{s.examples.length}
                             </div>
                           ) : null}
@@ -794,13 +797,46 @@ export default function AgentDetailPage() {
         </>
       )}
 
+      <Dialog open={isLineageZoomOpen} onOpenChange={setIsLineageZoomOpen}>
+        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50 flex-shrink-0 flex flex-row items-center justify-between gap-3">
+            <DialogTitle>语义关系</DialogTitle>
+            <Button variant="ghost" size="icon" onClick={() => setIsLineageZoomOpen(false)} aria-label="关闭" title="关闭">
+              <X className="w-4 h-4" />
+            </Button>
+          </DialogHeader>
+          <div className="p-6 overflow-auto flex-1 min-h-0">
+            <div className="min-h-[400px] flex flex-wrap items-start justify-center gap-6">
+              {dataSourceLineageRoots.map((root, i) => (
+                <Fragment key={root.group.id ?? i}>
+                  {i > 0 && (
+                    <div className="w-px self-stretch min-h-[280px] border-l border-dashed border-line" aria-hidden />
+                  )}
+                  <DataSourceLineageBlock
+                    root={root}
+                    onNavigateToGroup={(id) => {
+                      setIsLineageZoomOpen(false)
+                      router.push(`/semantic-groups/${encodeURIComponent(id)}`)
+                    }}
+                    onNavigateToDataSource={(ns, name) => {
+                      setIsLineageZoomOpen(false)
+                      router.push(`/datasources/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)
+                    }}
+                  />
+                </Fragment>
+              ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除？</AlertDialogTitle>
             <AlertDialogDescription>
               删除后将无法恢复。该操作只删除智能体，不影响底层数据源与配置。
-              <span className="block mt-2 font-mono text-xs text-slate-600">{namespace}/{name}</span>
+              <span className="block mt-2 font-mono text-xs text-content">{namespace}/{name}</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -10,6 +10,25 @@ from langchain_core.documents import Document
 import logging
 import os
 
+# Merge loader fragments + CharacterTextSplitter (\n\n). PDF excluded (keep per-page / MinerU md splits).
+_PROSE_FILE_TYPES = frozenset({"docx", "doc", "txt", "md"})
+
+
+def _merge_raw_documents(documents: List[Document]) -> Document:
+    """Join ordered fragments with blank lines so paragraph-aware splitting sees real boundaries."""
+    parts: List[str] = []
+    for d in documents:
+        if d.page_content:
+            s = d.page_content.strip()
+            if s:
+                parts.append(s)
+    text = "\n\n".join(parts)
+    metadata: dict = {}
+    if documents:
+        metadata = dict(documents[0].metadata)
+    metadata["merged_source_parts"] = len(documents)
+    return Document(page_content=text, metadata=metadata)
+
 
 class Processor:
 
@@ -36,6 +55,14 @@ class Processor:
         
         self.text_splitter = TextSplitterWrapper(
             splitter_type=splitter_type,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            max_document_length=max_document_length,
+            **splitter_kwargs
+        )
+        # LangChain CharacterTextSplitter: default separator \n\n, keeps paragraphs whole when possible.
+        self.paragraph_splitter = TextSplitterWrapper(
+            splitter_type="character",
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             max_document_length=max_document_length,
@@ -104,8 +131,21 @@ class Processor:
 
         self.logger.debug(f"Processor.process_file, raw_documents={raw_documents}")
 
+        if file_type in _PROSE_FILE_TYPES:
+            if len(raw_documents) > 1:
+                n_parts = len(raw_documents)
+                raw_documents = [_merge_raw_documents(raw_documents)]
+                self.logger.info(
+                    "Merged %d loader fragments before paragraph splitting (file_type=%s)",
+                    n_parts,
+                    file_type,
+                )
+            if not (raw_documents[0].page_content and raw_documents[0].page_content.strip()):
+                raise Exception(f"Failed to load file")
+            split_documents = self.paragraph_splitter.split_documents(raw_documents)
+            return split_documents
+
         if len(raw_documents) > 1:
             return raw_documents
-        else:
-            split_documents = self.text_splitter.split_documents(raw_documents)
-            return split_documents
+        split_documents = self.text_splitter.split_documents(raw_documents)
+        return split_documents

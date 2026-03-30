@@ -2,9 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import useSWR from "swr";
 import { api } from "@/lib/api";
+import { apiFetcherWithParams } from "@/lib/swr";
 import { getUserRole } from "@/lib/auth"; // Import auth helper
 import { RbacButton, RbacWrapper } from "@/components/rbac";
+import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { PaginationBar } from "@/components/pagination-bar";
 import { Badge } from "@/components/ui/badge";
@@ -37,7 +40,8 @@ import {
   CreateAgentDialog,
   CreateAgentPayload,
 } from "@/components/agent-forms";
-import { toast } from "sonner";
+import { toast } from "sonner"
+import { ListSkeleton } from "@/components/ui/skeleton";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -86,9 +90,6 @@ function deriveAgentStatus(agent: UnknownRecord): Agent["status"] {
 
 export default function AgentsPage() {
   const router = useRouter();
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteNamespace, setDeleteNamespace] = useState<string>("default");
@@ -98,131 +99,115 @@ export default function AgentsPage() {
   const [typeFilter, setTypeFilter] = useState<
     "all" | "descriptor" | "semantic-group"
   >("all");
-  const [sgNameById, setSgNameById] = useState<Record<string, string>>({});
-  const [isLoadingSg, setIsLoadingSg] = useState(false);
 
   const getItemField = (item: UnknownRecord, key: string, legacyKey: string) =>
     (item[key] as unknown) ?? (item[legacyKey] as unknown);
 
-  const loadSemanticGroups = async () => {
-    if (isLoadingSg) return;
-    setIsLoadingSg(true);
-    try {
-      // Best-effort: load semantic groups and build id -> group_name map.
-      const res = await api.get("/semantic-groups", {
-        params: { offset: 0, limit: 2000 },
-      });
-      const data = (res.data?.data ?? res.data) as unknown;
-      const r = isRecord(data) ? data : {};
-      const items = Array.isArray((r as UnknownRecord).items)
-        ? ((r as UnknownRecord).items as unknown[])
-        : [];
-      const next: Record<string, string> = {};
-      for (const x0 of items) {
-        const x = isRecord(x0) ? x0 : {};
-        const id = asString(x.id) || "";
-        const name = asString(x.group_name) || "";
-        if (id) next[id] = name || id;
-      }
-      setSgNameById((prev) => ({ ...prev, ...next }));
-    } catch {
-      // ignore (UI will fallback)
-    } finally {
-      setIsLoadingSg(false);
+  const agentsKey = useMemo(
+    () => ["/agents", { offset: (page - 1) * pageSize, limit: pageSize }] as const,
+    [page, pageSize]
+  );
+  const sgKey = useMemo(
+    () => ["/semantic-groups", { offset: 0, limit: 2000 }] as const,
+    []
+  );
+
+  const { data: agentsData, error: agentsError, isLoading, mutate: mutateAgents } = useSWR<
+    { items?: unknown[]; totalCount?: number; total?: number; data?: { items?: unknown[]; totalCount?: number; total?: number } }
+  >(agentsKey, apiFetcherWithParams);
+
+  const { data: sgData, isLoading: isLoadingSg } = useSWR<{ items?: unknown[] }>(sgKey, apiFetcherWithParams);
+
+  const sgNameById = useMemo(() => {
+    const r = sgData as unknown;
+    const raw = isRecord(r) ? r : {};
+    const items = Array.isArray(raw.items) ? raw.items : [];
+    const next: Record<string, string> = {};
+    for (const x0 of items) {
+      const x = isRecord(x0) ? x0 : {};
+      const id = asString(x.id) || "";
+      const name = asString(x.group_name) || "";
+      if (id) next[id] = name || id;
     }
-  };
+    return next;
+  }, [sgData]);
 
-  const fetchData = async () => {
-    setIsLoading(true);
-    try {
-      const offset = (page - 1) * pageSize;
-      const res = await api.get(`/agents`, {
-        params: { offset, limit: pageSize },
-      });
-      const data = res.data?.data ?? res.data;
-      const items = (data?.items || []) as unknown;
-      const total = Number(data?.totalCount ?? data?.total ?? 0);
-      const list = Array.isArray(items) ? items : [];
+  const { agents: rawAgentsList, totalCount: rawTotal } = useMemo(() => {
+    const data = agentsData?.data ?? agentsData;
+    const items = (data?.items ?? []) as unknown;
+    const list = Array.isArray(items) ? items : [];
+    const total = Number(data?.totalCount ?? data?.total ?? 0);
+    return { agents: list, totalCount: total };
+  }, [agentsData]);
 
-      const adapted: Agent[] = list
-        .filter((x): x is UnknownRecord => isRecord(x))
-        .map((item) => {
-          const name = asString(item.name) ?? "";
-          const namespace = asString(item.namespace) ?? "default";
+  const agents = useMemo(() => {
+    const list = rawAgentsList ?? [];
+    return list
+      .filter((x): x is UnknownRecord => isRecord(x))
+      .map((item) => {
+        const name = asString(item.name) ?? "";
+        const namespace = asString(item.namespace) ?? "default";
+        const agentCardRaw = getItemField(item, "agentCard", "agent_card");
+        const agentCard = isRecord(agentCardRaw) ? agentCardRaw : undefined;
+        const displayName = asString(agentCard?.name) ?? name;
+        const description = asString(agentCard?.description) ?? "";
+        const dataPolicyRaw = getItemField(item, "dataPolicy", "data_policy");
+        const dataPolicy = isRecord(dataPolicyRaw) ? dataPolicyRaw : undefined;
+        const selectorRaw = dataPolicy?.sourceNameSelector;
+        const selector = Array.isArray(selectorRaw)
+          ? selectorRaw.filter((s): s is string => typeof s === "string")
+          : [];
+        const semanticGroupID =
+          asString((dataPolicy as UnknownRecord | undefined)?.semanticGroupID) ||
+          asString((dataPolicy as UnknownRecord | undefined)?.semantic_group_id);
+        const dataSourceTypeRaw =
+          asString((dataPolicy as UnknownRecord | undefined)?.dataSourceType) ||
+          asString((dataPolicy as UnknownRecord | undefined)?.data_source_type);
+        const dsType =
+          dataSourceTypeRaw === "SemanticGroup" || Boolean(semanticGroupID)
+            ? "semantic-group"
+            : "descriptor";
+        const modelRaw = item.model;
+        const model = isRecord(modelRaw) ? modelRaw : undefined;
+        const plannerLLM =
+          asString((model as UnknownRecord | undefined)?.plannerLLM) ||
+          asString((model as UnknownRecord | undefined)?.planner_llm);
+        const expertLLM =
+          asString((model as UnknownRecord | undefined)?.expertLLM) ||
+          asString((model as UnknownRecord | undefined)?.expert_llm);
+        return {
+          id: name,
+          name: displayName,
+          namespace,
+          description,
+          dataSource: selector.length > 0 ? selector.join(", ") : "-",
+          dataSourceType: dsType,
+          semanticGroupID,
+          plannerLLM,
+          expertLLM,
+          status: deriveAgentStatus(item),
+          raw: item,
+        };
+      })
+      .filter((a) => a.id && a.name);
+  }, [rawAgentsList]);
 
-          const agentCardRaw = getItemField(item, "agentCard", "agent_card");
-          const agentCard = isRecord(agentCardRaw) ? agentCardRaw : undefined;
-          const displayName = asString(agentCard?.name) ?? name;
-          const description = asString(agentCard?.description) ?? "";
-
-          const dataPolicyRaw = getItemField(item, "dataPolicy", "data_policy");
-          const dataPolicy = isRecord(dataPolicyRaw)
-            ? dataPolicyRaw
-            : undefined;
-          const selectorRaw = dataPolicy?.sourceNameSelector;
-          const selector = Array.isArray(selectorRaw)
-            ? selectorRaw.filter((s): s is string => typeof s === "string")
-            : [];
-          const semanticGroupID =
-            asString((dataPolicy as UnknownRecord | undefined)?.semanticGroupID) ||
-            asString((dataPolicy as UnknownRecord | undefined)?.semantic_group_id);
-          const dataSourceTypeRaw =
-            asString((dataPolicy as UnknownRecord | undefined)?.dataSourceType) ||
-            asString((dataPolicy as UnknownRecord | undefined)?.data_source_type);
-
-          const dsType =
-            dataSourceTypeRaw === "SemanticGroup" || Boolean(semanticGroupID)
-              ? "semantic-group"
-              : "descriptor";
-
-          const modelRaw = item.model;
-          const model = isRecord(modelRaw) ? modelRaw : undefined;
-          const plannerLLM =
-            asString((model as UnknownRecord | undefined)?.plannerLLM) ||
-            asString((model as UnknownRecord | undefined)?.planner_llm);
-          const expertLLM =
-            asString((model as UnknownRecord | undefined)?.expertLLM) ||
-            asString((model as UnknownRecord | undefined)?.expert_llm);
-
-          return {
-            id: name,
-            name: displayName,
-            namespace,
-            description,
-            dataSource: selector.length > 0 ? selector.join(", ") : "-",
-            dataSourceType: dsType,
-            semanticGroupID,
-            plannerLLM,
-            expertLLM,
-            status: deriveAgentStatus(item),
-            raw: item,
-          };
-        })
-        .filter((a) => a.id && a.name);
-      setAgents(adapted);
-      setTotalCount(
-        Number.isFinite(total) && total >= 0 ? total : adapted.length,
-      );
-    } catch (err) {
-      console.error("Fetch agents failed", err);
-      toast.error("获取智能体列表失败");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const totalCount = useMemo(
+    () =>
+      Number.isFinite(rawTotal) && rawTotal >= 0 ? rawTotal : agents.length,
+    [rawTotal, agents.length]
+  );
 
   useEffect(() => {
-    // Prefetch SG names to avoid showing SG id flash.
-    loadSemanticGroups();
-    fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize]);
+    if (agentsError) {
+      toast.error("获取智能体列表失败");
+    }
+  }, [agentsError]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [totalPages]);
+  }, [page, totalPages]);
 
   const ordered = useMemo(() => agents || [], [agents]);
   const filtered = useMemo(() => {
@@ -230,17 +215,7 @@ export default function AgentsPage() {
     return ordered.filter((a) => a.dataSourceType === typeFilter);
   }, [ordered, typeFilter]);
 
-  useEffect(() => {
-    // If there are SG agents but we still don't have names, retry once (best-effort).
-    const hasSg =
-      (agents || []).some(
-        (a) => a.dataSourceType === "semantic-group" && (a.semanticGroupID || "").trim(),
-      ) && Object.keys(sgNameById || {}).length === 0;
-    if (!hasSg) return;
-    if (isLoadingSg) return;
-    void loadSemanticGroups();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents, sgNameById, isLoadingSg]);
+  const fetchData = () => mutateAgents();
 
   const handleCreate = async (data: CreateAgentPayload) => {
     try {
@@ -328,37 +303,6 @@ export default function AgentsPage() {
     setDeleteNamespace(ns);
   };
 
-  const statusBadge = (s: Agent["status"]) => {
-    if (s === "AVAILABLE") {
-      return (
-        <Badge
-          variant="outline"
-          className="bg-green-50 text-green-700 border-green-200"
-        >
-          AVAILABLE
-        </Badge>
-      );
-    }
-    if (s === "CREATING") {
-      return (
-        <Badge
-          variant="outline"
-          className="bg-blue-50 text-blue-700 border-blue-200"
-        >
-          CREATING
-        </Badge>
-      );
-    }
-    return (
-      <Badge
-        variant="outline"
-        className="bg-slate-50 text-slate-600 border-slate-200"
-      >
-        UNKNOWN
-      </Badge>
-    );
-  };
-
   const openDetail = (agent: Agent) => {
     router.push(
       `/agents/${encodeURIComponent(agent.namespace)}/${encodeURIComponent(agent.id)}`,
@@ -366,21 +310,21 @@ export default function AgentsPage() {
   };
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6 sm:space-y-8">
       {/* Breadcrumb + actions (in-content, no extra bar) */}
       <div className="flex items-center justify-between">
-        <div className="text-sm font-medium text-slate-600">
-          <span className="text-slate-900 font-semibold">智能体</span>
+        <div className="text-sm font-medium text-content">
+          <span className="text-content font-semibold">智能体</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="hidden sm:block">
+          <div className="hidden md:block">
             <Select
               value={typeFilter}
               onValueChange={(v) =>
                 setTypeFilter(v as "all" | "descriptor" | "semantic-group")
               }
             >
-              <SelectTrigger className="w-[200px] bg-white">
+              <SelectTrigger className="w-[200px] bg-surface">
                 <SelectValue placeholder="筛选类型" />
               </SelectTrigger>
               <SelectContent align="end">
@@ -395,6 +339,7 @@ export default function AgentsPage() {
             size="icon"
             onClick={fetchData}
             disabled={isLoading}
+            aria-label="刷新"
           >
             <RefreshCw
               className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`}
@@ -412,14 +357,14 @@ export default function AgentsPage() {
         </div>
       </div>
 
-      <div className="sm:hidden">
+      <div className="md:hidden">
         <Select
           value={typeFilter}
           onValueChange={(v) =>
             setTypeFilter(v as "all" | "descriptor" | "semantic-group")
           }
         >
-          <SelectTrigger className="w-full bg-white">
+          <SelectTrigger className="w-full bg-surface">
             <SelectValue placeholder="筛选类型" />
           </SelectTrigger>
           <SelectContent>
@@ -431,21 +376,16 @@ export default function AgentsPage() {
       </div>
 
       {isLoading && ordered.length === 0 ? (
-        <div className="flex h-[400px] items-center justify-center">
-          <div className="flex flex-col items-center gap-2 text-muted-foreground">
-            <Loader2 className="w-8 h-8 animate-spin" />
-            <p>加载中...</p>
-          </div>
-        </div>
+        <ListSkeleton items={6} />
       ) : ordered.length === 0 ? (
-        <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50">
+        <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed border-line-hover bg-surface-muted">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Bot className="w-10 h-10 opacity-20" />
             <p>暂无智能体</p>
             <RbacWrapper requiredRole="admin">
               <Button
                 variant="link"
-                className="text-slate-500 underline underline-offset-4 hover:text-slate-900"
+                className="text-content-muted underline underline-offset-4 hover:text-content"
                 onClick={() => setIsCreateOpen(true)}
               >
                 创建一个?
@@ -454,13 +394,13 @@ export default function AgentsPage() {
           </div>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50">
+        <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed border-line-hover bg-surface-muted">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Layers className="w-10 h-10 opacity-20" />
             <p>暂无匹配的智能体</p>
             <Button
               variant="link"
-              className="text-slate-500 underline underline-offset-4 hover:text-slate-900"
+              className="text-content-muted underline underline-offset-4 hover:text-content"
               onClick={() => setTypeFilter("all")}
             >
               清除筛选
@@ -472,14 +412,14 @@ export default function AgentsPage() {
           {filtered.map((a) => (
             <Card
               key={`${a.namespace}/${a.id}`}
-              className="group relative cursor-pointer overflow-hidden hover:border-slate-300 hover:shadow-md transition-all duration-200 py-0 gap-0"
+              className="group relative cursor-pointer overflow-hidden hover:border-line-hover hover:shadow-md transition-all duration-200 py-0 gap-0"
               onClick={() => openDetail(a)}
             >
-              <CardHeader className="p-4 pb-3 bg-slate-50/50">
+              <CardHeader className="p-4 pb-3 bg-surface-muted/50">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0">
-                      <Bot className="w-4.5 h-4.5" />
+                    <div className="w-10 h-10 rounded-xl bg-[#e0e7ff] flex items-center justify-center text-[#4f46e5] shrink-0 border border-[#c7d2fe]">
+                      <Bot className="w-5 h-5" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <CardTitle
@@ -489,12 +429,12 @@ export default function AgentsPage() {
                         {a.name}
                       </CardTitle>
                       <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
-                        <span className="font-mono text-slate-500">
+                        <span className="font-mono text-content-muted">
                           {a.namespace}
                         </span>
-                        <span className="text-slate-300">·</span>
+                        <span className="text-content-muted">·</span>
                         <span
-                          className="font-mono text-slate-500 truncate"
+                          className="font-mono text-content-muted truncate"
                           title={a.id}
                         >
                           {a.id}
@@ -503,12 +443,12 @@ export default function AgentsPage() {
                     </div>
                   </div>
                   <div className="shrink-0 flex items-center gap-2">
-                    {statusBadge(a.status)}
+                    <StatusBadge status={a.status} />
                     <RbacWrapper requiredRole="admin">
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        className="h-8 w-8 text-content-muted hover:text-red-600 hover:bg-red-50"
                         onClick={(e) => {
                           e.stopPropagation();
                           openDelete(a.id, a.namespace);
@@ -523,7 +463,7 @@ export default function AgentsPage() {
                 </div>
               </CardHeader>
               <CardContent className="px-4 pb-4 pt-3 space-y-3">
-                <p className="text-xs text-slate-600 line-clamp-2 min-h-[32px] leading-relaxed">
+                <p className="text-xs text-content line-clamp-2 min-h-[32px] leading-relaxed">
                   {a.description || "暂无描述"}
                 </p>
 
@@ -538,20 +478,20 @@ export default function AgentsPage() {
                   }
                 >
                   {a.dataSourceType === "semantic-group" ? (
-                    <Layers className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <Layers className="w-3.5 h-3.5 text-content-muted shrink-0" />
                   ) : (
-                    <Database className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <Database className="w-3.5 h-3.5 text-content-muted shrink-0" />
                   )}
-                  <span className="text-xs text-slate-600 truncate">
+                  <span className="text-xs text-content truncate">
                     {a.dataSourceType === "semantic-group"
                       ? sgNameById[a.semanticGroupID || ""] ||
-                        (a.semanticGroupID ? (isLoadingSg ? "加载中..." : "-") : "-")
+                        (a.semanticGroupID ? (isLoadingSg ? "加载中…" : "-") : "-")
                       : a.dataSource || "-"}
                   </span>
                 </div>
 
                 <div
-                  className="text-[11px] text-slate-500 font-mono truncate"
+                  className="text-[11px] text-content-muted font-mono truncate"
                   title={[a.plannerLLM, a.expertLLM]
                     .filter(Boolean)
                     .join(" / ")}
@@ -569,7 +509,7 @@ export default function AgentsPage() {
                       业务智能体
                     </Badge>
                   ) : (
-                    <Badge variant="secondary" className="text-[10px] h-5 bg-slate-50 text-slate-600 border-slate-100 font-normal px-2">
+                    <Badge variant="secondary" className="text-[10px] h-5 bg-surface-muted text-content border-line font-normal px-2">
                       数据智能体
                     </Badge>
                   )}
@@ -606,7 +546,7 @@ export default function AgentsPage() {
             <AlertDialogDescription>
               删除后将无法恢复。该操作只删除智能体，不影响底层数据源与配置。
               {deleteId ? (
-                <span className="block mt-2 font-mono text-xs text-slate-600">
+                <span className="block mt-2 font-mono text-xs text-content">
                   {deleteNamespace}/{deleteId}
                 </span>
               ) : null}

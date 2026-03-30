@@ -1,0 +1,556 @@
+# =============================================================================
+# DAC Helm Chart - Default Values
+# All values are documented inline. Override via --set or -f values-prod.yaml
+# =============================================================================
+
+# -- Override the chart name used in resource names
+nameOverride: ""
+# -- Override the full release name (takes precedence over nameOverride)
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Global settings shared across all components
+# ---------------------------------------------------------------------------
+global:
+  # -- Target namespace (informational; actual namespace is set at install time)
+  namespace: dac
+  # -- Container image registry prefix for all DAC images
+  imageRegistry: "registry.cn-shanghai.aliyuncs.com/jamesxiong"
+  # -- Default image pull policy (IfNotPresent | Always | Never)
+  imagePullPolicy: IfNotPresent
+  # -- Image pull secrets for private registries
+  imagePullSecrets: []
+  #  - name: my-registry-secret
+  # -- Default StorageClass for all middleware PVCs ("" = cluster default)
+  storageClass: "nfs-csi"
+
+  # -- LLM provider configuration (shared by all agents)
+  llm:
+    # -- LLM provider type
+    provider: "openai_compatible"
+    # -- LLM API key (replace placeholder before use, e.g. sk-xxx → your real key)
+    apiKey: "sk-xxx"
+    # -- LLM API base URL
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # -- Default LLM model for agents
+    model: "qwen2.5-72b-instruct"
+    # -- Default LLM temperature
+    temperature: "0.01"
+
+  # -- Embedding model configuration (used by data-services)
+  embedding:
+    # -- Embedding provider name (dashscope | openai_compatible | azure)
+    provider: "dashscope"
+    # -- Embedding API key (replace placeholder before use)
+    apiKey: "sk-xxx"
+    # -- Embedding API base URL (required for openai_compatible; dashscope ignores this)
+    baseUrl: ""
+    # -- Embedding model name
+    model: "text-embedding-v4"
+    # -- Embedding vector dimensions
+    dims: "1024"
+
+# =============================================================================
+# Middleware - Built-in single-node StatefulSet instances
+# Set enabled: false to use an external instance instead.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# MySQL 8.0 (used by: apiserver DB, data-services fingerprint/history)
+# ---------------------------------------------------------------------------
+mysql:
+  # -- Deploy built-in MySQL. Set false to use external MySQL.
+  enabled: true
+  image:
+    repository: mysql
+    tag: "8.0"
+  # -- MySQL service port
+  port: 3306
+  # -- Root password (CHANGE THIS before production use)
+  rootPassword: "dac123"
+  # -- Databases to create on init
+  databases:
+    - dac_db
+    - fingerprint
+    - history
+  persistence:
+    # -- Enable persistent storage via volumeClaimTemplates
+    enabled: true
+    # -- Override global.storageClass for MySQL ("" = use global)
+    storageClass: ""
+    # -- PVC size
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# ---------------------------------------------------------------------------
+# Redis 7 (used by: agents, data-sinkers-job, semantic-grouper, registries)
+# ---------------------------------------------------------------------------
+redis:
+  # -- Deploy built-in Redis. Set false to use external Redis.
+  enabled: true
+  image:
+    repository: redis
+    tag: "7.0.4"
+  # -- Redis service port
+  port: 6379
+  # -- Redis auth password (CHANGE THIS before production use)
+  password: "123"
+  persistence:
+    # -- Enable persistent storage via volumeClaimTemplates
+    enabled: true
+    # -- Override global.storageClass for Redis ("" = use global)
+    storageClass: ""
+    # -- PVC size
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ---------------------------------------------------------------------------
+# PostgreSQL 16 + pgvector (used by: data-services vectors and memory)
+# ---------------------------------------------------------------------------
+pgvector:
+  # -- Deploy built-in pgvector. Set false to use external PostgreSQL.
+  enabled: true
+  image:
+    repository: pgvector
+    tag: "pg16-amd64"
+  # -- PostgreSQL service port
+  port: 5432
+  # -- PostgreSQL superuser name
+  user: "postgres"
+  # -- PostgreSQL superuser password (CHANGE THIS before production use)
+  password: "postgres"
+  # -- Databases to create on init (vector extension enabled in each)
+  databases:
+    - knowledge_vector
+    - agent_memory
+  persistence:
+    # -- Enable persistent storage via volumeClaimTemplates
+    enabled: true
+    # -- Override global.storageClass for PGVector ("" = use global)
+    storageClass: ""
+    # -- PVC size
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# =============================================================================
+# Core Platform Services
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# dac-apiserver - Go HTTP API server with JWT auth and Casbin RBAC
+# ---------------------------------------------------------------------------
+apiserver:
+  # -- Enable apiserver deployment
+  enabled: true
+  image:
+    repository: apiserver
+    tag: "v0.8.0"
+  # -- Number of replicas
+  replicas: 1
+  service:
+    # -- Service type (ClusterIP | NodePort | LoadBalancer)
+    type: ClusterIP
+    # -- Service port exposed to other services
+    port: 80
+    # -- Container port the Go binary listens on
+    targetPort: 8080
+    # -- Prometheus metrics port
+    metricsPort: 9090
+  config:
+    server:
+      # -- Gin run mode (release | debug)
+      mode: "release"
+      readTimeout: "60s"
+      writeTimeout: "60s"
+      # -- Max request body size in bytes (10 MB)
+      maxRequestBodySize: 10485760
+    log:
+      # -- Log level (debug | info | warn | error)
+      level: "info"
+      # -- Log format (json | text)
+      format: "json"
+    observability:
+      enableMetrics: false
+      enableTracing: false
+    routingAgent:
+      # -- Timeout for routing agent calls
+      timeout: "300s"
+      # -- Session timeout for chat sessions
+      sessionTimeout: "30m"
+    database:
+      # -- MySQL user for apiserver database
+      user: "root"
+      # -- Database name
+      database: "dac_db"
+      maxOpenConns: 25
+      maxIdleConns: 5
+      connMaxLifetime: "5m"
+    jwt:
+      # -- JWT signing secret (CHANGE THIS before production use)
+      secret: "dac-jwt-secret-change-me"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# frontend - Next.js UI with nginx reverse proxy
+# ---------------------------------------------------------------------------
+frontend:
+  # -- Enable frontend deployment
+  enabled: true
+  image:
+    repository: frontend
+    tag: "v0.8.0"
+  # -- Number of replicas
+  replicas: 1
+  service:
+    # -- Service type (NodePort for direct access, ClusterIP behind ingress)
+    type: NodePort
+    # -- Service port
+    port: 3000
+    # -- Container port
+    targetPort: 3000
+  # -- Ingress for external HTTPS access (disabled by default)
+  ingress:
+    enabled: false
+    # -- Ingress class name (e.g. nginx, traefik)
+    className: "nginx"
+    # -- Additional ingress annotations
+    annotations: {}
+    hosts:
+      - host: dac.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    # -- TLS configuration
+    tls: []
+    #  - secretName: dac-tls
+    #    hosts:
+    #      - dac.example.com
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# data-services - Core data/vector/memory/knowledge-graph API
+# ---------------------------------------------------------------------------
+dataServices:
+  # -- Enable data-services deployment
+  enabled: true
+  image:
+    repository: data-services
+    tag: "v0.8.0-amd64"
+  # -- Number of replicas
+  replicas: 1
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  config:
+    mysql:
+      user: "root"
+      # -- MySQL database for fingerprint storage
+      fingerprintDatabase: "fingerprint"
+      # -- MySQL database for history storage
+      historyDatabase: "history"
+      maxConnection: "50"
+    pgvector:
+      # -- pgvector database for knowledge vectors
+      knowledgeDatabase: "knowledge_vector"
+      minConnection: "1"
+      maxConnection: "50"
+    memory:
+      # -- pgvector database for agent memory (mem0)
+      database: "agent_memory"
+      # -- Default memory collection name
+      collection: "memories"
+      # -- Memory embedding vector dimensions
+      embeddingDims: "1024"
+      minConnection: "1"
+      maxConnection: "50"
+      # -- Graph memory (enable | disable). Requires Neo4j.
+      graphEnable: "disable"
+    knowledgeGraph:
+      embeddingDims: "1024"
+    # -- Neo4j connection (only needed if graphEnable=enable)
+    neo4j:
+      url: "bolt://neo4j-server:7687"
+      username: "neo4j"
+      password: "test123456"
+    llm:
+      # -- LLM model used by data-services (can differ from agent model)
+      model: "deepseek-v3"
+      temperature: "0.01"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# =============================================================================
+# Execution Engine - CRD-based Operator (manages DataAgentContainer / DataDescriptor)
+#
+# The execution-engine operator watches DataAgentContainer (DAC) and
+# DataDescriptor (DD) custom resources and DYNAMICALLY creates Deployments
+# containing orchestrator-agent, expert-agent, code-agent, doc-agent,
+# dac-data-services, data-sinkers-job, etc. Those components are NOT installed
+# as static Deployments by Helm; they are created/destroyed by the operator
+# at runtime in response to CR lifecycle events.
+# =============================================================================
+executionEngine:
+  # -- Deploy the execution-engine operator
+  enabled: true
+  image:
+    repository: execution-engine
+    tag: "v0.8.3-amd64"
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  # -- Images the operator injects into dynamically created Deployments.
+  #    When a DataAgentContainer CR is created, the operator uses these images
+  #    for the orchestrator-agent, expert-agent, code-agent, doc-agent,
+  #    dac-data-services, data-sinkers-job and data-sinkers-status containers.
+  agentImages:
+    orchestratorAgent:
+      tag: "v0.8.0-amd64"
+    expertAgent:
+      tag: "v0.8.0-amd64"
+    codeAgent:
+      tag: "v0.8.0-amd64"
+    docAgent:
+      tag: "v0.8.0-amd64"
+    dacDataServices:
+      tag: "v0.8.0-amd64"
+    dataSinkerJob:
+      tag: "v0.8.0-amd64"
+    dataSinkerStatus:
+      tag: "v0.8.0-amd64"
+
+  # -- dac-configuration ConfigMap values (read by DAC controller)
+  dacConfig:
+    # -- Default planner LLM ConfigMap name
+    defaultPlannerLLM: "llm-default"
+    # -- Default expert LLM ConfigMap name
+    defaultExpertLLM: "llm-default"
+    # -- Langfuse / observation (optional)
+    observationBaseUrl: ""
+    observationSecretKey: ""
+    observationPublicKey: ""
+
+  # -- dd-configuration ConfigMap values (read by DD controller)
+  ddConfig:
+    # -- LLM ConfigMap name used by data-sinkers-job
+    llmConfig: "llm-default"
+
+  # -- LLM model ConfigMaps created in the release namespace.
+  #    The operator and CR spec reference these by name.
+  #    Each field defaults to the corresponding global.llm.* value if left empty.
+  llmConfigs:
+    - name: "llm-default"
+      provider: "openai_compatible"
+      apiKey: "sk-xxx"
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      model: "qwen2.5-72b-instruct"
+
+# ---------------------------------------------------------------------------
+# semantic-grouper - Semantic grouping API + Celery worker
+# ---------------------------------------------------------------------------
+semanticGrouper:
+  # -- Enable semantic-grouper deployment
+  enabled: true
+  image:
+    repository: semantic-grouper
+    tag: "v0.8.0-amd64"
+  api:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  worker:
+    replicas: 1
+    # -- Number of Celery worker processes in each pod
+    celeryWorkerAmount: "2"
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+  config:
+    # -- Redis DB index for Celery broker
+    redisBrokerDb: "8"
+    # -- Redis DB index for Celery result backend
+    redisBackendDb: "9"
+    # -- Redis DB index for distributed locks
+    redisLockDb: "6"
+    llm:
+      provider: "openai_compatible"
+      model: "deepseek-v3.2"
+      temperature: "0.01"
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+
+# =============================================================================
+# Agent Registry - A2A agent card discovery
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# orchestrator-registry - Registry for orchestrator agent cards
+# ---------------------------------------------------------------------------
+orchestratorRegistry:
+  enabled: true
+  image:
+    repository: agent-registry
+    tag: "v0.7.0-amd64"
+  replicas: 1
+  config:
+    # -- Vector collection name for agent cards
+    collectionName: "orchestrator_agent_cards"
+    # -- Redis DB index
+    redisDb: "0"
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 100m
+      memory: 1Gi
+
+# ---------------------------------------------------------------------------
+# biz-orchestrator-registry - Registry for business orchestrator agent cards
+# ---------------------------------------------------------------------------
+bizOrchestratorRegistry:
+  enabled: true
+  image:
+    repository: agent-registry
+    tag: "v0.7.0-amd64"
+  replicas: 1
+  config:
+    collectionName: "biz_orchestrator_agent_cards"
+    redisDb: "2"
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 100m
+      memory: 1Gi
+
+# =============================================================================
+# Agents - A2A protocol agents
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# biz-routing-agent - Entry point: routes user queries to biz orchestrator agents
+# ---------------------------------------------------------------------------
+bizRoutingAgent:
+  enabled: true
+  image:
+    repository: routing-agent
+    tag: "v0.8.0-amd64"
+  replicas: 1
+  config:
+    # -- Redis DB index for agent state
+    redisDb: "2"
+    # -- Agent card collection to search for orchestrators
+    registryCollection: "biz_orchestrator_agent_cards"
+    # -- Max retries for LLM routing calls
+    maxRetries: "1"
+  service:
+    type: ClusterIP
+    # -- A2A protocol port
+    port: 10100
+    targetPort: 10100
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# ---------------------------------------------------------------------------
+# biz-chart-agent - ECharts generation agent (agent mode, self-registers)
+# ---------------------------------------------------------------------------
+bizChartAgent:
+  enabled: true
+  image:
+    repository: chart-agent
+    tag: "v0.7.0-amd64"
+  replicas: 1
+  config:
+    redisDb: "2"
+    agentName: "ChartAgent"
+    agentDescription: "根据用户描述与数据判断是否可绘图并生成 ECharts 图表；数据不足时明确说明无法生成。"
+    # -- Start mode (agent = self-register to biz registry)
+    startMode: "agent"
+    # -- Whether to self-register to agent registry
+    registerAgent: "true"
+  service:
+    type: ClusterIP
+    port: 10100
+    targetPort: 10100
+  resources:
+    requests:
+      cpu: 50m
+      memory: 512Mi
+    limits:
+      cpu: 100m
+      memory: 2Gi
+
+# =============================================================================
+# NOTE: orchestrator-agent, expert-agent, code-agent, doc-agent,
+# dac-data-services and data-sinkers-job are NOT deployed statically by Helm.
+# They are dynamically created by the execution-engine operator when
+# DataAgentContainer / DataDescriptor CRs are applied.
+# See executionEngine.agentImages above for image configuration.
+# =============================================================================

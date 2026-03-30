@@ -148,6 +148,19 @@ spec:
                   - type
                   type: object
                 type: array
+              syncPolicy:
+                description: SyncPolicy enables periodic observation of data source
+                  changes for re-sync
+                properties:
+                  enabled:
+                    description: Enabled enables the dd-sync-observer sidecar when
+                      true
+                    type: boolean
+                  schedule:
+                    description: Schedule is the detection interval, e.g. "6h", "1h",
+                      or seconds
+                    type: string
+                type: object
             type: object
           status:
             description: DataDescriptorStatus defines the observed state of DataDescriptor.

@@ -1,32 +1,26 @@
 "use client"
 
-import { useEffect } from "react"
-import { usePathname } from "next/navigation"
-import Cookies from "js-cookie"
 import { Sidebar } from "@/components/sidebar"
 import { Topbar } from "@/components/topbar"
+import { ErrorBoundary } from "@/components/error-boundary"
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname()
-
-  useEffect(() => {
-    const token = Cookies.get("dac_token")
-    if (token) return
-
-    const search = typeof window !== "undefined" ? window.location.search || "" : ""
-    const hash = typeof window !== "undefined" ? window.location.hash || "" : ""
-    const next = `${pathname || "/"}${search}${hash}`
-    window.location.href = `/login?next=${encodeURIComponent(next)}`
-  }, [pathname])
-
   return (
     <div className="h-screen w-full flex flex-col">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded focus:bg-cta focus:px-3 focus:py-2 focus:text-content-inverse focus:outline-none focus:ring-2 focus:ring-cta cursor-pointer"
+      >
+        跳过主内容
+      </a>
       <Topbar />
       <div className="flex flex-1 min-h-0">
         <Sidebar />
-        <main className="flex-1 flex flex-col h-full overflow-hidden">
-          <div className="flex-1 overflow-auto bg-slate-50">
-            {children}
+        <main id="main" className="flex-1 flex flex-col h-full overflow-hidden pl-14 lg:pl-0">
+          <div className="flex-1 overflow-auto bg-surface-muted min-w-0">
+            <ErrorBoundary>
+              {children}
+            </ErrorBoundary>
           </div>
         </main>
       </div>

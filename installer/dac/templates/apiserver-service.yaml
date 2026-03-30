@@ -1,0 +1,21 @@
+{{- if .Values.apiserver.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "dac-apiserver") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "dac-apiserver") | nindent 4 }}
+spec:
+  type: {{ .Values.apiserver.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.apiserver.service.port }}
+      targetPort: {{ .Values.apiserver.service.targetPort }}
+      protocol: TCP
+    - name: metrics
+      port: {{ .Values.apiserver.service.metricsPort }}
+      targetPort: {{ .Values.apiserver.service.metricsPort }}
+      protocol: TCP
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "dac-apiserver") | nindent 4 }}
+{{- end }}

@@ -1,8 +1,6 @@
 "use client"
 
 import { memo, useEffect, useMemo, useRef, useState } from "react"
-import ReactECharts from "echarts-for-react"
-import * as echarts from "echarts"
 import { Maximize2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -34,21 +32,25 @@ function legendCount(option: unknown): number {
   return readDataLen(legend)
 }
 
-function normalizeEChartsOption(input: Record<string, unknown>) {
-  const o = input as Record<string, any>
-  const out: Record<string, any> = { ...o }
+type EChartsSeriesItem = Record<string, unknown>
+type EChartsTitleOption = Record<string, unknown>
+type EChartsLegendOption = Record<string, unknown>
 
-  const series = Array.isArray(o.series) ? o.series : o.series ? [o.series] : []
+function normalizeEChartsOption(input: Record<string, unknown>) {
+  const o = input
+  const out: Record<string, unknown> = { ...o }
+
+  const series: unknown[] = Array.isArray(o.series) ? o.series : o.series ? [o.series] : []
   const types = new Set(
     series
-      .map((s: any) => (s && typeof s === "object" ? String(s.type || "") : ""))
+      .map((s: unknown) => (s && typeof s === "object" ? String((s as EChartsSeriesItem).type ?? "") : ""))
       .filter(Boolean),
   )
   const isCartesian = ["line", "bar", "scatter", "candlestick", "boxplot"].some((t) =>
     types.has(t),
   )
 
-  const looksLikeDefaultTop = (top: any) => {
+  const looksLikeDefaultTop = (top: unknown) => {
     if (top == null) return true
     if (top === 0 || top === "0" || top === "0%") return true
     if (top === "top") return true
@@ -56,9 +58,9 @@ function normalizeEChartsOption(input: Record<string, unknown>) {
     return false
   }
 
-  const fixTitle = (t: any) => {
+  const fixTitle = (t: unknown): EChartsTitleOption | unknown => {
     if (!t || typeof t !== "object") return t
-    const next = { ...t }
+    const next = { ...(t as EChartsTitleOption) }
     if (next.left == null && next.right == null) next.left = "center"
     if (looksLikeDefaultTop(next.top)) next.top = 8
     if (next.textStyle == null) next.textStyle = {}
@@ -69,9 +71,9 @@ function normalizeEChartsOption(input: Record<string, unknown>) {
     out.title = Array.isArray(o.title) ? o.title.map(fixTitle) : fixTitle(o.title)
   }
 
-  const fixLegend = (lg: any) => {
+  const fixLegend = (lg: unknown): EChartsLegendOption | unknown => {
     if (!lg || typeof lg !== "object") return lg
-    const next = { ...lg }
+    const next = { ...(lg as EChartsLegendOption) }
     const topLooksDefault = looksLikeDefaultTop(next.top)
     const titleObj = Array.isArray(out.title) ? out.title[0] : out.title
     if (topLooksDefault && next.bottom == null) {
@@ -105,9 +107,10 @@ function normalizeEChartsOption(input: Record<string, unknown>) {
         containLabel: true,
       }
     } else if (o.grid && typeof o.grid === "object" && !Array.isArray(o.grid)) {
-      out.grid = { ...o.grid }
-      if (out.grid.containLabel == null) out.grid.containLabel = true
-      if (out.grid.top == null) out.grid.top = clamp(topBase, 72, 180)
+      const grid: Record<string, unknown> = { ...(o.grid as Record<string, unknown>) }
+      if (grid.containLabel == null) grid.containLabel = true
+      if (grid.top == null) grid.top = clamp(topBase, 72, 180)
+      out.grid = grid
     }
   }
 
@@ -176,17 +179,17 @@ export const ChartBlock = memo(function ChartBlock({ value, className }: ChartBl
   if (!raw || !normalizedOption) {
     return (
       <div className={className}>
-        <div className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="rounded-lg border border-line bg-surface shadow-sm overflow-hidden">
           <div className="p-4">
-            <div className="h-[12px] w-40 rounded bg-slate-100 animate-pulse" />
-            <div className="mt-3 h-[10px] w-64 rounded bg-slate-100 animate-pulse" />
-            <div className="mt-4 h-[240px] rounded bg-slate-50 border border-slate-100 animate-pulse" />
-            <div className="mt-3 text-[12px] text-slate-500">
+            <div className="h-[12px] w-40 rounded bg-surface-muted animate-pulse" />
+            <div className="mt-3 h-[10px] w-64 rounded bg-surface-muted animate-pulse" />
+            <div className="mt-4 h-[240px] rounded bg-surface-muted border border-line animate-pulse" />
+            <div className="mt-3 text-[12px] text-content-muted">
               {raw && parseError ? `图表配置解析失败：${parseError}` : isParsing ? "图表生成中…" : "图表生成中…"}
             </div>
           </div>
           {raw && parseError && isProbablyCompleteJson(raw) ? (
-            <pre className="border-t border-slate-200 bg-slate-50 p-3 text-[12px] leading-5 text-slate-700 whitespace-pre-wrap">
+            <pre className="border-t border-line bg-surface-muted p-3 text-[12px] leading-5 text-content whitespace-pre-wrap">
               {raw}
             </pre>
           ) : null}
@@ -197,15 +200,72 @@ export const ChartBlock = memo(function ChartBlock({ value, className }: ChartBl
 
   return (
     <div className={className}>
+      <ChartBlockWithECharts
+        containerRef={containerRef}
+        inlineHeight={inlineHeight}
+        normalizedOption={normalizedOption}
+        open={open}
+        setOpen={setOpen}
+      />
+    </div>
+  )
+})
+
+const ChartBlockWithECharts = memo(function ChartBlockWithECharts({
+  containerRef,
+  inlineHeight,
+  normalizedOption,
+  open,
+  setOpen,
+}: {
+  containerRef: React.RefObject<HTMLDivElement | null>
+  inlineHeight: number
+  normalizedOption: Record<string, unknown>
+  open: boolean
+  setOpen: (v: boolean) => void
+}) {
+  const [ready, setReady] = useState(false)
+  const [ReactECharts, setReactECharts] = useState<typeof import("echarts-for-react")["default"] | null>(null)
+  const [echarts, setEcharts] = useState<typeof import("echarts") | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([import("echarts-for-react"), import("echarts")]).then(([reactEChartsMod, echartsMod]) => {
+      if (!cancelled) {
+        setReactECharts(() => reactEChartsMod.default)
+        setEcharts(echartsMod)
+        setReady(true)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (!ready || !ReactECharts || !echarts) {
+    return (
       <div
         ref={containerRef}
-        className="relative rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden"
+        className="relative rounded-lg border border-line bg-surface shadow-sm overflow-hidden"
+      >
+        <div className="p-4 flex items-center justify-center" style={{ minHeight: inlineHeight }}>
+          <span className="text-sm text-content-muted">加载图表…</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div
+        ref={containerRef}
+        className="relative rounded-lg border border-line bg-surface shadow-sm overflow-hidden"
       >
         <div className="absolute right-2 top-2 z-10">
           <Button
             variant="outline"
             size="icon"
-            className="h-7 w-7 bg-white/90 backdrop-blur"
+            className="h-7 w-7 bg-surface/90 backdrop-blur"
             onClick={() => setOpen(true)}
             aria-label="放大"
             title="放大"
@@ -231,7 +291,7 @@ export const ChartBlock = memo(function ChartBlock({ value, className }: ChartBl
             </Button>
           </DialogHeader>
           <div className="px-6 pb-6 pt-4">
-            <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+            <div className="rounded-lg border border-line bg-surface overflow-hidden">
               <ReactECharts
                 echarts={echarts}
                 option={normalizedOption}
@@ -243,7 +303,7 @@ export const ChartBlock = memo(function ChartBlock({ value, className }: ChartBl
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 })
 

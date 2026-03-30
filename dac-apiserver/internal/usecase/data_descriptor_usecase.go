@@ -4,29 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
-	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 )
 
 type dataDescriptorUsecase struct {
-	repo       domain.DataDescriptorRepository
-	dsClient   *dataservices.Client // Inject DataServices Client
-	logger     *slog.Logger
-}
-
-// generateCollectionName matches Python's generate_collection_name(descriptor)
-// Format: namespace_name, then replace '-' with '_'
-func generateCollectionName(namespace, name string) string {
-	collectionName := fmt.Sprintf("%s_%s", namespace, name)
-	return strings.ReplaceAll(collectionName, "-", "_")
+	repo     domain.DataDescriptorRepository
+	dsClient domain.DataServicesClient
+	logger   *slog.Logger
 }
 
 // NewDataDescriptorUsecase creates a new DataDescriptorUsecase
-func NewDataDescriptorUsecase(repo domain.DataDescriptorRepository, dsClient *dataservices.Client, logger *slog.Logger) domain.DataDescriptorUsecase {
+func NewDataDescriptorUsecase(repo domain.DataDescriptorRepository, dsClient domain.DataServicesClient, logger *slog.Logger) domain.DataDescriptorUsecase {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -97,67 +88,49 @@ func (u *dataDescriptorUsecase) Delete(ctx context.Context, namespace, name stri
 }
 
 // GetSignatureByDD retrieves the newest signature record for a given data descriptor (if any).
-func (u *dataDescriptorUsecase) GetSignatureByDD(ctx context.Context, namespace, name string) (*dataservices.Signature, error) {
+func (u *dataDescriptorUsecase) GetSignatureByDD(ctx context.Context, namespace, name string) (*domain.Signature, error) {
 	return u.dsClient.GetSignatureByDD(ctx, namespace, name)
 }
 
 // GetSemanticDomainByDD retrieves the newest semantic domain record for a given data descriptor (if any).
-func (u *dataDescriptorUsecase) GetSemanticDomainByDD(ctx context.Context, namespace, name string) (*dataservices.SemanticDomain, error) {
+func (u *dataDescriptorUsecase) GetSemanticDomainByDD(ctx context.Context, namespace, name string) (*domain.SemanticDomain, error) {
 	return u.dsClient.GetSemanticDomainByDD(ctx, namespace, name)
 }
 
-// SearchKnowledge searches for knowledge fragments associated with the descriptor
-// Uses the descriptor name as the collection name (convention)
-func (u *dataDescriptorUsecase) SearchKnowledge(ctx context.Context, namespace, name, query string) ([]dataservices.KnowledgeSearchResult, error) {
-	// 1. Check if descriptor exists (ensure user has access)
+// SearchKnowledge searches for knowledge fragments associated with the descriptor.
+func (u *dataDescriptorUsecase) SearchKnowledge(ctx context.Context, namespace, name, query string) ([]domain.KnowledgeSearchResult, error) {
 	_, err := u.repo.Get(ctx, namespace, name)
 	if err != nil {
 		return nil, err
 	}
-
-	// 2. Call Data Services
-	// Python contract: collection_name = f"{namespace}_{name}".replace("-", "_")
-	collectionName := generateCollectionName(namespace, name)
-	results, err := u.dsClient.SearchKnowledge(ctx, collectionName, query, 10)
+	results, err := u.dsClient.SearchKnowledge(ctx, namespace, name, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search knowledge: %w", err)
 	}
-	
 	return results, nil
 }
 
-// GetAllKnowledge retrieves all knowledge fragments associated with the descriptor
-func (u *dataDescriptorUsecase) GetAllKnowledge(ctx context.Context, namespace, name string) ([]dataservices.KnowledgeDocument, error) {
-	// 1. Check if descriptor exists
+// GetAllKnowledge retrieves all knowledge fragments associated with the descriptor.
+func (u *dataDescriptorUsecase) GetAllKnowledge(ctx context.Context, namespace, name string) ([]domain.KnowledgeDocument, error) {
 	_, err := u.repo.Get(ctx, namespace, name)
 	if err != nil {
 		return nil, err
 	}
-
-	// 2. Call Data Services
-	collectionName := generateCollectionName(namespace, name)
-	results, err := u.dsClient.GetAllKnowledge(ctx, collectionName)
+	results, err := u.dsClient.GetAllKnowledge(ctx, namespace, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all knowledge: %w", err)
 	}
-	
 	return results, nil
 }
 
-// DeleteKnowledge deletes knowledge fragments
+// DeleteKnowledge deletes knowledge fragments.
 func (u *dataDescriptorUsecase) DeleteKnowledge(ctx context.Context, namespace, name string, docIDs []string) error {
-	// 1. Check if descriptor exists
 	_, err := u.repo.Get(ctx, namespace, name)
 	if err != nil {
 		return err
 	}
-
-	// 2. Call Data Services
-	collectionName := generateCollectionName(namespace, name)
-	err = u.dsClient.DeleteKnowledge(ctx, collectionName, docIDs)
-	if err != nil {
+	if err := u.dsClient.DeleteKnowledge(ctx, namespace, name, docIDs); err != nil {
 		return fmt.Errorf("failed to delete knowledge: %w", err)
 	}
-	
 	return nil
 }

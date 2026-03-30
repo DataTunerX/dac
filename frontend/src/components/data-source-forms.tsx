@@ -6,6 +6,8 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
 import { ChevronDown, Eye, EyeOff } from "lucide-react"
 import { api } from "@/lib/api"
+import { listNamespaces } from "@/lib/namespaces-api"
+import { listConfigMaps } from "@/lib/configmaps-api"
 import {
   Dialog,
   DialogContent,
@@ -150,7 +152,7 @@ const dataSourceSchema = z.object({
     }
   })
 
-type DataSourceFormValues = z.infer<typeof dataSourceSchema>
+export type DataSourceFormValues = z.infer<typeof dataSourceSchema>
 
 const defaultFormValues: DataSourceFormValues = {
   name: "",
@@ -237,16 +239,8 @@ export function CreateDataSourceDialog({
     setIsLoadingNs(true)
     setNsLoadError(null)
     try {
-      const res = await api.get("/namespaces")
-      // Interceptor unwraps the response data, so res.data is the payload
-      const items = (res.data?.items || res.data?.data?.items || []) as unknown
-      const list = Array.isArray(items) ? items : []
-      const adapted = list
-        .map((x: unknown) => {
-          const r = typeof x === "object" && x !== null ? (x as Record<string, unknown>) : {}
-          return typeof r.name === "string" ? r.name : ""
-        })
-        .filter((x) => x)
+      const res = await listNamespaces()
+      const adapted = (res.items ?? []).map((x) => x.name).filter(Boolean)
       setNamespaces(adapted)
     } catch (e) {
       console.error("Failed to load namespaces", e)
@@ -280,20 +274,8 @@ export function CreateDataSourceDialog({
     setPromptsLoadError(null)
     try {
       const ns = (namespace || "default").trim() || "default"
-      const res = await api.get(`/namespaces/${ns}/configmaps`, { params: { type: "prompts" } })
-      // NOTE: @/lib/api.ts unwraps the standard response envelope `{ code, message, data }`,
-      // so `res.data` is already the inner payload: `{ items, totalCount, ... }`.
-      const data = (res.data?.data ?? res.data) as unknown
-      const r = (typeof data === "object" && data !== null) ? (data as Record<string, unknown>) : {}
-      const items = (r.items ?? []) as unknown
-      const list = Array.isArray(items) ? items : []
-      const adapted = list
-        .map((x: unknown) => {
-          const r = (typeof x === "object" && x !== null) ? (x as Record<string, unknown>) : {}
-          const name = typeof r.name === "string" ? r.name : ""
-          return { name }
-        })
-        .filter((x) => x.name)
+      const data = await listConfigMaps(ns, { type: "prompts" })
+      const adapted = (data.items ?? []).map((x) => ({ name: x.name })).filter((x) => x.name)
       setPromptsConfigMaps(adapted)
     } catch (e) {
       console.error("Failed to load prompts configmaps", e)
@@ -307,7 +289,7 @@ export function CreateDataSourceDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[720px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
-        <DialogHeader className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+        <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
           <DialogTitle>{title || "新建数据源"}</DialogTitle>
           <DialogDescription>
             配置连接信息以创建新的数据源（系统会基于该数据源生成指纹与知识分片）。
@@ -353,7 +335,7 @@ export function CreateDataSourceDialog({
                                 </SelectItem>
                               ) : isLoadingNs ? (
                                 <SelectItem value="__loading__" disabled>
-                                  加载中...
+                                  加载中…
                                 </SelectItem>
                               ) : null}
                               {namespaces.map((ns) => (
@@ -374,7 +356,7 @@ export function CreateDataSourceDialog({
               </div>
             
               <div className="space-y-4">
-                <div className="text-xs font-semibold text-slate-500">连接配置</div>
+                <div className="text-xs font-semibold text-content-muted">连接配置</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
@@ -547,7 +529,7 @@ export function CreateDataSourceDialog({
                                 <button
                                   type="button"
                                   className={cn(
-                                    "absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-slate-500 hover:text-slate-700",
+                                    "absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-content-muted hover:text-content cursor-pointer",
                                     isSubmitting && "pointer-events-none opacity-50"
                                   )}
                                   onClick={() => setShowPassword((v) => !v)}
@@ -594,7 +576,7 @@ export function CreateDataSourceDialog({
                                 <button
                                   type="button"
                                   className={cn(
-                                    "absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-slate-500 hover:text-slate-700",
+                                    "absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-content-muted hover:text-content cursor-pointer",
                                     isSubmitting && "pointer-events-none opacity-50"
                                   )}
                                   onClick={() => setShowPassword((v) => !v)}
@@ -613,7 +595,7 @@ export function CreateDataSourceDialog({
                 </div>
 
                 {typeValue === "coderepo" ? (
-                  <div className="rounded-md border border-slate-200 bg-white p-3 space-y-3">
+                  <div className="rounded-md border border-line bg-surface p-3 space-y-3">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <FormField
                         control={form.control}
@@ -685,8 +667,8 @@ export function CreateDataSourceDialog({
                 ) : null}
               </div>
 
-              <div className="pt-2 border-t border-slate-100">
-                <div className="text-xs font-semibold text-slate-500 mb-2">提示词（可选）</div>
+              <div className="pt-2 border-t border-line">
+                <div className="text-xs font-semibold text-content-muted mb-2">提示词（可选）</div>
                 <FormField
                   control={form.control}
                   name="promptsConfigMapName"
@@ -706,7 +688,7 @@ export function CreateDataSourceDialog({
                           open={promptsSelectOpen}
                           disabled={isSubmitting}
                         >
-                          <SelectTrigger className="w-full bg-white">
+                          <SelectTrigger className="w-full bg-surface">
                             <SelectValue placeholder="选择提示词 ConfigMap（不选则不启用）" />
                           </SelectTrigger>
                           <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
@@ -717,7 +699,7 @@ export function CreateDataSourceDialog({
                               </SelectItem>
                             ) : isLoadingPrompts && promptsConfigMaps.length === 0 ? (
                               <SelectItem value="__loading__" disabled>
-                                加载中...
+                                加载中…
                               </SelectItem>
                             ) : promptsConfigMaps.length === 0 ? (
                               <SelectItem value="__empty__" disabled>
@@ -733,10 +715,10 @@ export function CreateDataSourceDialog({
                         </Select>
                       </FormControl>
                       {(promptsLoadError || promptsConfigMaps.length === 0) && (
-                        <div className="text-xs text-slate-500">
+                        <div className="text-xs text-content-muted">
                           没有可选项？
                           <Link
-                            className="ml-1 text-blue-600 hover:text-blue-700 hover:underline"
+                            className="ml-1 text-cta hover:text-cta/90 hover:underline cursor-pointer"
                             href={`/configmaps?namespace=${encodeURIComponent((namespaceValue || "default").trim() || "default")}&type=prompts&create=1`}
                           >
                             去创建 Prompts ConfigMap
@@ -750,7 +732,7 @@ export function CreateDataSourceDialog({
               </div>
             </div>
 
-            <DialogFooter className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 mt-0">
+            <DialogFooter className="px-6 py-4 border-t border-line bg-surface-muted/50 mt-0">
               <Button
                 type="button"
                 variant="outline"

@@ -15,6 +15,7 @@ class SemanticDomainData:
     dd_name: Optional[str] = None
     semantic_domain_id: Optional[str] = None
     descriptor_type: Optional[str] = None
+    version: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format"""
@@ -31,6 +32,8 @@ class SemanticDomainData:
             data["semantic_domain_id"] = self.semantic_domain_id
         if self.descriptor_type is not None:
             data["descriptor_type"] = self.descriptor_type
+        if self.version is not None:
+            data["version"] = self.version
         return data
 
 class SemanticDomainClient:

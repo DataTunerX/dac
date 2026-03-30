@@ -137,7 +137,7 @@ func (h *AgentContainerHandler) Get(ctx context.Context, c *app.RequestContext) 
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
-//	@Success		200			{object}	map[string]interface{}	"AgentContainer list"
+//	@Success		200			{object}	map[string]any	"AgentContainer list"
 //	@Failure		401			{object}	map[string]string		"Unauthorized"
 //	@Router			/agents [get]
 func (h *AgentContainerHandler) ListAll(ctx context.Context, c *app.RequestContext) {
@@ -175,7 +175,7 @@ func (h *AgentContainerHandler) ListAll(ctx context.Context, c *app.RequestConte
 	for i, container := range containers {
 		items[i] = dto.ToAgentContainerResponse(container)
 	}
-	SuccessResponse(c, map[string]interface{}{
+	SuccessResponse(c, map[string]any{
 		"items":      items,
 		"totalCount": totalCount,
 		"limit":      lo.Limit,
@@ -192,7 +192,7 @@ func (h *AgentContainerHandler) ListAll(ctx context.Context, c *app.RequestConte
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			namespace	path		string	true	"Kubernetes namespace"
-//	@Success		200			{object}	map[string]interface{}	"AgentContainer list"
+//	@Success		200			{object}	map[string]any	"AgentContainer list"
 //	@Failure		401			{object}	map[string]string		"Unauthorized"
 //	@Router			/namespaces/{namespace}/agents [get]
 func (h *AgentContainerHandler) List(ctx context.Context, c *app.RequestContext) {
@@ -229,7 +229,7 @@ func (h *AgentContainerHandler) List(ctx context.Context, c *app.RequestContext)
 		items[i] = dto.ToAgentContainerResponse(container)
 	}
 
-	SuccessResponse(c, map[string]interface{}{
+	SuccessResponse(c, map[string]any{
 		"items":      items,
 		"totalCount": totalCount,
 		"limit":      lo.Limit,

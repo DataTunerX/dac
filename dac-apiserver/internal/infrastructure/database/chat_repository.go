@@ -3,11 +3,13 @@ package database
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
 	"github.com/lvyanru/dac-apiserver/internal/ent"
+	"github.com/lvyanru/dac-apiserver/internal/ent/predicate"
 	"github.com/lvyanru/dac-apiserver/internal/ent/run"
 )
 
@@ -112,15 +114,22 @@ func (r *chatRepository) GetRun(ctx context.Context, runID string) (*entity.Run,
 	return toRunEntity(runEntity), nil
 }
 
-// ListUserRuns gets all runs for user
-func (r *chatRepository) ListUserRuns(ctx context.Context, userID string) ([]*entity.Run, error) {
+// ListUserRuns gets user runs within the requested time window.
+func (r *chatRepository) ListUserRuns(ctx context.Context, userID string, since time.Time) ([]*entity.Run, error) {
 	uid, err := uuid.Parse(userID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid user id: %w", err)
 	}
 
+	predicates := []predicate.Run{
+		run.UserID(uid),
+	}
+	if !since.IsZero() {
+		predicates = append(predicates, run.CreatedAtGTE(since))
+	}
+
 	runs, err := r.client.Run.Query().
-		Where(run.UserID(uid)).
+		Where(predicates...).
 		Order(ent.Desc(run.FieldCreatedAt)).
 		All(ctx)
 	if err != nil {

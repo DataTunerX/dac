@@ -7,6 +7,7 @@ import {
   useFormContext,
   type ControllerProps,
   type FieldPath,
+  type FieldErrors,
   type FieldValues,
 } from "react-hook-form"
 import { cn } from "@/lib/utils"
@@ -31,7 +32,7 @@ export function FormItem({ className, ...props }: React.HTMLAttributes<HTMLDivEl
 }
 
 export function FormLabel({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
-  return <label className={cn("text-sm font-medium text-slate-700", className)} {...props} />
+  return <label className={cn("text-sm font-medium text-content", className)} {...props} />
 }
 
 export function FormControl({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
@@ -42,7 +43,8 @@ export function FormMessage({ className, ...props }: React.HTMLAttributes<HTMLPa
   const ctx = React.useContext(FormFieldContext)
   const { formState } = useFormContext()
   const name = ctx?.name
-  const msg = name ? (formState.errors as any)?.[name]?.message : undefined
+  const err = name ? (formState.errors as FieldErrors<FieldValues>)[name] : undefined
+  const msg = err && typeof err === "object" && "message" in err ? (err as { message?: string }).message : undefined
   if (!msg) return null
   return (
     <p className={cn("text-xs text-red-600", className)} {...props}>
@@ -53,7 +55,7 @@ export function FormMessage({ className, ...props }: React.HTMLAttributes<HTMLPa
 
 export function FormDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
   return (
-    <p className={cn("text-xs text-slate-500", className)} {...props} />
+    <p className={cn("text-xs text-content-muted", className)} {...props} />
   )
 }
 

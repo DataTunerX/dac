@@ -17,12 +17,12 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
 ) {
   const variantClass =
     variant === "outline"
-      ? "border border-slate-200 bg-white shadow-sm hover:bg-slate-50 text-slate-900"
+      ? "border border-line bg-surface shadow-sm hover:bg-surface-muted text-content"
       : variant === "ghost"
-        ? "hover:bg-slate-100 hover:text-slate-900"
+        ? "hover:bg-surface-muted hover:text-content"
         : variant === "link"
-          ? "text-slate-900 underline-offset-4 hover:underline"
-        : "bg-slate-900 text-slate-50 shadow hover:bg-slate-900/90"
+          ? "text-content underline-offset-4 hover:underline"
+          : "bg-btn-primary text-content-inverse shadow hover:bg-btn-primary-hover"
 
   const sizeClass =
     size === "sm"
@@ -36,7 +36,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       ref={ref}
       type={type}
       className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-slate-950 disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cta focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed",
         variantClass,
         sizeClass,
         className

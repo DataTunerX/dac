@@ -103,7 +103,7 @@ func (h *ConfigMapHandler) Get(ctx context.Context, c *app.RequestContext) {
 //	@Param			namespace	path		string	true	"namespace"
 //	@Param			type		query		string	false	"llm|prompts"
 //	@Param			labelSelector	query		string	false	"extra label selector"
-//	@Success		200			{object}	map[string]interface{}
+//	@Success		200			{object}	map[string]any
 //	@Router			/namespaces/{namespace}/configmaps [get]
 func (h *ConfigMapHandler) List(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
@@ -139,7 +139,7 @@ func (h *ConfigMapHandler) List(ctx context.Context, c *app.RequestContext) {
 		resp = append(resp, dto.ToConfigMapResponse(cm))
 	}
 
-	SuccessResponse(c, map[string]interface{}{
+	SuccessResponse(c, map[string]any{
 		"items":      resp,
 		"totalCount": totalCount,
 		"limit":      lo.Limit,

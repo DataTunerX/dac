@@ -47,8 +47,8 @@ from .prompts import (
     OBSERVE_PROMPT_SQL_ZH,
     OBSERVE_PROMPT_COMMON_ZH
 )
-from .executors.mysql.mysql_reader import execute_mysql, get_mysql_tables_schema, get_mysql_tables_relationship, get_mysql_tables_sampledata
-from .executors.postgres.postgres_reader import execute_postgres, get_postgres_tables_schema, get_postgres_tables_relationship, get_postgres_tables_sampledata
+from .executors.mysql.mysql_reader import AsyncMySQLReaderContextManager, execute_mysql, get_mysql_tables_schema, get_mysql_tables_relationship, get_mysql_tables_sampledata
+from .executors.postgres.postgres_reader import AsyncPostgresReaderContextManager, execute_postgres, get_postgres_tables_schema, get_postgres_tables_relationship, get_postgres_tables_sampledata
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 
@@ -61,8 +61,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 SUPPORTED_DATABASE_TYPES = ["mysql", "postgres"]
+PROGRESS_FRAME_PREFIX = "[[DAC_PROGRESS]] "
 
 SQL_PROCESS_MODE = os.getenv('SQL_PROCESS_MODE', "dictionary")
+NON_RETRYABLE_MARKER = "NON_RETRYABLE::OUT_OF_SCOPE"
+NON_RETRYABLE_REPEAT_MARKER = "NON_RETRYABLE::REPEATED_FAILURE"
+STUCK_SIMILARITY_CONFIDENCE_THRESHOLD = float(os.getenv("STUCK_SIMILARITY_CONFIDENCE_THRESHOLD", "0.8"))
+STUCK_MIN_SIMILAR_FAILURES = max(2, int(os.getenv("STUCK_MIN_SIMILAR_FAILURES", "2")))
 
 # System Instructions to Agent
 INSTRUCTIONS = """
@@ -248,6 +253,11 @@ class LLMResult(BaseModel):
         description='The regenerated new user query.'
     )
 
+    reason_code: Optional[str] = Field(
+        default="",
+        description='Structured reason code. Use out_of_scope_non_retryable when task is outside this expert domain.'
+    )
+
 class RequeryResult(BaseModel):
 
     requery: Optional[str] = Field(
@@ -267,6 +277,24 @@ class ObserveResult(BaseModel):
     conclusion: Optional[str] = Field(
         description='whether the answer meet your question.'
     )
+
+class FailureSnapshot(BaseModel):
+    step_id: int = Field(description='Step id for this failure snapshot.')
+    query: str = Field(description='Query used in this step.')
+    sql: str = Field(default="", description='SQL used in this step if any.')
+    sql_signature: str = Field(default="", description='Normalized SQL signature.')
+    error_type: str = Field(default="", description='Normalized error type.')
+    error_code: str = Field(default="", description='Normalized DB error code.')
+    error_stage: str = Field(default="", description='Execution stage where failure happened.')
+    root_cause_type: str = Field(default="", description='Normalized database root cause type.')
+    root_cause_target: str = Field(default="", description='Normalized database object or target.')
+    root_cause_signature: str = Field(default="", description='Stable root cause signature for deterministic matching.')
+    answer_excerpt: str = Field(default="", description='Short answer excerpt for debugging.')
+
+class FailureSimilarityResult(BaseModel):
+    same_failure: bool = Field(default=False, description='Whether two failures are essentially the same.')
+    confidence: float = Field(default=0.0, description='Confidence score for same_failure.')
+    reason: str = Field(default="", description='Brief explanation.')
 
 class TaskStatus(BaseModel):
 
@@ -370,7 +398,9 @@ LOCATE_DB_KNOWLEDGE_PROMPT_ZH = """
 {{
   "knowledge_ids": ["Knowledge ID 1", "Knowledge ID 2", "Knowledge ID 3"],
   "intent_analysis": "对用户真实意图的理解，以及需要哪些表来满足查询。",
-  "reasoning": "选择这些知识记录的原因，说明各表在回答问题中的作用。"
+  "reasoning": "选择这些知识记录的原因，说明各表在回答问题中的作用。",
+  "domain_fit": "fit | mismatch | uncertain",
+  "mismatch_evidence": "当 domain_fit=mismatch 时，简要说明为何当前领域无法处理"
 }}
 
 ---
@@ -400,6 +430,16 @@ class KnowledgeSelectionResult(BaseModel):
         description="选择这些知识记录的原因"
     )
 
+    domain_fit: Optional[str] = Field(
+        default="uncertain",
+        description="fit | mismatch | uncertain"
+    )
+
+    mismatch_evidence: Optional[str] = Field(
+        default="",
+        description="Domain mismatch evidence when domain_fit=mismatch"
+    )
+
 
 class AgentState(str, Enum):
     """Agent execution states"""
@@ -427,12 +467,13 @@ class ExpertAgent(BaseAgent):
         metadata: dict = None,
         max_steps:int = 5,
         current_tasks_status: TaskStatusList = None,
-        current_task_id: int = None
+        current_task_id: int = None,
+        agent_id: str = None,
 
     ):
         logger.info('Initializing ExpertAgent')
         super().__init__(
-            agent_name='ExpertAgent',
+            agent_name=(agent_id or 'ExpertAgent'),
             description='answer user question using yourself knowledge.',
             content_types=['text', 'text/plain'],
         )
@@ -468,7 +509,552 @@ class ExpertAgent(BaseAgent):
         self.max_steps=max_steps
         self.current_tasks_status = current_tasks_status
         self.current_task_id = current_task_id
+        self.agent_id = agent_id or self.agent_name
         self.step_status_list: List[StepStatus] = []
+        # Domain-mismatch fast-fail heuristics (evidence-based, not single-step hard failure)
+        self._consecutive_empty_knowledge_rounds: int = 0
+        self._last_selection_domain_fit: str = "uncertain"
+        self._last_selection_mismatch_evidence: str = ""
+        self._last_sql_execution_error: bool = False
+        self._last_stuck_reason: str = ""
+        self._selected_table_whitelist: List[str] = []
+
+    @staticmethod
+    def _extract_db_error_code(error_text: str) -> str:
+        raw = str(error_text or "")
+        m = re.search(r"\((\d{3,6})\s*,", raw)
+        return m.group(1) if m else ""
+
+    @staticmethod
+    def _normalize_db_object_name(name: str) -> str:
+        raw = str(name or "").strip().strip("`'\"")
+        raw = re.sub(r"\s+", "", raw)
+        return raw.lower()
+
+    @classmethod
+    def _normalize_table_reference(cls, name: str) -> str:
+        raw = str(name or "").strip()
+        if not raw or raw.startswith("("):
+            return ""
+        parts = [part for part in raw.split(".") if part]
+        if not parts:
+            return ""
+        return cls._normalize_db_object_name(parts[-1])
+
+    @classmethod
+    def _coerce_table_name_list(cls, payload: Any) -> List[str]:
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict):
+            items = payload.get("tables", [])
+        else:
+            items = []
+
+        cleaned: List[str] = []
+        seen = set()
+        for item in items:
+            name = str(item or "").strip()
+            normalized = cls._normalize_db_object_name(name)
+            if not normalized or normalized in seen:
+                continue
+            cleaned.append(name)
+            seen.add(normalized)
+        return cleaned
+
+    async def _get_available_table_names(self, db_connect_config: dict, db_type: str) -> List[str]:
+        db_type_lower = str(db_type or "").strip().lower()
+        results: List[Dict[str, Any]] = []
+
+        if db_type_lower == "mysql":
+            async with AsyncMySQLReaderContextManager(db_connect_config) as reader:
+                results = await reader.schema()
+        elif db_type_lower == "postgres":
+            async with AsyncPostgresReaderContextManager(db_connect_config) as reader:
+                results = await reader.schema()
+        else:
+            raise ValueError(f"Unsupported database type: {db_type}")
+
+        table_names: List[str] = []
+        seen = set()
+        for item in results or []:
+            table_name = str((item or {}).get("table_name") or "").strip()
+            normalized = self._normalize_db_object_name(table_name)
+            if not normalized or normalized in seen:
+                continue
+            table_names.append(table_name)
+            seen.add(normalized)
+        return table_names
+
+    def _filter_tables_by_whitelist(self, candidate_tables: List[str], available_tables: List[str]) -> tuple[List[str], List[str]]:
+        normalized_to_actual = {
+            self._normalize_db_object_name(table_name): table_name
+            for table_name in available_tables
+            if str(table_name or "").strip()
+        }
+
+        valid_tables: List[str] = []
+        invalid_tables: List[str] = []
+        seen_valid = set()
+
+        for table_name in candidate_tables or []:
+            normalized = self._normalize_db_object_name(table_name)
+            actual = normalized_to_actual.get(normalized)
+            if actual:
+                if normalized not in seen_valid:
+                    valid_tables.append(actual)
+                    seen_valid.add(normalized)
+            elif str(table_name or "").strip():
+                invalid_tables.append(str(table_name).strip())
+
+        return valid_tables, invalid_tables
+
+    def _extract_sql_table_names(self, sql: str) -> List[str]:
+        raw_sql = str(sql or "")
+        if not raw_sql.strip():
+            return []
+
+        pattern = re.compile(
+            r"\b(?:FROM|JOIN)\s+((?!\()(?:(?:`[^`]+`|\"[^\"]+\"|[A-Za-z_][\w$]*)(?:\s*\.\s*(?:`[^`]+`|\"[^\"]+\"|[A-Za-z_][\w$]*))?))",
+            flags=re.IGNORECASE,
+        )
+        table_names: List[str] = []
+        seen = set()
+        for match in pattern.finditer(raw_sql):
+            normalized = self._normalize_table_reference(match.group(1))
+            if not normalized or normalized in seen:
+                continue
+            table_names.append(normalized)
+            seen.add(normalized)
+        return table_names
+
+    def _validate_sql_table_whitelist(self, sql: str, allowed_tables: List[str]) -> tuple[bool, List[str]]:
+        referenced_tables = self._extract_sql_table_names(sql)
+        if not allowed_tables:
+            return len(referenced_tables) == 0, referenced_tables
+
+        allowed = {
+            self._normalize_db_object_name(table_name)
+            for table_name in allowed_tables
+            if str(table_name or "").strip()
+        }
+        unknown_tables = [table_name for table_name in referenced_tables if table_name not in allowed]
+        return len(unknown_tables) == 0, unknown_tables
+
+    @classmethod
+    def _extract_db_root_cause(cls, error_text: str, error_code: str) -> Dict[str, str]:
+        raw = str(error_text or "")
+        if not raw:
+            return {
+                "root_cause_type": "",
+                "root_cause_target": "",
+                "root_cause_signature": "",
+            }
+
+        patterns = [
+            (
+                "missing_table",
+                re.search(r"table ['\"]?([^'\"\s]+)['\"]? doesn't exist", raw, flags=re.IGNORECASE),
+            ),
+            (
+                "missing_table",
+                re.search(r"relation ['\"]?([^'\"\s]+)['\"]? does not exist", raw, flags=re.IGNORECASE),
+            ),
+            (
+                "unknown_column",
+                re.search(r"unknown column ['\"]?([^'\"\s]+)['\"]? in", raw, flags=re.IGNORECASE),
+            ),
+            (
+                "unknown_column",
+                re.search(r"column ['\"]?([^'\"\s]+)['\"]? does not exist", raw, flags=re.IGNORECASE),
+            ),
+            (
+                "permission_denied",
+                re.search(r"(?:select|insert|update|delete|alter|drop)\s+command denied .*? for table ['\"]?([^'\"\s]+)['\"]?", raw, flags=re.IGNORECASE),
+            ),
+            (
+                "permission_denied",
+                re.search(r"permission denied for table ['\"]?([^'\"\s]+)['\"]?", raw, flags=re.IGNORECASE),
+            ),
+            (
+                "permission_denied",
+                re.search(r"permission denied for relation ['\"]?([^'\"\s]+)['\"]?", raw, flags=re.IGNORECASE),
+            ),
+        ]
+
+        for root_cause_type, match in patterns:
+            if not match:
+                continue
+            target = cls._normalize_db_object_name(match.group(1))
+            signature = f"{root_cause_type}:{target}" if target else root_cause_type
+            return {
+                "root_cause_type": root_cause_type,
+                "root_cause_target": target,
+                "root_cause_signature": signature,
+            }
+
+        fallback_by_code = {
+            "1146": "missing_table",
+            "1054": "unknown_column",
+            "1142": "permission_denied",
+            "1044": "permission_denied",
+            "1045": "permission_denied",
+        }
+        root_cause_type = fallback_by_code.get(str(error_code or "").strip(), "")
+        return {
+            "root_cause_type": root_cause_type,
+            "root_cause_target": "",
+            "root_cause_signature": root_cause_type,
+        } if root_cause_type else {
+            "root_cause_type": "",
+            "root_cause_target": "",
+            "root_cause_signature": "",
+        }
+
+    @staticmethod
+    def _build_structured_error(*, error_type: str, error_code: str, error_stage: str, retryable: bool) -> Dict[str, Any]:
+        return {
+            "error_type": str(error_type or ""),
+            "error_code": str(error_code or ""),
+            "error_stage": str(error_stage or ""),
+            "retryable": bool(retryable),
+        }
+
+    @staticmethod
+    def _build_structured_control(
+        *,
+        reason_code: str,
+        non_retryable: bool,
+        error_type: str = "",
+        error_code: str = "",
+        error_stage: str = "",
+        retryable: bool = True,
+    ) -> Dict[str, Any]:
+        return {
+            "reason_code": str(reason_code or ""),
+            "non_retryable": bool(non_retryable),
+            "error_type": str(error_type or ""),
+            "error_code": str(error_code or ""),
+            "error_stage": str(error_stage or ""),
+            "retryable": bool(retryable),
+        }
+
+    @staticmethod
+    def _extract_structured_error_from_text(text: str) -> Dict[str, Any]:
+        for line in str(text or "").splitlines():
+            stripped = line.strip()
+            if not stripped.lower().startswith("structured_error:"):
+                continue
+            payload = stripped.split(":", 1)[1].strip()
+            try:
+                data = json.loads(payload)
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                return data
+        return {}
+
+    @staticmethod
+    def _extract_structured_control_from_text(text: str) -> Dict[str, Any]:
+        for line in str(text or "").splitlines():
+            stripped = line.strip()
+            if not stripped.lower().startswith("structured_control:"):
+                continue
+            payload = stripped.split(":", 1)[1].strip()
+            try:
+                data = json.loads(payload)
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                return data
+        return {}
+
+    @staticmethod
+    def _extract_sql_from_answer(text: str) -> str:
+        raw = str(text or "")
+        match = re.search(r"sql:\s*(select\b.*?)(?:\n|$)", raw, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return ""
+
+    @staticmethod
+    def _prepare_sql_for_signature(sql: str) -> str:
+        raw = str(sql or "").strip().lower()
+        if not raw:
+            return ""
+        raw = re.sub(r"/\*.*?\*/", " ", raw, flags=re.DOTALL)
+        raw = re.sub(r"--.*?(?:\n|$)", " ", raw)
+        raw = re.sub(r"#.*?(?:\n|$)", " ", raw)
+        raw = raw.replace("`", "").replace('"', "")
+        raw = re.sub(r"'(?:''|[^'])*'", "?", raw)
+        raw = re.sub(r"\b\d+(?:\.\d+)?\b", "?", raw)
+        raw = re.sub(r"%s|\$\d+|:[a-zA-Z_][a-zA-Z0-9_]*|\?", "?", raw)
+        raw = re.sub(r"\s+", " ", raw).strip().rstrip(";")
+        return raw
+
+    @staticmethod
+    def _normalize_sql_identifier(identifier: str, keep_schema: bool = False) -> str:
+        raw = str(identifier or "").strip().strip(",;()")
+        if not raw:
+            return ""
+        raw = raw.replace("`", "").replace('"', "")
+        raw = re.split(r"\s+as\s+|\s+", raw, maxsplit=1, flags=re.IGNORECASE)[0]
+        parts = [part for part in raw.split(".") if part]
+        if not parts:
+            return ""
+        if keep_schema and len(parts) >= 2:
+            return ".".join(parts[-2:])
+        return parts[-1]
+
+    @staticmethod
+    def _normalize_sql_expression_signature(expr: str) -> str:
+        raw = str(expr or "").strip().lower()
+        if not raw:
+            return ""
+        raw = raw.replace("`", "").replace('"', "")
+        raw = re.sub(r"\b[a-z_][a-z0-9_]*\.([a-z_][a-z0-9_]*)\b", r"\1", raw)
+        raw = re.sub(r"\s+", " ", raw).strip(" ,()")
+        return raw
+
+    @staticmethod
+    def _extract_sql_clauses(sql: str, clause: str, stop_clauses: List[str]) -> List[str]:
+        stop_patterns = [rf"\b{re.escape(keyword)}\b" for keyword in stop_clauses]
+        stop_patterns.extend([
+            r"\)\s*(?:select|update|insert|delete)\b",
+            r"\)\s*,",
+        ])
+        stop_pattern = "|".join(stop_patterns)
+        matches = re.finditer(
+            rf"\b{re.escape(clause)}\b\s+(.*?)(?={stop_pattern}|$)",
+            sql,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        clauses: List[str] = []
+        for match in matches:
+            body = match.group(1).strip()
+            if body:
+                clauses.append(body)
+        return clauses
+
+    @classmethod
+    def _extract_sql_table_signatures(cls, sql: str) -> List[str]:
+        tables: List[str] = []
+        seen = set()
+        patterns = [
+            r"\bfrom\s+([a-zA-Z_][a-zA-Z0-9_\.]*)",
+            r"\bjoin\s+([a-zA-Z_][a-zA-Z0-9_\.]*)",
+            r"\bupdate\s+([a-zA-Z_][a-zA-Z0-9_\.]*)",
+            r"\binsert\s+into\s+([a-zA-Z_][a-zA-Z0-9_\.]*)",
+            r"\bdelete\s+from\s+([a-zA-Z_][a-zA-Z0-9_\.]*)",
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, sql, flags=re.IGNORECASE):
+                table_name = cls._normalize_sql_identifier(match.group(1), keep_schema=True)
+                if table_name and table_name not in seen:
+                    seen.add(table_name)
+                    tables.append(table_name)
+        tables.sort()
+        return tables
+
+    @classmethod
+    def _extract_sql_predicate_signatures(cls, where_clause: str) -> List[str]:
+        clause = str(where_clause or "").strip()
+        if not clause:
+            return []
+        signatures: List[str] = []
+        seen = set()
+        pattern = re.compile(
+            r"([a-zA-Z_][a-zA-Z0-9_\.]*)\s*"
+            r"(is\s+not\s+null|is\s+null|not\s+in|between|like|in|<=|>=|<>|!=|=|<|>|is)(?=\s|\(|$)",
+            flags=re.IGNORECASE,
+        )
+        for match in pattern.finditer(clause):
+            identifier = cls._normalize_sql_identifier(match.group(1))
+            operator = re.sub(r"\s+", "_", match.group(2).strip().lower())
+            if not identifier:
+                continue
+            signature = f"{identifier}:{operator}"
+            if signature not in seen:
+                seen.add(signature)
+                signatures.append(signature)
+        if signatures:
+            signatures.sort()
+            return signatures
+        raw_signature = cls._normalize_sql_expression_signature(clause)
+        return [raw_signature[:120]] if raw_signature else []
+
+    @classmethod
+    def _extract_sql_list_signatures(cls, clause: str) -> List[str]:
+        body = str(clause or "").strip()
+        if not body:
+            return []
+        signatures: List[str] = []
+        seen = set()
+        for part in body.split(","):
+            normalized = cls._normalize_sql_expression_signature(part)
+            if not normalized:
+                continue
+            if normalized not in seen:
+                seen.add(normalized)
+                signatures.append(normalized)
+        signatures.sort()
+        return signatures
+
+    @classmethod
+    def _normalize_sql_signature(cls, sql: str) -> str:
+        raw = cls._prepare_sql_for_signature(sql)
+        if not raw:
+            return ""
+
+        statement_match = re.search(r"\b(select|update|insert|delete)\b", raw, flags=re.IGNORECASE)
+        statement_type = statement_match.group(1).lower() if statement_match else "unknown"
+        tables = cls._extract_sql_table_signatures(raw)
+
+        where_clauses = cls._extract_sql_clauses(
+            raw,
+            "where",
+            ["group by", "order by", "having", "limit", "offset", "union", "for update"],
+        )
+        group_clauses = cls._extract_sql_clauses(
+            raw,
+            "group by",
+            ["having", "order by", "limit", "offset", "union", "for update"],
+        )
+        having_clauses = cls._extract_sql_clauses(
+            raw,
+            "having",
+            ["order by", "limit", "offset", "union", "for update"],
+        )
+        order_clauses = cls._extract_sql_clauses(
+            raw,
+            "order by",
+            ["limit", "offset", "union", "for update"],
+        )
+        limit_clauses = cls._extract_sql_clauses(
+            raw,
+            "limit",
+            ["offset", "union", "for update"],
+        )
+
+        signature_parts = [f"stmt={statement_type}"]
+        if raw.startswith("with "):
+            signature_parts.append("cte=true")
+        if tables:
+            signature_parts.append(f"tables={','.join(tables)}")
+
+        where_signatures: List[str] = []
+        where_seen = set()
+        for clause in where_clauses:
+            for signature in cls._extract_sql_predicate_signatures(clause):
+                if signature not in where_seen:
+                    where_seen.add(signature)
+                    where_signatures.append(signature)
+        where_signatures.sort()
+        if where_signatures:
+            signature_parts.append(f"where={','.join(where_signatures)}")
+
+        group_signatures: List[str] = []
+        group_seen = set()
+        for clause in group_clauses:
+            for signature in cls._extract_sql_list_signatures(clause):
+                if signature not in group_seen:
+                    group_seen.add(signature)
+                    group_signatures.append(signature)
+        group_signatures.sort()
+        if group_signatures:
+            signature_parts.append(f"group={','.join(group_signatures)}")
+
+        having_signatures: List[str] = []
+        having_seen = set()
+        for clause in having_clauses:
+            for signature in cls._extract_sql_predicate_signatures(clause):
+                if signature not in having_seen:
+                    having_seen.add(signature)
+                    having_signatures.append(signature)
+        having_signatures.sort()
+        if having_signatures:
+            signature_parts.append(f"having={','.join(having_signatures)}")
+
+        order_signatures: List[str] = []
+        order_seen = set()
+        for clause in order_clauses:
+            for signature in cls._extract_sql_list_signatures(clause):
+                if signature not in order_seen:
+                    order_seen.add(signature)
+                    order_signatures.append(signature)
+        order_signatures.sort()
+        if order_signatures:
+            signature_parts.append(f"order={','.join(order_signatures)}")
+
+        limit_signatures: List[str] = []
+        limit_seen = set()
+        for clause in limit_clauses:
+            signature = cls._normalize_sql_expression_signature(clause)
+            if signature and signature not in limit_seen:
+                limit_seen.add(signature)
+                limit_signatures.append(signature)
+        limit_signatures.sort()
+        if limit_signatures:
+            signature_parts.append(f"limit={','.join(limit_signatures)}")
+
+        return "|".join(signature_parts)
+
+    @staticmethod
+    def _sd_step_query_preview(text: str, limit: int = 420) -> str:
+        """Single-line preview of the step query for DAC_PROGRESS (sd_expert)."""
+        raw = (text or "").replace("\n", " ").strip()
+        if len(raw) <= limit:
+            return raw
+        return raw[: limit - 3] + "..."
+
+    @staticmethod
+    def build_progress_frame(
+        event: str,
+        *,
+        message: str = "",
+        status: str = "running",
+        run_id: str = "",
+        user_id: str = "",
+        agent_id: str = "",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload: Dict[str, Any] = {
+            "schema_version": "v1",
+            "layer": "sd_expert",
+            "event": event,
+            "run_id": run_id or "",
+            "user_id": user_id or "",
+            "agent_id": agent_id or "",
+            "task_id": task_id,
+            "message": message or "",
+            "status": status or "",
+        }
+        if extra:
+            payload["extra"] = extra
+        return f"{PROGRESS_FRAME_PREFIX}{json.dumps(payload, ensure_ascii=False)}\n"
+
+    async def emit_progress(
+        self,
+        event: str,
+        *,
+        message: str,
+        status: str = "running",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        callback = getattr(self, "progress_callback", None)
+        if callback is None:
+            return
+        await callback(self.build_progress_frame(
+            event,
+            message=message,
+            status=status,
+            run_id=(self.metadata or {}).get("run_id", ""),
+            user_id=(self.metadata or {}).get("user_id", ""),
+            agent_id=self.agent_id,
+            task_id=task_id,
+            extra=extra,
+        ))
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
@@ -509,41 +1095,113 @@ class ExpertAgent(BaseAgent):
                 yield {'content': chunk.content, 'is_task_complete': False}
         yield {'content': '', 'is_task_complete': True}
 
+    def _extract_llm_result_from_python_dict_with_nested_quotes(self, content: str) -> Optional[dict]:
+        """
+        Fallback: extract answer/conclusion/requery/reason_code from Python dict format
+        when values contain nested single quotes (e.g. SQL: WHERE x = 'value').
+        Uses regex to handle the '' (escaped quote) boundary before next key.
+        """
+        content = content.strip()
+        if not content.startswith('{') and not content.startswith("'"):
+            return None
+        result = {}
+        # Match 'answer': '...' , 'conclusion' - capture group (.+') includes the SQL closing quote
+        m = re.search(
+            r"'answer'\s*:\s*'(.+')'\s*,\s*'conclusion'\s*:\s*'([^']*)'\s*,\s*'requery'\s*:\s*'(.*?)'\s*(?:,\s*'reason_code'\s*:\s*'([^']*)')?\s*[\)}]",
+            content,
+            re.DOTALL,
+        )
+        if m:
+            result["answer"] = m.group(1)
+            result["conclusion"] = m.group(2)
+            result["requery"] = m.group(3)
+            if m.group(4) is not None:
+                result["reason_code"] = m.group(4)
+            return result
+        # Try double-quote JSON-like with same structure (for consistency)
+        # Use r'...' so inner " do not terminate the string literal
+        json_re = (
+            r'"answer"\s*:\s*"(.*?)"\s*,\s*"conclusion"\s*:\s*"([^"]*)"'
+            r'\s*,\s*"requery"\s*:\s*"(.*?)"\s*(?:,\s*"reason_code"\s*:\s*"([^"]*)")?\s*[\)}]'
+        )
+        m = re.search(json_re, content, re.DOTALL)
+        if m:
+            result["answer"] = m.group(1).replace('\\"', '"').replace('\\\\', '\\')
+            result["conclusion"] = m.group(2)
+            result["requery"] = m.group(3).replace('\\"', '"').replace('\\\\', '\\')
+            if m.group(4) is not None:
+                result["reason_code"] = m.group(4)
+            return result
+        # ObserveResult format: reason + conclusion (observe_sql / observe_common)
+        # Use greedy .+ to capture reason value that may contain internal "
+        m = re.search(
+            r'"reason"\s*:\s*"(.+)"\s*,\s*"conclusion"\s*:\s*"([^"]*)"\s*[\)}]',
+            content,
+            re.DOTALL,
+        )
+        if m:
+            return {"reason": m.group(1).replace('\\"', '"').replace('\\\\', '\\'), "conclusion": m.group(2)}
+        return None
+
     def format_llm_ouput(self, answer) -> dict:
         data_dict = None
-    
+        raw_content = getattr(answer, "content", None) or str(answer)
+
         try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
+            data_dict = json.loads(raw_content)
+        except (json.JSONDecodeError, TypeError):
 
-            cleaned_content = answer.content.strip()
+            cleaned_content = raw_content.strip()
 
-            if cleaned_content.startswith('```json'):
+            if cleaned_content.startswith("```json"):
                 cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
+            elif cleaned_content.startswith("```"):
                 cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
+
+            if cleaned_content.endswith("```"):
                 cleaned_content = cleaned_content[:-3]
-            
+
             cleaned_content = cleaned_content.strip()
-            
+
+            # Normalize Unicode smart quotes: use single quote to avoid breaking JSON string values.
+            # Replacing with " would break when reason/answer contains quoted text like "问题".
+            cleaned_content = cleaned_content.replace("\u201c", "'").replace("\u201d", "'")
+            cleaned_content = cleaned_content.replace("\u2018", "'").replace("\u2019", "'")
+
             try:
                 data_dict = json.loads(cleaned_content)
             except json.JSONDecodeError as e2:
                 logger.error(f" === format_llm_ouput, Parsing failed after cleanup.: {e2}")
                 try:
                     import ast
+
                     data_dict = ast.literal_eval(cleaned_content)
                 except (ValueError, SyntaxError) as e3:
                     logger.error(f" === format_llm_ouput, ast parsing fail: {e3}")
                     try:
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
+                        # Naive replace breaks when values contain single quotes (e.g. SQL)
+                        cleaned_content_replaced = cleaned_content.replace("'", '"')
+                        data_dict = json.loads(cleaned_content_replaced)
                     except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
+                        logger.error(
+                            f" === format_llm_output, secondary parsing failed: {e4}, trying regex fallback"
+                        )
+                        # Fallback: Python dict with nested single quotes (e.g. kimi-k2.5)
+                        data_dict = self._extract_llm_result_from_python_dict_with_nested_quotes(
+                            raw_content
+                        )
+                        if data_dict is None:
+                            data_dict = self._extract_llm_result_from_python_dict_with_nested_quotes(
+                                cleaned_content
+                            )
+                        if data_dict is None:
+                            logger.error(
+                                " === format_llm_output, regex fallback also failed, using default value"
+                            )
+                    except Exception as e5:
+                        logger.error(
+                            f" === format_llm_output, exception during parsing: {e5}, using default value"
+                        )
 
         return data_dict
 
@@ -591,7 +1249,7 @@ class ExpertAgent(BaseAgent):
 
         logger.debug(f" === ExpertAgent.invoke_structured_with_table_selector, llm answer = {answer}")
 
-        tables = self.format_llm_ouput(answer)
+        tables = self._coerce_table_name_list(self.format_llm_ouput(answer))
 
         logger.info(f" === ExpertAgent.invoke_structured_with_table_selector , invoke_structured_with_table_selector, tables = {tables}")
 
@@ -599,20 +1257,39 @@ class ExpertAgent(BaseAgent):
 
         source_metadata = self.analyze_descriptor_source_metadata()
         db_connect_config = source_metadata[ddname]
+        available_tables = await self._get_available_table_names(db_connect_config, db_type)
+        valid_tables, invalid_tables = self._filter_tables_by_whitelist(tables, available_tables)
+        self._selected_table_whitelist = valid_tables
+
+        if invalid_tables:
+            logger.warning(
+                "Table selector produced non-existent tables, invalid=%s, valid=%s",
+                invalid_tables,
+                valid_tables,
+            )
 
         sql_schema = ""
         sql_relationship = ""
         sql_sample_data = ""
 
-        if db_type == "mysql":
-            sql_schema = await get_mysql_tables_schema(db_connect_config, tables)
-            sql_relationship = await get_mysql_tables_relationship(db_connect_config, tables)
-            sql_sample_data = await get_mysql_tables_sampledata(db_connect_config, tables)
+        if not valid_tables:
+            logger.warning(
+                "Table selector whitelist left no valid tables, original=%s invalid=%s",
+                tables,
+                invalid_tables,
+            )
+            sql_schema = "No schema information available"
+            sql_relationship = "[]"
+            sql_sample_data = "[]"
+        elif db_type == "mysql":
+            sql_schema = await get_mysql_tables_schema(db_connect_config, valid_tables)
+            sql_relationship = await get_mysql_tables_relationship(db_connect_config, valid_tables)
+            sql_sample_data = await get_mysql_tables_sampledata(db_connect_config, valid_tables)
 
-        if db_type == "postgres":
-            sql_schema = await get_postgres_tables_schema(db_connect_config, tables)
-            sql_relationship = await get_postgres_tables_relationship(db_connect_config, tables)
-            sql_sample_data = await get_postgres_tables_sampledata(db_connect_config, tables)
+        if valid_tables and db_type == "postgres":
+            sql_schema = await get_postgres_tables_schema(db_connect_config, valid_tables)
+            sql_relationship = await get_postgres_tables_relationship(db_connect_config, valid_tables)
+            sql_sample_data = await get_postgres_tables_sampledata(db_connect_config, valid_tables)
 
         logger.debug(f"ExpertAgent.invoke_structured_with_table_selector, sql_schema={sql_schema}")
 
@@ -706,23 +1383,23 @@ class ExpertAgent(BaseAgent):
             {
               "name": "性别",
               "column": "gender",
-              "table": "user", 
-              "sql": "SELECT DISTINCT gender FROM user"
+              "table": "user_profile", 
+              "sql": "SELECT DISTINCT `gender` FROM `user_profile`"
             },
             {
               "name": "产品分类",
               "column": "category",
-              "table": "product",
-              "sql": "SELECT DISTINCT category FROM product"
+              "table": "product_catalog",
+              "sql": "SELECT DISTINCT `category` FROM `product_catalog`"
             },
             {
               "name": "城市", 
               "column": "city",
-              "table": "customer",
-              "sql": "SELECT DISTINCT city FROM customer"
+              "table": "customer_profile",
+              "sql": "SELECT DISTINCT `city` FROM `customer_profile`"
             }
           ],
-          "reason": ""
+          "reason": "table 字段和 sql 中的表名必须来自当前 Tables Schema 中已经出现的真实物理表名，不能猜测或改写表名。"
         }
 
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -820,13 +1497,15 @@ class ExpertAgent(BaseAgent):
         terminate_json_prompt_instructions_zh: dict = {
             "answer": "基于背景知识，Java是一种高级、面向对象、跨平台的编程语言...",
             "conclusion": "terminate",
-            "requery": ""
+            "requery": "",
+            "reason_code": ""
         }
 
         continue_json_prompt_instructions_zh: dict = {
             "answer": "当前背景知识主要涵盖Java和Go语言，无法提供Python相关的详细信息",
             "conclusion": "continue",
-            "requery": "能否提供Python编程语言的具体介绍和特点？"
+            "requery": "能否提供Python编程语言的具体介绍和特点？",
+            "reason_code": ""
         }
 
         agent_domain = self._get_agent_domain_description()
@@ -876,7 +1555,8 @@ class ExpertAgent(BaseAgent):
             data_dict = {
                 "answer": "System error: Unable to process model response",
                 "conclusion": "error",
-                "requery": ""
+                "requery": "",
+                "reason_code": ""
             }
 
         llm_result = LLMResult(**data_dict)
@@ -969,12 +1649,22 @@ class ExpertAgent(BaseAgent):
     async def invoke_structured_dictionary_mode(self, knowledge, db_type) -> (LLMResult, str, str):
 
         memory = self.metadata.get('memory', '')
+        logger.info(
+            "[MemoryUse][SD-Expert][invoke_structured_dictionary_mode] query_chars=%d memory_chars=%d memory_non_empty=%s",
+            len(str(self.query or "")),
+            len(str(memory or "")),
+            bool(str(memory or "").strip()),
+        )
 
         logger.debug(f" === ExpertAgent.invoke_structured_dictionary_mode, memory = {memory}")
 
         sql_schema, sql_relationship, sql_sample_data = await self.invoke_structured_with_table_selector(knowledge, db_type)
 
         tables_knowledge = f"\n\nTables Schema:\n {sql_schema}\n\nTables Relationshp:\n{sql_relationship}\n\nSample SQL Data:\n{sql_sample_data}\n\n"
+
+        # 将数据源中的 Key Information（background_knowledge）和 Fewshots 一并传入 SQL 生成 prompt，否则 ConfigMap 中的年末值规则等无法生效
+        if knowledge and isinstance(knowledge, str) and knowledge.strip():
+            tables_knowledge += f"\n\n--- 数据源背景知识与示例（必须遵守） ---\n\n{knowledge}\n\n"
 
         dimensions, dimensions_reason = await self.invoke_structured_with_dimension_selector(tables_knowledge, db_type)
 
@@ -1040,7 +1730,7 @@ class ExpertAgent(BaseAgent):
 
         langfuse.flush()
 
-        logger.debug(f" === ExpertAgent.invoke_structured_dictionary_mode, answer = {answer}")
+        logger.info(f" === ExpertAgent.invoke_structured_dictionary_mode, answer = {answer}")
 
         data_dict = self.format_llm_ouput(answer)
 
@@ -1063,6 +1753,12 @@ class ExpertAgent(BaseAgent):
     async def invoke_structured(self, knowledge, db_type) -> LLMResult:
 
         memory = self.metadata.get('memory', '')
+        logger.info(
+            "[MemoryUse][SD-Expert][invoke_structured] query_chars=%d memory_chars=%d memory_non_empty=%s",
+            len(str(self.query or "")),
+            len(str(memory or "")),
+            bool(str(memory or "").strip()),
+        )
 
         logger.info(f" === ExpertAgent.invoke_structured, memory = {memory}")
 
@@ -1578,6 +2274,9 @@ class ExpertAgent(BaseAgent):
                     return_exceptions=True
                 )
 
+                domain_fit_votes = {"fit": 0, "mismatch": 0, "uncertain": 0}
+                mismatch_evidences: List[str] = []
+
                 # 收集所有批次选中的 knowledge_id
                 for idx, result in enumerate(batch_results):
                     if isinstance(result, Exception):
@@ -1585,6 +2284,13 @@ class ExpertAgent(BaseAgent):
                         continue
                     if result.knowledge_ids:
                         all_selected_ids.extend(result.knowledge_ids)
+                    fit = str(getattr(result, "domain_fit", "uncertain") or "uncertain").strip().lower()
+                    if fit not in domain_fit_votes:
+                        fit = "uncertain"
+                    domain_fit_votes[fit] += 1
+                    evidence = str(getattr(result, "mismatch_evidence", "") or "").strip()
+                    if evidence:
+                        mismatch_evidences.append(evidence)
 
                 # 去重（保留首次出现顺序）
                 seen = set()
@@ -1596,6 +2302,28 @@ class ExpertAgent(BaseAgent):
                 if unique_ids:
                     knowledge_str = knowledge_blocks.get_text_by_ids(unique_ids)
                     logger.info(f"get_knowledge: Retrieved full knowledge content, length: {len(knowledge_str)}")
+
+                if unique_ids:
+                    self._consecutive_empty_knowledge_rounds = 0
+                    self._last_selection_domain_fit = "fit"
+                    self._last_selection_mismatch_evidence = ""
+                else:
+                    self._consecutive_empty_knowledge_rounds += 1
+                    # Majority vote from batch-level domain_fit signal
+                    if domain_fit_votes["mismatch"] > max(domain_fit_votes["fit"], domain_fit_votes["uncertain"]):
+                        self._last_selection_domain_fit = "mismatch"
+                    elif domain_fit_votes["fit"] > max(domain_fit_votes["mismatch"], domain_fit_votes["uncertain"]):
+                        self._last_selection_domain_fit = "fit"
+                    else:
+                        self._last_selection_domain_fit = "uncertain"
+                    self._last_selection_mismatch_evidence = " | ".join(mismatch_evidences[:3])
+                logger.info(
+                    "[DomainMismatchHeuristic][Expert] step=%d empty_rounds=%d domain_fit=%s selected_ids=%d",
+                    self.current_step,
+                    self._consecutive_empty_knowledge_rounds,
+                    self._last_selection_domain_fit,
+                    len(unique_ids),
+                )
 
         except Exception as e:
             logger.error(f'An error occurred during two-stage knowledge retrieval: {e}')
@@ -1651,6 +2379,20 @@ class ExpertAgent(BaseAgent):
         except (json.JSONDecodeError, Exception) as e:
             logger.error(f"analyze_descriptor_types: failed to parse JSON: {e}, raw={first_item[:200]}")
             return "", "unknown", ""
+
+    def _should_fast_fail_out_of_scope(self, llm_result: LLMResult, knowledge: str) -> bool:
+        # Preserve AI flexibility: allow one exploratory step first.
+        if self.current_step <= 1:
+            return False
+        if str(getattr(llm_result, "reason_code", "") or "").strip():
+            return False
+        if str(getattr(llm_result, "conclusion", "") or "").strip() != "continue":
+            return False
+        if str(knowledge or "").strip():
+            return False
+        if self._consecutive_empty_knowledge_rounds < 2:
+            return False
+        return self._last_selection_domain_fit == "mismatch"
 
     def analyze_descriptor_source_metadata(self):
         """
@@ -1743,6 +2485,7 @@ class ExpertAgent(BaseAgent):
         llm_result = None
         dimensions = ""
         dimensions_reason = ""
+        self._last_sql_execution_error = False
         try:
             if agent_type == "structured":
                 # Determine whether the current query needs to execute SQL or should be analyzed based on the large model itself.
@@ -1763,17 +2506,55 @@ class ExpertAgent(BaseAgent):
                             sql_result :List[Dict[str, Any]] = []
                             # Execute the SQL statement generated by the large model.
                             try:
+                                sql_tables_valid, unknown_tables = self._validate_sql_table_whitelist(
+                                    llm_result.answer,
+                                    self._selected_table_whitelist,
+                                )
+                                if not sql_tables_valid:
+                                    raise ValueError(
+                                        "SQL references table(s) outside the selected whitelist: "
+                                        f"{', '.join(unknown_tables)}. allowed_tables={self._selected_table_whitelist}"
+                                    )
                                 sql_result = await self.execute_db_query(db_connect_config, db_type, llm_result.answer)
                                 logger.info(f"sql execute sql: {llm_result.answer}")
                             except Exception as e:
-                                # if sql error, will requery and enter next loop
+                                # SQL execution errors should short-circuit this step.
                                 logger.error(f"execute_db_query error : {e}")
+                                error_message = f"Execution error: sql error: {e}"
+                                error_code = self._extract_db_error_code(str(e))
+                                if not error_code and "selected whitelist" in str(e):
+                                    error_code = "1146"
+                                structured_control = self._build_structured_control(
+                                    reason_code="execution_error",
+                                    non_retryable=False,
+                                    error_type="execution_error",
+                                    error_code=error_code,
+                                    error_stage="execute_db_query",
+                                    retryable=True,
+                                )
+                                self._last_sql_execution_error = True
+                                llm_result.reason_code = "execution_error"
                                 llm_result.conclusion = "continue"
-                                requery = await self.invoke_requery_sql(llm_result.answer, f"sql error: {e}", knowledge)
+                                self.state = AgentState.IDLE
+                                requery = await self.invoke_requery_sql(llm_result.answer, error_message, knowledge)
                                 if requery.conclusion == "terminate" and requery.requery:
                                     llm_result.requery = requery.requery
-                                    self.state = AgentState.IDLE
-                                    llm_result.answer = f"sql error:{e}, sql: {llm_result.answer}"
+                                llm_result.answer = (
+                                    f"{error_message}, sql: {llm_result.answer}\n"
+                                    f"structured_control: {json.dumps(structured_control, ensure_ascii=False)}"
+                                )
+
+                            if self._last_sql_execution_error:
+                                logger.warning(
+                                    "Skip observe_sql due to structured sql_execution_error flag"
+                                )
+                                # Keep failure snapshots available for repeated-failure detection.
+                                self.save_step_status(self.query, llm_result.answer)
+                                # Preserve existing requery behavior for next step when available.
+                                if hasattr(llm_result, "requery") and llm_result.requery:
+                                    self.query = llm_result.requery
+                                    self._update_task_description(llm_result.requery)
+                                return llm_result.answer, dimensions, dimensions_reason
 
                             if sql_result:
                                 # Case: The large model successfully generated SQL, and data was retrieved.
@@ -1862,8 +2643,40 @@ class ExpertAgent(BaseAgent):
 
             # if need to re-query, reset query to self.query for next loop
             if hasattr(llm_result, 'conclusion') and llm_result.conclusion == "continue":
+                if self._should_fast_fail_out_of_scope(llm_result, knowledge):
+                    llm_result.reason_code = "out_of_scope_non_retryable"
+                    logger.warning(
+                        "[NonRetryablePropagation][Expert] task_id=%s fast_fail_domain_mismatch=true empty_rounds=%d domain_fit=%s",
+                        self.current_task_id,
+                        self._consecutive_empty_knowledge_rounds,
+                        self._last_selection_domain_fit,
+                    )
+                # Structured non-retryable signal from model output.
+                if str(getattr(llm_result, 'reason_code', '') or '').strip() == "out_of_scope_non_retryable":
+                    base_answer = str(llm_result.answer or "").strip()
+                    if not base_answer:
+                        base_answer = "当前任务超出本领域能力范围，无法提供有效答案。"
+                    evidence = str(self._last_selection_mismatch_evidence or "").strip()
+                    if evidence and evidence not in base_answer:
+                        base_answer = f"{base_answer}\n\nDomain mismatch evidence: {evidence}"
+                    if NON_RETRYABLE_MARKER not in base_answer:
+                        llm_result.answer = f"{NON_RETRYABLE_MARKER} | {base_answer}"
+                    else:
+                        llm_result.answer = base_answer
+                    llm_result.answer = (
+                        f"{llm_result.answer}\n"
+                        f"structured_control: {json.dumps(self._build_structured_control(reason_code='out_of_scope_non_retryable', non_retryable=True, retryable=False), ensure_ascii=False)}"
+                    )
+                    logger.warning(
+                        "[NonRetryablePropagation][Expert] task_id=%s marker_emitted=%s source=reason_code action=finish_no_requery answer_chars=%d",
+                        self.current_task_id,
+                        NON_RETRYABLE_MARKER,
+                        len(str(llm_result.answer or "")),
+                    )
+                    llm_result.requery = ""
+                    self.state = AgentState.FINISHED
                 self.save_step_status(self.query, llm_result.answer)
-                if hasattr(llm_result, 'requery') and llm_result.requery:
+                if self.state != AgentState.FINISHED and hasattr(llm_result, 'requery') and llm_result.requery:
                     self.query = llm_result.requery
                     self._update_task_description(llm_result.requery)
 
@@ -1918,6 +2731,219 @@ class ExpertAgent(BaseAgent):
                     logger.info(f"Updated task {self.current_task_id} description to: {new_task_description}")
                     break
 
+    def _build_failure_snapshot(self, step_status: StepStatus) -> Optional[FailureSnapshot]:
+        answer = str(getattr(step_status, "answer", "") or "")
+        structured = self._extract_structured_control_from_text(answer)
+        if not structured:
+            structured = self._extract_structured_error_from_text(answer)
+        error_type = str(structured.get("error_type") or "").strip().lower()
+        error_code = str(structured.get("error_code") or "").strip()
+        error_stage = str(structured.get("error_stage") or "").strip().lower()
+        if not error_type and "execution error:" in answer.lower():
+            error_type = "execution_error"
+        if not error_code:
+            error_code = self._extract_db_error_code(answer)
+        if not error_type:
+            return None
+        sql_text = self._extract_sql_from_answer(answer)
+        root_cause = self._extract_db_root_cause(answer, error_code)
+        return FailureSnapshot(
+            step_id=int(getattr(step_status, "id", 0) or 0),
+            query=str(getattr(step_status, "query", "") or ""),
+            sql=sql_text,
+            sql_signature=self._normalize_sql_signature(sql_text),
+            error_type=error_type,
+            error_code=error_code,
+            error_stage=error_stage,
+            root_cause_type=str(root_cause.get("root_cause_type") or ""),
+            root_cause_target=str(root_cause.get("root_cause_target") or ""),
+            root_cause_signature=str(root_cause.get("root_cause_signature") or ""),
+            answer_excerpt=answer[:500],
+        )
+
+    def _rule_based_same_failure(self, previous: FailureSnapshot, current: FailureSnapshot) -> tuple[Optional[bool], str]:
+        # Triage stage 1: rules only handle deterministic cases.
+        # Return True for hard matches, False for hard non-matches, and None for gray areas
+        # that should be delegated to the LLM judge.
+        same_error_code = bool(previous.error_code and current.error_code and previous.error_code == current.error_code)
+        conflicting_error_code = bool(
+            previous.error_code and current.error_code and previous.error_code != current.error_code
+        )
+        same_error_type = bool(previous.error_type and current.error_type and previous.error_type == current.error_type)
+        same_error_stage = bool(
+            previous.error_stage and current.error_stage and previous.error_stage == current.error_stage
+        )
+        same_sql = bool(
+            previous.sql_signature and current.sql_signature and previous.sql_signature == current.sql_signature
+        )
+        both_missing_sql = bool(not previous.sql_signature and not current.sql_signature)
+        same_root_cause_signature = bool(
+            previous.root_cause_signature
+            and current.root_cause_signature
+            and previous.root_cause_signature == current.root_cause_signature
+        )
+
+        if same_error_code and same_sql:
+            return True, f"same_error_code={previous.error_code} with same_sql_signature"
+        if same_error_code and same_error_stage and same_root_cause_signature:
+            return True, (
+                f"same_error_code={previous.error_code}, "
+                f"same_error_stage={previous.error_stage}, "
+                f"same_root_cause_signature={previous.root_cause_signature}"
+            )
+        if conflicting_error_code:
+            return False, (
+                f"conflicting_error_code={previous.error_code}!={current.error_code}"
+            )
+        if previous.sql_signature and current.sql_signature and not same_sql:
+            return None, "different_sql_signature"
+        if same_error_type and same_error_stage and same_sql and not conflicting_error_code:
+            return True, (
+                f"same_error_type={previous.error_type}, "
+                f"same_error_stage={previous.error_stage} with same_sql_signature"
+            )
+        if both_missing_sql and same_error_code and same_error_stage and same_error_type:
+            return True, (
+                f"same_error_code={previous.error_code}, "
+                f"same_error_stage={previous.error_stage}, "
+                f"same_error_type={previous.error_type} without_sql_signature"
+            )
+        return None, ""
+
+    async def _llm_judge_similar_failure(
+        self,
+        previous: FailureSnapshot,
+        current: FailureSnapshot,
+    ) -> FailureSimilarityResult:
+        prompt = (
+            "你是一个失败归因判断器。请比较下面两次失败是否本质上是同一个失败模式。"
+            "如果它们只是 query 表述略有不同，但错误类型、错误码、SQL 模板或失败根因基本一致，"
+            "请判断 same_failure=true。只输出 JSON，不要输出任何额外文本。\n\n"
+            "输出格式："
+            "{\"same_failure\": true/false, \"confidence\": 0.0-1.0, \"reason\": \"简短原因\"}\n\n"
+            f"previous={json.dumps(previous.model_dump(), ensure_ascii=False)}\n"
+            f"current={json.dumps(current.model_dump(), ensure_ascii=False)}"
+        )
+        answer = await self.llm.ainvoke([HumanMessage(content=prompt)])
+        data = self.format_llm_ouput(answer)
+        if not isinstance(data, dict):
+            return FailureSimilarityResult()
+        return FailureSimilarityResult(**{
+            "same_failure": bool(data.get("same_failure", False)),
+            "confidence": float(data.get("confidence", 0.0) or 0.0),
+            "reason": str(data.get("reason", "") or ""),
+        })
+
+    @staticmethod
+    def _failure_snapshot_for_log(snapshot: FailureSnapshot) -> Dict[str, Any]:
+        return {
+            "step_id": snapshot.step_id,
+            "error_code": snapshot.error_code,
+            "error_stage": snapshot.error_stage,
+            "root_cause_signature": snapshot.root_cause_signature,
+            "sql_signature": snapshot.sql_signature[:240],
+            "query": snapshot.query[:120],
+        }
+
+    async def _decide_same_failure(self, previous: FailureSnapshot, current: FailureSnapshot) -> tuple[bool, str]:
+        # Triage stage 2:
+        # 1. short-circuit on high-confidence rule results
+        # 2. use the LLM only for ambiguous comparisons
+        # This keeps repeated-failure aborts conservative and explainable.
+        task_id = getattr(self, "current_task_id", None)
+        step_no = getattr(self, "current_step", 0)
+        same_by_rule, rule_reason = self._rule_based_same_failure(previous, current)
+        if same_by_rule is True:
+            logger.warning(
+                "Repeated failure triage hard-match | task_id=%s current_step=%s reason=%s previous=%s current=%s",
+                task_id,
+                step_no,
+                rule_reason,
+                self._failure_snapshot_for_log(previous),
+                self._failure_snapshot_for_log(current),
+            )
+            await self.emit_progress(
+                "sd_same_failure_hard_match",
+                message="detected repeated failure by deterministic rule",
+                status="running",
+                task_id=task_id,
+                extra={
+                    "reason": rule_reason,
+                    "previous": self._failure_snapshot_for_log(previous),
+                    "current": self._failure_snapshot_for_log(current),
+                },
+            )
+            return True, f"rule:{rule_reason}"
+        if same_by_rule is False:
+            logger.info(
+                "Repeated failure triage hard-non-match | task_id=%s current_step=%s reason=%s previous=%s current=%s",
+                task_id,
+                step_no,
+                rule_reason,
+                self._failure_snapshot_for_log(previous),
+                self._failure_snapshot_for_log(current),
+            )
+            await self.emit_progress(
+                "sd_same_failure_hard_non_match",
+                message="determined failures are different by deterministic rule",
+                status="running",
+                task_id=task_id,
+                extra={
+                    "reason": rule_reason or "hard_non_match",
+                    "previous": self._failure_snapshot_for_log(previous),
+                    "current": self._failure_snapshot_for_log(current),
+                },
+            )
+            return False, f"rule:{rule_reason}" if rule_reason else "rule:hard_non_match"
+
+        logger.info(
+            "Repeated failure triage enters llm judge | task_id=%s current_step=%s pre_rule_reason=%s previous=%s current=%s",
+            task_id,
+            step_no,
+            rule_reason,
+            self._failure_snapshot_for_log(previous),
+            self._failure_snapshot_for_log(current),
+        )
+        await self.emit_progress(
+            "sd_same_failure_llm_judging",
+            message="using LLM to compare ambiguous failure patterns",
+            status="running",
+            task_id=task_id,
+            extra={
+                "pre_rule_reason": rule_reason,
+                "previous": self._failure_snapshot_for_log(previous),
+                "current": self._failure_snapshot_for_log(current),
+            },
+        )
+        llm_result = await self._llm_judge_similar_failure(previous, current)
+        logger.info(
+            "Repeated failure triage llm result | task_id=%s current_step=%s same_failure=%s confidence=%.2f threshold=%.2f reason=%s",
+            task_id,
+            step_no,
+            llm_result.same_failure,
+            llm_result.confidence,
+            STUCK_SIMILARITY_CONFIDENCE_THRESHOLD,
+            llm_result.reason,
+        )
+        await self.emit_progress(
+            "sd_same_failure_llm_result",
+            message="received LLM same-failure judgment",
+            status="running",
+            task_id=task_id,
+            extra={
+                "same_failure": llm_result.same_failure,
+                "confidence": llm_result.confidence,
+                "threshold": STUCK_SIMILARITY_CONFIDENCE_THRESHOLD,
+                "reason": llm_result.reason,
+            },
+        )
+        if llm_result.same_failure and llm_result.confidence >= STUCK_SIMILARITY_CONFIDENCE_THRESHOLD:
+            return True, (
+                f"llm(confidence={llm_result.confidence:.2f}, "
+                f"threshold={STUCK_SIMILARITY_CONFIDENCE_THRESHOLD:.2f}): {llm_result.reason}"
+            )
+        return False, ""
+
     def handle_stuck_state(self):
         """Handle stuck state by adding a prompt to change strategy"""
         stuck_prompt_en = "\
@@ -1929,8 +2955,62 @@ class ExpertAgent(BaseAgent):
         self.next_step_prompt = f"{stuck_prompt_zh}\n{self.next_step_prompt}"
         logger.warning(f"Agent detected stuck state. Added prompt: {stuck_prompt_zh}")
 
-    def is_stuck(self) -> bool:
-        """Check if the agent is stuck in a loop by detecting duplicate content"""
+    async def is_stuck(self) -> bool:
+        """Unified stuck detection: deterministic rules first, LLM fallback second."""
+        self._last_stuck_reason = ""
+
+        if len(self.step_status_list) >= STUCK_MIN_SIMILAR_FAILURES:
+            snapshots: List[FailureSnapshot] = []
+            for step in reversed(self.step_status_list):
+                snap = self._build_failure_snapshot(step)
+                if not snap:
+                    break
+                snapshots.append(snap)
+                if len(snapshots) >= STUCK_MIN_SIMILAR_FAILURES:
+                    break
+
+            if len(snapshots) >= STUCK_MIN_SIMILAR_FAILURES:
+                current = snapshots[0]
+                matched_reasons: List[str] = []
+                consecutive_matches = 1
+                for previous in snapshots[1:]:
+                    same_failure, same_reason = await self._decide_same_failure(previous, current)
+                    if not same_failure:
+                        break
+                    consecutive_matches += 1
+                    if same_reason:
+                        matched_reasons.append(same_reason)
+                    current = previous
+
+                if consecutive_matches >= STUCK_MIN_SIMILAR_FAILURES:
+                    joined_reason = " | ".join(matched_reasons) if matched_reasons else "similar failures detected"
+                    self._last_stuck_reason = (
+                        f"consecutive_similar_failures={consecutive_matches}"
+                        f"/threshold={STUCK_MIN_SIMILAR_FAILURES}: {joined_reason}"
+                    )
+                    task_id = getattr(self, "current_task_id", None)
+                    step_no = getattr(self, "current_step", 0)
+                    logger.warning(
+                        "Repeated failure threshold reached | task_id=%s current_step=%s consecutive=%s threshold=%s reason=%s",
+                        task_id,
+                        step_no,
+                        consecutive_matches,
+                        STUCK_MIN_SIMILAR_FAILURES,
+                        self._last_stuck_reason,
+                    )
+                    await self.emit_progress(
+                        "sd_repeated_failure_detected",
+                        message="detected repeated failure and will stop local retries",
+                        status="running",
+                        task_id=task_id,
+                        extra={
+                            "consecutive_matches": consecutive_matches,
+                            "threshold": STUCK_MIN_SIMILAR_FAILURES,
+                            "reason": self._last_stuck_reason,
+                        },
+                    )
+                    return True
+
         if len(self.memory.messages) < 2:
             return False
 
@@ -1938,14 +3018,15 @@ class ExpertAgent(BaseAgent):
         if not last_message.content:
             return False
 
-        # Count identical content occurrences
         duplicate_count = sum(
             1
             for msg in reversed(self.memory.messages[:-1])
             if msg.role == "assistant" and msg.content == last_message.content
         )
-
-        return duplicate_count >= self.duplicate_threshold
+        if duplicate_count >= self.duplicate_threshold:
+            self._last_stuck_reason = "duplicate assistant responses detected"
+            return True
+        return False
 
     def update_memory(
         self,
@@ -1993,10 +3074,34 @@ class ExpertAgent(BaseAgent):
                 self.current_step += 1
 
                 current_task = self.metadata.get('current_task', '')
+                # Snapshot before step() — step() may update self.query (requery).
+                step_query_snapshot = (self.query or "").strip()
 
                 logger.info(f"******************** {current_task}, current query: {self.query}, Executing step {self.current_step}/{self.max_steps}")
+                step_query_preview = self._sd_step_query_preview(step_query_snapshot)
+                # agent_name is already on the progress frame (agent_id); keep message minimal.
+                step_started_msg = (
+                    f"executing step {self.current_step}/{self.max_steps}"
+                    f" | query: {step_query_preview}"
+                )
+                step_extra: Dict[str, Any] = {
+                    "step": self.current_step,
+                    "max_steps": self.max_steps,
+                    "step_query": step_query_preview,
+                }
+                ct = (current_task or "").strip()
+                if ct and ct != step_query_snapshot:
+                    step_extra["current_task"] = self._sd_step_query_preview(ct, 260)
+                    step_started_msg += f" | task: {step_extra['current_task']}"
+                await self.emit_progress(
+                    "sd_step_started",
+                    message=step_started_msg,
+                    status="running",
+                    task_id=self.current_task_id,
+                    extra=step_extra,
+                )
 
-                step_result_str = f"step {self.current_step}/{self.max_steps}: query: {self.query}"
+                step_result_str = f"step {self.current_step}/{self.max_steps}: query: {step_query_snapshot}"
 
                 step_result ,dimensions, dimensions_reason = await self.step()
 
@@ -2016,10 +3121,54 @@ class ExpertAgent(BaseAgent):
                 if dimensions_reason and dimensions:
                     step_result = f"{step_result_str} \n\nconditions: {dimensions}, {dimensions_reason} \n\nanswer: {step_result} \n"
 
+                stuck = await self.is_stuck()
+                if stuck:
+                    stuck_reason = self._last_stuck_reason or "repeated failure detected"
+                    stop_notice = (
+                        f"{NON_RETRYABLE_REPEAT_MARKER} | repeated_failure_non_retryable | {stuck_reason}"
+                    )
+                    structured_control = json.dumps(
+                        self._build_structured_control(
+                            reason_code="repeated_failure_non_retryable",
+                            non_retryable=True,
+                            retryable=False,
+                        ),
+                        ensure_ascii=False,
+                    )
+                    step_result = f"{step_result}\n{stop_notice}\n"
+                    if self.step_status_list:
+                        self.step_status_list[-1].answer = (
+                            f"{self.step_status_list[-1].answer}\n{stop_notice}\nstructured_control: {structured_control}"
+                        )
+                    step_result = f"{step_result}structured_control: {structured_control}\n"
+                    self.state = AgentState.FINISHED
+                    logger.warning(
+                        "Expert detected repeated failure and stopped local retries | task_id=%s step=%s reason=%s",
+                        self.current_task_id,
+                        self.current_step,
+                        stuck_reason,
+                    )
+
+                finished_query_preview = self._sd_step_query_preview(step_query_snapshot)
+                await self.emit_progress(
+                    "sd_step_finished",
+                    message=(
+                        f"completed step {self.current_step}/{self.max_steps}"
+                        f" | query: {finished_query_preview}"
+                    ),
+                    status="done",
+                    task_id=self.current_task_id,
+                    extra={
+                        "step": self.current_step,
+                        "max_steps": self.max_steps,
+                        "step_query": finished_query_preview,
+                        "result_chars": len(str(step_result or "")),
+                    },
+                )
                 yield step_result
 
-                # Check for stuck state
-                if self.is_stuck():
+                # Backward compatible soft hint when not hard-stopped but duplicate content is detected.
+                if not stuck and self._last_stuck_reason == "duplicate assistant responses detected":
                     self.handle_stuck_state()
 
             if self.current_step >= self.max_steps:
@@ -2044,7 +3193,8 @@ class ExpertAgentExecutorSemanticDomain(AgentExecutor):
         dd_namespace:str = None,
         descriptor_types:list = None,
         data_services_url: str = None,
-        max_steps:int = 5
+        max_steps:int = 5,
+        agent_id: str = None,
 
     ):
         self.provider=provider
@@ -2059,6 +3209,7 @@ class ExpertAgentExecutorSemanticDomain(AgentExecutor):
         self.data_services_url=data_services_url
         self.stream_enabled = stream
         self.max_steps = max_steps
+        self.agent_id = agent_id
 
     async def execute(
         self,
@@ -2100,7 +3251,8 @@ class ExpertAgentExecutorSemanticDomain(AgentExecutor):
             metadata=metadata,
             max_steps=self.max_steps,
             current_tasks_status=current_tasks_status,
-            current_task_id=current_task_id
+            current_task_id=current_task_id,
+            agent_id=self.agent_id,
         )
 
         task = context.current_task
@@ -2111,6 +3263,13 @@ class ExpertAgentExecutorSemanticDomain(AgentExecutor):
         updater = TaskUpdater(event_queue, task.id, task.context_id)
 
         if self.stream_enabled:
+            async def _progress_callback(text: str) -> None:
+                await updater.add_artifact(
+                    [TextPart(text=text)],
+                    name=f'{agent.agent_name}-result',
+                )
+
+            agent.progress_callback = _progress_callback
             async for chunk in agent.run():
                 if chunk:
                     part = TextPart(text=chunk)

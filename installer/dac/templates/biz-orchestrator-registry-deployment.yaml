@@ -1,0 +1,44 @@
+{{- if .Values.bizOrchestratorRegistry.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dac.bizOrchestratorRegistry.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "biz-orchestrator-registry") | nindent 4 }}
+spec:
+  replicas: {{ .Values.bizOrchestratorRegistry.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "biz-orchestrator-registry") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "biz-orchestrator-registry") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: biz-orchestrator-registry
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.bizOrchestratorRegistry.image.repository "tag" .Values.bizOrchestratorRegistry.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.bizOrchestratorRegistry.service.targetPort }}
+          env:
+            - name: DATA_SERVICES
+              value: {{ include "dac.dataServices.url" . | quote }}
+            - name: COLLECTION_NAME
+              value: {{ .Values.bizOrchestratorRegistry.config.collectionName | quote }}
+          args:
+            - "--redis-host"
+            - {{ include "dac.redis.serviceName" . | quote }}
+            - "--redis-port"
+            - {{ .Values.redis.port | quote }}
+            - "--redis-db"
+            - {{ .Values.bizOrchestratorRegistry.config.redisDb | quote }}
+            - "--password"
+            - {{ .Values.redis.password | quote }}
+          resources:
+            {{- toYaml .Values.bizOrchestratorRegistry.resources | nindent 12 }}
+{{- end }}

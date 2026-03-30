@@ -115,12 +115,13 @@ func runServer(cmd *cobra.Command, args []string) {
 		slog.Warn("kubernetes health check failed, service may not work properly", "error", err)
 	}
 
-	// Initialize DataServices Client
+	// Initialize DataServices Client and domain adapter (dependency inversion)
 	dsClient := dataservices.NewClient(
 		cfg.DataServices.BaseURL,
 		cfg.DataServices.Timeout,
 		appLogger,
 	)
+	dsAdapter := dataservices.NewDataServicesAdapter(dsClient)
 
 	// Initialize repositories, usecases, and handlers with dynamic client
 	agentRepo := k8s.NewAgentContainerRepository(k8sClient)
@@ -128,23 +129,23 @@ func runServer(cmd *cobra.Command, args []string) {
 	agentHandler := handler.NewAgentContainerHandler(agentUsecase, appLogger)
 
 	descriptorRepo := k8s.NewDataDescriptorRepository(k8sClient)
-	descriptorUsecase := usecase.NewDataDescriptorUsecase(descriptorRepo, dsClient, appLogger) // Injected dsClient + logger
+	descriptorUsecase := usecase.NewDataDescriptorUsecase(descriptorRepo, dsAdapter, appLogger)
 	descriptorHandler := handler.NewDataDescriptorHandler(descriptorUsecase, appLogger)
 
 	// Semantic Domain module (data-services)
-	semanticDomainUsecase := usecase.NewSemanticDomainUsecase(dsClient, appLogger)
+	semanticDomainUsecase := usecase.NewSemanticDomainUsecase(dsAdapter, appLogger)
 	semanticDomainHandler := handler.NewSemanticDomainHandler(semanticDomainUsecase, appLogger)
 
 	// Semantic Group module (data-services)
-	semanticGroupUsecase := usecase.NewSemanticGroupUsecase(dsClient, appLogger)
+	semanticGroupUsecase := usecase.NewSemanticGroupUsecase(dsAdapter, appLogger)
 	semanticGroupHandler := handler.NewSemanticGroupHandler(semanticGroupUsecase, appLogger)
 
 	// DD Group Relation module (data-services)
-	ddGroupRelationUsecase := usecase.NewDDGroupRelationUsecase(dsClient, appLogger)
+	ddGroupRelationUsecase := usecase.NewDDGroupRelationUsecase(dsAdapter, appLogger)
 	ddGroupRelationHandler := handler.NewDDGroupRelationHandler(ddGroupRelationUsecase, appLogger)
 
 	// Knowledge Graph module (data-services)
-	knowledgeGraphUsecase := usecase.NewKnowledgeGraphUsecase(dsClient, appLogger)
+	knowledgeGraphUsecase := usecase.NewKnowledgeGraphUsecase(dsAdapter, appLogger)
 	knowledgeGraphHandler := handler.NewKnowledgeGraphHandler(knowledgeGraphUsecase, appLogger)
 
 	// ConfigMap module (DAC managed ConfigMaps: llm/prompts)
@@ -197,7 +198,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	chatUsecase := usecase.NewChatUsecase(
 		chatRepo,
 		a2aClient,
-		dsClient, // Inject dsClient
+		dsAdapter,
 		appLogger,
 	)
 	chatHandler := handler.NewChatHandler(chatUsecase, appLogger)

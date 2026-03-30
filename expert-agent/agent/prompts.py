@@ -145,6 +145,13 @@ MYSQL_NEXT_STEP_PROMPT_ZH = """
 - 不包含任何额外文本或解释
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
+- 【重要】必须使用双引号包裹键名和字符串值，禁止使用 Python 字典格式（单引号）。answer 中的 SQL 字符串字面量（如 `'广州农商银行总行'`）可以保留单引号，但外层 JSON 结构必须用双引号。
+
+正确示例（answer 含 SQL 时）：
+{{"answer": "SELECT retail_deposit_total FROM deposit_data WHERE branch_name = '广州农商银行总行' AND data_date = '2024-12-31'", "conclusion": "terminate", "requery": ""}}
+
+错误示例（禁止）：
+{{'answer': 'SELECT ... WHERE branch_name = '广州农商银行总行'...', 'conclusion': 'terminate', 'requery': ''}}  // 单引号格式无法解析
 
 **示例参考：**
 
@@ -327,6 +334,7 @@ POSTGRES_NEXT_STEP_PROMPT_ZH = """
 - 不包含任何额外文本或解释
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
+- 【重要】必须使用双引号包裹键名和字符串值，禁止使用 Python 字典格式（单引号）。answer 中的 SQL 可含单引号字符串字面量，但外层 JSON 必须用双引号。
 
 请严格按照以下JSON格式响应，使用双引号：
 
@@ -426,6 +434,11 @@ You are an expert at answering questions based on the provided PostgreSQL databa
 - Does not contain any additional text or explanation
 - Do not add extra quotes around the output
 - Ensure it is valid JSON format
+- [CRITICAL] Use double quotes for keys and string values. Do NOT use Python dict format (single quotes). SQL string literals in answer (e.g. 'Branch Name') may use single quotes, but the outer JSON structure must use double quotes.
+
+Correct example (answer with SQL): {{"answer": "SELECT x FROM t WHERE name = 'value'", "conclusion": "terminate", "requery": ""}}
+
+Wrong (forbidden): {{'answer': 'SELECT ...', 'conclusion': 'terminate'}}  // single-quote format cannot be parsed
 
 Please strictly follow the following JSON format, using double quotes:
 
@@ -476,8 +489,13 @@ TABLE_SELECTOR_NEXT_STEP_PROMPT_ZH = """
 **数据表和表关系的数据**
 {knowledge}
 
+**硬性规则**
+1. 只能返回在上方 `knowledge` 中明确出现过的真实物理表名。
+2. 禁止根据语义猜测、改写或简化表名。例如，不能把 `sys_user`、`users`、`user_info` 这类真实表名改写成 `user`。
+3. 如果无法从 `knowledge` 中确认真实表名，返回空数组 `[]`，不要猜测。
+
 **返回的样本数据**
-["user", "product"]
+["ods_user_account", "dim_branch_info"]
 
 
 **输出格式：**
@@ -796,6 +814,7 @@ COMMON_NEXT_STEP_PROMPT_ZH = """
 4. 在生成问题的时候, 不要让用户补充材料。
 5. 若背景知识与用户问题无关或信息不足，在 `answer` 字段中说明无法直接回答的原因，并提示需要更相关的信息，结论字段返回 `continue`。
 6. 特别注意：即使你的通用知识中可能知道答案，但如果问题不在你的专业领域内，或背景知识中没有提供相关内容，你也必须返回 `continue`。诚实地回答"不知道"比编造答案更重要。
+7. 当且仅当你判断“问题超出当前专家领域，不应由本专家处理”时，必须设置 `reason_code` 为 `out_of_scope_non_retryable`，并将 `requery` 置为空字符串。
 
 
 **任务处理要求**
@@ -816,7 +835,7 @@ COMMON_NEXT_STEP_PROMPT_ZH = """
 **输出格式要求：**
 - 必须返回标准的 JSON 格式字符串
 - 确保输出可直接被 `json.loads()` 解析
-- 包含三个必要字段：`answer`, `conclusion`, `requery`
+- 包含四个字段：`answer`, `conclusion`, `requery`, `reason_code`
 
 
 **示例参考：**
@@ -852,6 +871,12 @@ COMMON_NEXT_STEP_PROMPT_GROUP_ZH = """
 4. 若提供的相关信息与用户问题无关或信息不足，请不要直接回答问题，请根据原始的问题，保留原问题的语意，重新生成一个更清晰易懂的相似的新问题，放入 `requery` 字段, 你要重新生成问题就行。
 5. 在生成问题的时候, 不要让用户补充材料。
 6. 若提供的相关信息与用户问题无关或信息不足，在 `answer` 字段中说明无法直接回答的原因，并提示需要更相关的信息。
+7. 输出必须收敛：先在 answer 开头用 1-2 句给出结论，不要先写过程。
+8. 若 answer 中包含多个事实、指标、属性或结论，默认使用轻量结构化表达提升可读性，例如短标题、项目符号或简短表格；不要写成没有层次的一整段。
+9. 对“统计结果 + 对象信息”这类问题，优先组织为“结论先行 + 关键依据/补充信息”这类结构。
+10. 不要机械使用“直接答案”“补充说明”这类模板化标题；若需要标题，优先使用更自然的标题，如“结论”“核心结论”“关键信息”“关键依据”，并允许根据内容自适应命名。
+11. 若用户未明确要求，不要主动扩展“方法对比/额外建议/治理建议”等内容。
+12. 补充内容只保留与问题直接相关的 2-4 个要点；保持 answer 简洁，但不要为了简短牺牲格式感和可读性。
 
 
 **任务处理要求**
@@ -906,6 +931,7 @@ You are a versatile AI expert. Based on the user's question and the provided rel
 3. If the provided relevant information is irrelevant or insufficient to answer the user's question, do not answer the question directly. Instead, generate a new, clearer, and easier-to-understand question that retains the original meaning of the question, and place it in the `requery` field. You only need to regenerate the question.
 4. When generating a new question, do not ask the user to supplement materials.
 5. If the provided relevant information is irrelevant or insufficient, explain the reason why you cannot answer directly in the `answer` field and indicate that more relevant information is needed.
+6. If and only if you judge that the task is outside this expert's domain and should be handled by another expert, set `reason_code` to `out_of_scope_non_retryable` and set `requery` to an empty string.
 
 **Task Processing Requirements**
 
@@ -922,7 +948,7 @@ You are a versatile AI expert. Based on the user's question and the provided rel
 **Output Format Requirements:**
 - Must return a standard JSON format string.
 - Ensure the output can be directly parsed by `json.loads()`.
-- Include three required fields: `answer`, `conclusion`, `requery`.
+- Include four fields: `answer`, `conclusion`, `requery`, `reason_code`.
 
 **Example Reference:**
 
@@ -1227,6 +1253,7 @@ OBSERVE_PROMPT_SQL_ZH = """
 - 不包含任何额外文本或解释
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
+- 【重要】reason 中引用问题原文时请用单引号如 '某某银行总行2024年零售存款的总额'，勿在 JSON 字符串内使用未转义的双引号
 
 **示例参考：**
 

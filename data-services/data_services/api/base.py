@@ -236,6 +236,7 @@ class SemanticDomain(BaseModel):
     dd_namespace: Optional[str] = Field(None, description="DD namespace")
     dd_name: Optional[str] = Field(None, description="DD name")
     descriptor_type: Optional[str] = Field(None, description="Descriptor type (code/structured/unstructured)")
+    version: Optional[str] = Field(None, description="Version, incremented on each update")
     created_at: Optional[datetime] = Field(None, description="Creation time")
     updated_at: Optional[datetime] = Field(None, description="Update time")
 
@@ -246,6 +247,7 @@ class SemanticDomainCreateRequest(BaseModel):
     dd_namespace: Optional[str] = Field(None, description="DD namespace")
     dd_name: Optional[str] = Field(None, description="DD name")
     descriptor_type: Optional[str] = Field(None, description="Descriptor type (code/structured/unstructured)")
+    version: Optional[str] = Field(None, description="Version (default '1' for new records)")
 
 class SemanticDomainUpdateRequest(BaseModel):
     semantic_domain_id: Optional[str] = Field(None, description="SemanticDomain type")
@@ -254,6 +256,7 @@ class SemanticDomainUpdateRequest(BaseModel):
     dd_namespace: Optional[str] = Field(None, description="DD namespace")
     dd_name: Optional[str] = Field(None, description="DD name")
     descriptor_type: Optional[str] = Field(None, description="Descriptor type (code/structured/unstructured)")
+    version: Optional[str] = Field(None, description="Version, incremented on each update")
 
 class SemanticDomainResponse(BaseModel):
     status: str
@@ -277,9 +280,10 @@ class SemanticGroup(BaseModel):
     group_name: str = Field(..., description="Group name")
     description: Optional[str] = Field(None, description="Group description")
     agent_card: Optional[str] = Field(None, description="Agent Card")
-    version: Optional[str] = Field(None, description="Version")
+    version: Optional[str] = Field(None, description="Version, incremented on each update")
     parent_id: Optional[str] = Field(None, description="Parent group ID (NULL = root or leaf)")
     created_at: Optional[datetime] = Field(None, description="Creation time")
+    updated_at: Optional[datetime] = Field(None, description="Update time")
 
 class DDGroupRelation(BaseModel):
     id: Optional[int] = Field(None, description="Primary key (auto-increment)")
@@ -292,20 +296,25 @@ class SemanticGroupCreateRequest(BaseModel):
     group_name: str = Field(..., description="Group name")
     description: Optional[str] = Field(None, description="Group description")
     agent_card: Optional[str] = Field(None, description="Agent Card")
-    version: Optional[str] = Field(None, description="Version")
+    version: Optional[str] = Field(None, description="Version (default '1' for new records)")
     parent_id: Optional[str] = Field(None, description="Parent group ID")
 
 class SemanticGroupUpdateRequest(BaseModel):
     group_name: Optional[str] = Field(None, description="Group name")
     description: Optional[str] = Field(None, description="Group description")
     agent_card: Optional[str] = Field(None, description="Agent Card")
-    version: Optional[str] = Field(None, description="Version")
+    version: Optional[str] = Field(None, description="Version, incremented on each update")
     parent_id: Optional[str] = Field(None, description="Parent group ID")
 
 class DDGroupRelationCreateRequest(BaseModel):
     sd_id: str = Field(..., description="Semantic domain ID")
     group_id: str = Field(..., description="Group ID")
     association_reason: Optional[str] = Field(None, description="Reason for association")
+
+
+class DDGroupRelationUpdateRequest(BaseModel):
+    association_reason: Optional[str] = Field(None, description="Updated association reason (e.g. embed SD content fingerprint)")
+
 
 class SemanticGroupResponse(BaseModel):
     status: str

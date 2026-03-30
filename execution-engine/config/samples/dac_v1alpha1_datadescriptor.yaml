@@ -16,6 +16,10 @@ data:
       {
         "query": "统计最近7天注册的用户数量",
         "answer": "SELECT COUNT(*) FROM users WHERE registration_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)"
+      },
+      {
+        "query": "农商银行总行2024年零售存款的总额是多少",
+        "answer": "SELECT retail_deposit_total FROM deposit_data WHERE branch_name = '农商银行总行' AND data_date = '2024-12-31'" 
       }
     ]
   background_knowledge.json: |
@@ -44,10 +48,13 @@ spec:
         password: "123"
         database: "dactest"
       extract:
-        tables: ["deposit_data", "balance_sheet", "loan_data", "retail_loan_detail"]
+        tables: []
       prompts:
         prompts:
           name: "mysql-production-fewshots"
+  syncPolicy:
+    enabled: true
+    schedule: "10m"
 
 ---
 
@@ -142,6 +149,107 @@ spec:
         user: "root"
         password: "123"
         database: "order_management"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+
+---
+
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: customer-service-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "customer_service"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: inventory-warehouse-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "inventory_warehouse"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: marketing-promotion-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "marketing_promotion"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+
+---
+
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: supply-chain-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "supply_chain"
       extract:
         tables: []
       prompts:

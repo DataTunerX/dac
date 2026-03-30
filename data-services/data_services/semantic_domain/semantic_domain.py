@@ -117,6 +117,7 @@ class AsyncSemanticDomainService:
             dd_namespace VARCHAR(255) COMMENT 'DD namespace',
             dd_name VARCHAR(255) COMMENT 'DD name',
             descriptor_type VARCHAR(64) COMMENT 'Descriptor type (code/structured/unstructured)',
+            version VARCHAR(32) COMMENT 'Version, incremented on each update',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT 'Creation time',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Update time',
             INDEX idx_semantic_domain (semantic_domain(255)),
@@ -134,6 +135,7 @@ class AsyncSemanticDomainService:
             'dd_namespace': 'VARCHAR(255)',
             'dd_name': 'VARCHAR(255)',
             'descriptor_type': 'VARCHAR(64)',
+            'version': 'VARCHAR(32)',
             'created_at': 'TIMESTAMP',
             'updated_at': 'TIMESTAMP'
         }
@@ -169,7 +171,8 @@ class AsyncSemanticDomainService:
                                     'agent_card': 'Agent Card',
                                     'dd_namespace': 'DD namespace',
                                     'dd_name': 'DD name',
-                                    'descriptor_type': 'Descriptor type (code/structured/unstructured)'
+                                    'descriptor_type': 'Descriptor type (code/structured/unstructured)',
+                                    'version': 'Version incremented on each update'
                                 }
                                 alter_query = f"ALTER TABLE semantic_domain ADD COLUMN {col_name} {col_type} COMMENT '{comment_map.get(col_name, '')}'"
                             
@@ -220,17 +223,18 @@ class AsyncSemanticDomainService:
         
         insert_query = """
         INSERT INTO semantic_domain 
-        (semantic_domain_id, semantic_domain, agent_card, dd_namespace, dd_name, descriptor_type)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        (semantic_domain_id, semantic_domain, agent_card, dd_namespace, dd_name, descriptor_type, version)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
-        
+        version = getattr(semantic_domain, 'version', None) or '1'
         values = (
             semantic_domain.semantic_domain_id,
             semantic_domain.semantic_domain,
             semantic_domain.agent_card,
             semantic_domain.dd_namespace,
             semantic_domain.dd_name,
-            semantic_domain.descriptor_type
+            semantic_domain.descriptor_type,
+            version
         )
         
         try:
@@ -253,8 +257,8 @@ class AsyncSemanticDomainService:
         """
         insert_query = """
         INSERT INTO semantic_domain 
-        (semantic_domain_id, semantic_domain, agent_card, dd_namespace, dd_name, descriptor_type)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        (semantic_domain_id, semantic_domain, agent_card, dd_namespace, dd_name, descriptor_type, version)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         
         try:
@@ -265,14 +269,15 @@ class AsyncSemanticDomainService:
                         # Generate ID if not provided
                         if not domain.semantic_domain_id:
                             domain.semantic_domain_id = str(uuid.uuid4())
-                        
+                        version = getattr(domain, 'version', None) or '1'
                         data.append((
                             domain.semantic_domain_id,
                             domain.semantic_domain,
                             domain.agent_card,
                             domain.dd_namespace,
                             domain.dd_name,
-                            domain.descriptor_type
+                            domain.descriptor_type,
+                            version
                         ))
                     
                     affected_rows = 0
@@ -311,6 +316,7 @@ class AsyncSemanticDomainService:
                         dd_namespace=result['dd_namespace'],
                         dd_name=result['dd_name'],
                         descriptor_type=result.get('descriptor_type'),
+                        version=result.get('version'),
                         created_at=result.get('created_at'),
                         updated_at=result.get('updated_at')
                     )
@@ -346,6 +352,7 @@ class AsyncSemanticDomainService:
                         dd_namespace=result['dd_namespace'],
                         dd_name=result['dd_name'],
                         descriptor_type=result.get('descriptor_type'),
+                        version=result.get('version'),
                         created_at=result.get('created_at'),
                         updated_at=result.get('updated_at')
                     ))
@@ -387,6 +394,7 @@ class AsyncSemanticDomainService:
                         dd_namespace=result['dd_namespace'],
                         dd_name=result['dd_name'],
                         descriptor_type=result.get('descriptor_type'),
+                        version=result.get('version'),
                         created_at=result.get('created_at'),
                         updated_at=result.get('updated_at')
                     ))
@@ -409,10 +417,10 @@ class AsyncSemanticDomainService:
         """
         update_query = """
         UPDATE semantic_domain 
-        SET semantic_domain = %s, agent_card = %s, dd_namespace = %s, dd_name = %s, descriptor_type = %s
+        SET semantic_domain = %s, agent_card = %s, dd_namespace = %s, dd_name = %s, descriptor_type = %s, version = %s, updated_at = CURRENT_TIMESTAMP
         WHERE semantic_domain_id = %s
         """
-        
+        version = getattr(semantic_domain, 'version', None) or '1'
         try:
             async with self._get_cursor() as cursor:
                 result = await cursor.execute(update_query, (
@@ -421,6 +429,7 @@ class AsyncSemanticDomainService:
                     semantic_domain.dd_namespace,
                     semantic_domain.dd_name,
                     semantic_domain.descriptor_type,
+                    version,
                     semantic_domain_id
                 ))
                 return result > 0

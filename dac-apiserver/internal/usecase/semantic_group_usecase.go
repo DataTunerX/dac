@@ -2,19 +2,17 @@ package usecase
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
-	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 )
 
 type semanticGroupUsecase struct {
-	dsClient *dataservices.Client
+	dsClient domain.DataServicesClient
 	logger   *slog.Logger
 }
 
-func NewSemanticGroupUsecase(dsClient *dataservices.Client, logger *slog.Logger) domain.SemanticGroupUsecase {
+func NewSemanticGroupUsecase(dsClient domain.DataServicesClient, logger *slog.Logger) domain.SemanticGroupUsecase {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -24,7 +22,7 @@ func NewSemanticGroupUsecase(dsClient *dataservices.Client, logger *slog.Logger)
 	}
 }
 
-func (u *semanticGroupUsecase) Create(ctx context.Context, req *domain.CreateSemanticGroupRequest) (*dataservices.SemanticGroup, error) {
+func (u *semanticGroupUsecase) Create(ctx context.Context, req *domain.CreateSemanticGroupRequest) (*domain.SemanticGroup, error) {
 	if req == nil || req.GroupName == "" {
 		return nil, domain.NewInvalidInputError("groupName is required")
 	}
@@ -56,22 +54,21 @@ func (u *semanticGroupUsecase) BatchCreate(ctx context.Context, req []domain.Cre
 	return u.dsClient.BatchCreateSemanticGroups(ctx, dsReq)
 }
 
-func (u *semanticGroupUsecase) Get(ctx context.Context, id string) (*dataservices.SemanticGroup, error) {
+func (u *semanticGroupUsecase) Get(ctx context.Context, id string) (*domain.SemanticGroup, error) {
 	if id == "" {
 		return nil, domain.NewInvalidInputError("id is required")
 	}
-	g, err := u.dsClient.GetSemanticGroup(ctx, id)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return nil, domain.NewNotFoundError("semantic group", id)
-		}
-		return nil, err
-	}
-	return g, nil
+	return u.dsClient.GetSemanticGroup(ctx, id)
 }
 
-func (u *semanticGroupUsecase) List(ctx context.Context, limit, offset int) ([]dataservices.SemanticGroup, int, error) {
+func (u *semanticGroupUsecase) GetWithMembers(ctx context.Context, id string) (*domain.SemanticGroupWithMembers, error) {
+	if id == "" {
+		return nil, domain.NewInvalidInputError("id is required")
+	}
+	return u.dsClient.GetSemanticGroupWithMembers(ctx, id)
+}
+
+func (u *semanticGroupUsecase) List(ctx context.Context, limit, offset int) ([]domain.SemanticGroup, int, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -80,14 +77,14 @@ func (u *semanticGroupUsecase) List(ctx context.Context, limit, offset int) ([]d
 	}
 	page := offset/limit + 1
 	pageSize := limit
-	items, total, err := u.dsClient.ListSemanticGroups(ctx, page, pageSize)
-	if err != nil {
-		return nil, 0, err
-	}
-	return items, total, nil
+	return u.dsClient.ListSemanticGroups(ctx, page, pageSize)
 }
 
-func (u *semanticGroupUsecase) Update(ctx context.Context, id string, req *domain.UpdateSemanticGroupRequest) (*dataservices.SemanticGroup, error) {
+func (u *semanticGroupUsecase) ListRoots(ctx context.Context) ([]domain.SemanticGroup, int, error) {
+	return u.dsClient.ListSemanticGroupRoots(ctx)
+}
+
+func (u *semanticGroupUsecase) Update(ctx context.Context, id string, req *domain.UpdateSemanticGroupRequest) (*domain.SemanticGroup, error) {
 	if id == "" {
 		return nil, domain.NewInvalidInputError("id is required")
 	}
@@ -107,45 +104,21 @@ func (u *semanticGroupUsecase) Update(ctx context.Context, id string, req *domai
 	if req.Version != nil {
 		dsReq["version"] = *req.Version
 	}
-	g, err := u.dsClient.UpdateSemanticGroup(ctx, id, dsReq)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return nil, domain.NewNotFoundError("semantic group", id)
-		}
-		return nil, err
-	}
-	return g, nil
+	return u.dsClient.UpdateSemanticGroup(ctx, id, dsReq)
 }
 
 func (u *semanticGroupUsecase) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return domain.NewInvalidInputError("id is required")
 	}
-	err := u.dsClient.DeleteSemanticGroup(ctx, id)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return domain.NewNotFoundError("semantic group", id)
-		}
-		return err
-	}
-	return nil
+	return u.dsClient.DeleteSemanticGroup(ctx, id)
 }
 
 func (u *semanticGroupUsecase) Exists(ctx context.Context, id string) (bool, error) {
 	if id == "" {
 		return false, domain.NewInvalidInputError("id is required")
 	}
-	ok, err := u.dsClient.SemanticGroupExists(ctx, id)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return false, nil
-		}
-		return false, err
-	}
-	return ok, nil
+	return u.dsClient.SemanticGroupExists(ctx, id)
 }
 
 func (u *semanticGroupUsecase) Count(ctx context.Context) (int, error) {

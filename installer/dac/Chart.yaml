@@ -1,0 +1,21 @@
+apiVersion: v2
+name: dac
+description: DAC (Data Agent Container) - An intelligent multi-agent platform for data analysis and orchestration
+type: application
+version: 0.1.0
+appVersion: "0.8.0"
+
+keywords:
+  - dac
+  - agent
+  - llm
+  - data
+  - orchestration
+
+maintainers:
+  - name: DAC Team
+
+sources:
+  - https://github.com/James-Dao/dac
+
+home: https://github.com/James-Dao/dac

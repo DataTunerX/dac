@@ -2,20 +2,17 @@ package usecase
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
-	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 )
 
 type ddGroupRelationUsecase struct {
-	dsClient *dataservices.Client
+	dsClient domain.DataServicesClient
 	logger   *slog.Logger
 }
 
-func NewDDGroupRelationUsecase(dsClient *dataservices.Client, logger *slog.Logger) domain.DDGroupRelationUsecase {
+func NewDDGroupRelationUsecase(dsClient domain.DataServicesClient, logger *slog.Logger) domain.DDGroupRelationUsecase {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -25,7 +22,7 @@ func NewDDGroupRelationUsecase(dsClient *dataservices.Client, logger *slog.Logge
 	}
 }
 
-func (u *ddGroupRelationUsecase) Create(ctx context.Context, req *domain.CreateDDGroupRelationRequest) (*dataservices.DDGroupRelation, error) {
+func (u *ddGroupRelationUsecase) Create(ctx context.Context, req *domain.CreateDDGroupRelationRequest) (*domain.DDGroupRelation, error) {
 	if req == nil || req.SemanticDomainID == "" || req.GroupID == "" {
 		return nil, domain.NewInvalidInputError("sd_id and group_id are required")
 	}
@@ -55,14 +52,14 @@ func (u *ddGroupRelationUsecase) BatchCreate(ctx context.Context, req []domain.C
 	return u.dsClient.BatchCreateDDGroupRelations(ctx, dsReq)
 }
 
-func (u *ddGroupRelationUsecase) ListByGroup(ctx context.Context, groupID string) ([]dataservices.DDGroupRelation, int, error) {
+func (u *ddGroupRelationUsecase) ListByGroup(ctx context.Context, groupID string) ([]domain.DDGroupRelation, int, error) {
 	if groupID == "" {
 		return nil, 0, domain.NewInvalidInputError("group_id is required")
 	}
 	return u.dsClient.ListDDGroupRelationsByGroup(ctx, groupID)
 }
 
-func (u *ddGroupRelationUsecase) ListBySemanticDomain(ctx context.Context, semanticDomainID string) ([]dataservices.DDGroupRelation, int, error) {
+func (u *ddGroupRelationUsecase) ListBySemanticDomain(ctx context.Context, semanticDomainID string) ([]domain.DDGroupRelation, int, error) {
 	if semanticDomainID == "" {
 		return nil, 0, domain.NewInvalidInputError("sd_id is required")
 	}
@@ -73,15 +70,7 @@ func (u *ddGroupRelationUsecase) DeleteByID(ctx context.Context, id int64) error
 	if id <= 0 {
 		return domain.NewInvalidInputError("id is required")
 	}
-	err := u.dsClient.DeleteDDGroupRelationByID(ctx, id)
-	if err != nil {
-		var httpErr *dataservices.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			return domain.NewNotFoundError("dd group relation", fmt.Sprintf("%d", id))
-		}
-		return err
-	}
-	return nil
+	return u.dsClient.DeleteDDGroupRelationByID(ctx, id)
 }
 
 func (u *ddGroupRelationUsecase) DeleteByGroup(ctx context.Context, groupID string) error {

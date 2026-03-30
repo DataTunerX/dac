@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import re
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from contextlib import asynccontextmanager
 import click
 import uvicorn
@@ -24,7 +24,7 @@ from .api.base import VectorAddDocumentsRequest, VectorDeleteDocumentsRequest, V
 from .api.base import SignatureCreateRequest, SignatureUpdateRequest, SignatureResponse, SignatureSearchByDDRequest, SignatureListResponse
 from .api.base import SemanticDomainCreateRequest, SemanticDomainUpdateRequest, SemanticDomainResponse, SemanticDomainSearchByDDRequest, SemanticDomainListResponse
 from .api.base import CodebaseIndexer, CodebaseIndexerCreateRequest, CodebaseIndexerUpdateRequest, CodebaseIndexerResponse, CodebaseIndexerSearchByDDRequest, CodebaseIndexerSearchByFilepathRequest, CodebaseIndexerListResponse
-from .api.base import SemanticGroupCreateRequest, SemanticGroupUpdateRequest, SemanticGroupResponse, SemanticGroupListResponse, DDGroupRelationCreateRequest, DDGroupRelationListResponse, SemanticGroupWithMembersResponse, SemanticGroupWithMembersData, SemanticGroupMemberDetail, SemanticGroupInfo
+from .api.base import SemanticGroupCreateRequest, SemanticGroupUpdateRequest, SemanticGroupResponse, SemanticGroupListResponse, DDGroupRelationCreateRequest, DDGroupRelationUpdateRequest, DDGroupRelationListResponse, SemanticGroupWithMembersResponse, SemanticGroupWithMembersData, SemanticGroupMemberDetail, SemanticGroupInfo
 from .api.base import CreateHistoryRequest, CreateHistoryResponse, SearchHistoryRequest, SearchHistoryResponse, HistoryRecordResponse, HistoryRecord, HistoryMessage,SearchHistoryRequestByUserAndRun
 from .api.base import KnowledgeGraphAddRequest, KnowledgeGraphSearchRequest, KnowledgeGraphDeleteRequest, KnowledgeGraphGetGraphRequest, KnowledgeGraphResponse
 from .knowledge_pyramid.knowledge_pyramid import KnowledgePyramidService
@@ -136,15 +136,18 @@ async def initialize_services():
         You are a professional document knowledge extraction engine, dedicated to accurately extracting key knowledge points, core facts, and structured information from user-provided documents. Your task is to transform lengthy or complex document content into clear, independent, and retrievable knowledge units. Please adhere to the following rules:
 
 ### Knowledge Extraction Types:
-1. **Core viewpoints and conclusions**: Extract the main arguments, research findings, or decision outcomes from the document.
+1. **Core viewpoints and conclusions**: Extract the main arguments, research findings, or decision outcomes.
 2. **Key data and metrics**: Record quantitative information such as numerical values, statistical results, and time nodes.
 3. **Definitions and concepts**: Extract explanations of terminology, theoretical frameworks, or specialized concepts.
-4. **Processes and methods**: Summarize the steps, methods, processes, or solutions described in the document.
-5. **People/organizations/events**: Record key entities, role relationships, or event descriptions involved.
-6. **Problems and challenges**: Extract explicitly mentioned issues, risks, or limitations in the text.
+4. **Processes and methods**: Summarize the steps, methods, processes, or solutions described.
+5. **People/organizations/events**: Record key entities, role relationships, or event descriptions.
+6. **Problems and challenges**: Extract explicitly mentioned issues, risks, or limitations.
 7. **Suggestions and prospects**: Summarize the author's proposals, future directions, or predictions.
 
 ### Processing Rules:
+- **Self-contained Facts**: Each fact must be a complete sentence that can be understood independently. **Never use pronouns** (e.g., "it", "this bank", "the data", "该行", "该数据") to refer to subjects in previous sentences. Always replace them with the actual entity names.
+- **Merge Contextual Info**: If a sentence provides supplementary information (like data source, time, or conditions) for a previous fact, **merge them into a single, comprehensive fact** instead of splitting them.
+- **Subject Persistence**: Ensure the main subject (e.g., "农商银行") is explicitly mentioned in every fact where it is the actor or owner.
 - The output must be in strict JSON format.
 - Each knowledge point should be a concise and complete sentence, retaining key information from the original text while avoiding redundancy.
 - If the document contains no valid information (e.g., blank/garbled text), return an empty list.
@@ -152,11 +155,11 @@ async def initialize_services():
 - Do not add explanatory text or formatting markers.
 
 ### Examples:
-Input: Quantum computing research reports indicate that the coherence time of superconducting qubits reached 500 microseconds in 2023, a threefold increase compared to 2020. The main challenge is the decoherence problem. 
-Output: {{"facts": ["Superconducting qubit coherence time reached 500 microseconds in 2023", "Coherence time in 2023 increased threefold compared to 2020", "The main challenge in quantum computing is the decoherence problem"]}}
+Input: 农商银行总行2024年零售存款的总额为263.35亿元。该数据来源于该行2024年12月31日的年末存款数据。
+Output: {{"facts": ["农商银行总行截至2024年12月31日的年末零售存款总额为263.35亿元。"]}}
 
-Input: Meeting notice: Power outage next week 
-Output: {{"facts": []}}
+Input: Quantum computing research reports indicate that the coherence time reached 500 microseconds in 2023. The main challenge is the decoherence problem.
+Output: {{"facts": ["The coherence time of quantum computing reached 500 microseconds in 2023", "The main challenge in quantum computing is the decoherence problem"]}}
 
 Return the facts and preferences in a json format as shown above.
 
@@ -398,6 +401,46 @@ async def get_info():
         "service": "data-services",
         "version": "0.1.0"
     }
+
+
+class SyncRequestedAtBody(BaseModel):
+    value: str
+
+
+@app.get("/datadescriptors/{namespace}/{name}")
+async def http_get_datadescriptor(namespace: str, name: str, request: Request):
+    """Return DataDescriptor CR JSON; used by dd-sync-observer via dac-data-services (requires Data-Descriptor header)."""
+    from .datadescriptor_k8s import (
+        get_datadescriptor,
+        validate_data_descriptor_header,
+    )
+
+    validate_data_descriptor_header(
+        namespace, name, request.headers.get("Data-Descriptor")
+    )
+    return get_datadescriptor(namespace, name)
+
+
+@app.patch("/datadescriptors/{namespace}/{name}/sync-requested-at")
+async def http_patch_sync_requested_at(
+    namespace: str, name: str, body: SyncRequestedAtBody, request: Request
+):
+    """Set annotation dac.dac.io/sync-requested-at on the DataDescriptor CR."""
+    from .datadescriptor_k8s import (
+        patch_datadescriptor_annotation,
+        validate_data_descriptor_header,
+    )
+
+    validate_data_descriptor_header(
+        namespace, name, request.headers.get("Data-Descriptor")
+    )
+    patch_datadescriptor_annotation(
+        namespace,
+        name,
+        "dac.dac.io/sync-requested-at",
+        body.value,
+    )
+    return {"ok": True}
 
 
 ###################################### memory routes #########################
@@ -1275,7 +1318,8 @@ async def update_semantic_domain(semantic_domain_id: str, request: SemanticDomai
             agent_card=request.agent_card if request.agent_card is not None else existing.agent_card,
             dd_namespace=request.dd_namespace if request.dd_namespace is not None else existing.dd_namespace,
             dd_name=request.dd_name if request.dd_name is not None else existing.dd_name,
-            descriptor_type=request.descriptor_type if request.descriptor_type is not None else existing.descriptor_type
+            descriptor_type=request.descriptor_type if request.descriptor_type is not None else existing.descriptor_type,
+            version=request.version if request.version is not None else existing.version
         )
         
         success = await semantic_domain_service.update(semantic_domain_id, updated_semantic_domain)
@@ -2124,6 +2168,29 @@ async def get_relations_by_sd_id(sd_id: str):
     except Exception as e:
         logger.error(f"Error getting relations by sd_id: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/dd_group_relations/{relation_id}", response_model=SemanticGroupResponse)
+async def update_dd_group_relation(relation_id: int, request: DDGroupRelationUpdateRequest):
+    try:
+        if request.association_reason is None:
+            raise HTTPException(status_code=400, detail="association_reason is required")
+        ok = await semantic_group_service.update_relation_association_reason(
+            relation_id, request.association_reason
+        )
+        if ok:
+            return SemanticGroupResponse(
+                status="success",
+                message="dd group relation update success",
+                data={"id": relation_id},
+            )
+        raise HTTPException(status_code=404, detail="dd group relation not found or not updated")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating dd group relation: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.delete("/dd_group_relations/{relation_id}", response_model=SemanticGroupResponse)
 async def delete_dd_group_relation(relation_id: int):

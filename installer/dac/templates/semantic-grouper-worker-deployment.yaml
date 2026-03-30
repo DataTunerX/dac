@@ -1,0 +1,57 @@
+{{- if .Values.semanticGrouper.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "semantic-grouper-worker") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "semantic-grouper-worker") | nindent 4 }}
+spec:
+  replicas: {{ .Values.semanticGrouper.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "semantic-grouper-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "semantic-grouper-worker") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "dac.componentName" (dict "context" . "name" "semantic-grouper-worker") }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: semantic-grouper-worker
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.semanticGrouper.image.repository "tag" .Values.semanticGrouper.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/bin/bash", "/app/entrypoint-worker.sh"]
+          env:
+            - name: REDIS_HOST
+              value: {{ include "dac.redis.serviceName" . | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.redis.port | quote }}
+            - name: REDIS_DB_BROKER
+              value: {{ .Values.semanticGrouper.config.redisBrokerDb | quote }}
+            - name: REDIS_DB_BACKEND
+              value: {{ .Values.semanticGrouper.config.redisBackendDb | quote }}
+            - name: REDIS_DB_LOCK
+              value: {{ .Values.semanticGrouper.config.redisLockDb | quote }}
+            - name: REDIS_PASSWORD
+              value: {{ .Values.redis.password | quote }}
+            - name: DATA_SERVICES
+              value: {{ include "dac.dataServices.url" . | quote }}
+            - name: PROVIDER
+              value: {{ .Values.semanticGrouper.config.llm.provider | quote }}
+            - name: API_KEY
+              value: {{ .Values.global.llm.apiKey | quote }}
+            - name: BASE_URL
+              value: {{ .Values.global.llm.baseUrl | quote }}
+            - name: Model
+              value: {{ .Values.semanticGrouper.config.llm.model | quote }}
+            - name: Temperature
+              value: {{ .Values.semanticGrouper.config.llm.temperature | quote }}
+            - name: CELERY_WORKER_AMOUNT
+              value: {{ .Values.semanticGrouper.worker.celeryWorkerAmount | quote }}
+          resources:
+            {{- toYaml .Values.semanticGrouper.worker.resources | nindent 12 }}
+{{- end }}

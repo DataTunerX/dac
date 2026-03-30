@@ -146,13 +146,15 @@ def extract_postgres(
     ddd_str = ""
 
     if code_ddd_summary:
-        db_and_code = f"{db_ddd_summary["summary"]} \n\n{code_ddd_summary["summary"]}"
+        db_sum = (db_ddd_summary or {}).get("summary") or ""
+        code_sum = (code_ddd_summary or {}).get("summary") or ""
+        db_and_code = f"{db_sum} \n\n{code_sum}"
         db_and_code_ddd_summary = code_analyzer.ddd(db_and_code)
-        logger.info(f"db_and_code_ddd_result:\n{db_and_code_ddd_summary["summary"]}")
+        logger.info(f"db_and_code_ddd_result:\n{(db_and_code_ddd_summary or {}).get('summary')}")
 
-        ddd_str = db_and_code_ddd_summary
+        ddd_str = (db_and_code_ddd_summary or {}).get("summary") or ""
     else:
-        ddd_str = db_ddd_summary["summary"]
+        ddd_str = (db_ddd_summary or {}).get("summary") or ""
 
     sql_summary, all_group_tables_for_chunk_summary = sql_analyzer.process(
         sql_reader,

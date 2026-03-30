@@ -71,9 +71,9 @@ export function HoverHint({
     >
       {children ? children : <span className="truncate block w-full">{t}</span>}
       {/* custom tooltip to avoid native title inconsistencies */}
-      <span className="pointer-events-none absolute left-0 top-full z-50 mt-2 w-max max-w-[min(80vw,36rem)] rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-800 shadow-lg opacity-0 translate-y-1 transition group-hover:opacity-100 group-hover:translate-y-0">
+      <span className="pointer-events-none absolute left-0 top-full z-50 mt-2 w-max max-w-[min(80vw,36rem)] rounded-md border border-line bg-surface px-2.5 py-2 text-xs text-content shadow-lg opacity-0 translate-y-1 transition group-hover:opacity-100 group-hover:translate-y-0">
         <span className="break-words whitespace-pre-wrap">{t}</span>
-        {canCopy ? <span className="ml-2 text-slate-400">{copied ? "已复制" : "点击复制"}</span> : null}
+        {canCopy ? <span className="ml-2 text-content-muted">{copied ? "已复制" : "点击复制"}</span> : null}
       </span>
     </div>
   )

@@ -50,7 +50,7 @@ function statusPillClass(status: DiscoveryJobStatus) {
       return "bg-red-100 text-red-800"
     case "PENDING":
     default:
-      return "bg-slate-100 text-slate-800"
+      return "bg-surface-muted text-content"
   }
 }
 
@@ -117,10 +117,8 @@ export default function InfraDiscoveryListPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, pageSize])
 
-  // IMPORTANT: do NOT re-sort client-side when using pagination.
-  // The backend already returns a stable order (created_at desc), and sorting per-page would
-  // make items jump across pages.
-  const ordered = useMemo(() => items || [], [items])
+  // Backend returns stable order (created_at desc). Use items directly to avoid redundant useMemo (Vercel React Best Practices 5.3).
+  const ordered = items ?? []
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
@@ -186,13 +184,13 @@ export default function InfraDiscoveryListPage() {
   }
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6 sm:space-y-8">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-medium text-slate-600">
-          <span className="text-slate-900 font-semibold">资产探测</span>
+        <div className="text-sm font-medium text-content">
+          <span className="text-content font-semibold">资产探测</span>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading}>
+          <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading} aria-label="刷新">
             <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
           <RbacButton 
@@ -207,10 +205,10 @@ export default function InfraDiscoveryListPage() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+      <div className="rounded-lg border border-line bg-surface overflow-hidden">
         <Table>
           <TableHeader>
-            <TableRow className="bg-slate-50">
+            <TableRow className="bg-surface-muted">
               <TableHead className="w-[220px]">名称</TableHead>
               <TableHead className="w-[200px]">目标</TableHead>
               <TableHead className="w-[120px]">状态</TableHead>
@@ -224,29 +222,29 @@ export default function InfraDiscoveryListPage() {
               <TableRow>
                 <TableCell colSpan={6} className="h-24 text-center">
                   <div className="flex items-center justify-center gap-2 text-muted-foreground">
-                    <Loader2 className="w-4 h-4 animate-spin" /> 加载中...
+                    <Loader2 className="w-4 h-4 animate-spin" /> 加载中…
                   </div>
                 </TableCell>
               </TableRow>
             ) : ordered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-slate-500 py-10">
+                <TableCell colSpan={6} className="text-center text-content-muted py-10">
                   暂无扫描记录
                 </TableCell>
               </TableRow>
             ) : (
               ordered.map((job) => (
-                <TableRow key={job.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openDetail(job.id)}>
-                  <TableCell className="text-sm text-slate-900">
+                <TableRow key={job.id} className="cursor-pointer hover:bg-surface-muted" onClick={() => openDetail(job.id)}>
+                  <TableCell className="text-sm text-content">
                     <div className="flex items-start gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0 mt-0.5">
+                      <div className="w-9 h-9 rounded-xl bg-cta/10 flex items-center justify-center text-cta shrink-0 mt-0.5">
                         <Target className="w-4 h-4" />
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="font-medium truncate" title={job.name || job.id}>
                           {job.name || "-"}
                         </div>
-                        <div className="mt-0.5 text-[11px] text-slate-500 font-mono truncate" title={job.id}>
+                        <div className="mt-0.5 text-[11px] text-content-muted font-mono truncate" title={job.id}>
                           {job.id}
                         </div>
                       </div>
@@ -258,15 +256,15 @@ export default function InfraDiscoveryListPage() {
                       {statusLabel(job.status)}
                     </span>
                   </TableCell>
-                  <TableCell className="text-xs text-slate-600">{fmtTs(job.startedAt)}</TableCell>
-                  <TableCell className="text-xs text-slate-600">{fmtTs(job.finishedAt)}</TableCell>
+                  <TableCell className="text-xs text-content">{fmtTs(job.startedAt)}</TableCell>
+                  <TableCell className="text-xs text-content">{fmtTs(job.finishedAt)}</TableCell>
                   <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => openDetail(job.id)}>
-                        <Eye className="w-4 h-4 text-slate-500" />
+                      <Button variant="ghost" size="icon" onClick={() => openDetail(job.id)} aria-label="查看">
+                        <Eye className="w-4 h-4 text-content-muted" />
                       </Button>
                       <RbacWrapper requiredRole="admin">
-                        <Button variant="ghost" size="icon" onClick={() => setDeleteId(job.id)}>
+                        <Button variant="ghost" size="icon" onClick={() => setDeleteId(job.id)} aria-label="删除">
                           <Trash2 className="w-4 h-4 text-red-500" />
                         </Button>
                       </RbacWrapper>
@@ -294,31 +292,31 @@ export default function InfraDiscoveryListPage() {
 
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
         <DialogContent className="sm:max-w-[720px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
-        <DialogHeader className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+        <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
           <DialogTitle>新建扫描</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 flex-1 min-h-0 overflow-y-auto px-6 py-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2 sm:col-span-2">
-              <div className="text-xs font-medium text-slate-600">名称（可选）</div>
+              <div className="text-xs font-medium text-content">名称（可选）</div>
               <Input value={createName} onChange={(e) => setCreateName(e.target.value)} placeholder="例如：sandbox 探测" />
             </div>
 
             <div className="space-y-2 sm:col-span-2">
-              <div className="text-xs font-medium text-slate-600">目标（IP / Host / IP 段）</div>
+              <div className="text-xs font-medium text-content">目标（IP / Host / IP 段）</div>
               <Input
                 value={createTarget}
                 onChange={(e) => setCreateTarget(e.target.value)}
                 placeholder="例如：10.0.0.1 / 10.0.0.0/24 / 10.0.0.10-20"
               />
-              <div className="text-[11px] text-slate-500">
+              <div className="text-[11px] text-content-muted">
                 支持 CIDR（如 10.0.0.0/24）、范围（如 10.0.0.10-10.0.0.20 或 10.0.0.10-20），多个目标可用逗号或空格分隔。
               </div>
             </div>
 
             <div className="space-y-2">
-              <div className="text-xs font-medium text-slate-600">端口范围（可选）</div>
+              <div className="text-xs font-medium text-content">端口范围（可选）</div>
               <Input
                 value={createPortsSpec}
                 onChange={(e) => setCreatePortsSpec(e.target.value)}
@@ -326,22 +324,22 @@ export default function InfraDiscoveryListPage() {
               />
             </div>
             <div className="space-y-2">
-              <div className="text-xs font-medium text-slate-600">并发（可选）</div>
+              <div className="text-xs font-medium text-content">并发（可选）</div>
               <Input value={createConcurrency} onChange={(e) => setCreateConcurrency(e.target.value)} placeholder="例如：256" />
             </div>
 
             <div className="space-y-2">
-              <div className="text-xs font-medium text-slate-600">超时（ms，可选）</div>
+              <div className="text-xs font-medium text-content">超时（ms，可选）</div>
               <Input value={createTimeoutMs} onChange={(e) => setCreateTimeoutMs(e.target.value)} placeholder="例如：30000" />
             </div>
           </div>
 
-          <div className="text-xs text-slate-500">
+          <div className="text-xs text-content-muted">
             提示：不填端口范围默认扫全端口（1-65535）。如果输入了较大的 IP 段，建议配合填写端口范围以更快完成。
           </div>
         </div>
 
-        <DialogFooter className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 mt-0">
+        <DialogFooter className="px-6 py-4 border-t border-line bg-surface-muted/50 mt-0">
           <Button variant="outline" onClick={() => setIsCreateOpen(false)} disabled={isCreating}>
             取消
           </Button>

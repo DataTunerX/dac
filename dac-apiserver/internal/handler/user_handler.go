@@ -84,7 +84,7 @@ func NewUserHandler(usecase domain.UserUsecase, jwtSecret string, logger *slog.L
 
 		// Unauthorized handler
 		Unauthorized: func(ctx context.Context, c *app.RequestContext, code int, message string) {
-			c.JSON(code, map[string]interface{}{
+			c.JSON(code, map[string]any{
 				"code":    "UNAUTHORIZED",
 				"message": message,
 			})
@@ -95,7 +95,7 @@ func NewUserHandler(usecase domain.UserUsecase, jwtSecret string, logger *slog.L
 			// Get user info from context
 			user, exists := c.Get("user")
 			if !exists {
-				c.JSON(consts.StatusInternalServerError, map[string]interface{}{
+				c.JSON(consts.StatusInternalServerError, map[string]any{
 					"code":    "INTERNAL_ERROR",
 					"message": "failed to get user info",
 				})
@@ -103,7 +103,7 @@ func NewUserHandler(usecase domain.UserUsecase, jwtSecret string, logger *slog.L
 			}
 			userEntity := user.(*entity.User)
 
-			c.JSON(consts.StatusOK, map[string]interface{}{
+			c.JSON(consts.StatusOK, map[string]any{
 				"code": "SUCCESS",
 				"data": dto.LoginResponse{
 					Token:  token,
@@ -200,16 +200,8 @@ func (h *UserHandler) RefreshToken(ctx context.Context, c *app.RequestContext) {
 //	@Failure		401	{object}	map[string]string	"Unauthorized"
 //	@Router			/users/me [get]
 func (h *UserHandler) GetCurrentUser(ctx context.Context, c *app.RequestContext) {
-	// Get user_id from RequestContext
-	userIDVal, exists := c.Get("user_id")
-	if !exists {
-		h.logger.Error("user_id not found in context")
-		ErrorResponse(c, domain.ErrUnauthorized)
-		return
-	}
-	userID, ok := userIDVal.(string)
-	if !ok || userID == "" {
-		h.logger.Error("invalid user_id in context")
+	userID, ok := GetUserIDFromContext(c, h.logger)
+	if !ok {
 		ErrorResponse(c, domain.ErrUnauthorized)
 		return
 	}
@@ -301,15 +293,8 @@ func (h *UserHandler) DeleteUser(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// Prevent deleting yourself
-	currentUserIDVal, exists := c.Get("user_id")
-	if !exists {
-		h.logger.Error("user_id not found in context")
-		ErrorResponse(c, domain.ErrUnauthorized)
-		return
-	}
-	currentUserID, ok := currentUserIDVal.(string)
-	if !ok || currentUserID == "" {
-		h.logger.Error("invalid user_id in context")
+	currentUserID, ok := GetUserIDFromContext(c, h.logger)
+	if !ok {
 		ErrorResponse(c, domain.ErrUnauthorized)
 		return
 	}

@@ -1,0 +1,129 @@
+{{- if .Values.dataServices.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dac.dataServices.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "data-services") | nindent 4 }}
+spec:
+  replicas: {{ .Values.dataServices.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "data-services") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "data-services") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: data-services
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.dataServices.image.repository "tag" .Values.dataServices.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.dataServices.service.targetPort }}
+          env:
+            - name: MEM0_TELEMETRY
+              value: "False"
+            - name: EC_TELEMETRY
+              value: "False"
+            # Embedding
+            - name: EMBEDDING_PROVIDER
+              value: {{ .Values.global.embedding.provider | quote }}
+            - name: EMBEDDING_API_KEY
+              value: {{ .Values.global.embedding.apiKey | quote }}
+            - name: EMBEDDING_MODEL
+              value: {{ .Values.global.embedding.model | quote }}
+            {{- if .Values.global.embedding.baseUrl }}
+            - name: EMBEDDING_BASE_URL
+              value: {{ .Values.global.embedding.baseUrl | quote }}
+            {{- end }}
+            # LLM
+            - name: LLM_API_KEY
+              value: {{ .Values.global.llm.apiKey | quote }}
+            - name: LLM_BASE_URL
+              value: {{ .Values.global.llm.baseUrl | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.dataServices.config.llm.model | quote }}
+            - name: LLM_TEMPERATURE
+              value: {{ .Values.dataServices.config.llm.temperature | quote }}
+            # Memory pgvector
+            - name: MEMORY_PGVECTOR_HOST
+              value: {{ include "dac.pgvector.serviceName" . | quote }}
+            - name: MEMORY_PGVECTOR_PORT
+              value: {{ .Values.pgvector.port | quote }}
+            - name: MEMORY_PGVECTOR_USER
+              value: {{ .Values.pgvector.user | quote }}
+            - name: MEMORY_PGVECTOR_PASSWORD
+              value: {{ .Values.pgvector.password | quote }}
+            - name: MEMORY_DBNAME
+              value: {{ .Values.dataServices.config.memory.database | quote }}
+            - name: MEMORY_PGVECTOR_MIN_CONNECTION
+              value: {{ .Values.dataServices.config.memory.minConnection | quote }}
+            - name: MEMORY_PGVECTOR_MAX_CONNECTION
+              value: {{ .Values.dataServices.config.memory.maxConnection | quote }}
+            - name: MEMORY_COLLECTION
+              value: {{ .Values.dataServices.config.memory.collection | quote }}
+            - name: MEMORY_EMBEDDING_DIMS
+              value: {{ .Values.dataServices.config.memory.embeddingDims | quote }}
+            - name: MEMORY_GRAPH_ENABLE
+              value: {{ .Values.dataServices.config.memory.graphEnable | quote }}
+            - name: MEMORY_GRAPH_DB_PROVIDER
+              value: "neo4j"
+            - name: MEMORY_GRAPH_DB_URL
+              value: {{ .Values.dataServices.config.neo4j.url | quote }}
+            - name: MEMORY_GRAPH_DB_USERNAME
+              value: {{ .Values.dataServices.config.neo4j.username | quote }}
+            - name: MEMORY_GRAPH_DB_PASSWORD
+              value: {{ .Values.dataServices.config.neo4j.password | quote }}
+            - name: MEMORY_GRAPH_LLM_MODEL
+              value: {{ .Values.dataServices.config.llm.model | quote }}
+            - name: MEMORY_GRAPH_LLM_APIKEY
+              value: {{ .Values.global.llm.apiKey | quote }}
+            - name: MEMORY_GRAPH_LLM_BASEURL
+              value: {{ .Values.global.llm.baseUrl | quote }}
+            # Knowledge pgvector
+            - name: PGVECTOR_HOST
+              value: {{ include "dac.pgvector.serviceName" . | quote }}
+            - name: PGVECTOR_PORT
+              value: {{ .Values.pgvector.port | quote }}
+            - name: PGVECTOR_USER
+              value: {{ .Values.pgvector.user | quote }}
+            - name: PGVECTOR_PASSWORD
+              value: {{ .Values.pgvector.password | quote }}
+            - name: PGVECTOR_DATABASE
+              value: {{ .Values.dataServices.config.pgvector.knowledgeDatabase | quote }}
+            - name: PGVECTOR_MIN_CONNECTION
+              value: {{ .Values.dataServices.config.pgvector.minConnection | quote }}
+            - name: PGVECTOR_MAX_CONNECTION
+              value: {{ .Values.dataServices.config.pgvector.maxConnection | quote }}
+            # MySQL
+            - name: MYSQL_HOST
+              value: {{ include "dac.mysql.serviceName" . | quote }}
+            - name: MYSQL_PORT
+              value: {{ .Values.mysql.port | quote }}
+            - name: MYSQL_USER
+              value: {{ .Values.dataServices.config.mysql.user | quote }}
+            - name: MYSQL_PASSWORD
+              value: {{ .Values.mysql.rootPassword | quote }}
+            - name: MYSQL_FINGERPRINT_DATABASE
+              value: {{ .Values.dataServices.config.mysql.fingerprintDatabase | quote }}
+            - name: MYSQL_HISTORY_DATABASE
+              value: {{ .Values.dataServices.config.mysql.historyDatabase | quote }}
+            - name: MYSQL_MAX_CONNECTION
+              value: {{ .Values.dataServices.config.mysql.maxConnection | quote }}
+            # Knowledge graph
+            - name: KNOWLEDGE_GRAPH_DB_URL
+              value: {{ .Values.dataServices.config.neo4j.url | quote }}
+            - name: KNOWLEDGE_GRAPH_DB_USERNAME
+              value: {{ .Values.dataServices.config.neo4j.username | quote }}
+            - name: KNOWLEDGE_GRAPH_DB_PASSWORD
+              value: {{ .Values.dataServices.config.neo4j.password | quote }}
+            - name: KNOWLEDGE_GRAPH_EMBEDDING_DIMS
+              value: {{ .Values.dataServices.config.knowledgeGraph.embeddingDims | quote }}
+          resources:
+            {{- toYaml .Values.dataServices.resources | nindent 12 }}
+{{- end }}

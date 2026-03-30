@@ -113,7 +113,7 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
           图表解析失败：{error}
         </div>
-        <pre className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-[12px] leading-5 text-slate-700 whitespace-pre-wrap overflow-x-auto">
+        <pre className="mt-2 rounded-lg border border-line bg-surface-muted p-3 text-[12px] leading-5 text-content whitespace-pre-wrap overflow-x-auto">
           {raw}
         </pre>
       </div>
@@ -123,8 +123,8 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
   if (!svg) {
     return (
       <div className={className}>
-        <div className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden p-6 flex items-center justify-center min-h-[120px]">
-          <div className="animate-pulse text-[12px] text-slate-500">渲染中…</div>
+        <div className="rounded-lg border border-line bg-surface shadow-sm overflow-hidden p-6 flex items-center justify-center min-h-[120px]">
+          <div className="animate-pulse text-[12px] text-content-muted">渲染中…</div>
         </div>
       </div>
     )
@@ -133,19 +133,19 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
   return (
     <div className={className}>
       <div
-        className="relative rounded-xl border border-slate-200/80 bg-gradient-to-br from-slate-50 to-white shadow-sm overflow-auto min-h-[140px]"
+        className="relative rounded-xl border border-line/80 bg-gradient-to-br from-slate-50 to-white shadow-sm overflow-auto min-h-[140px]"
         ref={containerRef}
       >
         <div className="absolute right-3 top-3 z-10">
           <Button
             variant="outline"
             size="icon"
-            className="h-8 w-8 rounded-lg bg-white/95 shadow-sm border-slate-200 hover:bg-slate-50 hover:border-slate-300"
+            className="h-8 w-8 rounded-lg bg-surface/95 shadow-sm border-line hover:bg-surface-muted hover:border-line-hover"
             onClick={() => setOpen(true)}
             aria-label="放大"
             title="放大"
           >
-            <Maximize2 className="w-4 h-4 text-slate-600" />
+            <Maximize2 className="w-4 h-4 text-content" />
           </Button>
         </div>
         <div
@@ -155,10 +155,10 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] rounded-2xl border-slate-200/90 shadow-xl">
+        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] rounded-2xl border-line/90 shadow-xl">
           <DialogHeader className="flex flex-row items-center justify-between gap-3 pb-2">
-            <DialogTitle className="text-slate-800">Mermaid 图表预览</DialogTitle>
-            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭" className="rounded-lg hover:bg-slate-100">
+            <DialogTitle className="text-content">Mermaid 图表预览</DialogTitle>
+            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭" className="rounded-lg hover:bg-surface-muted">
               <X className="w-4 h-4" />
             </Button>
           </DialogHeader>

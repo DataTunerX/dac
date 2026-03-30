@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import Cookies from "js-cookie"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { clearAuthToken, getAuthToken, navigateAfterAuth } from "@/lib/auth-session"
 import { decodeJwtPayload, initialFromUsername } from "@/lib/utils"
 
 export function Topbar() {
@@ -20,7 +20,7 @@ export function Topbar() {
 
   useEffect(() => {
     setMounted(true)
-    const token = Cookies.get("dac_token") || ""
+    const token = getAuthToken()
     const payload = token ? decodeJwtPayload(token) : null
     const username = typeof payload?.username === "string" ? payload.username : ""
     setUserInfo({ username, initial: initialFromUsername(username) })
@@ -29,33 +29,33 @@ export function Topbar() {
   const { username, initial } = userInfo
 
   const handleLogout = () => {
-    Cookies.remove("dac_token")
-    window.location.href = "/login"
+    clearAuthToken()
+    navigateAfterAuth("/login")
   }
 
   return (
-    <header className="h-14 bg-[#2f3136] shrink-0">
+    <header className="h-14 shrink-0 bg-surface-inverse border-b border-white/5">
       <div className="h-full flex items-center w-full">
-        <div className="w-64 h-full flex items-center px-6 gap-2">
-          <div className="w-6 h-6 bg-blue-600 rounded flex items-center justify-center text-white text-xs font-bold">
+        <div className="hidden lg:flex w-64 h-full items-center px-6 gap-3">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-sm font-bold bg-[#4f46e5] shadow-sm" aria-hidden="true">
             D
           </div>
-          <span className="text-white font-bold text-lg">DAC</span>
+          <span className="text-content-inverse font-bold text-base tracking-wide">DAC Platform</span>
         </div>
 
-        <div className="flex-1 flex items-center justify-end px-6">
+        <div className="flex-1 flex items-center justify-end px-4 lg:px-6">
           {mounted ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
-                  id="radix-_r_0_"
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="rounded-full hover:bg-white/10 text-white"
+                  className="rounded-full hover:bg-surface/10 text-content-inverse min-w-[44px] min-h-[44px] w-10 h-10 touch-manipulation"
+                  aria-label="账户菜单"
                 >
                   <span className="relative flex shrink-0 overflow-hidden rounded-full h-8 w-8">
-                    <span className="flex size-full items-center justify-center rounded-full bg-white/10 text-white">
+                    <span className="flex size-full items-center justify-center rounded-full bg-surface/10 text-content-inverse">
                       {initial}
                     </span>
                   </span>
@@ -77,10 +77,11 @@ export function Topbar() {
               type="button"
               variant="ghost"
               size="icon"
-              className="rounded-full hover:bg-white/10 text-white"
+              className="rounded-full hover:bg-surface/10 text-content-inverse min-w-[44px] min-h-[44px] w-10 h-10 touch-manipulation"
+              aria-label="账户"
             >
               <span className="relative flex shrink-0 overflow-hidden rounded-full h-8 w-8">
-                <span className="flex size-full items-center justify-center rounded-full bg-white/10 text-white">
+                <span className="flex size-full items-center justify-center rounded-full bg-surface/10 text-content-inverse">
                   {initial}
                 </span>
               </span>

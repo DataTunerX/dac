@@ -23,7 +23,7 @@ from .extractors.code import extract_code
 from .extractors.minio import extract_minio
 from .extractors.fileserver import extract_fileserver
 from .extractors.knowledge_graph import Knowledge_Graph
-from .fingerprint.fingerprint import FingerprintBuilder
+from .fingerprint.fingerprint import FingerprintBuilder, get_remote_commit_sha
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("data_sinkers")
@@ -234,6 +234,30 @@ def process_data(self, data: Dict[str, Any]):
 
             logger.debug(f"============= process_data extract success, result = {result} , fingerprint_associated_info = {fingerprint_associated_info}")
 
+            # AddOrUpdate re-sync: delete existing data before create to avoid duplicates.
+            # semantic_domain uses update-if-exists (handled in send_add_semantic_domain).
+            dd_namespace = descriptor.get('namespace')
+            dd_name = descriptor.get('name')
+            try:
+                signature_client.delete_signatures_by_dd_info(dd_namespace, dd_name)
+                knowledge_pyramid_client.delete_collection(collection_name)
+                send_delete_knowledge_graph(collection_name)
+                if source_type in [DataSourceType.GITHUB, DataSourceType.GITEE, DataSourceType.GITLAB]:
+                    codebase_indexer_client.delete_codebase_indexers_by_dd_info(dd_namespace, dd_name)
+                logger.info(
+                    "[data-sinker] feature=add_or_update_preclear Cleared signature/pyramid/graph/codebase_indexer "
+                    "for AddOrUpdate re-sync dd=%s/%s",
+                    dd_namespace,
+                    dd_name,
+                )
+            except Exception as clear_err:
+                logger.warning(
+                    "[data-sinker] feature=add_or_update_preclear Non-fatal error during pre-clear dd=%s/%s: %s",
+                    dd_namespace,
+                    dd_name,
+                    clear_err,
+                )
+
             send_add_signature(source_type, connection_config, descriptor, fingerprint_associated_info)
             logger.info(f"Successfully sent add collection request {collection_name} to signature")
             
@@ -306,17 +330,31 @@ def send_add_signature(data_type, connection_config, descriptor, fingerprint_ass
     fingerprint_summary = ""
 
     if data_type == DataSourceType.MYSQL:
-        fingerprint_summary = fingerprintBuilder.generate_db_fingerprint_summary(data_type, fingerprint_associated_info["tables_schema_md_list"])
+        fingerprint_summary = fingerprintBuilder.generate_db_fingerprint_summary(
+            data_type, fingerprint_associated_info["tables_schema_md_list"]
+        )
     elif data_type == DataSourceType.POSTGRESQL:
-        fingerprint_summary = fingerprintBuilder.generate_db_fingerprint_summary(data_type, fingerprint_associated_info["tables_schema_md_list"])
-    elif data_type == DataSourceType.GITHUB:
-        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(data_type, connection_config)
-    elif data_type == DataSourceType.GITLAB:
-        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(data_type, connection_config)
+        fingerprint_summary = fingerprintBuilder.generate_db_fingerprint_summary(
+            data_type, fingerprint_associated_info["tables_schema_md_list"]
+        )
+    elif data_type in (DataSourceType.GITHUB, DataSourceType.GITEE, DataSourceType.GITLAB):
+        repo_url = connection_config.get("codeRepoPath") or ""
+        branch = connection_config.get("codeRepoBranch") or "main"
+        token = connection_config.get("token") or connection_config.get("codeRepoToken") or ""
+        commit_sha = get_remote_commit_sha(repo_url, branch, token or None)
+        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(
+            data_type, connection_config, commit_sha
+        )
     elif data_type == DataSourceType.MINIO:
-        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(data_type, connection_config)
+        obj_hash = fingerprint_associated_info.get("object_list_hash")
+        fingerprint_summary = fingerprintBuilder.generate_object_list_fingerprint_summary(
+            data_type, connection_config, obj_hash
+        )
     elif data_type == DataSourceType.FILESERVER:
-        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(data_type, connection_config)
+        obj_hash = fingerprint_associated_info.get("object_list_hash")
+        fingerprint_summary = fingerprintBuilder.generate_object_list_fingerprint_summary(
+            data_type, connection_config, obj_hash
+        )
 
     fingerprint_id = fingerprintBuilder.generate_fingerprint_id(fingerprint_summary)
 
@@ -390,7 +428,13 @@ def send_add_signature(data_type, connection_config, descriptor, fingerprint_ass
         dd_name=descriptor.get('name')
     )
 
-    logger.info(f"send_add_signature: signature = {signature}")
+    logger.info(
+        "[data-sinker] feature=write_signature Creating signature in data-services dd=%s/%s data_type=%s fingerprint_id=%s",
+        descriptor.get("namespace"),
+        descriptor.get("name"),
+        getattr(data_type, "value", str(data_type)),
+        fingerprint_id,
+    )
 
     try:
         result = signature_client.create_signature(signature)
@@ -401,37 +445,103 @@ def send_add_signature(data_type, connection_config, descriptor, fingerprint_ass
         logger.error(f"create signature fail: {str(e)}", exc_info=True)
         raise
 
+
+def _coerce_semantic_domain_text(fingerprint_associated_info: Dict[str, Any]) -> Optional[str]:
+    """
+    Normalize the DDD text sent to data-services as semantic_domain.
+
+    - ``ddd`` should be a string; postgres historically set it to a dict (full ddd result).
+    - If ``ddd`` is missing/empty but ``db_ddd`` / ``code_ddd`` exist, use those so PUT
+      includes semantic_domain (otherwise the API omits the field and the DB keeps the old value).
+    """
+    raw = fingerprint_associated_info.get("ddd")
+    if isinstance(raw, dict):
+        raw = raw.get("summary")
+    if raw is not None:
+        s = raw if isinstance(raw, str) else str(raw)
+        if s.strip():
+            return s
+    for key in ("db_ddd", "code_ddd"):
+        fb = fingerprint_associated_info.get(key)
+        if fb is not None:
+            s = fb if isinstance(fb, str) else str(fb)
+            if s.strip():
+                return s
+    return None
+
+
 def send_add_semantic_domain(descriptor, fingerprint_associated_info):
     """
-    Create and send semantic domain record to data-services
-    
-    Args:
-        descriptor: Descriptor containing namespace and name
-        fingerprint_associated_info: Associated information including semantic_domain, agent_card, etc.
+    Create or update semantic domain record in data-services.
+    Update-if-exists: when re-sync, update existing record (semantic_domain, agent_card, version)
+    to avoid relationship disruption (dd_group_relation references semantic_domain_id).
     """
     agent_card = json.dumps(fingerprint_associated_info.get("agent_card", {}), ensure_ascii=False, indent=4)
-    semantic_domain_text = fingerprint_associated_info.get("ddd")
+    semantic_domain_text = _coerce_semantic_domain_text(fingerprint_associated_info)
+    if semantic_domain_text is None:
+        logger.warning(
+            "send_add_semantic_domain: no non-empty ddd/db_ddd/code_ddd; "
+            "semantic_domain will be omitted on PUT and data-services will keep the previous value"
+        )
 
     # 从环境变量中获取 DataDescriptor CRD 的 descriptorType（由 dd.go 设置）
     descriptor_type = os.environ.get("DESCRIPTOR_TYPE", "")
-
-    semantic_domain = SemanticDomainData(
-        semantic_domain=semantic_domain_text,
-        agent_card=agent_card,
-        dd_namespace=descriptor.get('namespace'),
-        dd_name=descriptor.get('name'),
-        descriptor_type=descriptor_type if descriptor_type else None
-    )
-
-    logger.info(f"send_add_semantic_domain: semantic_domain = {semantic_domain}")
+    dd_namespace = descriptor.get('namespace')
+    dd_name = descriptor.get('name')
 
     try:
-        result = semantic_domain_client.create_semantic_domain(semantic_domain)
-        logger.debug(f"create semantic domain: {result}")
+        existing = semantic_domain_client.search_semantic_domains_by_dd(dd_namespace, dd_name)
+        domains = existing.get("data") or []
+        count = existing.get("count", 0) or len(domains)
 
-        return result
+        if count > 0 and domains:
+            # Update existing: take the first (most recent by created_at DESC)
+            to_update = domains[0] if isinstance(domains[0], dict) else domains[0].model_dump()
+            sd_id = to_update.get("semantic_domain_id")
+            current_version = to_update.get("version") or "0"
+            try:
+                new_version = str(int(current_version) + 1)
+            except (ValueError, TypeError):
+                new_version = "1"
+
+            update_data = SemanticDomainData(
+                semantic_domain=semantic_domain_text,
+                agent_card=agent_card,
+                dd_namespace=dd_namespace,
+                dd_name=dd_name,
+                descriptor_type=descriptor_type if descriptor_type else None,
+                version=new_version
+            )
+            result = semantic_domain_client.update_semantic_domain(sd_id, update_data)
+            logger.info(f"send_add_semantic_domain: updated existing semantic_domain {sd_id}, version={new_version}")
+
+            # If multiple records exist (legacy), delete the stale ones
+            for extra in domains[1:]:
+                extra_id = extra.get("semantic_domain_id") if isinstance(extra, dict) else getattr(extra, "semantic_domain_id", None)
+                if extra_id and extra_id != sd_id:
+                    try:
+                        semantic_domain_client.delete_semantic_domain(extra_id)
+                        logger.info(f"send_add_semantic_domain: deleted stale semantic_domain {extra_id}")
+                    except Exception as del_err:
+                        logger.warning(f"send_add_semantic_domain: failed to delete stale {extra_id}: {del_err}")
+
+            return result
+        else:
+            # Create new
+            semantic_domain = SemanticDomainData(
+                semantic_domain=semantic_domain_text,
+                agent_card=agent_card,
+                dd_namespace=dd_namespace,
+                dd_name=dd_name,
+                descriptor_type=descriptor_type if descriptor_type else None,
+                version="1"
+            )
+            logger.info(f"send_add_semantic_domain: creating new semantic_domain")
+            result = semantic_domain_client.create_semantic_domain(semantic_domain)
+            logger.debug(f"create semantic domain: {result}")
+            return result
     except Exception as e:
-        logger.error(f"create semantic domain fail: {str(e)}", exc_info=True)
+        logger.error(f"create/update semantic domain fail: {str(e)}", exc_info=True)
         raise
 
 def send_add_documents_to_knowledge_pyramid(documents: List[Dict[str, Any]], collection_name: str) -> Dict[str, Any]:
@@ -475,7 +585,7 @@ def send_add_knowledge_graph(collection_name, fingerprint_associated_info):
     try:
         knowledge_graph = Knowledge_Graph()
 
-        semantic_domain_text = fingerprint_associated_info.get("ddd")
+        semantic_domain_text = _coerce_semantic_domain_text(fingerprint_associated_info)
 
         knowledge_graph_result = knowledge_graph.knowledge_graph(semantic_domain_text)
 

@@ -1,0 +1,17 @@
+{{- if .Values.orchestratorRegistry.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.orchestratorRegistry.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "orchestrator-registry") | nindent 4 }}
+spec:
+  type: {{ .Values.orchestratorRegistry.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.orchestratorRegistry.service.port }}
+      targetPort: {{ .Values.orchestratorRegistry.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "orchestrator-registry") | nindent 4 }}
+{{- end }}

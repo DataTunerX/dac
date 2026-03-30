@@ -1,0 +1,53 @@
+{{- if .Values.bizChartAgent.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dac.bizChartAgent.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "biz-chart-agent") | nindent 4 }}
+spec:
+  replicas: {{ .Values.bizChartAgent.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "biz-chart-agent") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "biz-chart-agent") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: biz-chart-agent
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.bizChartAgent.image.repository "tag" .Values.bizChartAgent.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.bizChartAgent.service.targetPort }}
+          env:
+            - name: Agent_Host
+              value: "{{ include "dac.bizChartAgent.serviceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+            - name: Agent_Port
+              value: {{ .Values.bizChartAgent.service.targetPort | quote }}
+            - name: Agent_Name
+              value: {{ .Values.bizChartAgent.config.agentName | quote }}
+            - name: Agent_Description
+              value: {{ .Values.bizChartAgent.config.agentDescription | quote }}
+            - name: CHART_AGENT_START_MODE
+              value: {{ .Values.bizChartAgent.config.startMode | quote }}
+            - name: REGISTER_AGENT
+              value: {{ .Values.bizChartAgent.config.registerAgent | quote }}
+          args:
+            - "--redis-host"
+            - {{ include "dac.redis.serviceName" . | quote }}
+            - "--redis-port"
+            - {{ .Values.redis.port | quote }}
+            - "--redis-db"
+            - {{ .Values.bizChartAgent.config.redisDb | quote }}
+            - "--password"
+            - {{ .Values.redis.password | quote }}
+            {{- include "dac.llmArgs" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.bizChartAgent.resources | nindent 12 }}
+{{- end }}

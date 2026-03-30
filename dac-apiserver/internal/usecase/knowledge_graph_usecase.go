@@ -5,15 +5,14 @@ import (
 	"log/slog"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
-	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 )
 
 type knowledgeGraphUsecase struct {
-	dsClient *dataservices.Client
+	dsClient domain.DataServicesClient
 	logger   *slog.Logger
 }
 
-func NewKnowledgeGraphUsecase(dsClient *dataservices.Client, logger *slog.Logger) domain.KnowledgeGraphUsecase {
+func NewKnowledgeGraphUsecase(dsClient domain.DataServicesClient, logger *slog.Logger) domain.KnowledgeGraphUsecase {
 	if logger == nil {
 		logger = slog.Default()
 	}

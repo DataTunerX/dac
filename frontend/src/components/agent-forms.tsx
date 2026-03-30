@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, useMemo, useRef } from "react"
+import useSWR from "swr"
 import { useForm, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
@@ -8,6 +9,19 @@ import { Loader2, Zap } from "lucide-react"
 import { toast } from "sonner"
 
 import { api } from "@/lib/api"
+import { apiFetcher } from "@/lib/swr"
+import { listNamespaces } from "@/lib/namespaces-api"
+import { listDescriptorsAll } from "@/lib/descriptors-api"
+import { listSemanticGroups } from "@/lib/semantic-groups-api"
+import { listConfigMaps } from "@/lib/configmaps-api"
+import type {
+  NamespaceListResponse,
+  DataDescriptorResponse,
+  SemanticGroupResponse,
+  ConfigMapResponse,
+  AgentCardResponse,
+  AgentSkillResponse,
+} from "@/lib/api-types"
 import {
   Dialog,
   DialogContent,
@@ -74,13 +88,40 @@ type DataDescriptor = {
 
 type LLMConfig = {
   name: string
-  data: any
+  data: Record<string, unknown> | undefined
 }
 
 type SemanticGroup = {
   id: string
   group_name: string
   agent_card?: string
+}
+
+/** Map API skill shape (or parsed JSON) to form Skill; returns null if invalid */
+function skillFromRaw(s: AgentSkillResponse | Record<string, unknown>): Skill | null {
+  const raw = typeof s === "object" && s !== null ? s : {}
+  const r = raw as Record<string, unknown>
+  const id = (typeof r.id === "string" ? r.id : "").trim()
+  const name = (typeof r.name === "string" ? r.name : "").trim()
+  const description = (typeof r.description === "string" ? r.description : "").trim()
+  const tagsRaw = r.tags
+  const tags = Array.isArray(tagsRaw)
+    ? tagsRaw.filter((t): t is string => typeof t === "string").join(",")
+    : typeof tagsRaw === "string"
+      ? tagsRaw
+      : ""
+  const examplesRaw = r.examples
+  const examples = Array.isArray(examplesRaw)
+    ? examplesRaw.filter((e): e is string => typeof e === "string").join("\n")
+    : typeof examplesRaw === "string"
+      ? examplesRaw
+      : ""
+  const finalId = id || name
+  const finalName = name || finalId
+  if (finalId || finalName) {
+    return { id: finalId, name: finalName, description, tags, examples }
+  }
+  return null
 }
 
 export function CreateAgentDialog({
@@ -99,8 +140,12 @@ export function CreateAgentDialog({
   const [ddError, setDdError] = useState<string | null>(null)
   const [sgError, setSgError] = useState<string | null>(null)
 
-  const [namespaces, setNamespaces] = useState<string[]>([])
-  const [isLoadingNs, setIsLoadingNs] = useState(false)
+  // Namespaces: SWR when dialog open for dedup/cache with configmaps page
+  const { data: nsData, isLoading: isLoadingNs } = useSWR<NamespaceListResponse>(
+    open ? "/namespaces" : null,
+    () => listNamespaces()
+  )
+  const namespaces = useMemo(() => nsData?.items?.map((n) => n.name) ?? [], [nsData])
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [sourceOpen, setSourceOpen] = useState(false)
@@ -175,8 +220,8 @@ export function CreateAgentDialog({
   const description = useWatch({ control: form.control, name: "description" })
   const dataSourceId = useWatch({ control: form.control, name: "dataSourceId" })
 
-  const selectedPlannerModel = llmConfigs.find((c) => c.name === plannerModel)?.data?.model || ""
-  const selectedExpertModel = llmConfigs.find((c) => c.name === expertModel)?.data?.model || ""
+  const selectedPlannerModel: string = String(llmConfigs.find((c) => c.name === plannerModel)?.data?.model ?? "")
+  const selectedExpertModel: string = String(llmConfigs.find((c) => c.name === expertModel)?.data?.model ?? "")
 
   // State for user interaction tracking (to avoid overwriting user input)
   const [nameTouched, setNameTouched] = useState(false)
@@ -211,53 +256,21 @@ export function CreateAgentDialog({
   const fingerprintError = fingerprintState.key === targetDataSource ? fingerprintState.error : ""
   const isFingerprintLoading = fingerprintState.key === targetDataSource && fingerprintState.status === "loading"
 
-  // Load Namespaces
-  const loadNamespaces = async () => {
-    if (isLoadingNs) return
-    setIsLoadingNs(true)
-    try {
-      const res = await api.get("/namespaces")
-      const items = (res.data?.items || res.data?.data?.items || []) as unknown
-      const list = Array.isArray(items) ? items : []
-      const adapted = list
-        .map((x: unknown) => {
-          const r = typeof x === "object" && x !== null ? (x as Record<string, unknown>) : {}
-          return typeof r.name === "string" ? r.name : ""
-        })
-        .filter((x) => x)
-      setNamespaces(adapted)
-    } catch (e) {
-      console.error("Failed to load namespaces", e)
-      setNamespaces([])
-    } finally {
-      setIsLoadingNs(false)
-    }
-  }
-
   // Load Data Descriptors
   const loadDataDescriptors = async () => {
     if (isLoadingDD) return
     setIsLoadingDD(true)
     setDdError(null)
     try {
-      const res = await api.get("/descriptors")
-      // Handle various response structures
-      const items = res.data?.data?.items || res.data?.items || res.data?.data || []
-      
-      if (Array.isArray(items)) {
-        const mapped = items
-          .map((item: any) => ({
-            id: item.name || "",
-            name: item.name || "",
-            namespace: item.namespace,
-            descriptorType: item.descriptor_type,
-            phase: item.overall_phase,
-          }))
-          .filter((item) => item.id)
-        setDataDescriptors(mapped)
-      } else {
-        setDataDescriptors([])
-      }
+      const { items } = await listDescriptorsAll()
+      const mapped: DataDescriptor[] = items.map((item: DataDescriptorResponse) => ({
+        id: item.name ?? "",
+        name: item.name ?? "",
+        namespace: item.namespace ?? "",
+        descriptorType: item.descriptor_type ?? "",
+        phase: item.overall_phase ?? "",
+      })).filter((item) => item.id)
+      setDataDescriptors(mapped)
     } catch (err) {
       console.error("Failed to fetch data descriptors:", err)
       setDataDescriptors([])
@@ -273,13 +286,13 @@ export function CreateAgentDialog({
     setIsLoadingSG(true)
     setSgError(null)
     try {
-      const res = await api.get("/semantic-groups")
-      const items = (res.data?.items || res.data?.data?.items || []) as unknown
-      const list = Array.isArray(items) ? items : []
-      const adapted = list.map((item: any) => ({
-        id: String(item.id || ""),
-        group_name: String(item.group_name || ""),
-        agent_card: typeof item.agent_card === "string" ? item.agent_card : undefined,
+      const { items } = await listSemanticGroups({ limit: 1000, offset: 0 })
+      const adapted = items.map((item: SemanticGroupResponse) => ({
+        id: String(item.id ?? ""),
+        group_name: String(item.group_name ?? ""),
+        agent_card: typeof (item as SemanticGroupResponse & { agent_card?: string }).agent_card === "string"
+          ? (item as SemanticGroupResponse & { agent_card?: string }).agent_card
+          : undefined,
       })).filter((s) => s.id)
       setSemanticGroups(adapted)
     } catch (err) {
@@ -298,25 +311,11 @@ export function CreateAgentDialog({
     setLlmError(null)
     try {
       const namespace = (ns || "default").trim() || "default"
-      const res = await api.get(`/namespaces/${namespace}/configmaps`, {
-        params: { type: "llm" },
-      })
-      // NOTE: @/lib/api.ts unwraps the standard response envelope `{ code, message, data }`,
-      // so `res.data` is already the inner payload: `{ items, totalCount, ... }`.
-      const data = (res.data?.data ?? res.data) as unknown
-      const r = (typeof data === "object" && data !== null) ? (data as Record<string, unknown>) : {}
-      const items = (r.items ?? []) as unknown
-      const list = (Array.isArray(items) ? items : [])
-        .map((item: any) => {
-          const raw = typeof item === "object" && item !== null ? item : {}
-          const name = typeof raw.name === "string" ? raw.name : ""
-          const data = raw.data
-          return {
-            name,
-            data: typeof data === "object" && data !== null ? data : undefined,
-          }
-        })
-        .filter((i) => i.name)
+      const { items } = await listConfigMaps(namespace, { type: "llm" })
+      const list: LLMConfig[] = items.map((item: ConfigMapResponse) => ({
+        name: item.name ?? "",
+        data: item.data as Record<string, unknown> | undefined,
+      })).filter((i) => i.name)
       setLlmConfigs(list)
       
       // Auto-select first two models if not already set (or if current selection is invalid for this ns)
@@ -344,15 +343,16 @@ export function CreateAgentDialog({
     }
   }
 
-  // Initialize
+  // Initialize: run independent fetches in parallel (namespaces via SWR when open)
   useEffect(() => {
-    if (open) {
-      loadNamespaces()
-      loadDataDescriptors()
-      loadSemanticGroups()
-      // Also load LLM configs for default namespace
-      loadLlmConfigs(namespace || "default")
-    }
+    if (!open) return
+    void Promise.all([
+      loadDataDescriptors(),
+      loadSemanticGroups(),
+      loadLlmConfigs(namespace || "default"),
+    ]).catch(() => {
+      // Each load* already sets error state; avoid unhandled rejection
+    })
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // When dataSourceId changes, update namespace field
@@ -440,54 +440,18 @@ export function CreateAgentDialog({
         }
 
         try {
-            const agentCard = JSON.parse(agentCardStr)
+            const agentCard = JSON.parse(agentCardStr) as AgentCardResponse
             setFingerprintState({
                 key: targetDataSource,
                 status: "ready",
                 agentCard: { name: agentCard.name, description: agentCard.description },
                 rawAgentCard: agentCardStr,
             })
-            // Process skills (reuse logic if possible, or duplicate for now)
             if (Array.isArray(agentCard?.skills)) {
-                // ... (skill processing logic same as below)
                 const newSkills = agentCard.skills
-                .map((s: any) => {
-                  const raw = typeof s === "object" && s !== null ? s : {}
-                  const id = (typeof raw.id === "string" ? raw.id : "").trim()
-                  const name = (typeof raw.name === "string" ? raw.name : "").trim()
-                  const description = (typeof raw.description === "string" ? raw.description : "").trim()
-                  const tagsRaw = raw.tags
-                  const tags = Array.isArray(tagsRaw)
-                    ? tagsRaw.filter((t: any) => typeof t === "string").join(",")
-                    : typeof tagsRaw === "string"
-                    ? tagsRaw
-                    : ""
-                  const examplesRaw = raw.examples
-                  const examples = Array.isArray(examplesRaw)
-                    ? examplesRaw.filter((e: any) => typeof e === "string").join("\n")
-                    : typeof examplesRaw === "string"
-                    ? examplesRaw
-                    : ""
-                  
-                  const finalId = id || name
-                  const finalName = name || finalId
-                  
-                  if (finalId || finalName) {
-                    return {
-                      id: finalId,
-                      name: finalName,
-                      description,
-                      tags,
-                      examples,
-                    }
-                  }
-                  return null
-                })
-                .filter((s: any) => !!s)
-              
-              if (newSkills.length > 0) {
-                setSkills(newSkills)
-              }
+                  .map((s) => skillFromRaw(s))
+                  .filter((s): s is Skill => s != null)
+                if (newSkills.length > 0) setSkills(newSkills)
             }
         } catch {
             const msg = "agent_card 不是合法 JSON"
@@ -523,9 +487,9 @@ export function CreateAgentDialog({
           return
         }
 
-        let agentCard: any = {}
+        let agentCard: AgentCardResponse
         try {
-          agentCard = JSON.parse(agentCardStr)
+          agentCard = JSON.parse(agentCardStr) as AgentCardResponse
         } catch {
           const msg = "agent_card 不是合法 JSON（请检查 semantic domain 内容）"
           setFingerprintState({ key: targetDataSource, status: "error", error: msg })
@@ -537,8 +501,8 @@ export function CreateAgentDialog({
           return
         }
 
-        const agentName = typeof agentCard?.name === "string" ? agentCard.name.trim() : ""
-        const agentDesc = typeof agentCard?.description === "string" ? agentCard.description.trim() : ""
+        const agentName = (agentCard.name ?? "").trim()
+        const agentDesc = (agentCard.description ?? "").trim()
 
         if (!agentName && !agentDesc) {
             const msg = "agent_card 中缺少 name/description（请检查 semantic domain 内容）"
@@ -558,50 +522,15 @@ export function CreateAgentDialog({
           rawAgentCard: agentCardStr,
         })
 
-        // Process skills
         if (Array.isArray(agentCard?.skills)) {
           const newSkills = agentCard.skills
-            .map((s: any) => {
-              const raw = typeof s === "object" && s !== null ? s : {}
-              const id = (typeof raw.id === "string" ? raw.id : "").trim()
-              const name = (typeof raw.name === "string" ? raw.name : "").trim()
-              const description = (typeof raw.description === "string" ? raw.description : "").trim()
-              const tagsRaw = raw.tags
-              const tags = Array.isArray(tagsRaw)
-                ? tagsRaw.filter((t: any) => typeof t === "string").join(",")
-                : typeof tagsRaw === "string"
-                ? tagsRaw
-                : ""
-              const examplesRaw = raw.examples
-              const examples = Array.isArray(examplesRaw)
-                ? examplesRaw.filter((e: any) => typeof e === "string").join("\n")
-                : typeof examplesRaw === "string"
-                ? examplesRaw
-                : ""
-              
-              const finalId = id || name
-              const finalName = name || finalId
-              
-              if (finalId || finalName) {
-                return {
-                  id: finalId,
-                  name: finalName,
-                  description,
-                  tags,
-                  examples,
-                }
-              }
-              return null
-            })
-            .filter((s: any) => !!s)
-          
-          if (newSkills.length > 0) {
-            setSkills(newSkills)
-          }
+            .map((s) => skillFromRaw(s))
+            .filter((s): s is Skill => s != null)
+          if (newSkills.length > 0) setSkills(newSkills)
         }
 
-      } catch (err: any) {
-        if (err.name === 'AbortError') return;
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") return
         const msg = "Semantic Domain 获取失败（请检查 data-services 或 Go 网关接口）"
         setFingerprintState({ key: targetDataSource, status: "error", error: msg })
         const errKey = `${targetDataSource}:${msg}`
@@ -693,7 +622,7 @@ export function CreateAgentDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[720px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
-        <DialogHeader className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+        <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
           <DialogTitle>新建智能体</DialogTitle>
           <DialogDescription>
             创建一个新的智能体，绑定数据源并指定使用的大模型。
@@ -771,7 +700,7 @@ export function CreateAgentDialog({
                                 </SelectItem>
                               ) : isLoadingDD && dataDescriptors.length === 0 ? (
                                 <SelectItem value="__loading__" disabled>
-                                  加载中...
+                                  加载中…
                                 </SelectItem>
                               ) : dataDescriptors.length === 0 ? (
                                 <SelectItem value="__empty__" disabled>
@@ -792,7 +721,7 @@ export function CreateAgentDialog({
                                 </SelectItem>
                               ) : isLoadingSG && semanticGroups.length === 0 ? (
                                 <SelectItem value="__loading__" disabled>
-                                  加载中...
+                                  加载中…
                                 </SelectItem>
                               ) : semanticGroups.length === 0 ? (
                                 <SelectItem value="__empty__" disabled>
@@ -893,9 +822,7 @@ export function CreateAgentDialog({
                           onValueChange={(val) => {
                             field.onChange(val)
                           }}
-                          onOpenChange={async (open) => {
-                            if (open) await loadNamespaces()
-                          }}
+                          onOpenChange={() => {}}
                           disabled={isSubmitting || isLoadingNs}
                         >
                           <FormControl>
@@ -942,8 +869,8 @@ export function CreateAgentDialog({
               </div>
 
               {/* Model Config */}
-              <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4">
-                <div className="text-xs font-semibold text-slate-500">模型配置</div>
+              <div className="rounded-lg border border-line bg-surface p-4 space-y-4">
+                <div className="text-xs font-semibold text-content-muted">模型配置</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-4">
                     <FormField
@@ -971,7 +898,7 @@ export function CreateAgentDialog({
                                 </SelectItem>
                               ) : isLoadingLLM && llmConfigs.length === 0 ? (
                                 <SelectItem value="__loading__" disabled>
-                                  加载中...
+                                  加载中…
                                 </SelectItem>
                               ) : llmConfigs.length === 0 ? (
                                 <SelectItem value="__empty__" disabled>
@@ -986,7 +913,7 @@ export function CreateAgentDialog({
                             </SelectContent>
                           </Select>
                           {selectedPlannerModel && (
-                            <div className="text-xs text-slate-500 truncate" title={selectedPlannerModel}>
+                            <div className="text-xs text-content-muted truncate" title={selectedPlannerModel}>
                               {selectedPlannerModel}
                             </div>
                           )}
@@ -1039,7 +966,7 @@ export function CreateAgentDialog({
                                 </SelectItem>
                               ) : isLoadingLLM && llmConfigs.length === 0 ? (
                                 <SelectItem value="__loading__" disabled>
-                                  加载中...
+                                  加载中…
                                 </SelectItem>
                               ) : llmConfigs.length === 0 ? (
                                 <SelectItem value="__empty__" disabled>
@@ -1054,7 +981,7 @@ export function CreateAgentDialog({
                             </SelectContent>
                           </Select>
                           {selectedExpertModel && (
-                            <div className="text-xs text-slate-500 truncate" title={selectedExpertModel}>
+                            <div className="text-xs text-content-muted truncate" title={selectedExpertModel}>
                               {selectedExpertModel}
                             </div>
                           )}
@@ -1081,10 +1008,10 @@ export function CreateAgentDialog({
                     />
                   </div>
                 </div>
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-content-muted">
                   没有可选项？
                   <a
-                    className="ml-1 text-blue-600 hover:text-blue-700 hover:underline"
+                    className="ml-1 text-cta hover:text-cta/90 hover:underline cursor-pointer"
                     href={`/configmaps?namespace=${encodeURIComponent((namespace || "default").trim() || "default")}&type=llm&create=1`}
                   >
                     去创建 LLM ConfigMap
@@ -1093,9 +1020,9 @@ export function CreateAgentDialog({
               </div>
 
               {/* Skills Definition */}
-              <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4">
+              <div className="rounded-lg border border-line bg-surface p-4 space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold text-slate-500">技能定义</div>
+                  <div className="text-xs font-semibold text-content-muted">技能定义</div>
                   <Button
                     type="button"
                     variant="outline"
@@ -1104,7 +1031,13 @@ export function CreateAgentDialog({
                     onClick={() =>
                       setSkills((prev) => [
                         ...prev,
-                        { id: "", name: "", description: "", tags: "", examples: "" },
+                        {
+                          id: `skill-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+                          name: "",
+                          description: "",
+                          tags: "",
+                          examples: "",
+                        },
                       ])
                     }
                   >
@@ -1113,17 +1046,17 @@ export function CreateAgentDialog({
                 </div>
                 <div className="space-y-3">
                   {skills.length === 0 ? (
-                    <div className="text-sm text-slate-500">暂无技能</div>
+                    <div className="text-sm text-content-muted">暂无技能</div>
                   ) : (
                     skills.map((skill, idx) => (
                       <div
-                        key={idx}
-                        className="rounded-md border border-slate-200 p-3 bg-slate-50/30"
+                        key={skill.id}
+                        className="rounded-md border border-line p-3 bg-surface-muted/30"
                       >
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-purple-600" />
-                            <span className="text-sm font-medium text-slate-800">
+                            <Zap className="w-4 h-4 text-sky-600" />
+                            <span className="text-sm font-medium text-content">
                               {skill.name?.trim() ? skill.name : `技能 ${idx + 1}`}
                             </span>
                             {skill.id?.trim() && (
@@ -1137,7 +1070,7 @@ export function CreateAgentDialog({
                             variant="ghost"
                             size="sm"
                             disabled={isSubmitting}
-                            className="text-slate-500 hover:text-red-600"
+                            className="text-content-muted hover:text-red-600"
                             onClick={() =>
                               setSkills((prev) => prev.filter((_, i) => i !== idx))
                             }
@@ -1147,7 +1080,7 @@ export function CreateAgentDialog({
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div className="space-y-1">
-                            <div className="text-xs text-slate-500">技能 ID</div>
+                            <div className="text-xs text-content-muted">技能 ID</div>
                             <Input
                               value={skill.id}
                               placeholder="例如：GeneralQA"
@@ -1162,7 +1095,7 @@ export function CreateAgentDialog({
                             />
                           </div>
                           <div className="space-y-1">
-                            <div className="text-xs text-slate-500">技能名称</div>
+                            <div className="text-xs text-content-muted">技能名称</div>
                             <Input
                               value={skill.name}
                               placeholder="例如：数据问答"
@@ -1178,7 +1111,7 @@ export function CreateAgentDialog({
                           </div>
                         </div>
                         <div className="mt-3 space-y-1">
-                          <div className="text-xs text-slate-500">技能描述</div>
+                          <div className="text-xs text-content-muted">技能描述</div>
                           <Textarea
                             value={skill.description}
                             placeholder="该技能能做什么..."
@@ -1194,7 +1127,7 @@ export function CreateAgentDialog({
           </div>
                         <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div className="space-y-1">
-                            <div className="text-xs text-slate-500">标签（逗号分隔）</div>
+                            <div className="text-xs text-content-muted">标签（逗号分隔）</div>
                             <Input
                               value={skill.tags}
                               placeholder="例如：qa,sql"
@@ -1209,7 +1142,7 @@ export function CreateAgentDialog({
                             />
           </div>
                           <div className="space-y-1">
-                            <div className="text-xs text-slate-500">示例问题（每行一个）</div>
+                            <div className="text-xs text-content-muted">示例问题（每行一个）</div>
                             <Textarea
                               value={skill.examples}
                               placeholder={`例如：\n帮我分析这份数据\n这个指标怎么计算？`}
@@ -1231,7 +1164,7 @@ export function CreateAgentDialog({
           </div>
         </div>
 
-            <DialogFooter className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 mt-0">
+            <DialogFooter className="px-6 py-4 border-t border-line bg-surface-muted/50 mt-0">
               <Button
                 type="button"
                 variant="outline"
@@ -1244,7 +1177,7 @@ export function CreateAgentDialog({
                 type="submit"
                 disabled={isSubmitting || isFingerprintLoading || !!fingerprintError}
               >
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 创建智能体
           </Button>
         </DialogFooter>

@@ -111,12 +111,24 @@ type SourceStatus struct {
 	TaskID       string      `json:"taskID,omitempty"`
 }
 
+// SyncPolicy controls periodic observation of data source changes.
+// When enabled, ds DAC Pod will run a dd-sync-observer sidecar that detects
+// changes and patches the DD to trigger re-sync.
+type SyncPolicy struct {
+	// Enabled enables the dd-sync-observer sidecar when true
+	Enabled bool `json:"enabled,omitempty"`
+	// Schedule is the detection interval, e.g. "6h", "1h", or seconds
+	Schedule string `json:"schedule,omitempty"`
+}
+
 // DataDescriptorSpec defines the desired state of DataDescriptor.
 type DataDescriptorSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	DescriptorType string       `json:"descriptorType,omitempty"`
 	Sources        []DataSource `json:"sources,omitempty"`
+	// SyncPolicy enables periodic observation of data source changes for re-sync
+	SyncPolicy *SyncPolicy `json:"syncPolicy,omitempty"`
 }
 
 // DataDescriptorStatus defines the observed state of DataDescriptor.

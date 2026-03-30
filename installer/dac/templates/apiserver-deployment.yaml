@@ -1,0 +1,66 @@
+{{- if .Values.apiserver.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "dac-apiserver") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "dac-apiserver") | nindent 4 }}
+spec:
+  replicas: {{ .Values.apiserver.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "dac-apiserver") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "dac-apiserver") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "dac.componentName" (dict "context" . "name" "dac-apiserver") }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: dac-apiserver
+          image: {{ include "dac.image" (dict "registry" (.Values.apiserver.image.registry | default .Values.global.imageRegistry) "repository" .Values.apiserver.image.repository "tag" .Values.apiserver.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/app/dac-apiserver"]
+          args: ["-c", "/app/configs/config.yaml"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.apiserver.service.targetPort }}
+            - name: metrics
+              containerPort: {{ .Values.apiserver.service.metricsPort }}
+          env:
+            - name: TZ
+              value: "Asia/Shanghai"
+          volumeMounts:
+            - name: config
+              mountPath: /app/configs
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: {{ .Values.apiserver.service.targetPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: {{ .Values.apiserver.service.targetPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.apiserver.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "dac.componentName" (dict "context" . "name" "dac-apiserver-config") }}
+            items:
+              - key: config.yaml
+                path: config.yaml
+              - key: model.conf
+                path: authz/model.conf
+              - key: policy.csv
+                path: authz/policy.csv
+{{- end }}

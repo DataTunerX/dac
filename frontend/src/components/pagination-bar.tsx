@@ -42,14 +42,14 @@ export function PaginationBar({
   ).sort((a, b) => a - b)
 
   return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="text-xs text-slate-500">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="text-xs text-content-muted shrink-0">
         共 {safeTotal} 条记录{safeTotal > 0 ? `，当前显示 ${startIdx}-${endIdx}` : ""}。
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {normalizedPageSizeOptions.length > 0 && onPageSizeChange ? (
           <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">每页</span>
+            <span className="text-xs text-content-muted">每页</span>
             <Select
               value={String(safePageSize)}
               onValueChange={(v) => {
@@ -72,7 +72,7 @@ export function PaginationBar({
                 ))}
               </SelectContent>
             </Select>
-            <span className="text-xs text-slate-500">条</span>
+            <span className="text-xs text-content-muted">条</span>
           </div>
         ) : null}
         <Button
@@ -83,7 +83,7 @@ export function PaginationBar({
         >
           上一页
         </Button>
-        <div className="text-xs text-slate-600">
+        <div className="text-xs text-content">
           第 <span className="font-mono">{safePage}</span> / <span className="font-mono">{totalPages}</span> 页
         </div>
         <Button

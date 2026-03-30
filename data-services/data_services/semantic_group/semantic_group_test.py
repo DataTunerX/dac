@@ -74,7 +74,14 @@ class SemanticGroupServiceTester:
                 column_names = {col['Field'] for col in columns}
                 
                 expected_columns = {
-                    'id', 'group_name', 'description', 'agent_card', 'version', 'created_at'
+                    'id',
+                    'group_name',
+                    'description',
+                    'agent_card',
+                    'version',
+                    'parent_id',
+                    'created_at',
+                    'updated_at',
                 }
                 
                 missing_columns = expected_columns - column_names

@@ -1,0 +1,17 @@
+{{- if .Values.frontend.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "frontend") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "frontend") | nindent 4 }}
+spec:
+  type: {{ .Values.frontend.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.frontend.service.port }}
+      targetPort: {{ .Values.frontend.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "frontend") | nindent 4 }}
+{{- end }}

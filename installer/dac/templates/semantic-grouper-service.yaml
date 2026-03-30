@@ -1,0 +1,17 @@
+{{- if .Values.semanticGrouper.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "semantic-grouper") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "semantic-grouper") | nindent 4 }}
+spec:
+  type: {{ .Values.semanticGrouper.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.semanticGrouper.service.port }}
+      targetPort: {{ .Values.semanticGrouper.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "semantic-grouper-api") | nindent 4 }}
+{{- end }}

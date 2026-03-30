@@ -6,63 +6,62 @@ FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# Install dependencies based on the preferred package manager
-COPY package.json ./
-# No lockfile present, so we use npm install to generate one and install
-# RUN npm config set registry https://registry.npmmirror.com/
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 
 # Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Ensure `public/` exists for standalone copy (Next serves static files from here when present).
+RUN mkdir -p public
 
 # Next.js collects completely anonymous telemetry data about general usage.
 # Learn more here: https://nextjs.org/telemetry
-# Uncomment the following line in case you want to disable telemetry during the build.
-# ENV NEXT_TELEMETRY_DISABLED 1
+# ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
 
-# Production image, copy all the files and run next
+# Production image: nginx listens on 3000; Next.js standalone binds 127.0.0.1:3001 (see entrypoint.sh).
 FROM base AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-# Uncomment the following line in case you want to disable telemetry during runtime.
-# ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN addgroup --system --gid 1001 nodejs \
+  && adduser --system --uid 1001 nextjs
 
 # Nginx reverse proxy (runtime-configurable via BACKEND_URL).
-# NOTE: `/v1/*` and `/api/v1/*` are proxied by nginx (see `nginx/default.conf.template`),
-# so the browser can call same-origin endpoints.
+# NOTE: `/v1/*` and `/api/v1/*` are proxied by nginx (see `nginx/default.conf.template`).
 USER root
 RUN apk add --no-cache nginx gettext dumb-init
+COPY ./nginx/nginx.conf /etc/nginx/nginx.conf
 COPY ./nginx/default.conf.template /etc/nginx/templates/default.conf.template
 COPY ./nginx/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
   && mkdir -p /etc/nginx/templates /etc/nginx/http.d /etc/nginx/conf.d \
   && mkdir -p /var/lib/nginx /var/log/nginx \
-  && chown -R nextjs:nodejs /etc/nginx/templates /etc/nginx/http.d /etc/nginx/conf.d /var/lib/nginx /var/log/nginx
+  && mkdir -p /tmp/nginx_client_body /tmp/nginx_proxy /tmp/nginx_fastcgi /tmp/nginx_uwsgi /tmp/nginx_scgi \
+  && chown -R nextjs:nodejs /etc/nginx/templates /etc/nginx/http.d /etc/nginx/conf.d \
+    /var/lib/nginx /var/log/nginx \
+    /tmp/nginx_client_body /tmp/nginx_proxy /tmp/nginx_fastcgi /tmp/nginx_uwsgi /tmp/nginx_scgi
 
-# Set the correct permission for prerender cache
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
+RUN mkdir .next && chown nextjs:nodejs .next
 
-# Automatically leverage output traces to reduce image size
 # https://nextjs.org/docs/advanced-features/output-file-tracing
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 USER nextjs
 
 EXPOSE 3000
 
-ENV PORT=3000
-# set hostname to localhost
-ENV HOSTNAME="0.0.0.0"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3000/healthz >/dev/null || exit 1
+
+# Next.js port/host are set at runtime in entrypoint.sh (127.0.0.1:3001). Do not set PORT/HOSTNAME here.
 
 CMD ["dumb-init", "/entrypoint.sh"]

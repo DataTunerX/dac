@@ -27,6 +27,79 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// clearSyncRequestedAtAnnotation removes dac.dac.io/sync-requested-at using a fresh GET + merge patch.
+func (h *DataDescriptorHandler) clearSyncRequestedAtAnnotation(ctx context.Context, namespace, name string, logger logr.Logger) error {
+	fresh := &dacv1alpha1.DataDescriptor{}
+	key := types.NamespacedName{Namespace: namespace, Name: name}
+	if err := h.Kubeclient.Get(ctx, key, fresh); err != nil {
+		return fmt.Errorf("get DataDescriptor before clearing sync-requested-at: %w", err)
+	}
+	if fresh.Annotations == nil || fresh.Annotations[annotationSyncRequestedAt] == "" {
+		return nil
+	}
+	modified := fresh.DeepCopy()
+	delete(modified.Annotations, annotationSyncRequestedAt)
+	if err := h.Kubeclient.Patch(ctx, modified, client.MergeFrom(fresh)); err != nil {
+		return fmt.Errorf("clear sync-requested-at annotation: %w", err)
+	}
+	logger.Info(
+		"resync path: cleared sync-requested-at after data-sinker deployment was ensured",
+		"feature", "sync_requested_at_resync",
+		"step", "annotation_clear_after_deployment_ensured",
+	)
+	return nil
+}
+
+// resetStatusForObserverResync transitions the DD out of Ready so handleDDStatus does not treat
+// stale SourceStatuses as complete (which would skip the status API and trigger immediate cleanup).
+// Semantic domain and other sinker work re-run via the new job; data-sinkers uses update-if-exists for SD.
+func (h *DataDescriptorHandler) resetStatusForObserverResync(ctx context.Context, dd *dacv1alpha1.DataDescriptor) error {
+	logger := h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name)
+	key := types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}
+	fresh := &dacv1alpha1.DataDescriptor{}
+	if err := h.Kubeclient.Get(ctx, key, fresh); err != nil {
+		return fmt.Errorf("get DataDescriptor before observer resync status reset: %w", err)
+	}
+
+	newStatus := fresh.Status.DeepCopy()
+	newStatus.OverallPhase = "NotReady"
+
+	sourceStatuses := make([]dacv1alpha1.SourceStatus, 0, len(fresh.Spec.Sources))
+	for _, src := range fresh.Spec.Sources {
+		sourceStatuses = append(sourceStatuses, dacv1alpha1.SourceStatus{
+			Name:   src.Name,
+			Phase:  "PENDING",
+			TaskID: "",
+		})
+	}
+	newStatus.SourceStatuses = sourceStatuses
+
+	if newStatus.Conditions == nil {
+		newStatus.Conditions = []dacv1alpha1.Condition{}
+	}
+	msg := "Re-sync requested (dac.dac.io/sync-requested-at); running data-sinker job from scratch."
+	newStatus.SetDataDescriptorCondition(*dacv1alpha1.NewCondition(dacv1alpha1.ConditionUpdating, corev1.ConditionTrue, "ObserverResync", msg))
+	newStatus.SetDataDescriptorCondition(*dacv1alpha1.NewCondition(dacv1alpha1.ConditionNotReady, corev1.ConditionTrue, "NotReady", "Re-sync in progress: waiting for data-sinker job."))
+	newStatus.SetDataDescriptorCondition(*dacv1alpha1.NewCondition(dacv1alpha1.ConditionAvailable, corev1.ConditionFalse, "ResyncPending", msg))
+
+	if h.isStatusEqualIgnoringTime(fresh.Status, *newStatus) {
+		dd.Status = fresh.Status
+		return nil
+	}
+
+	fresh.Status = *newStatus
+	if err := h.Kubeclient.Status().Update(ctx, fresh); err != nil {
+		return fmt.Errorf("reset DataDescriptor status for observer resync: %w", err)
+	}
+	dd.Status = fresh.Status
+	logger.Info(
+		"resync path: DD status reset to NotReady + PENDING sources for full data-sinker re-run",
+		"feature", "sync_requested_at_resync",
+		"step", "status_reset_observer_resync",
+	)
+	return nil
+}
+
 type DataDescriptorHandler struct {
 	K8sServices k8s.Services
 	EventsCli   k8s.Event
@@ -55,6 +128,42 @@ type StatusAPIResponse struct {
 
 // errDataDescriptorGone is returned when the DD was deleted or is being deleted while waiting for deployment.
 var errDataDescriptorGone = fmt.Errorf("data descriptor deleted or being deleted")
+
+// logResyncDSDACContext records ds-type DataAgentContainers that reference this DD.
+// They are separate resources from the DD-scoped data-sinker Deployment
+// (generator.DataDescriptorResourceName); ds DAC existence does not bypass observer resync logic.
+func (h *DataDescriptorHandler) logResyncDSDACContext(ctx context.Context, logger logr.Logger, dd *dacv1alpha1.DataDescriptor) {
+	allDACs := &dacv1alpha1.DataAgentContainerList{}
+	if err := h.Kubeclient.List(ctx, allDACs, client.InNamespace(dd.Namespace)); err != nil {
+		logger.Info(
+			"resync path: could not list DataAgentContainers for ds DAC context",
+			"feature", "sync_requested_at_resync",
+			"step", "ds_dac_context_list_error",
+			"error", err.Error(),
+		)
+		return
+	}
+	var dsDACNames []string
+	for i := range allDACs.Items {
+		dac := &allDACs.Items[i]
+		if dac.Spec.DACType != "ds" {
+			continue
+		}
+		for _, sel := range dac.Spec.DataPolicy.SourceNameSelector {
+			if strings.TrimSpace(sel) == dd.Name {
+				dsDACNames = append(dsDACNames, dac.Name)
+				break
+			}
+		}
+	}
+	logger.Info(
+		"resync path: ds DataAgentContainers referencing this DD (do not replace DD data-sinker Deployment)",
+		"feature", "sync_requested_at_resync",
+		"step", "ds_dac_context",
+		"dsDacNames", dsDACNames,
+		"note", "ensureAutoDAC is not called on this path; if job does not re-run, see deployment_probe and skip_create_existing_deployment.",
+	)
+}
 
 // isTemporaryNetworkError checks if the error is a temporary network error (e.g., connection refused, timeout)
 // that typically occurs when a service is starting up. These should be treated as PENDING, not ERROR.
@@ -163,6 +272,10 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 	logger := h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name)
 	logger.Info("DoAddOrUpdate Processing DataDescriptor")
 
+	// Tracks dd-sync-observer resync path. Annotation is cleared only after Deployment is ensured
+	// so a failed create does not strand the DD in Ready-without-annotation (which skips recreate).
+	resyncFromObserver := false
+
 	// Skip create/update when DD is being deleted (controller handles deletion separately)
 	if dd.DeletionTimestamp != nil {
 		logger.Info("DataDescriptor is being deleted, skipping DoAddOrUpdate")
@@ -171,33 +284,100 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 
 	// DD 已完成（OverallPhase Ready）时，deployment 已被 cleanupCompletedDeployment 清理；
 	// 重启时不应再创建 deployment，否则会重复跑 data-sinker job。
-	// 但仍需确保 auto-created DAC 存在（服务升级后首次 reconcile 可能需要补建）。
+	// 但当 observer 设置了 sync-requested-at 时，需清除该 annotation 并重新创建 deployment 触发 re-sync。
 	if dd.Status.OverallPhase == "Ready" {
-		logger.Info("DataDescriptor already completed (OverallPhase Ready), skipping deployment create")
+		if dd.Annotations != nil && dd.Annotations[annotationSyncRequestedAt] != "" {
+			resyncFromObserver = true
+			logger.Info(
+				"dd-sync observer: sync-requested-at present; will ensure data-sinker deployment then clear annotation",
+				"feature", "sync_requested_at_resync",
+				"annotation", annotationSyncRequestedAt,
+				"annotationValue", dd.Annotations[annotationSyncRequestedAt],
+				"dataSinkerDeploymentName", generator.DataDescriptorResourceName(dd),
+				"note", "Deployment name is dd-<DataDescriptor.metadata.name> (dd- prefix), not the bare DD name.",
+			)
+			// Do not clear annotation yet — if ConfigMap/Deployment create fails, keep annotation for retry.
+		} else {
+			// Ready but observer did not request resync: we do not create/manage DD job Deployment here.
+			// If Deployment is missing, that is usually normal (post-success cleanup); if unexpected, prior
+			// reconcile errors or stuck annotation logic are the place to look.
+			idleDeployName := generator.DataDescriptorResourceName(dd)
+			_, idleDepErr := h.K8sServices.GetDeployment(dd.Namespace, idleDeployName)
+			idleDepExists := idleDepErr == nil
+			logger.Info(
+				"Ready DD without sync-requested-at: early-return path (ensureAutoDAC only, no DD data-sinker Deployment create)",
+				"feature", "dd_ready_idle_path",
+				"step", "early_return_ensure_auto_dac_only",
+				"deploymentName", idleDeployName,
+				"dataSinkerDeploymentExists", idleDepExists,
+				"getDeploymentErr", fmt.Sprintf("%v", idleDepErr),
+				"explain", "New job stack only runs when dac.dac.io/sync-requested-at is set or DD is non-Ready. Missing Deployment after cleanup is expected.",
+			)
+			if !idleDepExists && idleDepErr != nil && apierrors.IsNotFound(idleDepErr) {
+				logger.Info(
+					"Ready + no resync annotation + no dd-* Deployment: idle cluster state (typical after handleDDStatus cleanup). To run data-sinker again, rely on dd-sync-observer or set sync-requested-at.",
+					"feature", "dd_ready_idle_path",
+					"step", "no_deployment_expected_idle",
+					"deploymentName", idleDeployName,
+				)
+			}
+			logger.Info("DataDescriptor already completed (OverallPhase Ready), skipping deployment create")
+			// Ensure auto-created DACs exist (idempotent — skips if already present)
+			if err := h.ensureAutoDAC(ctx, dd); err != nil {
+				logger.Error(err, "Failed to ensure ds DAC for already-Ready DD")
+			}
+			requeue, err := h.ensureAutoNormalDAC(ctx, dd)
+			if err != nil {
+				logger.Error(err, "Failed to ensure normal DAC for already-Ready DD")
+			}
+			if requeue {
+				return ErrRequeueNeeded
+			}
+			return nil
+		}
+	}
 
-		// Ensure auto-created DACs exist (idempotent — skips if already present)
-		if err := h.ensureAutoDAC(ctx, dd); err != nil {
-			logger.Error(err, "Failed to ensure ds DAC for already-Ready DD")
+	if resyncFromObserver {
+		if err := h.resetStatusForObserverResync(ctx, dd); err != nil {
+			return fmt.Errorf("observer resync: reset status for re-run: %w", err)
 		}
-		requeue, err := h.ensureAutoNormalDAC(ctx, dd)
-		if err != nil {
-			logger.Error(err, "Failed to ensure normal DAC for already-Ready DD")
-		}
-		if requeue {
-			return ErrRequeueNeeded
-		}
-
-		return nil
 	}
 
 	deploymentName := generator.DataDescriptorResourceName(dd)
 	_, err := h.K8sServices.GetDeployment(dd.Namespace, deploymentName)
 	deploymentExists := err == nil
+	if resyncFromObserver {
+		logger.Info(
+			"resync path: probed data-sinker deployment",
+			"feature", "sync_requested_at_resync",
+			"step", "deployment_probe",
+			"deploymentName", deploymentName,
+			"deploymentExists", deploymentExists,
+			"getDeploymentErr", fmt.Sprintf("%v", err),
+		)
+		h.logResyncDSDACContext(ctx, logger, dd)
+	}
 
 	if !deploymentExists {
 		// 仅当 deployment 不存在时创建 ConfigMap 和 deployment（真正创建 DD 或首次 Reconcile）
 		// 1. 为 data-sinker-job 生成 ConfigMap（operation: AddOrUpdate）
+		if resyncFromObserver {
+			logger.Info(
+				"resync path: deployment missing — creating ConfigMap then Deployment",
+				"feature", "sync_requested_at_resync",
+				"step", "create_configmap_and_deployment",
+				"deploymentName", deploymentName,
+			)
+		}
 		if err := h.createOrUpdateDataSinkerJobConfigMap(ctx, dd); err != nil {
+			if resyncFromObserver {
+				logger.Error(err,
+					"resync path: createOrUpdateDataSinkerJobConfigMap failed; sync-requested-at was NOT cleared — will retry on next reconcile",
+					"feature", "sync_requested_at_resync",
+					"step", "create_configmap_failed_keeps_annotation",
+					"deploymentName", deploymentName,
+				)
+			}
 			return fmt.Errorf("failed to create/update data-sinker job configmap: %w", err)
 		}
 		// 2. 创建 deployment（包含 data-sinker-job / data-sinker-status / dac-data-services）
@@ -208,28 +388,104 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 		}
 		logger.Info("Creating deployment for DataDescriptor")
 		if err := ddGenerator.Do(ctx, dd); err != nil {
+			if resyncFromObserver {
+				logger.Error(err,
+					"resync path: DataDescriptorGenerator.Do failed; sync-requested-at was NOT cleared — will retry on next reconcile",
+					"feature", "sync_requested_at_resync",
+					"step", "deployment_do_failed_keeps_annotation",
+					"deploymentName", deploymentName,
+				)
+			}
 			return fmt.Errorf("failed to create deployment for data descriptor: %w", err)
+		}
+		if resyncFromObserver {
+			logger.Info(
+				"resync path: DataDescriptorGenerator.Do completed (deployment create submitted)",
+				"feature", "sync_requested_at_resync",
+				"step", "deployment_create_done",
+				"deploymentName", deploymentName,
+			)
 		}
 	} else {
 		logger.Info("Deployment already exists, skipping ConfigMap/deployment create (status sync only)")
+		if resyncFromObserver {
+			logger.Info(
+				"resync path: deployment already exists — no new Deployment/ConfigMap; only wait + status sync. "+
+					"If full re-sync was expected, cleanup may not have removed this Deployment or a race kept it alive.",
+				"feature", "sync_requested_at_resync",
+				"step", "skip_create_existing_deployment",
+				"deploymentName", deploymentName,
+			)
+		}
+	}
+
+	if resyncFromObserver {
+		if err := h.clearSyncRequestedAtAnnotation(ctx, dd.Namespace, dd.Name, logger); err != nil {
+			logger.Error(err, "resync path: failed to clear sync-requested-at after ensuring deployment",
+				"feature", "sync_requested_at_resync",
+				"step", "annotation_clear_failed",
+				"deploymentName", deploymentName,
+			)
+			return err
+		}
+		if dd.Annotations != nil {
+			delete(dd.Annotations, annotationSyncRequestedAt)
+		}
 	}
 
 	logger.Info("Waiting for deployment to be ready", "deployment", deploymentName)
+	if resyncFromObserver {
+		logger.Info(
+			"resync path: waiting for deployment ready (up to 5m)",
+			"feature", "sync_requested_at_resync",
+			"step", "wait_deployment_ready_begin",
+			"deploymentName", deploymentName,
+		)
+	}
 	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	if err := h.waitForDeploymentReady(waitCtx, dd.Namespace, deploymentName, dd.Name); err != nil {
+		if resyncFromObserver {
+			logger.Error(err, "resync path: wait for deployment ready failed or timed out",
+				"feature", "sync_requested_at_resync",
+				"step", "wait_deployment_ready_error",
+				"deploymentName", deploymentName,
+			)
+		}
 		if err == errDataDescriptorGone {
 			return nil // DD deleted, no need to requeue with error
 		}
 		return fmt.Errorf("deployment not ready: %w", err)
 	}
 	logger.Info("Deployment is ready, start checking data-sinker job status via status service")
+	if resyncFromObserver {
+		logger.Info(
+			"resync path: deployment ready — calling handleDDStatus",
+			"feature", "sync_requested_at_resync",
+			"step", "handle_dd_status_begin",
+			"deploymentName", deploymentName,
+		)
+	}
 
 	// 3. 通过 data-sinker-status 判断 job 状态并更新 dd.Status
 	taskIDs := make(map[string]string) // 保持签名一致，目前不再使用 taskID
 	if err := h.handleDDStatus(ctx, dd, taskIDs); err != nil {
+		if resyncFromObserver {
+			logger.Error(err, "resync path: handleDDStatus failed",
+				"feature", "sync_requested_at_resync",
+				"step", "handle_dd_status_error",
+			)
+		}
 		return fmt.Errorf("failed to update status: %w", err)
+	}
+	if resyncFromObserver {
+		logger.Info(
+			"resync path: DoAddOrUpdate finished after observer resync (handleDDStatus ok)",
+			"feature", "sync_requested_at_resync",
+			"step", "handle_dd_status_ok",
+			"deploymentName", deploymentName,
+		)
 	}
 
 	return nil
@@ -840,6 +1096,7 @@ func (h *DataDescriptorHandler) handleDDStatus(ctx context.Context, dd *dacv1alp
 			newStatus.OverallPhase = "Ready"
 			c := dacv1alpha1.NewCondition(dacv1alpha1.ConditionAvailable, corev1.ConditionTrue, "Available", "All data sources healthy.")
 			newStatus.SetDataDescriptorCondition(*c)
+			newStatus.SetDataDescriptorCondition(*dacv1alpha1.NewCondition(dacv1alpha1.ConditionUpdating, corev1.ConditionFalse, "Complete", "Data-sinker job finished successfully."))
 			h.EventsCli.Normal(dd, "AllSourcesHealthy", "All data sources healthy and tasks triggered and Completed.")
 
 			// Auto-create a "ds" type DAC for this DataDescriptor
@@ -1267,7 +1524,8 @@ func (h *DataDescriptorHandler) checkFileserverStatus(ctx context.Context, sourc
 
 const (
 	// Annotation on the DataDescriptor indicating auto-DAC creation should be skipped.
-	annotationSkipAutoDAC = "dac.dac.io/skip-auto-dac"
+	annotationSkipAutoDAC     = "dac.dac.io/skip-auto-dac"
+	annotationSyncRequestedAt = "dac.dac.io/sync-requested-at"
 	// Label applied to auto-created DAC resources.
 	labelAutoCreated = "dac.dac.io/auto-created"
 	// Label linking the DAC back to its source DataDescriptor (ds type).
@@ -1351,37 +1609,83 @@ func (h *DataDescriptorHandler) ensureAutoDAC(ctx context.Context, dd *dacv1alph
 		return nil
 	}
 
-	// Idempotency: check whether ANY ds DAC already exists for this DD
-	// (manual or auto-created) by scanning all DACs in the namespace and
-	// checking spec.dataPolicy.sourceNameSelector.
+	// Idempotency: check whether ANY ds DAC already exists for this DD.
+	// If exists and AgentCard changed (e.g. after re-sync), patch DAC to trigger Pod rebuild.
 	allDACs := &dacv1alpha1.DataAgentContainerList{}
 	if err := h.Kubeclient.List(ctx, allDACs, client.InNamespace(dd.Namespace)); err != nil {
 		return fmt.Errorf("failed to list existing DACs for DD %s: %w", dd.Name, err)
 	}
-	for _, dac := range allDACs.Items {
+	var existingDSDAC *dacv1alpha1.DataAgentContainer
+	for i := range allDACs.Items {
+		dac := &allDACs.Items[i]
 		if dac.Spec.DACType != "ds" {
 			continue
 		}
 		for _, sel := range dac.Spec.DataPolicy.SourceNameSelector {
 			if sel == dd.Name {
-				logger.Info("DS DAC already exists for this DD, skipping creation",
-					"existingDAC", dac.Name)
-				return nil
+				existingDSDAC = dac
+				break
 			}
 		}
+		if existingDSDAC != nil {
+			break
+		}
+	}
+	if existingDSDAC != nil {
+		agentCard, rawAgentCard, err := h.fetchAgentCardFromDataServices(ctx, dd)
+		if err != nil {
+			logger.Info("DS DAC exists but failed to fetch AgentCard for update check, skipping",
+				"existingDAC", existingDSDAC.Name, "error", err)
+			return nil
+		}
+		// Hash the raw agent_card string from data-services, not json.Marshal(struct).
+		// Unmarshal drops unknown JSON keys; re-marshal can match even when the DB text changed.
+		currentHash := agentCardHash(rawAgentCard)
+		storedHash := ""
+		if existingDSDAC.Annotations != nil {
+			storedHash = existingDSDAC.Annotations[annotationAgentCardHash]
+		}
+		if storedHash != "" && storedHash == currentHash {
+			logger.Info("ensureAutoDAC: DS DAC already exists with matching AgentCard hash, skipping",
+				"feature", "ensureAutoDAC_noop",
+				"existingDAC", existingDSDAC.Name)
+			return nil
+		}
+		// AgentCard changed (re-sync updated semantic_domain): patch DAC to trigger Pod rebuild
+		logger.Info("ensureAutoDAC: AgentCard hash changed; patching DS DAC to rebuild Pod (e.g. after re-sync)",
+			"feature", "ensureAutoDAC_agentcard_patch",
+			"existingDAC", existingDSDAC.Name, "oldHash", storedHash, "newHash", currentHash)
+		suffix := ddDeterministicSuffix(dd.Namespace, dd.Name)
+		agentCard.Name = fmt.Sprintf("%s-dd-%s", agentCard.Name, suffix)
+		modified := existingDSDAC.DeepCopy()
+		modified.Spec.AgentCard = agentCard
+		if modified.Annotations == nil {
+			modified.Annotations = make(map[string]string)
+		}
+		modified.Annotations[annotationAgentCardHash] = currentHash
+		if err := h.Kubeclient.Patch(ctx, modified, client.MergeFrom(existingDSDAC)); err != nil {
+			logger.Error(err, "Failed to patch DS DAC with new AgentCard")
+			return fmt.Errorf("failed to patch DS DAC %s: %w", existingDSDAC.Name, err)
+		}
+		h.EventsCli.Normal(dd, "AutoDACUpdated",
+			fmt.Sprintf("Updated DataAgentContainer %s with new AgentCard after re-sync", existingDSDAC.Name))
+		return nil
 	}
 
 	// Fetch AgentCard from data-services (generated by LLM during data-sinker processing).
 	// If semantic domain or agent_card does not exist, this is an error — we do NOT
 	// generate a fallback card because the data-sinker pipeline must have completed
 	// successfully for the DD to be Ready.
-	agentCard, err := h.fetchAgentCardFromDataServices(ctx, dd)
+	agentCard, rawAgentCard, err := h.fetchAgentCardFromDataServices(ctx, dd)
 	if err != nil {
 		return fmt.Errorf("cannot auto-create DAC: %w", err)
 	}
 	logger.Info("AgentCard resolved for auto DAC",
 		"agentName", agentCard.Name,
 		"skillsCount", len(agentCard.Skills))
+
+	// Hash raw agent_card text from data-services (before name suffix) for change detection
+	agentCardHashVal := agentCardHash(rawAgentCard)
 
 	// DAC name format: <AgentCardName>-dd-<hash8>
 	// e.g. bankbusinessanalyticsagent-dd-a1b2c3d4
@@ -1417,6 +1721,9 @@ func (h *DataDescriptorHandler) ensureAutoDAC(ctx context.Context, dd *dacv1alph
 			Labels: map[string]string{
 				labelAutoCreated: "true",
 				labelSourceDD:    dd.Name,
+			},
+			Annotations: map[string]string{
+				annotationAgentCardHash: agentCardHashVal,
 			},
 		},
 		Spec: dacv1alpha1.DataAgentContainerSpec{
@@ -1500,9 +1807,9 @@ func sanitizeK8sName(name string) string {
 	return strings.Trim(clean.String(), "-")
 }
 
-// agentCardHash returns the hex-encoded SHA-256 digest of the raw agent_card
-// JSON string. This is stored as an annotation on the DAC so that subsequent
-// reconcile loops can detect when the semantic group's agent_card has changed.
+// agentCardHash returns the hex-encoded SHA-256 digest of the agent_card payload.
+// For ds DACs this must be the raw string from data-services (same bytes as stored in
+// semantic_domain.agent_card), not json.Marshal of the parsed AgentCard struct.
 func agentCardHash(agentCardJSON string) string {
 	h := sha256.Sum256([]byte(agentCardJSON))
 	return hex.EncodeToString(h[:])
@@ -1518,6 +1825,74 @@ func isDACHealthy(dac *dacv1alpha1.DataAgentContainer) bool {
 		}
 	}
 	return false
+}
+
+// expandGroupIDsWithAncestors expands seed semantic group IDs to include all
+// ancestor groups by following parent_id links from data-services.
+//
+// It is best-effort and tolerant to partial failures:
+// - a single group lookup failure only skips that branch
+// - loops are prevented by "expanded" dedupe
+// - a maximum chain depth guard avoids pathological data
+func (h *DataDescriptorHandler) expandGroupIDsWithAncestors(ctx context.Context, seedGroupIDs map[string]bool) map[string]bool {
+	expanded := map[string]bool{}
+	if len(seedGroupIDs) == 0 {
+		return expanded
+	}
+	if h.HTTPClient == nil {
+		for gid := range seedGroupIDs {
+			trimmed := strings.TrimSpace(gid)
+			if trimmed != "" {
+				expanded[trimmed] = true
+			}
+		}
+		return expanded
+	}
+
+	logger := h.Logger
+	const maxAncestorDepth = 10
+
+	for seedID := range seedGroupIDs {
+		current := strings.TrimSpace(seedID)
+		depth := 0
+
+		for current != "" {
+			if expanded[current] {
+				break
+			}
+			expanded[current] = true
+
+			if depth >= maxAncestorDepth {
+				logger.Info("Hit semantic group ancestor depth limit, stop climbing",
+					"groupID", current, "maxDepth", maxAncestorDepth)
+				break
+			}
+
+			groupResp, err := h.HTTPClient.GetSemanticGroupByID(ctx, current)
+			if err != nil {
+				logger.Error(err, "Failed to fetch semantic group while expanding ancestors",
+					"groupID", current)
+				break
+			}
+
+			parentID := strings.TrimSpace(groupResp.Data.ParentID)
+			if parentID == "" {
+				break
+			}
+			if parentID == current {
+				logger.Info("Detected self-parent semantic group, stop climbing",
+					"groupID", current)
+				break
+			}
+
+			current = parentID
+			depth++
+		}
+	}
+
+	logger.Info("Expanded semantic groups with ancestors",
+		"seedCount", len(seedGroupIDs), "expandedCount", len(expanded))
+	return expanded
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1581,6 +1956,14 @@ func (h *DataDescriptorHandler) ensureAutoNormalDAC(ctx context.Context, dd *dac
 
 	if len(groupIDs) == 0 {
 		logger.Info("Semantic domains have no group memberships, skipping normal DAC creation")
+		return false, nil
+	}
+
+	// Step 2.5: Include all ancestors of seed groups so parent/middle groups
+	// with agent_card can also get normal DACs without polluting dd_group_relation.
+	groupIDs = h.expandGroupIDsWithAncestors(ctx, groupIDs)
+	if len(groupIDs) == 0 {
+		logger.Info("No semantic groups remain after ancestor expansion, skipping normal DAC creation")
 		return false, nil
 	}
 
@@ -1786,11 +2169,14 @@ type a2aAgentSkill struct {
 //   - the data-services query fails
 //   - no semantic domain exists for this DD
 //   - none of the semantic domains has a valid agent_card
-func (h *DataDescriptorHandler) fetchAgentCardFromDataServices(ctx context.Context, dd *dacv1alpha1.DataDescriptor) (dacv1alpha1.AgentCard, error) {
+//
+// The second return value is the raw agent_card string from data-services for that record;
+// callers should hash it for dac.dac.io/agent-card-hash (not json.Marshal of the struct).
+func (h *DataDescriptorHandler) fetchAgentCardFromDataServices(ctx context.Context, dd *dacv1alpha1.DataDescriptor) (dacv1alpha1.AgentCard, string, error) {
 	logger := h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name)
 
 	if h.HTTPClient == nil {
-		return dacv1alpha1.AgentCard{}, fmt.Errorf("HTTPClient not configured, cannot fetch agent_card from data-services")
+		return dacv1alpha1.AgentCard{}, "", fmt.Errorf("HTTPClient not configured, cannot fetch agent_card from data-services")
 	}
 
 	resp, err := h.HTTPClient.SemanticDomainSearchByDD(ctx, &apiclient.SemanticDomainSearchByDDRequest{
@@ -1798,11 +2184,11 @@ func (h *DataDescriptorHandler) fetchAgentCardFromDataServices(ctx context.Conte
 		DdName:      dd.Name,
 	})
 	if err != nil {
-		return dacv1alpha1.AgentCard{}, fmt.Errorf("failed to query data-services for semantic domains: %w", err)
+		return dacv1alpha1.AgentCard{}, "", fmt.Errorf("failed to query data-services for semantic domains: %w", err)
 	}
 
 	if resp == nil || len(resp.Data) == 0 {
-		return dacv1alpha1.AgentCard{}, fmt.Errorf(
+		return dacv1alpha1.AgentCard{}, "", fmt.Errorf(
 			"no semantic domain found in data-services for DD %s/%s — "+
 				"data-sinker may not have completed agent_card generation",
 			dd.Namespace, dd.Name)
@@ -1815,8 +2201,9 @@ func (h *DataDescriptorHandler) fetchAgentCardFromDataServices(ctx context.Conte
 			continue
 		}
 
+		raw := sd.AgentCard
 		var a2a a2aAgentCard
-		if err := json.Unmarshal([]byte(sd.AgentCard), &a2a); err != nil {
+		if err := json.Unmarshal([]byte(raw), &a2a); err != nil {
 			logger.Error(err, "Failed to parse agent_card JSON, trying next semantic domain",
 				"semanticDomainID", sd.SemanticDomainID)
 			lastParseErr = err
@@ -1849,16 +2236,16 @@ func (h *DataDescriptorHandler) fetchAgentCardFromDataServices(ctx context.Conte
 			Name:        a2a.Name,
 			Description: a2a.Description,
 			Skills:      skills,
-		}, nil
+		}, raw, nil
 	}
 
 	// All semantic domains existed but none had a valid agent_card
 	if lastParseErr != nil {
-		return dacv1alpha1.AgentCard{}, fmt.Errorf(
+		return dacv1alpha1.AgentCard{}, "", fmt.Errorf(
 			"semantic domains exist for DD %s/%s but none has a valid agent_card: %w",
 			dd.Namespace, dd.Name, lastParseErr)
 	}
-	return dacv1alpha1.AgentCard{}, fmt.Errorf(
+	return dacv1alpha1.AgentCard{}, "", fmt.Errorf(
 		"semantic domains exist for DD %s/%s but all agent_card fields are empty",
 		dd.Namespace, dd.Name)
 }

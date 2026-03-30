@@ -2,6 +2,8 @@ package generator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	dacv1alpha1 "github.com/DataTunerX/dac/execution-engine/api/v1alpha1"
@@ -41,16 +43,14 @@ type DACConfig struct {
 	RedisPort                    string
 	RedisPassword                string
 	DataServicesURL              string
-	DSExpertAgentRegistry        string
-	BIZExpertAgentRegistry       string
 	DSOrchestratorAgentRegistry  string
 	BIZOrchestratorAgentRegistry string
 	OrchestratorAgentImage       string
 	ExpertAgentImage             string
-	DataSinkerImage              string
 	DSDataServicesImage          string
 	CodeAgentImage               string
 	DocAgentImage                string
+	DDSyncObserverImage          string
 }
 
 func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) error {
@@ -89,16 +89,9 @@ func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.D
 		if err != nil {
 			return err
 		}
-
-		deploymentName := h.GenerateDataAgentContainerDeploymentName(dac)
-		if _, err := h.K8sServices.GetDeployment(dac.Namespace, deploymentName); err != nil {
-			if !errors.IsNotFound(err) {
-				return err
-			}
-			err = h.K8sServices.CreateDeployment(dac.Namespace, deployment)
-			if err != nil {
-				return err
-			}
+		// Use CreateOrUpdate so that AgentCard/syncPolicy changes trigger deployment update
+		if err := h.K8sServices.CreateOrUpdateDeployment(dac.Namespace, deployment); err != nil {
+			return err
 		}
 	}
 
@@ -194,33 +187,16 @@ func (h *DataAgentContainerGenerator) generateExpertAgentEnvs(dac *dacv1alpha1.D
 		Value: dac.Spec.DataPolicy.DataSourceType,
 	})
 
+	envs = append(envs, corev1.EnvVar{
+		Name:  "REGISTER_AGENT",
+		Value: "false",
+	})
+
 	if dac.Spec.DACType == "ds" {
 		dataServicesURL := "http://localhost:8000"
 		envs = append(envs, corev1.EnvVar{
 			Name:  "DataServicesURL",
 			Value: dataServicesURL,
-		})
-
-		agentRegistry := ""
-		if dacConfig != nil {
-			agentRegistry = dacConfig.DSExpertAgentRegistry
-		} else {
-			agentRegistry = "http://expert-registry.dac.svc.cluster.local:8000"
-		}
-
-		envs = append(envs, corev1.EnvVar{
-			Name:  "AgentRegistry",
-			Value: agentRegistry,
-		})
-		leafAgentRegistry := ""
-		if dacConfig != nil {
-			leafAgentRegistry = dacConfig.DSOrchestratorAgentRegistry
-		} else {
-			leafAgentRegistry = "http://orchestrator-registry.dac.svc.cluster.local:8000"
-		}
-		envs = append(envs, corev1.EnvVar{
-			Name:  "LeafAgentRegistry",
-			Value: leafAgentRegistry,
 		})
 
 		envs = append(envs, corev1.EnvVar{
@@ -251,17 +227,6 @@ func (h *DataAgentContainerGenerator) generateExpertAgentEnvs(dac *dacv1alpha1.D
 			Value: dac.Spec.DataPolicy.SemanticGroupID,
 		})
 
-		agentRegistry := ""
-		if dacConfig != nil {
-			agentRegistry = dacConfig.BIZExpertAgentRegistry
-		} else {
-			agentRegistry = "http://biz-expert-registry.dac.svc.cluster.local:8000"
-		}
-
-		envs = append(envs, corev1.EnvVar{
-			Name:  "AgentRegistry",
-			Value: agentRegistry,
-		})
 		leafAgentRegistry := ""
 		if dacConfig != nil {
 			leafAgentRegistry = dacConfig.DSOrchestratorAgentRegistry
@@ -426,6 +391,32 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 	return envs
 }
 
+// agentCardSkillsSHA256 is a stable checksum of AgentCard.skills JSON for rolling Pods when skills change.
+func agentCardSkillsSHA256(dac *dacv1alpha1.DataAgentContainer) string {
+	if dac.Spec.AgentCard.Skills == nil {
+		return ""
+	}
+	skillsJSON, err := json.Marshal(dac.Spec.AgentCard.Skills)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(skillsJSON)
+	return hex.EncodeToString(sum[:])
+}
+
+func podTemplateObjectMeta(labels map[string]string, dac *dacv1alpha1.DataAgentContainer) metav1.ObjectMeta {
+	om := metav1.ObjectMeta{Labels: labels}
+	if dac.Spec.AgentCard.Skills != nil {
+		if h := agentCardSkillsSHA256(dac); h != "" {
+			if om.Annotations == nil {
+				om.Annotations = map[string]string{}
+			}
+			om.Annotations["dac.dac.io/skills-json-sha256"] = h
+		}
+	}
+	return om
+}
+
 func (h *DataAgentContainerGenerator) createConfigMapForSkills(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) error {
 	if dac.Spec.AgentCard.Skills != nil {
 		skillsJSON, err := json.Marshal(dac.Spec.AgentCard.Skills)
@@ -446,12 +437,13 @@ func (h *DataAgentContainerGenerator) createConfigMapForSkills(ctx context.Conte
 			},
 		}
 
-		return h.K8sServices.CreateIfNotExistsConfigMap(dac.Namespace, configMap)
+		return h.K8sServices.CreateOrUpdateConfigMap(dac.Namespace, configMap)
 	}
 	return nil
 }
 
-// getObserveConfig get data from configmap
+// getDACConfig reads cluster-wide DAC settings (images, data-services-url, dd-sync-observer-image, …)
+// from ConfigMap dac-configuration in namespace "dac". If that ConfigMap is missing, returns (nil, nil).
 func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACConfig, error) {
 	configMap := &corev1.ConfigMap{}
 
@@ -475,16 +467,14 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 		RedisPort:                    configMap.Data["redis-port"],
 		RedisPassword:                configMap.Data["redis-password"],
 		DataServicesURL:              configMap.Data["data-services-url"],
-		BIZExpertAgentRegistry:       configMap.Data["biz-expert-agent-registry"],
-		DSExpertAgentRegistry:        configMap.Data["expert-agent-registry"],
 		BIZOrchestratorAgentRegistry: configMap.Data["biz-orchestrator-agent-registry"],
 		DSOrchestratorAgentRegistry:  configMap.Data["orchestrator-agent-registry"],
 		OrchestratorAgentImage:       configMap.Data["orchestrator-agent-image"],
 		ExpertAgentImage:             configMap.Data["expert-agent-image"],
-		DataSinkerImage:              configMap.Data["data-sinker-image"],
 		DSDataServicesImage:          configMap.Data["ds-data-services-image"],
 		CodeAgentImage:               configMap.Data["code-agent-image"],
 		DocAgentImage:                configMap.Data["doc-agent-image"],
+		DDSyncObserverImage:          configMap.Data["dd-sync-observer-image"],
 	}, nil
 }
 
@@ -535,6 +525,116 @@ type SourceConfig struct {
 	CodeRepoPath   string            `json:"codeRepoPath,omitempty"`
 	CodeRepoBranch string            `json:"codeRepoBranch,omitempty"`
 	CodeRepoToken  string            `json:"codeRepoToken,omitempty"`
+}
+
+// hasSyncPolicyEnabled returns true if any DataDescriptor referenced by the DAC
+// has spec.syncPolicy.enabled == true.
+//
+// Contract: DataDescriptors listed in dataPolicy.sourceNameSelector are resolved in
+// dac.Namespace only (same namespace as the DataAgentContainer). Cross-namespace DD
+// refs are not supported here; dd-sync-observer RBAC is namespaced accordingly.
+func (h *DataAgentContainerGenerator) hasSyncPolicyEnabled(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) (bool, string, string) {
+	for _, item := range dac.Spec.DataPolicy.SourceNameSelector {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		dd := &dacv1alpha1.DataDescriptor{}
+		if err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: item, Namespace: dac.Namespace}, dd); err != nil {
+			continue
+		}
+		if dd.Spec.SyncPolicy != nil && dd.Spec.SyncPolicy.Enabled {
+			return true, dac.Namespace, item
+		}
+	}
+	return false, "", ""
+}
+
+// resolveDataDescriptorKey matches data-services / dac-data-services DATA_DESCRIPTOR:
+// first SyncPolicy-enabled DD in sourceNameSelector if any, else first selector entry;
+// hyphens replaced with underscores (entire string).
+func (h *DataAgentContainerGenerator) resolveDataDescriptorKey(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) string {
+	enabled, _, ddName := h.hasSyncPolicyEnabled(ctx, dac)
+	if enabled && strings.TrimSpace(ddName) != "" {
+		return strings.ReplaceAll(dac.Namespace+"_"+ddName, "-", "_")
+	}
+	ddName = ""
+	if len(dac.Spec.DataPolicy.SourceNameSelector) > 0 {
+		ddName = strings.TrimSpace(dac.Spec.DataPolicy.SourceNameSelector[0])
+	}
+	return strings.ReplaceAll(dac.Namespace+"_"+ddName, "-", "_")
+}
+
+// buildObserverSidecar returns the dd-sync-observer container if any referenced DD
+// has syncPolicy.enabled and dac-configuration provides dd-sync-observer-image; otherwise nil.
+func (h *DataAgentContainerGenerator) buildObserverSidecar(ctx context.Context, dac *dacv1alpha1.DataAgentContainer, dacConfig *DACConfig) *corev1.Container {
+	enabled, ddNamespace, ddName := h.hasSyncPolicyEnabled(ctx, dac)
+	if !enabled {
+		return nil
+	}
+
+	observerImage := ""
+	if dacConfig != nil {
+		observerImage = strings.TrimSpace(dacConfig.DDSyncObserverImage)
+	}
+	if observerImage == "" {
+		h.Logger.Info(
+			"dd-sync-observer sidecar skipped: dd-sync-observer-image not set or empty in dac-configuration",
+			"feature", "dd_sync_observer_sidecar",
+			"dac", dac.Name,
+			"dacNamespace", dac.Namespace,
+		)
+		return nil
+	}
+
+	// Observer shares the ds DAC pod with the dac-data-services container (port 8000).
+	// Do not use dac-configuration data-services-url here: that points at the cluster backend
+	// and skips in-pod Data-Descriptor validation / proxy behavior.
+	const observerLocalDataServicesURL = "http://localhost:8000"
+
+	schedule := "6h"
+	for _, item := range dac.Spec.DataPolicy.SourceNameSelector {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		dd := &dacv1alpha1.DataDescriptor{}
+		if err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: item, Namespace: dac.Namespace}, dd); err != nil {
+			continue
+		}
+		if dd.Spec.SyncPolicy != nil && dd.Spec.SyncPolicy.Schedule != "" {
+			schedule = dd.Spec.SyncPolicy.Schedule
+			break
+		}
+	}
+
+	dataDescriptor := h.resolveDataDescriptorKey(ctx, dac)
+	envs := []corev1.EnvVar{
+		{Name: "DD_NAMESPACE", Value: ddNamespace},
+		{Name: "DD_NAME", Value: ddName},
+		{Name: "DATA_DESCRIPTOR", Value: dataDescriptor},
+		{Name: "DATA_SERVICES_URL", Value: observerLocalDataServicesURL},
+		{Name: "SYNC_SCHEDULE", Value: schedule},
+		{Name: "PYTHONUNBUFFERED", Value: "1"},
+	}
+
+	return &corev1.Container{
+		Name:            "dd-sync-observer",
+		Image:           observerImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"python", "-m", "data_sinkers.observer"},
+		Env:             envs,
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1000m"),
+				corev1.ResourceMemory: resource.MustParse("2000Mi"),
+			},
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
+			},
+		},
+	}
 }
 
 // isCodeTypeDD 检查 DataAgentContainer 关联的 DataDescriptor 是否为 code 类型
@@ -805,7 +905,7 @@ func (h *DataAgentContainerGenerator) generateExpertAgentArgs(dac *dacv1alpha1.D
 	return cmds
 }
 
-func (h *DataAgentContainerGenerator) generateDataServicesEnvs(dac *dacv1alpha1.DataAgentContainer, dacConfig *DACConfig) ([]corev1.EnvVar, error) {
+func (h *DataAgentContainerGenerator) generateDataServicesEnvs(ctx context.Context, dac *dacv1alpha1.DataAgentContainer, dacConfig *DACConfig) ([]corev1.EnvVar, error) {
 	envs := []corev1.EnvVar{}
 
 	dataServicesURL := ""
@@ -820,13 +920,7 @@ func (h *DataAgentContainerGenerator) generateDataServicesEnvs(dac *dacv1alpha1.
 		Value: dataServicesURL,
 	})
 
-	ddName := ""
-	if len(dac.Spec.DataPolicy.SourceNameSelector) > 0 {
-		ddName = dac.Spec.DataPolicy.SourceNameSelector[0]
-	}
-
-	dataDescriptor := dac.Namespace + "_" + ddName
-	dataDescriptor = strings.ReplaceAll(dataDescriptor, "-", "_")
+	dataDescriptor := h.resolveDataDescriptorKey(ctx, dac)
 
 	envs = append(envs, corev1.EnvVar{
 		Name:  "DATA_DESCRIPTOR",
@@ -947,17 +1041,13 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 	}
 
 	// Default images for DS type; override from dacConfig only when non-empty
-	dataSinkerImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers:v0.6.0-amd64"
-	dataServicesImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/dac-data-services:v0.6.0-amd64"
-	orchestratorAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/ds-orchestrator-agent:v0.6.0-amd64"
-	expertAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/ds-expert-agent:v0.6.0-amd64"
-	codeAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/code-agent:v0.6.0-amd64"
-	docAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/doc-agent:v0.6.0-amd64"
+	dataServicesImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/dac-data-services:v0.9.0-amd64"
+	orchestratorAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/orchestrator-agent:v0.8.0-amd64"
+	expertAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/expert-agent:v0.8.0-amd64"
+	codeAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/code-agent:v0.7.0-amd64"
+	docAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/doc-agent:v0.7.0-amd64"
 
 	if dacConfig != nil {
-		if dacConfig.DataSinkerImage != "" {
-			dataSinkerImage = dacConfig.DataSinkerImage
-		}
 		if dacConfig.DSDataServicesImage != "" {
 			dataServicesImage = dacConfig.DSDataServicesImage
 		}
@@ -974,8 +1064,6 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 			docAgentImage = dacConfig.DocAgentImage
 		}
 	}
-
-	h.Logger.WithValues("dataSinkerImage", dataSinkerImage).Info("use this image to handler data")
 
 	plannerLLMConfig, err := h.getPlannerLLMConfig(ctx, dac)
 	if err != nil {
@@ -1015,12 +1103,7 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 		h.Logger.Info("Using doc-agent image for expert container", "image", docAgentImage)
 	}
 
-	// dataSinkerEnvs, err := h.generateDataSinkerEnvs(dac, expertLLMConfig, dacConfig)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	dataServicesEnvs, err := h.generateDataServicesEnvs(dac, dacConfig)
+	dataServicesEnvs, err := h.generateDataServicesEnvs(ctx, dac, dacConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -1043,12 +1126,12 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 				Env: h.generateOrchestratorAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("2000m"),
-						corev1.ResourceMemory: resource.MustParse("8000Mi"),
+						corev1.ResourceCPU:    resource.MustParse("1000m"),
+						corev1.ResourceMemory: resource.MustParse("2000Mi"),
 					},
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("1000Mi"),
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
 					},
 				},
 			},
@@ -1067,12 +1150,12 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 				Env: h.generateExpertAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("2000m"),
-						corev1.ResourceMemory: resource.MustParse("8000Mi"),
+						corev1.ResourceCPU:    resource.MustParse("1000m"),
+						corev1.ResourceMemory: resource.MustParse("2000Mi"),
 					},
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("1000Mi"),
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
 					},
 				},
 			},
@@ -1095,27 +1178,24 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 					},
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("500Mi"),
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
 					},
 				},
 			},
-			// {
-			// 	Name:            "data-sinkers",
-			// 	Image:           dataSinkerImage,
-			// 	ImagePullPolicy: corev1.PullIfNotPresent,
-			// 	Env:             dataSinkerEnvs,
-			// 	Resources: corev1.ResourceRequirements{
-			// 		Limits: corev1.ResourceList{
-			// 			corev1.ResourceCPU:    resource.MustParse("2000m"),
-			// 			corev1.ResourceMemory: resource.MustParse("4000Mi"),
-			// 		},
-			// 		Requests: corev1.ResourceList{
-			// 			corev1.ResourceCPU:    resource.MustParse("100m"),
-			// 			corev1.ResourceMemory: resource.MustParse("500Mi"),
-			// 		},
-			// 	},
-			// },
 		},
+	}
+
+	// Add dd-sync-observer sidecar when any referenced DD has syncPolicy.enabled
+	if observerContainer := h.buildObserverSidecar(ctx, dac, dacConfig); observerContainer != nil {
+		podSpec.Containers = append(podSpec.Containers, *observerContainer)
+		h.Logger.Info(
+			"dd-sync-observer sidecar appended to ds DAC Pod (DD syncPolicy.enabled)",
+			"feature", "dd_sync_observer_sidecar",
+			"dac", dac.Name,
+			"dacNamespace", dac.Namespace,
+			"sidecarContainer", observerContainer.Name,
+			"sidecarImage", observerContainer.Image,
+		)
 	}
 
 	if dac.Spec.AgentCard.Skills != nil {
@@ -1161,10 +1241,8 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 				MatchLabels: labels,
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: podSpec,
+				ObjectMeta: podTemplateObjectMeta(labels, dac),
+				Spec:       podSpec,
 			},
 		},
 	}
@@ -1238,12 +1316,12 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 				Env: h.generateOrchestratorAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("2000m"),
-						corev1.ResourceMemory: resource.MustParse("8000Mi"),
+						corev1.ResourceCPU:    resource.MustParse("1000m"),
+						corev1.ResourceMemory: resource.MustParse("2000Mi"),
 					},
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("1000Mi"),
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
 					},
 				},
 			},
@@ -1262,12 +1340,12 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 				Env: h.generateExpertAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("2000m"),
-						corev1.ResourceMemory: resource.MustParse("8000Mi"),
+						corev1.ResourceCPU:    resource.MustParse("1000m"),
+						corev1.ResourceMemory: resource.MustParse("2000Mi"),
 					},
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("1000Mi"),
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
 					},
 				},
 			},
@@ -1317,10 +1395,8 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 				MatchLabels: labels,
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: podSpec,
+				ObjectMeta: podTemplateObjectMeta(labels, dac),
+				Spec:       podSpec,
 			},
 		},
 	}

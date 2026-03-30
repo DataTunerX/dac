@@ -38,9 +38,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-AgentRegistry = os.getenv("AgentRegistry", "expert-registry.dac.svc.cluster.local::10100")
-
-
 def _check_semantic_group_root_status(
     data_source_type: str,
     semantic_group_id: str,
@@ -437,6 +434,7 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         if data_source_type == "SemanticGroup":
             semantic_group_id = os.getenv('SemanticGroupID',"")
             logger.info(f"SemanticGroupID is: {semantic_group_id}")
+            logger.info("SemanticGroup max_loops is: %s", max_loops)
 
             request_handler = DefaultRequestHandler(
             agent_executor=OrchestratorAgentExecutorSemanticGroup(

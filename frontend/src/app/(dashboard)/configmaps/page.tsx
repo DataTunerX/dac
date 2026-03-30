@@ -1,8 +1,13 @@
 "use client"
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react"
+import useSWR from "swr"
 import { useRouter, useSearchParams } from "next/navigation"
 import { api } from "@/lib/api"
+import { listConfigMaps, getConfigMap } from "@/lib/configmaps-api"
+import { listAgentsAll } from "@/lib/agents-api"
+import { listDescriptorsAll } from "@/lib/descriptors-api"
+import { apiFetcher } from "@/lib/swr"
 import { Button } from "@/components/ui/button"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
 import { getUserRole } from "@/lib/auth" // still needed for loadConfigIntoDialog logic
@@ -152,10 +157,11 @@ function ConfigMapsContent() {
   const [dialogNsSelectOpen, setDialogNsSelectOpen] = useState(false)
   const [dialogTypeSelectOpen, setDialogTypeSelectOpen] = useState(false)
 
-  const [namespaces, setNamespaces] = useState<NamespaceItem[]>([])
-  const [isLoadingNs, setIsLoadingNs] = useState(false)
-  const [nsLoadError, setNsLoadError] = useState<string | null>(null)
-  
+  // Namespaces: SWR for dedup/cache (Vercel React Best Practices 4.3)
+  const { data: nsData, error: nsError, isLoading: isLoadingNs } = useSWR<{ items?: unknown; data?: { items?: unknown } }>("/namespaces", apiFetcher)
+  const namespaces = useMemo(() => safeNamespaces(nsData?.items ?? (nsData as { data?: { items?: unknown } })?.data?.items ?? []), [nsData])
+  const nsLoadError = nsError ? "命名空间加载失败" : null
+
   // 删除和依赖检查相关状态
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [deleteNamespace, setDeleteNamespace] = useState<string>("default")
@@ -225,16 +231,13 @@ function ConfigMapsContent() {
     setIsLoading(true)
     try {
       const ns = (namespace || "default").trim() || "default"
-      const res = await api.get(`/namespaces/${ns}/configmaps`, {
-        params: {
-          type,
-          offset: (page - 1) * pageSize,
-          limit: pageSize,
-        },
+      const data = await listConfigMaps(ns, {
+        type,
+        offset: (page - 1) * pageSize,
+        limit: pageSize,
       })
-      const data = res.data?.data ?? res.data
-      const list = safeItems(data?.items as unknown)
-      const total = Number(data?.totalCount ?? data?.total ?? 0)
+      const list = data.items ?? []
+      const total = data.totalCount ?? 0
       // Prevent out-of-order responses from overwriting the latest filter state.
       if (mySeq === loadSeqRef.current) {
         setItems(list)
@@ -269,30 +272,6 @@ function ConfigMapsContent() {
     setDialogType(type)
     setOpen(true)
   }
-
-  const loadNamespaces = async () => {
-    if (isLoadingNs) return
-    setIsLoadingNs(true)
-    setNsLoadError(null)
-    try {
-      const res = await api.get("/namespaces")
-      // interceptor unwraps data, so res.data is the payload containing items
-      const raw = res.data?.items || res.data?.data?.items
-      const list = safeNamespaces(raw as unknown)
-      setNamespaces(list)
-    } catch (e) {
-      console.error("load namespaces failed", e)
-      setNamespaces([])
-      setNsLoadError("命名空间加载失败")
-    } finally {
-      setIsLoadingNs(false)
-    }
-  }
-
-  useEffect(() => {
-    void loadNamespaces()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   // Support deep-link:
   // - /configmaps?namespace=xxx&type=llm|prompts&create=1
@@ -357,17 +336,13 @@ function ConfigMapsContent() {
       // Force 'view' mode for non-admin users even if 'edit' was requested
       const userRole = getUserRole()
       const safeMode = userRole !== "admin" ? "view" : mode;
-      
+
       const ns = (namespace || "default").trim() || "default"
-      const res = await api.get(`/namespaces/${ns}/configmaps/${encodeURIComponent(cmName)}`)
-      // Note: api interceptor unwraps response.data.data into res.data
-      const r = (res.data || {}) as Record<string, unknown>
-      const data = (typeof r.data === "object" && r.data !== null) ? (r.data as Record<string, string>) : {}
-      const labels = (typeof r.labels === "object" && r.labels !== null) ? (r.labels as Record<string, string>) : {}
-      const rawType = typeof r.type === "string" ? r.type : ""
+      const r = await getConfigMap(ns, cmName)
+      const data = r.data ?? {}
+      const labels = r.labels ?? {}
       const labelType = labels["dac.io/config-type"]
-      
-      const cmType = labelType || rawType || "llm"
+      const cmType = labelType || "llm"
 
       setDialogMode(safeMode)
       setEditingName(cmName)
@@ -481,52 +456,35 @@ function ConfigMapsContent() {
       const dependent: DependentResource[] = []
 
       if (type === "llm") {
-        // LLM ConfigMap 由智能体引用：`model.plannerLLM` / `model.expertLLM`
-        const res = await api.get("/agents")
-        // NOTE: @/lib/api.ts unwraps `{ code, message, data }`, so res.data is the inner payload.
-        const data = (res.data?.data ?? res.data) as unknown
-        const r = (typeof data === "object" && data !== null) ? (data as Record<string, unknown>) : {}
-        const agents = (r.items ?? r.data ?? data) as unknown
-        const list = Array.isArray(agents) ? agents : []
-        for (const agent of list) {
-          const a = (agent ?? {}) as Record<string, unknown>
-          const model = (a.model ?? {}) as Record<string, unknown>
-          const planner = typeof model.plannerLLM === "string" ? model.plannerLLM : ""
-          const expert = typeof model.expertLLM === "string" ? model.expertLLM : ""
+        // LLM ConfigMap 由智能体引用：model.plannerLLM / model.expertLLM
+        const { items: list } = await listAgentsAll()
+        for (const a of list) {
+          const model = a.model
+          const planner = model?.plannerLLM ?? ""
+          const expert = model?.expertLLM ?? ""
           if (planner === cmName || expert === cmName) {
             dependent.push({
               kind: "agent",
-              name: String(a.name ?? ""),
-              namespace: String(a.namespace ?? "default"),
+              name: a.name ?? "",
+              namespace: a.namespace ?? "default",
             })
           }
         }
       } else {
-        // Prompts ConfigMap 由 DataDescriptor 引用：`sources[].Prompts.ConfigMapName`
-        const res = await api.get("/descriptors")
-        const data = (res.data?.data ?? res.data) as unknown
-        const r = (typeof data === "object" && data !== null) ? (data as Record<string, unknown>) : {}
-        const descriptors = (r.items ?? r.data ?? data) as unknown
-        const list = Array.isArray(descriptors) ? descriptors : []
+        // Prompts ConfigMap 由 DataDescriptor 引用：sources[].prompts.configMapName
+        const { items: list } = await listDescriptorsAll()
         for (const dd of list) {
-          const r = (dd ?? {}) as Record<string, unknown>
-          const ns = String(r.namespace ?? "default")
-          // 只阻止删除同 namespace 的配置（ConfigMap namespaced）
+          const ns = dd.namespace ?? "default"
           if (ns !== cmNamespace) continue
-
-          const sourcesRaw = r.sources
-          const sources = Array.isArray(sourcesRaw) ? sourcesRaw : []
+          const sources = dd.sources ?? []
           const uses = sources.some((s) => {
-            const src = (s ?? {}) as Record<string, unknown>
-            const prompts = (src.Prompts ?? {}) as Record<string, unknown>
-            const cm = typeof prompts.ConfigMapName === "string" ? prompts.ConfigMapName : ""
-            return cm === cmName
+            const configMapName = s.prompts?.configMapName ?? ""
+            return configMapName === cmName
           })
-
           if (uses) {
             dependent.push({
               kind: "descriptor",
-              name: String(r.name ?? ""),
+              name: dd.name ?? "",
               namespace: ns,
             })
           }
@@ -578,23 +536,23 @@ function ConfigMapsContent() {
   if (!mounted) {
     return (
       <div className="flex h-full items-center justify-center p-8">
-        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+        <Loader2 className="h-6 w-6 animate-spin text-content-muted" />
       </div>
     )
   }
 
   return (
-    <div className="p-8 space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div className="text-sm font-medium text-slate-600">
-          <span className="text-slate-900 font-semibold">配置管理</span>
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6 sm:space-y-8">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="text-sm font-medium text-content">
+          <span className="text-content font-semibold">配置管理</span>
         </div>
 
         <div className="flex items-center gap-2">
           {/* Filters (move to top bar for better aesthetics) */}
           <div className="hidden md:flex items-center gap-2 mr-2">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">命名空间</span>
+              <span className="text-xs font-medium text-content-muted">命名空间</span>
               {namespaces.length > 0 ? (
                 <Select value={namespace} onValueChange={setNamespace} disabled={isLoadingNs}>
                   <SelectTrigger className="h-9 w-44">
@@ -607,7 +565,7 @@ function ConfigMapsContent() {
                       </SelectItem>
                     ) : isLoadingNs ? (
                       <SelectItem value="__loading__" disabled>
-                        加载中...
+                        加载中…
                       </SelectItem>
                     ) : null}
                     {namespaces.map((ns) => (
@@ -628,7 +586,7 @@ function ConfigMapsContent() {
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-500">类型</span>
+              <span className="text-xs font-medium text-content-muted">类型</span>
               <Select value={type} onValueChange={(v) => setType(v as ConfigMapType)}>
                 <SelectTrigger className="h-9 w-36">
                   <SelectValue placeholder="选择类型" />
@@ -641,11 +599,11 @@ function ConfigMapsContent() {
             </div>
           </div>
 
-          <Button variant="outline" size="icon" onClick={() => void load()} disabled={isLoading} title="刷新">
+          <Button variant="outline" size="icon" onClick={() => void load()} disabled={isLoading} title="刷新" aria-label="刷新">
             <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
           <RbacButton 
-            className="flex items-center gap-2 bg-[#1e293b] hover:bg-[#0f172a] text-white" 
+            className="flex items-center gap-2" 
             onClick={openCreate}
             requiredRole="admin"
             fallbackTitle="无权限：仅管理员可创建"
@@ -657,10 +615,10 @@ function ConfigMapsContent() {
       </div>
 
       {/* Table card */}
-      <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+      <div className="rounded-lg border border-line bg-surface overflow-hidden">
         <Table>
           <TableHeader>
-            <TableRow className="bg-slate-50">
+            <TableRow className="bg-surface-muted">
               <TableHead>名称</TableHead>
               <TableHead>命名空间</TableHead>
               <TableHead>{type === "llm" ? "提供方" : "配置概览"}</TableHead>
@@ -671,19 +629,19 @@ function ConfigMapsContent() {
           <TableBody>
             {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-slate-500 py-10">
-                  {isLoading ? "加载中..." : "暂无数据"}
+                <TableCell colSpan={5} className="text-center text-content-muted py-10">
+                  {isLoading ? "加载中…" : "暂无数据"}
                 </TableCell>
               </TableRow>
             ) : (
               items.map((cm) => (
                 <TableRow
                   key={`${cm.namespace}/${cm.name}`}
-                  className="cursor-pointer hover:bg-slate-50"
+                  className="cursor-pointer hover:bg-surface-muted"
                   onClick={() => void openView(cm.name)}
                 >
                   <TableCell className="font-medium flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                      <div className="w-8 h-8 rounded-full bg-cta/10 flex items-center justify-center text-cta">
                         {(() => {
                           if (type !== "llm") return <FileText className="w-4 h-4" />
                           const provider = cm.data?.provider || ""
@@ -705,8 +663,8 @@ function ConfigMapsContent() {
                       </div>
                       {cm.name}
                   </TableCell>
-                  <TableCell className="text-slate-500">{cm.namespace}</TableCell>
-                  <TableCell className="text-slate-700">
+                  <TableCell className="text-content-muted">{cm.namespace}</TableCell>
+                  <TableCell className="text-content">
                     {type === "llm"
                       ? toProviderLabel(cm.data?.provider || "", cm.data?.model || "")
                       : (() => {
@@ -715,27 +673,27 @@ function ConfigMapsContent() {
                           const hasFew = few.length > 0
                           const hasBg = bg.length > 0
                           if (!hasFew && !hasBg) {
-                            return <span className="text-slate-400">未配置</span>
+                            return <span className="text-content-muted">未配置</span>
                           }
                           return (
                             <span className="inline-flex items-center gap-2">
-                              {hasFew ? <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-50 text-slate-700 border border-slate-200 text-xs">fewshots</span> : null}
-                              {hasBg ? <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-50 text-slate-700 border border-slate-200 text-xs">background</span> : null}
+                              {hasFew ? <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-surface-muted text-content border border-line text-xs">fewshots</span> : null}
+                              {hasBg ? <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-surface-muted text-content border border-line text-xs">background</span> : null}
                             </span>
                           )
                         })()}
                   </TableCell>
-                  <TableCell className="text-slate-600">
+                  <TableCell className="text-content">
                     {cm.created_at ? new Date(cm.created_at).toLocaleString() : "-"}
                   </TableCell>
                   <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => void openEdit(cm.name)} title="编辑">
+                      <Button variant="ghost" size="icon" onClick={() => void openEdit(cm.name)} title="编辑" aria-label="编辑">
                         <RbacWrapper requiredRole="admin">
-                          <Pencil className="w-4 h-4 text-slate-600" />
+                          <Pencil className="w-4 h-4 text-content" />
                         </RbacWrapper>
                         <RbacWrapper requiredRole="admin" inverse>
-                          <Eye className="w-4 h-4 text-slate-600" />
+                          <Eye className="w-4 h-4 text-content" />
                         </RbacWrapper>
                       </Button>
                       <RbacWrapper requiredRole="admin">
@@ -745,6 +703,7 @@ function ConfigMapsContent() {
                           onClick={() => void handleDeleteClick(cm.name, cm.namespace)}
                           disabled={checkingDependency}
                           title="删除"
+                          aria-label="删除"
                         >
                           <Trash2 className="w-4 h-4 text-red-500" />
                         </Button>
@@ -783,13 +742,13 @@ function ConfigMapsContent() {
         }}
       >
       <DialogContent className="sm:max-w-[720px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
-          <DialogHeader className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
             <div className="flex items-center justify-between gap-3">
               <DialogTitle>{title}</DialogTitle>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-slate-500 hover:text-slate-900"
+                className="h-8 w-8 text-content-muted hover:text-content"
                 onClick={closeDialogSafely}
                 aria-label="关闭"
                 title="关闭"
@@ -832,7 +791,7 @@ function ConfigMapsContent() {
                         </SelectItem>
                       ) : isLoadingNs ? (
                         <SelectItem value="__loading__" disabled>
-                          加载中...
+                          加载中…
                         </SelectItem>
                       ) : null}
                       {namespaces.map((ns) => (
@@ -870,8 +829,8 @@ function ConfigMapsContent() {
             </div>
 
             {dialogType === "llm" ? (
-              <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4">
-                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">模型配置</div>
+              <div className="rounded-lg border border-line bg-surface p-4 space-y-4">
+                <div className="text-xs font-semibold text-content-muted uppercase tracking-wider">模型配置</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label>Provider</Label>
@@ -892,12 +851,12 @@ function ConfigMapsContent() {
                 </div>
               </div>
             ) : (
-              <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4">
-                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">提示词配置</div>
+              <div className="rounded-lg border border-line bg-surface p-4 space-y-4">
+                <div className="text-xs font-semibold text-content-muted uppercase tracking-wider">提示词配置</div>
                 <div className="space-y-2">
                   <Label>fewshots.json（可选）</Label>
                   <textarea
-                    className="w-full min-h-[140px] rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    className="w-full min-h-[140px] rounded-md border border-line bg-surface px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-cta/20"
                     value={toTextAreaValue(promptsFewshots)}
                     onChange={(e) => setPromptsFewshots(e.target.value)}
                     placeholder='例如：[{"query":"查找年龄大于30岁的用户","answer":"SELECT name, age FROM users WHERE age > 30"}]'
@@ -907,7 +866,7 @@ function ConfigMapsContent() {
                 <div className="space-y-2">
                   <Label>background_knowledge.json（可选）</Label>
                   <textarea
-                    className="w-full min-h-[140px] rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    className="w-full min-h-[140px] rounded-md border border-line bg-surface px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-cta/20"
                     value={toTextAreaValue(promptsBackground)}
                     onChange={(e) => setPromptsBackground(e.target.value)}
                     placeholder='例如：[{"description":"年度总额采用年末值进行处理。举例来说，如果想知道2023年的贷款总额，只需要查询2023年的记录中，看看月份最大的那个月的数据就是2023年的贷款总额。"}]'
@@ -919,7 +878,7 @@ function ConfigMapsContent() {
           </div>
 
           {!isViewMode && (
-            <DialogFooter className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 mt-0">
+            <DialogFooter className="px-6 py-4 border-t border-line bg-surface-muted/50 mt-0">
               <Button variant="outline" onClick={closeDialogSafely}>
                 取消
               </Button>
@@ -942,10 +901,10 @@ function ConfigMapsContent() {
           </AlertDialogHeader>
 
           <div className="mt-4 space-y-3 px-6">
-            <div className="max-h-[320px] w-full overflow-auto rounded-md border border-slate-200">
+            <div className="max-h-[320px] w-full overflow-auto rounded-md border border-line">
               <Table className="w-full table-fixed">
                 <TableHeader>
-                  <TableRow className="bg-slate-50">
+                  <TableRow className="bg-surface-muted">
                     <TableHead className="w-auto">资源</TableHead>
                     <TableHead className="w-28">命名空间</TableHead>
                     <TableHead className="w-28 text-right">操作</TableHead>
@@ -957,7 +916,7 @@ function ConfigMapsContent() {
                       <TableCell className="font-medium whitespace-normal break-all">
                         {agent.kind === "agent" ? "智能体" : "数据源"} / {agent.name}
                       </TableCell>
-                      <TableCell className="text-slate-500">{agent.namespace}</TableCell>
+                      <TableCell className="text-content-muted">{agent.namespace}</TableCell>
                       <TableCell className="text-right">
                         <Button
                           variant="ghost"
@@ -970,7 +929,7 @@ function ConfigMapsContent() {
                                 : `/datasources/${agent.namespace}/${agent.name}`
                             )
                           }}
-                          className="text-blue-600 hover:text-blue-800 whitespace-nowrap"
+                          className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"
                         >
                           查看详情 →
                         </Button>
@@ -981,13 +940,13 @@ function ConfigMapsContent() {
               </Table>
             </div>
 
-            <div className="text-sm text-slate-600">
+            <div className="text-sm text-content">
               请先解除这些资源对该配置的引用，然后再删除此配置。
             </div>
           </div>
 
           <AlertDialogFooter>
-            <AlertDialogAction>知道了</AlertDialogAction>
+            <AlertDialogAction onClick={() => setShowDependencyDialog(false)}>知道了</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1019,7 +978,7 @@ export default function ConfigMapsPage() {
     <Suspense
       fallback={
         <div className="flex h-full items-center justify-center p-8">
-          <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+          <Loader2 className="h-6 w-6 animate-spin text-content-muted" />
         </div>
       }
     >

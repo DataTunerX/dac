@@ -116,6 +116,16 @@ class VectorDeleteDocumentsByMetaFieldRequest(BaseModel):
     key: str
     value: str
 
+
+class VectorGetIdsByMetaFieldRequest(BaseModel):
+    key: str
+    value: str
+
+
+class VectorGetIdsByMetaFieldResponse(BaseModel):
+    ids: List[str] = Field(default_factory=list, description="Document ids matching the metadata key-value")
+
+
 class VectorCreateCollectionRequest(BaseModel):
     documents: List[DocumentModel]
     collection_name: str
@@ -226,6 +236,7 @@ class SemanticDomain(BaseModel):
     dd_namespace: Optional[str] = Field(None, description="DD namespace")
     dd_name: Optional[str] = Field(None, description="DD name")
     descriptor_type: Optional[str] = Field(None, description="Descriptor type (code/structured/unstructured)")
+    version: Optional[str] = Field(None, description="Version, incremented on each update")
     created_at: Optional[datetime] = Field(None, description="Creation time")
     updated_at: Optional[datetime] = Field(None, description="Update time")
 
@@ -236,6 +247,7 @@ class SemanticDomainCreateRequest(BaseModel):
     dd_namespace: Optional[str] = Field(None, description="DD namespace")
     dd_name: Optional[str] = Field(None, description="DD name")
     descriptor_type: Optional[str] = Field(None, description="Descriptor type (code/structured/unstructured)")
+    version: Optional[str] = Field(None, description="Version (default '1' for new records)")
 
 class SemanticDomainUpdateRequest(BaseModel):
     semantic_domain_id: Optional[str] = Field(None, description="SemanticDomain type")
@@ -244,6 +256,7 @@ class SemanticDomainUpdateRequest(BaseModel):
     dd_namespace: Optional[str] = Field(None, description="DD namespace")
     dd_name: Optional[str] = Field(None, description="DD name")
     descriptor_type: Optional[str] = Field(None, description="Descriptor type (code/structured/unstructured)")
+    version: Optional[str] = Field(None, description="Version, incremented on each update")
 
 class SemanticDomainResponse(BaseModel):
     status: str
@@ -267,8 +280,10 @@ class SemanticGroup(BaseModel):
     group_name: str = Field(..., description="Group name")
     description: Optional[str] = Field(None, description="Group description")
     agent_card: Optional[str] = Field(None, description="Agent Card")
-    version: Optional[str] = Field(None, description="Version")
+    version: Optional[str] = Field(None, description="Version, incremented on each update")
+    parent_id: Optional[str] = Field(None, description="Parent group ID (NULL = root or leaf)")
     created_at: Optional[datetime] = Field(None, description="Creation time")
+    updated_at: Optional[datetime] = Field(None, description="Update time")
 
 class DDGroupRelation(BaseModel):
     id: Optional[int] = Field(None, description="Primary key (auto-increment)")
@@ -281,18 +296,25 @@ class SemanticGroupCreateRequest(BaseModel):
     group_name: str = Field(..., description="Group name")
     description: Optional[str] = Field(None, description="Group description")
     agent_card: Optional[str] = Field(None, description="Agent Card")
-    version: Optional[str] = Field(None, description="Version")
+    version: Optional[str] = Field(None, description="Version (default '1' for new records)")
+    parent_id: Optional[str] = Field(None, description="Parent group ID")
 
 class SemanticGroupUpdateRequest(BaseModel):
     group_name: Optional[str] = Field(None, description="Group name")
     description: Optional[str] = Field(None, description="Group description")
     agent_card: Optional[str] = Field(None, description="Agent Card")
-    version: Optional[str] = Field(None, description="Version")
+    version: Optional[str] = Field(None, description="Version, incremented on each update")
+    parent_id: Optional[str] = Field(None, description="Parent group ID")
 
 class DDGroupRelationCreateRequest(BaseModel):
     sd_id: str = Field(..., description="Semantic domain ID")
     group_id: str = Field(..., description="Group ID")
     association_reason: Optional[str] = Field(None, description="Reason for association")
+
+
+class DDGroupRelationUpdateRequest(BaseModel):
+    association_reason: Optional[str] = Field(None, description="Updated association reason")
+
 
 class SemanticGroupResponse(BaseModel):
     status: str
@@ -317,10 +339,19 @@ class SemanticGroupMemberDetail(BaseModel):
     semantic_domain: Optional[SemanticDomain] = Field(None, description="Semantic domain details (None if SD was deleted)")
 
 
+class SemanticGroupInfo(BaseModel):
+    """Summary info of a child group within a parent group."""
+    id: str = Field(..., description="Child group ID")
+    group_name: str = Field(..., description="Child group name")
+    description: Optional[str] = Field(None, description="Child group description")
+    agent_card: Optional[str] = Field(None, description="Child group Agent Card JSON")
+
+
 class SemanticGroupWithMembersData(BaseModel):
-    """Semantic group with its member semantic domains."""
+    """Semantic group with its member semantic domains and child groups."""
     group: SemanticGroup = Field(..., description="The semantic group")
     members: List[SemanticGroupMemberDetail] = Field(default_factory=list, description="Member semantic domains with details")
+    child_groups: List[SemanticGroupInfo] = Field(default_factory=list, description="Child groups (non-leaf groups have these instead of SD members)")
 
 
 class SemanticGroupWithMembersResponse(BaseModel):
@@ -352,9 +383,11 @@ class CreateHistoryRequest(BaseModel):
     messages: List[HistoryMessage]
 
     def get_conversation_json(self) -> str:
+        """Conversation without think (role, content only)."""
         return json.dumps([{"role": m.role, "content": m.content} for m in self.messages], ensure_ascii=False)
 
     def get_think_json(self) -> str:
+        """Think values in same order as messages."""
         return json.dumps([(m.think or "") for m in self.messages], ensure_ascii=False)
 
 class CreateHistoryResponse(BaseModel):
@@ -379,7 +412,7 @@ class HistoryRecordResponse(BaseModel):
     agent_id: str
     run_id: str
     messages: List[HistoryMessage]
-    think: Optional[List[str]] = None
+    think: Optional[List[str]] = None  # think per message, same order as messages
     created_at: datetime
     updated_at: datetime
 

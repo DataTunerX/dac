@@ -18,11 +18,11 @@ import httpx
 from .api.base import DocumentModel, SearchType, CreateRequest, AddTextsRequest, SearchRequest,DeleteRequest, MetadataRequest
 from .api.base import MemoryMessage, MemoryAddRequest, MemoryUpdateRequest, MemorySearchRequest, MemoryGetAllRequest, MemoryDeleteRequest, MemoryResponse
 from .api.base import KnowledgePyramidAddRequest, KnowledgePyramidSearchRequest, KnowledgePyramidDeleteRequest
-from .api.base import VectorAddDocumentsRequest, VectorDeleteDocumentsRequest, VectorSearchRequest, VectorCreateCollectionRequest, VectorDeleteCollectionRequest, VectorDeleteDocumentsByMetaFieldRequest
+from .api.base import VectorAddDocumentsRequest, VectorDeleteDocumentsRequest, VectorSearchRequest, VectorCreateCollectionRequest, VectorDeleteCollectionRequest, VectorDeleteDocumentsByMetaFieldRequest, VectorGetIdsByMetaFieldRequest, VectorGetIdsByMetaFieldResponse
 from .api.base import SignatureCreateRequest, SignatureUpdateRequest, SignatureResponse, SignatureSearchByDDRequest, SignatureListResponse
 from .api.base import SemanticDomainCreateRequest, SemanticDomainUpdateRequest, SemanticDomainResponse, SemanticDomainSearchByDDRequest, SemanticDomainListResponse
 from .api.base import CodebaseIndexer, CodebaseIndexerCreateRequest, CodebaseIndexerUpdateRequest, CodebaseIndexerResponse, CodebaseIndexerSearchByDDRequest, CodebaseIndexerSearchByFilepathRequest, CodebaseIndexerListResponse
-from .api.base import SemanticGroupCreateRequest, SemanticGroupUpdateRequest, SemanticGroupResponse, SemanticGroupListResponse, DDGroupRelationCreateRequest, DDGroupRelationListResponse, SemanticGroupWithMembersResponse
+from .api.base import SemanticGroupCreateRequest, SemanticGroupUpdateRequest, SemanticGroupResponse, SemanticGroupListResponse, DDGroupRelationCreateRequest, DDGroupRelationUpdateRequest, DDGroupRelationListResponse, SemanticGroupWithMembersResponse
 from .api.base import CreateHistoryRequest, CreateHistoryResponse, SearchHistoryRequest, SearchHistoryResponse, HistoryRecordResponse, HistoryRecord, HistoryMessage,SearchHistoryRequestByUserAndRun
 from .api.base import KnowledgeGraphAddRequest, KnowledgeGraphSearchRequest, KnowledgeGraphDeleteRequest, KnowledgeGraphGetGraphRequest, KnowledgeGraphResponse
 from .api.base import Signature, SemanticDomain, SemanticGroup, DDGroupRelation
@@ -34,7 +34,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="dac data services", version="0.1.0")
+app = FastAPI(title="data services", version="0.1.0")
 
 BACKEND_SERVICE_URL = os.getenv("DATA_SERVICES", "http://data-services.dac:8000")
 
@@ -201,6 +201,24 @@ async def get_info():
         "service": "data-services",
         "version": "0.1.0"
     }
+
+
+@app.get("/datadescriptors/{namespace}/{name}")
+async def proxy_get_datadescriptor(namespace: str, name: str, http_request: Request):
+    return await proxy_request(
+        "GET", f"/datadescriptors/{namespace}/{name}", http_request
+    )
+
+
+@app.patch("/datadescriptors/{namespace}/{name}/sync-requested-at")
+async def proxy_patch_sync_requested_at(
+    namespace: str, name: str, http_request: Request
+):
+    return await proxy_request(
+        "PATCH",
+        f"/datadescriptors/{namespace}/{name}/sync-requested-at",
+        http_request,
+    )
 
 
 ###################################### memory routes #########################
@@ -370,6 +388,17 @@ async def delete_by_metadata_field(
 ):
     """代理请求到后端服务，保留原有的 request 类型用于验证和文档"""
     return await proxy_request("DELETE", f"/vector/{collection_name}/delete_by_metadata_field", http_request)
+
+
+@app.post("/vector/{collection_name}/get_ids_by_metadata_field", response_model=VectorGetIdsByMetaFieldResponse)
+async def get_ids_by_metadata_field(
+    collection_name: str,
+    _request: VectorGetIdsByMetaFieldRequest,
+    http_request: Request,
+):
+    """与 data-services 一致：按 metadata 键值查询文档 id 列表"""
+    return await proxy_request("POST", f"/vector/{collection_name}/get_ids_by_metadata_field", http_request)
+
 
 # vector routes
 @app.delete("/vector/{collection_name}/delete_all")
@@ -578,6 +607,31 @@ async def get_semantic_group_with_members(group_id: str, http_request: Request):
     """获取 semantic group 及其包含的 semantic domain 成员详细信息，代理到后端服务"""
     return await proxy_request("GET", f"/semantic_groups/{group_id}/with_members", http_request)
 
+
+@app.get("/semantic_groups/{group_id}/children", response_model=SemanticGroupListResponse)
+async def get_semantic_group_children(group_id: str, http_request: Request):
+    """列出某组的直接子组（与 data-services 对齐）"""
+    return await proxy_request("GET", f"/semantic_groups/{group_id}/children", http_request)
+
+
+@app.get("/semantic_groups_roots", response_model=SemanticGroupListResponse)
+async def get_semantic_groups_roots(http_request: Request):
+    """所有根 semantic group（与 data-services 对齐）"""
+    return await proxy_request("GET", "/semantic_groups_roots", http_request)
+
+
+@app.get("/semantic_groups_leaf_orphans", response_model=SemanticGroupListResponse)
+async def get_semantic_groups_leaf_orphans(http_request: Request):
+    """叶子且无父的组（与 data-services 对齐）"""
+    return await proxy_request("GET", "/semantic_groups_leaf_orphans", http_request)
+
+
+@app.get("/semantic_groups_orphans_with_members", response_model=SemanticGroupListResponse)
+async def get_semantic_groups_orphans_with_members(http_request: Request):
+    """有成员但无父的 orphan 组（与 data-services 对齐）"""
+    return await proxy_request("GET", "/semantic_groups_orphans_with_members", http_request)
+
+
 @app.get("/semantic_groups", response_model=SemanticGroupListResponse)
 async def get_all_semantic_groups(http_request: Request, page: Optional[int] = None, page_size: Optional[int] = None):
     """代理请求到后端服务，保留原有的 request 类型用于验证和文档"""
@@ -604,6 +658,13 @@ async def get_semantic_group_count(http_request: Request):
     """代理请求到后端服务，保留原有的 request 类型用于验证和文档"""
     return await proxy_request("GET", "/semantic_groups/status/count", http_request)
 
+
+@app.post("/semantic_groups/maintenance/purge_orphan_vectors", response_model=SemanticGroupResponse)
+async def purge_orphan_semantic_group_vectors(http_request: Request):
+    """清理已删除组在向量库中的残留（与 data-services 对齐）"""
+    return await proxy_request("POST", "/semantic_groups/maintenance/purge_orphan_vectors", http_request)
+
+
 # DD Group Relation routes
 @app.post("/dd_group_relations", response_model=SemanticGroupResponse)
 async def create_dd_group_relation(_request: DDGroupRelationCreateRequest, http_request: Request):
@@ -624,6 +685,15 @@ async def get_relations_by_group_id(group_id: str, http_request: Request):
 async def get_relations_by_sd_id(sd_id: str, http_request: Request):
     """代理请求到后端服务，保留原有的 request 类型用于验证和文档"""
     return await proxy_request("GET", f"/dd_group_relations/sd/{sd_id}", http_request)
+
+
+@app.put("/dd_group_relations/{relation_id}", response_model=SemanticGroupResponse)
+async def update_dd_group_relation(
+    relation_id: int, _request: DDGroupRelationUpdateRequest, http_request: Request
+):
+    """更新 dd_group_relation（如同步 SD 指纹到 association_reason）"""
+    return await proxy_request("PUT", f"/dd_group_relations/{relation_id}", http_request)
+
 
 @app.delete("/dd_group_relations/{relation_id}", response_model=SemanticGroupResponse)
 async def delete_dd_group_relation(relation_id: int, http_request: Request):

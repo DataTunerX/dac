@@ -1,0 +1,17 @@
+{{- if .Values.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.redis.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "redis") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: redis
+      port: {{ .Values.redis.port }}
+      targetPort: 6379
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "redis") | nindent 4 }}
+{{- end }}

@@ -1,0 +1,17 @@
+{{- if .Values.bizChartAgent.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.bizChartAgent.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "biz-chart-agent") | nindent 4 }}
+spec:
+  type: {{ .Values.bizChartAgent.service.type }}
+  ports:
+    - name: grpc
+      port: {{ .Values.bizChartAgent.service.port }}
+      targetPort: {{ .Values.bizChartAgent.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "biz-chart-agent") | nindent 4 }}
+{{- end }}

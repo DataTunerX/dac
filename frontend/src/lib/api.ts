@@ -1,20 +1,21 @@
-import axios from "axios"
-import Cookies from "js-cookie"
+import axios, { type InternalAxiosRequestConfig } from "axios"
+import { clearAuthToken, getAuthToken, redirectToLogin } from "@/lib/auth-session"
 
 // Axios instance for DAC API.
 // - baseURL: /api/v1
 // - request: attach Bearer token if exists (dac_token)
-// - response: unwrap standard envelope { code, message, data }
+// - response: unwrap Go envelope { code, message, data } so res.data is the payload.
+//   Use res.data only; do not double-unwrap (res.data.data). See docs/api-contract-go-frontend.md.
 export const api = axios.create({
   baseURL: "/api/v1",
 })
 
-api.interceptors.request.use((config) => {
-  const token = Cookies.get("dac_token")
+api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const token = getAuthToken()
   if (token) {
-    config.headers = config.headers || {}
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(config.headers as any)["Authorization"] = `Bearer ${token}`
+    config.headers = config.headers ?? {}
+    const headers = config.headers as Record<string, string>
+    headers["Authorization"] = `Bearer ${token}`
   }
   return config
 })
@@ -36,7 +37,7 @@ api.interceptors.response.use(
     // - redirect to login with next=...
     // IMPORTANT: must be safe in non-browser contexts.
     if (axios.isAxiosError(err) && err.response?.status === 401) {
-      Cookies.remove("dac_token")
+      clearAuthToken()
       if (typeof window !== "undefined") {
         const path = window.location.pathname || "/"
         const search = window.location.search || ""
@@ -45,7 +46,7 @@ api.interceptors.response.use(
 
         // Avoid redirect loop on auth pages.
         if (!path.startsWith("/login") && !path.startsWith("/register")) {
-          window.location.href = `/login?next=${encodeURIComponent(next)}`
+          redirectToLogin(next)
         }
       }
     }

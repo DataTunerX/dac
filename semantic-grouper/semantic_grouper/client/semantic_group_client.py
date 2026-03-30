@@ -341,6 +341,22 @@ class SemanticGroupClient:
         
         return self._make_request("GET", endpoint)
 
+    def update_dd_group_relation(self, relation_id: int, association_reason: str) -> Dict[str, Any]:
+        """
+        Update DD group relation record (e.g. association_reason with content fingerprint)
+
+        Args:
+            relation_id: Primary key of record to update
+            association_reason: New association reason text
+
+        Returns:
+            API response result
+        """
+        endpoint = f"/dd_group_relations/{relation_id}"
+        return self._make_request(
+            "PUT", endpoint, {"association_reason": association_reason}
+        )
+
     def delete_dd_group_relation(self, relation_id: int) -> Dict[str, Any]:
         """
         Delete DD group relation record
@@ -658,6 +674,24 @@ class AsyncSemanticGroupClient:
         endpoint = f"/dd_group_relations/sd/{sd_id}"
         
         return await self._make_request("GET", endpoint)
+
+    async def aupdate_dd_group_relation(
+        self, relation_id: int, association_reason: str
+    ) -> Dict[str, Any]:
+        """
+        Update DD group relation record (async).
+
+        Args:
+            relation_id: Primary key of record to update
+            association_reason: New association reason text
+
+        Returns:
+            API response result
+        """
+        endpoint = f"/dd_group_relations/{relation_id}"
+        return await self._make_request(
+            "PUT", endpoint, {"association_reason": association_reason}
+        )
 
     async def adelete_dd_group_relation(self, relation_id: int) -> Dict[str, Any]:
         """

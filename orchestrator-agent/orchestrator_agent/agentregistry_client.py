@@ -1,5 +1,5 @@
 import json
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -36,20 +36,23 @@ class AgentRegistryClient:
     """AgentRegistry API Client"""
     
     def __init__(
-        self, 
-        base_url: str = "http://expert-registry.dac.svc.cluster.local:10100",
+        self,
+        base_url: Optional[str] = None,
         timeout: int = 300
     ):
         """
-        Initialize client
-        
+        Initialize client.
+
         Args:
-            base_url: API base URL
+            base_url: API base URL. If None, uses env AgentRegistry.
             timeout: Request timeout (seconds)
         """
-        AgentRegistry = os.getenv("AgentRegistry", "http://expert-registry.dac.svc.cluster.local:10100")
-
-        self.base_url = AgentRegistry.rstrip('/')
+        resolved = (
+            base_url
+            or os.getenv("AgentRegistry")
+            or "http://expert-registry.dac.svc.cluster.local:10100"
+        )
+        self.base_url = resolved.rstrip("/")
         self.timeout = timeout
 
     async def _amake_request(

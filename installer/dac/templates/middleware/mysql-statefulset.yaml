@@ -1,0 +1,70 @@
+{{- if .Values.mysql.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "dac.mysql.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "mysql") | nindent 4 }}
+spec:
+  serviceName: {{ include "dac.mysql.serviceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "mysql") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "mysql") | nindent 8 }}
+    spec:
+      containers:
+        - name: mysql
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.mysql.image.repository "tag" .Values.mysql.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: {{ .Values.mysql.rootPassword | quote }}
+            - name: TZ
+              value: "Asia/Shanghai"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+          livenessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.mysql.resources | nindent 12 }}
+      volumes:
+        - name: initdb
+          configMap:
+            name: {{ include "dac.mysql.serviceName" . }}-initdb
+        {{- if not .Values.mysql.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if .Values.mysql.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- $sc := .Values.mysql.persistence.storageClass | default .Values.global.storageClass }}
+        {{- if $sc }}
+        storageClassName: {{ $sc | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mysql.persistence.size }}
+  {{- end }}
+{{- end }}

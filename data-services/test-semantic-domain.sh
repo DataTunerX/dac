@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Semantic Domain API 手测（请求/响应字段与 data_services/api/base.py 中
+# SemanticDomain、SemanticDomainCreateRequest、SemanticDomainUpdateRequest 一致，含 descriptor_type、version）
+
 # 1. Create Semantic Domain
 
 curl -X POST "http://192.168.3.238:22000/semantic_domains" \
@@ -8,7 +11,9 @@ curl -X POST "http://192.168.3.238:22000/semantic_domains" \
     "semantic_domain": "This is a test semantic domain for application services",
     "agent_card": "{\"name\": \"test_agent\", \"description\": \"Test agent for semantic domain\"}",
     "dd_namespace": "test_namespace",
-    "dd_name": "test_name"
+    "dd_name": "test_name",
+    "descriptor_type": "structured",
+    "version": "1"
 }' | jq .
 
 # output
@@ -20,6 +25,8 @@ curl -X POST "http://192.168.3.238:22000/semantic_domains" \
 #     "agent_card": "{\"name\": \"test_agent\", \"description\": \"Test agent for semantic domain\"}",
 #     "dd_namespace": "test_namespace",
 #     "dd_name": "test_name",
+#     "descriptor_type": "structured",
+#     "version": "1",
 #     "created_at": "2024-01-01T00:00:00",
 #     "updated_at": "2024-01-01T00:00:00"
 #   },
@@ -36,13 +43,17 @@ curl -X POST "http://192.168.3.238:22000/semantic_domains/batch" \
         "semantic_domain": "Semantic domain for database services",
         "agent_card": "{\"name\": \"db_agent\", \"type\": \"database\"}",
         "dd_namespace": "namespace2",
-        "dd_name": "name2"
+        "dd_name": "name2",
+        "descriptor_type": "structured",
+        "version": "1"
     },
     {
         "semantic_domain": "Semantic domain for API services",
         "agent_card": "{\"name\": \"api_agent\", \"type\": \"api\"}",
         "dd_namespace": "namespace3",
-        "dd_name": "name3"
+        "dd_name": "name3",
+        "descriptor_type": "code",
+        "version": "1"
     }
 ]' | jq .
 
@@ -69,6 +80,8 @@ curl -X GET "http://192.168.3.238:22000/semantic_domains/c94af930-ad5b-4ab6-9930
 #     "agent_card": "{\"name\": \"test_agent\", \"description\": \"Test agent for semantic domain\"}",
 #     "dd_namespace": "test_namespace",
 #     "dd_name": "test_name",
+#     "descriptor_type": "structured",
+#     "version": "1",
 #     "created_at": "2024-01-01T00:00:00",
 #     "updated_at": "2024-01-01T00:00:00"
 #   },
@@ -95,6 +108,8 @@ curl -X POST "http://192.168.3.238:22000/semantic_domains/search/by-dd" \
 #       "agent_card": "{\"name\": \"test_agent\", \"description\": \"Test agent for semantic domain\"}",
 #       "dd_namespace": "test_namespace",
 #       "dd_name": "test_name",
+#       "descriptor_type": "structured",
+#       "version": "1",
 #       "created_at": "2024-01-01T00:00:00",
 #       "updated_at": "2024-01-01T00:00:00"
 #     }
@@ -102,7 +117,7 @@ curl -X POST "http://192.168.3.238:22000/semantic_domains/search/by-dd" \
 #   "count": 1
 # }
 
-# 5. Update Semantic Domain
+# 5. Update Semantic Domain（可显式传 version / descriptor_type；未传则服务端保留原值）
 
 curl -X PUT "http://192.168.3.238:22000/semantic_domains/c94af930-ad5b-4ab6-9930-3f178d732570" \
 -H "Content-Type: application/json" \
@@ -110,7 +125,9 @@ curl -X PUT "http://192.168.3.238:22000/semantic_domains/c94af930-ad5b-4ab6-9930
     "semantic_domain": "Updated semantic domain content",
     "agent_card": "{\"name\": \"updated_agent\", \"description\": \"Updated agent card\"}",
     "dd_namespace": "updated_namespace",
-    "dd_name": "updated_name"
+    "dd_name": "updated_name",
+    "descriptor_type": "unstructured",
+    "version": "2"
 }' | jq .
 
 # output
@@ -122,6 +139,8 @@ curl -X PUT "http://192.168.3.238:22000/semantic_domains/c94af930-ad5b-4ab6-9930
 #     "agent_card": "{\"name\": \"updated_agent\", \"description\": \"Updated agent card\"}",
 #     "dd_namespace": "updated_namespace",
 #     "dd_name": "updated_name",
+#     "descriptor_type": "unstructured",
+#     "version": "2",
 #     "created_at": "2024-01-01T00:00:00",
 #     "updated_at": "2024-01-01T00:01:00"
 #   },

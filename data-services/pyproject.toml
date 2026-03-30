@@ -34,6 +34,7 @@ dependencies = [
     "aiomysql~=0.2.0",
     "DBUtils~=3.1.2",
     "asyncpg~=0.30.0",
+    "kubernetes>=28.0.0",
     "model_sdk @ file:///Users/james/daocloud/code/dac/data-services/sdks/model_sdk-0.1.0-py3-none-any.whl",
 
 ]

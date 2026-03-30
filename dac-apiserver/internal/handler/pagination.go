@@ -11,6 +11,8 @@ type limitOffset struct {
 	Offset int
 }
 
+// parseLimitOffset reads limit and offset from query (e.g. ?limit=20&offset=0),
+// applying defaultLimit and maxLimit when given.
 func parseLimitOffset(c *app.RequestContext, defaultLimit, maxLimit int) limitOffset {
 	var out limitOffset
 
@@ -34,6 +36,7 @@ func parseLimitOffset(c *app.RequestContext, defaultLimit, maxLimit int) limitOf
 	return out
 }
 
+// paginateSlice returns the sub-slice of items for the given offset and limit.
 func paginateSlice[T any](items []T, offset, limit int) []T {
 	if offset < 0 {
 		offset = 0

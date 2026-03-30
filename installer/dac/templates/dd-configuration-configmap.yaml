@@ -1,0 +1,29 @@
+{{- if .Values.executionEngine.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dd-configuration
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "execution-engine") | nindent 4 }}
+data:
+  {{- with .Values.executionEngine.dacConfig }}
+  {{- if .observationBaseUrl }}
+  observation-base-url: {{ .observationBaseUrl | quote }}
+  {{- end }}
+  {{- if .observationSecretKey }}
+  observation-secret-key: {{ .observationSecretKey | quote }}
+  {{- end }}
+  {{- if .observationPublicKey }}
+  observation-public-key: {{ .observationPublicKey | quote }}
+  {{- end }}
+  {{- end }}
+  redis-host: {{ printf "%s.%s.svc.cluster.local" (include "dac.redis.serviceName" .) .Release.Namespace | quote }}
+  redis-port: {{ .Values.redis.port | default "6379" | quote }}
+  redis-password: {{ .Values.redis.password | default "123" | quote }}
+  data-services-url: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.dataServices.serviceName" .) .Release.Namespace (.Values.dataServices.service.port | default 8000) | quote }}
+  data-sinker-job-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" "data-sinkers" "tag" .Values.executionEngine.agentImages.dataSinkerJob.tag) | quote }}
+  data-sinker-status-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" "data-sinkers-status" "tag" .Values.executionEngine.agentImages.dataSinkerStatus.tag) | quote }}
+  dac-data-services-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" "dac-data-services" "tag" .Values.executionEngine.agentImages.dacDataServices.tag) | quote }}
+  llm-config: {{ .Values.executionEngine.ddConfig.llmConfig | default "llm-default" | quote }}
+{{- end }}

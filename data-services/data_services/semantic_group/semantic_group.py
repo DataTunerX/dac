@@ -114,9 +114,10 @@ class AsyncSemanticGroupService:
             group_name VARCHAR(255) NOT NULL COMMENT 'Group name',
             description MEDIUMTEXT COMMENT 'Group description',
             agent_card MEDIUMTEXT COMMENT 'Agent Card',
-            version VARCHAR(20) COMMENT 'Version',
+            version VARCHAR(32) COMMENT 'Version, incremented on each update',
             parent_id VARCHAR(255) DEFAULT NULL COMMENT 'Parent group ID (NULL = root or leaf)',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT 'Creation time',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Update time',
             INDEX idx_group_name (group_name),
             INDEX idx_created_at (created_at),
             INDEX idx_parent_id (parent_id),
@@ -143,9 +144,10 @@ class AsyncSemanticGroupService:
             'group_name': 'VARCHAR(255)',
             'description': 'MEDIUMTEXT',
             'agent_card': 'MEDIUMTEXT',
-            'version': 'VARCHAR(20)',
+            'version': 'VARCHAR(32)',
             'parent_id': 'VARCHAR(255)',
-            'created_at': 'TIMESTAMP'
+            'created_at': 'TIMESTAMP',
+            'updated_at': 'TIMESTAMP'
         }
         
         # Expected columns for dd_group_relation
@@ -177,6 +179,11 @@ class AsyncSemanticGroupService:
                         if col_name not in existing_column_names:
                             if col_name == 'created_at':
                                 alter_query = f"ALTER TABLE semantic_groups ADD COLUMN {col_name} {col_type} DEFAULT CURRENT_TIMESTAMP COMMENT 'Creation time'"
+                            elif col_name == 'updated_at':
+                                alter_query = (
+                                    f"ALTER TABLE semantic_groups ADD COLUMN {col_name} {col_type} "
+                                    "DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Update time'"
+                                )
                             elif col_name == 'parent_id':
                                 alter_query = f"ALTER TABLE semantic_groups ADD COLUMN parent_id VARCHAR(255) DEFAULT NULL COMMENT 'Parent group ID (NULL = root or leaf)'"
                             else:
@@ -185,12 +192,23 @@ class AsyncSemanticGroupService:
                                     'group_name': 'Group name',
                                     'description': 'Group description',
                                     'agent_card': 'Agent Card',
-                                    'version': 'Version'
+                                    'version': 'Version incremented on each update'
                                 }
                                 alter_query = f"ALTER TABLE semantic_groups ADD COLUMN {col_name} {col_type} COMMENT '{comment_map.get(col_name, '')}'"
                             
                             await cursor.execute(alter_query)
                             logger.info(f"Added missing column to semantic_groups: {col_name}")
+                    
+                    # Widen legacy version column (VARCHAR(20)) to match semantic_domain
+                    await cursor.execute("DESCRIBE semantic_groups")
+                    columns_after = await cursor.fetchall()
+                    ver_col = next((c for c in columns_after if c.get('Field') == 'version'), None)
+                    if ver_col and 'varchar(20)' in (ver_col.get('Type') or '').lower():
+                        await cursor.execute(
+                            "ALTER TABLE semantic_groups MODIFY COLUMN version VARCHAR(32) "
+                            "COMMENT 'Version, incremented on each update'"
+                        )
+                        logger.info("Widened semantic_groups.version to VARCHAR(32)")
                     
                     # Check and add missing indexes
                     await cursor.execute("SHOW INDEXES FROM semantic_groups")
@@ -280,13 +298,13 @@ class AsyncSemanticGroupService:
         (id, group_name, description, agent_card, version, parent_id)
         VALUES (%s, %s, %s, %s, %s, %s)
         """
-        
+        version = getattr(semantic_group, 'version', None) or '1'
         values = (
             semantic_group.id,
             semantic_group.group_name,
             semantic_group.description,
             semantic_group.agent_card,
-            semantic_group.version,
+            version,
             getattr(semantic_group, 'parent_id', None)
         )
         
@@ -323,12 +341,13 @@ class AsyncSemanticGroupService:
                         if not group.id:
                             group.id = str(uuid.uuid4())
                         
+                        v = getattr(group, 'version', None) or '1'
                         data.append((
                             group.id,
                             group.group_name,
                             group.description,
                             group.agent_card,
-                            group.version,
+                            v,
                             getattr(group, 'parent_id', None)
                         ))
                     
@@ -368,7 +387,8 @@ class AsyncSemanticGroupService:
                         agent_card=result.get('agent_card'),
                         version=result.get('version'),
                         parent_id=result.get('parent_id'),
-                        created_at=result.get('created_at')
+                        created_at=result.get('created_at'),
+                        updated_at=result.get('updated_at')
                     )
                 return None
         except Error as e:
@@ -407,7 +427,8 @@ class AsyncSemanticGroupService:
                         agent_card=result.get('agent_card'),
                         version=result.get('version'),
                         parent_id=result.get('parent_id'),
-                        created_at=result.get('created_at')
+                        created_at=result.get('created_at'),
+                        updated_at=result.get('updated_at')
                     ))
                 
                 return groups
@@ -428,17 +449,17 @@ class AsyncSemanticGroupService:
         """
         update_query = """
         UPDATE semantic_groups 
-        SET group_name = %s, description = %s, agent_card = %s, version = %s, parent_id = %s
+        SET group_name = %s, description = %s, agent_card = %s, version = %s, parent_id = %s, updated_at = CURRENT_TIMESTAMP
         WHERE id = %s
         """
-        
+        version = getattr(semantic_group, 'version', None) or '1'
         try:
             async with self._get_cursor() as cursor:
                 result = await cursor.execute(update_query, (
                     semantic_group.group_name,
                     semantic_group.description,
                     semantic_group.agent_card,
-                    semantic_group.version,
+                    version,
                     getattr(semantic_group, 'parent_id', None),
                     group_id
                 ))
@@ -636,6 +657,23 @@ class AsyncSemanticGroupService:
             logger.error(f"Query DD group relations by sd_id error: {e}")
             return []
     
+    async def update_relation_association_reason(self, relation_id: int, association_reason: Optional[str]) -> bool:
+        """
+        Update association_reason for a dd_group_relation row (e.g. after SD re-sync merge).
+        """
+        update_query = """
+        UPDATE dd_group_relation
+        SET association_reason = %s
+        WHERE id = %s
+        """
+        try:
+            async with self._get_cursor() as cursor:
+                result = await cursor.execute(update_query, (association_reason, relation_id))
+                return result > 0
+        except Error as e:
+            logger.error(f"Update DD group relation record error: {e}")
+            return False
+
     async def delete_relation(self, relation_id: int) -> bool:
         """
         Delete DD group relation record
@@ -722,7 +760,8 @@ class AsyncSemanticGroupService:
                         agent_card=result.get('agent_card'),
                         version=result.get('version'),
                         parent_id=result.get('parent_id'),
-                        created_at=result.get('created_at')
+                        created_at=result.get('created_at'),
+                        updated_at=result.get('updated_at')
                     ))
 
                 return groups
@@ -753,7 +792,8 @@ class AsyncSemanticGroupService:
                         agent_card=result.get('agent_card'),
                         version=result.get('version'),
                         parent_id=result.get('parent_id'),
-                        created_at=result.get('created_at')
+                        created_at=result.get('created_at'),
+                        updated_at=result.get('updated_at')
                     ))
 
                 return groups
@@ -790,13 +830,15 @@ class AsyncSemanticGroupService:
                         agent_card=result.get('agent_card'),
                         version=result.get('version'),
                         parent_id=result.get('parent_id'),
-                        created_at=result.get('created_at')
+                        created_at=result.get('created_at'),
+                        updated_at=result.get('updated_at')
                     ))
 
                 return groups
         except Error as e:
             logger.error(f"Query leaf groups without parent error: {e}")
             return []
+
 
     async def update_parent_id(self, group_id: str, parent_id: Optional[str]) -> bool:
         """
@@ -809,7 +851,7 @@ class AsyncSemanticGroupService:
         Returns:
             bool: Whether the operation was successful
         """
-        update_query = "UPDATE semantic_groups SET parent_id = %s WHERE id = %s"
+        update_query = "UPDATE semantic_groups SET parent_id = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s"
 
         try:
             async with self._get_cursor() as cursor:
@@ -851,7 +893,8 @@ class AsyncSemanticGroupService:
                         agent_card=result.get('agent_card'),
                         version=result.get('version'),
                         parent_id=result.get('parent_id'),
-                        created_at=result.get('created_at')
+                        created_at=result.get('created_at'),
+                        updated_at=result.get('updated_at')
                     ))
 
                 return groups

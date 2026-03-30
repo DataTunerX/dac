@@ -45,15 +45,23 @@ type ConversationSummary struct {
 	UpdatedAt time.Time
 }
 
-// HistoryRecord represents a single history record from data services
+// ConversationListFilter controls which conversations are returned.
+type ConversationListFilter struct {
+	// Days limits results to conversations created within the last N days.
+	// Zero means "no time filter".
+	Days int
+}
+
+// HistoryRecord represents a single history record from data-services.
+// Messages follow data-services HistoryMessage (role, content, think); no map guessing.
 type HistoryRecord struct {
-	HID       string                   `json:"hid"`
-	UserID    string                   `json:"user_id"`
-	AgentID   string                   `json:"agent_id"`
-	RunID     string                   `json:"run_id"`
-	Messages  []map[string]interface{} `json:"messages"`
-	CreatedAt string                   `json:"created_at"`
-	UpdatedAt string                   `json:"updated_at"`
+	HID       string        `json:"hid"`
+	UserID    string        `json:"user_id"`
+	AgentID   string        `json:"agent_id"`
+	RunID     string        `json:"run_id"`
+	Messages  []MessageItem `json:"messages"`
+	CreatedAt string        `json:"created_at"`
+	UpdatedAt string        `json:"updated_at"`
 }
 
 // ChatRepository Chat 数据存储interface（只负责 Run 相关数据）
@@ -64,8 +72,9 @@ type ChatRepository interface {
 	// GetRun getrun
 	GetRun(ctx context.Context, runID string) (*entity.Run, error)
 
-	// ListUserRuns getuserof所有run
-	ListUserRuns(ctx context.Context, userID string) ([]*entity.Run, error)
+	// ListUserRuns gets user runs created at or after `since`.
+	// Zero `since` means "no lower bound".
+	ListUserRuns(ctx context.Context, userID string, since time.Time) ([]*entity.Run, error)
 
 	// DeleteRun 删除run
 	DeleteRun(ctx context.Context, runID string) error
@@ -77,11 +86,6 @@ type A2AClient interface {
 	SendMessageStreaming(ctx context.Context, message *entity.ChatMessage, userID, runID string) (<-chan entity.StreamChunk, error)
 }
 
-// DataServicesClient defines methods for interacting with data services
-type DataServicesClient interface {
-	GetRunHistory(ctx context.Context, userID, runID string) ([]HistoryRecord, error)
-}
-
 // ChatUsecase Chat用例interface
 type ChatUsecase interface {
 	// Chat 发送Chat消息（非流式）
@@ -91,7 +95,7 @@ type ChatUsecase interface {
 	ChatStreaming(ctx context.Context, req *ChatRequest) (<-chan entity.StreamChunk, string, error)
 
 	// ListConversations 列出用户的最近会话
-	ListConversations(ctx context.Context, userID string) ([]ConversationSummary, error)
+	ListConversations(ctx context.Context, userID string, filter ConversationListFilter) ([]ConversationSummary, error)
 
 	// GetConversation 获取指定会话的历史记录
 	GetConversation(ctx context.Context, userID, runID string) (*ConversationHistory, error)

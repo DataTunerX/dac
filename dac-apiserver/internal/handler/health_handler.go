@@ -43,8 +43,8 @@ func (h *HealthHandler) Ping(ctx context.Context, c *app.RequestContext) {
 // @Description 检查服务is否就绪（包括依赖项）
 // @Tags health
 // @Produce json
-// @Success 200 {object} map[string]interface{}
-// @Failure 503 {object} map[string]interface{}
+// @Success 200 {object} map[string]any
+// @Failure 503 {object} map[string]any
 // @Router /health/ready [get]
 func (h *HealthHandler) Readiness(ctx context.Context, c *app.RequestContext) {
 	// 检查 Kubernetes 连接

@@ -10,18 +10,20 @@ import (
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
-	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 )
 
 type chatUsecase struct {
 	chatRepo  domain.ChatRepository
 	a2aClient domain.A2AClient
-	dsClient  *dataservices.Client // Inject DataServices client
+	dsClient  domain.DataServicesClient
 	logger    *slog.Logger
 }
 
 // NewChatUsecase create Chat 用例
-func NewChatUsecase(chatRepo domain.ChatRepository, a2aClient domain.A2AClient, dsClient *dataservices.Client, logger *slog.Logger) domain.ChatUsecase {
+func NewChatUsecase(chatRepo domain.ChatRepository, a2aClient domain.A2AClient, dsClient domain.DataServicesClient, logger *slog.Logger) domain.ChatUsecase {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &chatUsecase{
 		chatRepo:  chatRepo,
 		a2aClient: a2aClient,
@@ -57,6 +59,10 @@ func (u *chatUsecase) Chat(ctx context.Context, req *domain.ChatRequest) (*domai
 	for chunk := range streamCh {
 		if chunk.Error != "" {
 			return nil, fmt.Errorf("a2a error: %s", chunk.Error)
+		}
+		if chunk.Content != "" {
+			finalResponse += chunk.Content
+			continue
 		}
 		if chunk.Text != "" {
 			finalResponse += chunk.Text
@@ -111,13 +117,13 @@ func parseHistoryTime(s string) time.Time {
 }
 
 // conversationTitleFromHistory returns the first user question as title (earliest user message).
-func conversationTitleFromHistory(records []dataservices.HistoryRecord) string {
+func conversationTitleFromHistory(records []domain.HistoryRecord) string {
 	if len(records) == 0 {
 		return ""
 	}
 
 	// Ensure we pick the earliest record to approximate "first question".
-	sorted := append([]dataservices.HistoryRecord(nil), records...)
+	sorted := append([]domain.HistoryRecord(nil), records...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		ti := parseHistoryTime(sorted[i].CreatedAt)
 		tj := parseHistoryTime(sorted[j].CreatedAt)
@@ -130,12 +136,10 @@ func conversationTitleFromHistory(records []dataservices.HistoryRecord) string {
 
 	for _, record := range sorted {
 		for _, msg := range record.Messages {
-			role, _ := msg["role"].(string)
-			content, _ := msg["content"].(string)
-			if role != "user" {
+			if msg.Role != "user" {
 				continue
 			}
-			clean := strings.TrimSpace(content)
+			clean := strings.TrimSpace(msg.Content)
 			clean = strings.ReplaceAll(clean, "\n", " ")
 			clean = strings.Join(strings.Fields(clean), " ")
 			if clean == "" {
@@ -153,8 +157,17 @@ func conversationTitleFromHistory(records []dataservices.HistoryRecord) string {
 }
 
 // ListConversations 列出用户的最近会话
-func (u *chatUsecase) ListConversations(ctx context.Context, userID string) ([]domain.ConversationSummary, error) {
-	runs, err := u.chatRepo.ListUserRuns(ctx, userID)
+func (u *chatUsecase) ListConversations(
+	ctx context.Context,
+	userID string,
+	filter domain.ConversationListFilter,
+) ([]domain.ConversationSummary, error) {
+	var since time.Time
+	if filter.Days > 0 {
+		since = time.Now().AddDate(0, 0, -filter.Days)
+	}
+
+	runs, err := u.chatRepo.ListUserRuns(ctx, userID, since)
 	if err != nil {
 		return nil, err
 	}
@@ -199,23 +212,17 @@ func (u *chatUsecase) GetConversation(ctx context.Context, userID, runID string)
 		return nil, fmt.Errorf("failed to get history from data services: %w", err)
 	}
 
-	// 3. 转换格式
+	// 3. 展平消息（data-services 已返回结构化 role/content/think，直接使用）
 	var messages []domain.MessageItem
-
-	// 遍历记录并展平消息
 	for _, record := range historyRecords {
 		for _, msg := range record.Messages {
-			role, _ := msg["role"].(string)
-			content, _ := msg["content"].(string)
-			think, _ := msg["think"].(string)
-			if role == "" || content == "" {
+			if msg.Role == "" {
 				continue
 			}
-			messages = append(messages, domain.MessageItem{
-				Role:    role,
-				Content: content,
-				Think:   think,
-			})
+			if msg.Content == "" && msg.Think == "" {
+				continue
+			}
+			messages = append(messages, msg)
 		}
 	}
 

@@ -1,0 +1,17 @@
+{{- if .Values.bizRoutingAgent.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.bizRoutingAgent.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "biz-routing-agent") | nindent 4 }}
+spec:
+  type: {{ .Values.bizRoutingAgent.service.type }}
+  ports:
+    - name: grpc
+      port: {{ .Values.bizRoutingAgent.service.port }}
+      targetPort: {{ .Values.bizRoutingAgent.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "biz-routing-agent") | nindent 4 }}
+{{- end }}

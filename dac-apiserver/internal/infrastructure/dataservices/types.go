@@ -2,16 +2,25 @@ package dataservices
 
 import "fmt"
 
+// HistoryMessage matches data-services HistoryMessage (role, content, think).
+// API: data_services.api.base.HistoryMessage
+type HistoryMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	Think   string `json:"think,omitempty"`
+}
+
 // HistoryRecord matches data-services history record response.
 // (Separate from domain.HistoryRecord to keep this package self-contained.)
+// API: HistoryRecordResponse with messages as List[HistoryMessage].
 type HistoryRecord struct {
-	HID       string                   `json:"hid"`
-	UserID    string                   `json:"user_id"`
-	AgentID   string                   `json:"agent_id"`
-	RunID     string                   `json:"run_id"`
-	Messages  []map[string]interface{} `json:"messages"`
-	CreatedAt string                   `json:"created_at"`
-	UpdatedAt string                   `json:"updated_at"`
+	HID       string           `json:"hid"`
+	UserID    string           `json:"user_id"`
+	AgentID   string           `json:"agent_id"`
+	RunID     string           `json:"run_id"`
+	Messages  []HistoryMessage `json:"messages"`
+	CreatedAt string           `json:"created_at"`
+	UpdatedAt string           `json:"updated_at"`
 }
 
 // Signature matches data-services signature record response.
@@ -42,12 +51,34 @@ type SemanticDomain struct {
 
 // SemanticGroup matches data-services semantic group record response.
 type SemanticGroup struct {
-	ID          string `json:"id"`
-	GroupName   string `json:"group_name"`
-	Description string `json:"description"`
-	AgentCard   string `json:"agent_card"`
-	Version     string `json:"version"`
-	CreatedAt   string `json:"created_at"`
+	ID          string  `json:"id"`
+	GroupName   string  `json:"group_name"`
+	Description string  `json:"description"`
+	AgentCard   string  `json:"agent_card"`
+	Version     string  `json:"version"`
+	ParentID    *string `json:"parent_id,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+}
+
+// SemanticGroupMemberDetail is one member: dd_group_relation + full semantic domain (from with_members).
+type SemanticGroupMemberDetail struct {
+	Relation      DDGroupRelation `json:"relation"`
+	SemanticDomain *SemanticDomain `json:"semantic_domain"`
+}
+
+// SemanticGroupInfo is summary of a child group (from with_members child_groups).
+type SemanticGroupInfo struct {
+	ID          string  `json:"id"`
+	GroupName   string  `json:"group_name"`
+	Description string  `json:"description"`
+	AgentCard   string  `json:"agent_card"`
+}
+
+// SemanticGroupWithMembersData is the payload of GET /semantic_groups/:id/with_members.
+type SemanticGroupWithMembersData struct {
+	Group       SemanticGroup                `json:"group"`
+	Members     []SemanticGroupMemberDetail  `json:"members"`
+	ChildGroups []SemanticGroupInfo          `json:"child_groups"`
 }
 
 // DDGroupRelation matches data-services dd_group_relations response.

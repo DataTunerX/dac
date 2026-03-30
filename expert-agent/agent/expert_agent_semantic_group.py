@@ -17,7 +17,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 import uuid
 import numpy as np
-from typing import Any, AsyncIterable, Dict, Literal, List, Optional, Tuple, Union
+from typing import Any, AsyncIterable, Awaitable, Callable, Dict, Literal, List, Optional, Tuple, Union
 from uuid import uuid4
 from pydantic import BaseModel, Field
 from abc import ABC
@@ -57,6 +57,54 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+PROGRESS_SCHEMA_VERSION = "v1"
+PROGRESS_BASE_FIELDS = (
+    "schema_version",
+    "layer",
+    "event",
+    "run_id",
+    "user_id",
+    "agent_id",
+    "task_id",
+    "message",
+    "status",
+)
+PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
+    "group_members_resolved": {"agent_count", "downstream_agents"},
+    "execution_plan_ready": {
+        "phase_count",
+        "query_preview",
+        "execution_order",
+        "dependency_summary",
+        "plan_outline",
+        "phase_order_hint",
+    },
+    "phase_started": {
+        "phase",
+        "total_phases",
+        "agent_count",
+        "query_preview",
+        "parallel_agents",
+        "context_from",
+    },
+    "phase_context_ready": {
+        "phase",
+        "total_phases",
+        "context_count",
+        "query_preview",
+        "context_from",
+    },
+    "phase_finished": {
+        "phase",
+        "total_phases",
+        "ok_count",
+        "agent_count",
+        "query_preview",
+        "parallel_agents",
+    },
+    "agent_answer": {"target_agent"},
+}
 
 # System Instructions to Agent
 INSTRUCTIONS = """
@@ -194,10 +242,11 @@ class ExpertAgent(BaseAgent):
         current_tasks_status: TaskStatusList = None,
         current_task_id: int = None,
         resolve_intersection_mode: Optional[str] = None,
+        agent_id: str = "",
     ):
         logger.info('Initializing ExpertAgent')
         super().__init__(
-            agent_name='ExpertAgent',
+            agent_name=((agent_id or semantic_group_id or "ExpertAgent").strip()),
             description='answer user question using yourself knowledge.',
             content_types=['text', 'text/plain'],
         )
@@ -265,6 +314,8 @@ class ExpertAgent(BaseAgent):
         self.current_tasks_status = current_tasks_status
         self.current_task_id = current_task_id
         self.step_status_list: List[StepStatus] = []
+        # Agent identity should come from DAC instance wiring, not request metadata.
+        self.agent_id = (agent_id or semantic_group_id or "").strip()
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
@@ -307,6 +358,164 @@ class ExpertAgent(BaseAgent):
             if hasattr(chunk, 'content') and chunk.content:
                 yield {'content': chunk.content, 'is_task_complete': False}
         yield {'content': '', 'is_task_complete': True}
+
+    @staticmethod
+    def build_progress_frame(
+        event: str,
+        *,
+        message: str = "",
+        status: str = "running",
+        run_id: str = "",
+        user_id: str = "",
+        agent_id: str = "",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        allowed = PROGRESS_EXTRA_ALLOWLIST.get(event, set())
+        filtered_extra: Dict[str, Any] = {}
+        if extra and allowed:
+            filtered_extra = {k: v for k, v in extra.items() if k in allowed}
+        payload: Dict[str, Any] = {
+            "schema_version": PROGRESS_SCHEMA_VERSION,
+            "layer": "sg_expert",
+            "event": event,
+            "run_id": run_id or "",
+            "user_id": user_id or "",
+            "agent_id": agent_id or "",
+            "task_id": task_id,
+            "message": message or "",
+            "status": status or "",
+        }
+        if filtered_extra:
+            payload.update(filtered_extra)
+        return f"[[DAC_PROGRESS]] {json.dumps(payload, ensure_ascii=False)}\n"
+
+    def current_agent_label(self) -> str:
+        return (self.agent_id or self.semantic_group_id or self.agent_name or "sg_expert").strip()
+
+    @staticmethod
+    def is_progress_frame(text: str) -> bool:
+        return isinstance(text, str) and text.lstrip().startswith("[[DAC_PROGRESS]] ")
+
+    @staticmethod
+    def _truncate_progress_message(text: str, limit: int = 320) -> str:
+        raw = (text or "").replace("\n", " ").strip()
+        if len(raw) <= limit:
+            return raw
+        return raw[:limit - 3] + "..."
+
+    def _query_preview_for_progress(self, query: str, limit: int = 200) -> str:
+        """Short, single-line user query for DAC_PROGRESS (message + structured extra)."""
+        return self._truncate_progress_message(query or "", limit)
+
+    def _format_progress_plan_bundle(
+        self,
+        query: str,
+        execution_plan: List[Dict[str, Any]],
+        name_to_agent: Dict[str, Tuple[Union["SemanticDomainInfo", "SemanticGroupInfo"], "AgentCard"]],
+    ) -> Dict[str, Any]:
+        """Structured summary: phase order, dependencies, per-phase parallel agents + context_from."""
+        total = len(execution_plan)
+        qp = self._query_preview_for_progress(query)
+        phase_order = " → ".join(str(p.get("phase", "?")) for p in execution_plan)
+        dep_bits: List[str] = []
+        phase_one_liners: List[str] = []
+        for p in execution_plan:
+            pn = p.get("phase", "?")
+            agents = p.get("agents", []) or []
+            ctx = p.get("context_from", []) or []
+            ag_l = [self._agent_display_name(a, name_to_agent) for a in agents]
+            ctx_l = [self._agent_display_name(c, name_to_agent) for c in ctx]
+            agents_bit = ", ".join(ag_l) or "—"
+            if ctx_l:
+                dep_bits.append(
+                    f"phase {pn} uses outputs from earlier phase(s), agents: {', '.join(ctx_l)}"
+                )
+                phase_one_liners.append(
+                    f"phase {pn}: agents run in parallel — {agents_bit} "
+                    f"(input includes prior outputs from: {', '.join(ctx_l)})"
+                )
+            else:
+                phase_one_liners.append(
+                    f"phase {pn}: agents run in parallel — {agents_bit} "
+                    f"(input is the user query only; no prior-phase outputs)"
+                )
+
+        dep_summary = (
+            "; ".join(dep_bits)
+            if dep_bits
+            else "No dependency between phases; each phase only needs the user query."
+        )
+        plan_outline = " | ".join(phase_one_liners)
+        if total <= 1:
+            phase_order_hint = (
+                "Only phase 1 exists: the listed agents all run at the same time (in parallel)."
+            )
+        else:
+            phase_order_hint = (
+                f"Phases run strictly in order ({phase_order}): finish an earlier phase before the next starts. "
+                "Within one phase, agents always run in parallel; later phases may merge earlier phases' results."
+            )
+
+        return {
+            "query_preview": qp,
+            "phase_count": total,
+            "execution_order": phase_order,
+            "dependency_summary": self._truncate_progress_message(dep_summary, 450),
+            "plan_outline": self._truncate_progress_message(plan_outline, 900),
+            "phase_order_hint": self._truncate_progress_message(phase_order_hint, 280),
+        }
+
+    def summarize_execution_plan(
+        self,
+        execution_plan: List[Dict[str, Any]],
+        name_to_agent: Optional[Dict[str, Tuple[Union["SemanticDomainInfo", "SemanticGroupInfo"], "AgentCard"]]] = None,
+    ) -> str:
+        if not execution_plan:
+            return "no phases"
+        chunks: List[str] = []
+        for phase_info in execution_plan[:5]:
+            phase_num = phase_info.get("phase", "?")
+            agents = phase_info.get("agents", []) or []
+            ctx = phase_info.get("context_from", []) or []
+            if name_to_agent:
+                agents_display = [self._agent_display_name(a, name_to_agent) for a in agents]
+                ctx_display = [self._agent_display_name(c, name_to_agent) for c in ctx]
+            else:
+                agents_display = [str(a) for a in agents]
+                ctx_display = [str(c) for c in ctx]
+            piece = f"phase {phase_num}: agents={', '.join(agents_display) or '-'}"
+            if ctx_display:
+                piece += f"; context_from={', '.join(ctx_display)}"
+            chunks.append(self._truncate_progress_message(piece, 180))
+        if len(execution_plan) > 5:
+            chunks.append(f"... total={len(execution_plan)}")
+        return " | ".join(chunks)
+
+    async def emit_progress(
+        self,
+        event: str,
+        *,
+        message: str,
+        status: str = "running",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if os.getenv("ENABLE_SG_PROGRESS_STREAM", "true").strip().lower() in ("false", "0", "no"):
+            return
+        callback = getattr(self, "progress_callback", None)
+        if callback is None:
+            return
+        await callback(self.build_progress_frame(
+            event,
+            message=message,
+            status=status,
+            run_id=(self.metadata or {}).get("run_id", ""),
+            user_id=(self.metadata or {}).get("user_id", ""),
+            agent_id=self.current_agent_label(),
+            task_id=task_id,
+            extra=extra,
+        ))
 
     def format_llm_output(self, answer) -> dict:
         data_dict = None
@@ -882,8 +1091,29 @@ class ExpertAgent(BaseAgent):
             async for chunk in stream_response:
                 result = self._get_response_text_from_chunk(chunk)
                 if result != "":
+                    if self.is_progress_frame(result):
+                        logger.info(
+                            "[DACProgress][SG-Expert] relay progress from downstream agent=%s",
+                            getattr(agent_card, "name", "") or "(unknown)",
+                        )
+                        callback = getattr(self, "progress_callback", None)
+                        if callback is not None:
+                            await callback(result)
+                        continue
                     agent_texts.append(result)
             text = " ".join(agent_texts) if agent_texts else ""
+            # NOTE:
+            # Keep only SG Orchestrator-side final answer presentation in UI.
+            # SG Expert's duplicated "agent_answer" progress frame is intentionally disabled.
+            # if text:
+            #     target_agent_name = getattr(agent_card, "name", "") or "(unknown)"
+            #     await self.emit_progress(
+            #         "agent_answer",
+            #         message=f"Target agent [{target_agent_name}] answer:\n{text}",
+            #         status="running",
+            #         task_id=self.current_task_id,
+            #         extra={"target_agent": target_agent_name},
+            #     )
             return (sd, text)
         except Exception as e:
             logger.warning("A2A call failed for agent %s: %s", getattr(agent_card, 'url', ''), e)
@@ -1054,6 +1284,14 @@ class ExpertAgent(BaseAgent):
         )
 
         human_content = f"User Query: {self.query}\n\nAvailable Agents:\n{agent_list_str}"
+        upstream_k = (self.metadata or {}).get("upstream_prior_knowledge", "") or ""
+        upstream_k = str(upstream_k).strip()
+        if upstream_k:
+            human_content = (
+                "【来自上游编排的前序任务结果】（供分解代理与阶段执行参考；用户需求以 User Query 为准）\n"
+                f"{upstream_k}\n\n"
+                + human_content
+            )
 
         try:
             messages = [
@@ -1147,15 +1385,23 @@ class ExpertAgent(BaseAgent):
 
     def _build_send_message_payload(self, query_text: str, extra_context: str = "") -> Dict[str, Any]:
         """构建 A2A 发送消息的 payload。extra_context 通过 metadata 传递，不污染 query。"""
+        upstream_metadata = self.metadata if isinstance(self.metadata, dict) else {}
         metadata: Dict[str, Any] = {
-            'user_id': self.metadata.get('user_id', ''),
-            'agent_id': self.metadata.get('agent_id', ''),
-            'run_id': self.metadata.get('run_id', ''),
-            'trace_id': self.metadata.get('trace_id', ''),
+            'user_id': upstream_metadata.get('user_id', ''),
+            'run_id': upstream_metadata.get('run_id', ''),
+            'trace_id': upstream_metadata.get('trace_id', ''),
             'answer_model': 'original',
         }
+        if upstream_metadata.get('propagated_history'):
+            metadata['propagated_history'] = upstream_metadata.get('propagated_history')
         if extra_context:
             metadata['extra_context'] = extra_context
+        logger.debug(
+            "[SGExpert] downstream metadata ready: user_id=%s run_id=%s extra_context_len=%d",
+            metadata.get('user_id', ''),
+            metadata.get('run_id', ''),
+            len(extra_context or ""),
+        )
         return {
             'message': {
                 'role': 'user',
@@ -1220,15 +1466,40 @@ class ExpertAgent(BaseAgent):
             return ""
 
         query = self.query
+        self._upstream_prior_block = str(
+            (self.metadata or {}).get("upstream_prior_knowledge", "") or ""
+        ).strip()
         name_to_agent = self._build_name_to_agent_map()
 
         logger.info("[SemanticGroup] get_knowledge 开始 | 组内 agent 数: %d", len(self.group_agent_cards))
 
         # ===== Step 1: LLM 驱动的执行规划 =====
         execution_plan = await self._plan_execution_order()
+        plan_meta = self._format_progress_plan_bundle(query, execution_plan, name_to_agent)
+        # Spell out "phase N" (not P1); avoid "wave" — use plain execution-phase wording.
+        plan_msg = (
+            f"query: {plan_meta['query_preview']} | "
+            f"{plan_meta['phase_count']} execution phase(s), phase order: {plan_meta['execution_order']} | "
+            f"{plan_meta['plan_outline']} | "
+            f"Note: {plan_meta['phase_order_hint']}"
+        )
+        await self.emit_progress(
+            "execution_plan_ready",
+            message=self._truncate_progress_message(plan_msg, 1200),
+            status="done",
+            extra={
+                "phase_count": plan_meta["phase_count"],
+                "query_preview": plan_meta["query_preview"],
+                "execution_order": plan_meta["execution_order"],
+                "dependency_summary": plan_meta["dependency_summary"],
+                "plan_outline": plan_meta["plan_outline"],
+                "phase_order_hint": plan_meta["phase_order_hint"],
+            },
+        )
 
         # ===== Step 2: 按阶段执行 =====
         logger.info("[SemanticGroup] 按计划执行，共 %d 阶段", len(execution_plan))
+        total_phases = len(execution_plan)
         all_knowledge_parts: List[str] = []
         # 存储每个 agent 的格式化结果（与 _format_agent_results 输出的 block 一致），
         # 供后续阶段的 context_from 选择性传递使用
@@ -1241,9 +1512,36 @@ class ExpertAgent(BaseAgent):
                 phase_num = phase_info.get("phase", 1)
                 phase_agent_names = phase_info.get("agents", [])
                 context_from_names = phase_info.get("context_from", [])
-
                 agents_display = [self._agent_display_name(a, name_to_agent) for a in phase_agent_names]
                 ctx_display = [self._agent_display_name(c, name_to_agent) for c in context_from_names] if context_from_names else []
+                qp = self._query_preview_for_progress(query)
+                agents_joined = ", ".join(agents_display) or "-"
+                ctx_joined = ", ".join(ctx_display) if ctx_display else ""
+                n_parallel = len(phase_agent_names)
+                n_ctx = len(context_from_names) if context_from_names else 0
+                phase_start_msg = (
+                    f"step {phase_num}/{total_phases} START | "
+                    f"query: {qp} | "
+                    f"{n_parallel} parallel agent(s) in this phase"
+                    + (
+                        f" | upstream context from {n_ctx} source(s)"
+                        if n_ctx
+                        else " | no upstream context (user query only)"
+                    )
+                )
+                await self.emit_progress(
+                    "phase_started",
+                    message=self._truncate_progress_message(phase_start_msg, 560),
+                    status="running",
+                    extra={
+                        "phase": phase_num,
+                        "total_phases": total_phases,
+                        "agent_count": len(phase_agent_names),
+                        "query_preview": qp,
+                        "parallel_agents": self._truncate_progress_message(agents_joined, 500),
+                        "context_from": self._truncate_progress_message(ctx_joined, 500) if ctx_joined else "",
+                    },
+                )
                 if ctx_display:
                     logger.info("[Phase %s] 执行: %s | 上下文来自: %s", phase_num, ", ".join(agents_display), ", ".join(ctx_display))
                 else:
@@ -1273,16 +1571,61 @@ class ExpertAgent(BaseAgent):
                                 context_parts.append(agent_results_by_name[k])
                                 break
 
+                # extra_context 顺序：上游 prior（metadata.upstream_prior_knowledge）固定在最前，
+                # 再衔接本组内 context_from 的前序 phase 结果（若有）。
+                upstream_blk = (getattr(self, "_upstream_prior_block", "") or "").strip()
+                in_group_ctx = "\n\n".join(context_parts) if context_parts else ""
                 extra_context = ""
-                if context_parts:
-                    extra_context = "\n\n".join(context_parts)
-                    ctx_summary = ", ".join(
-                        f"{self._agent_display_name(n, name_to_agent)}({len(c)}字)"
-                        for n, c in zip(context_from_names, context_parts)
+                if upstream_blk and in_group_ctx:
+                    extra_context = (
+                        f"{upstream_blk}\n\n"
+                        "---\n"
+                        "组内 context_from（本语义组前序阶段）\n"
+                        "---\n\n"
+                        f"{in_group_ctx}"
+                    ).strip()
+                elif upstream_blk:
+                    extra_context = upstream_blk
+                elif in_group_ctx:
+                    extra_context = in_group_ctx
+
+                if extra_context:
+                    if context_parts:
+                        ctx_summary = ", ".join(
+                            f"{self._agent_display_name(n, name_to_agent)}({len(c)}字)"
+                            for n, c in zip(context_from_names, context_parts)
+                        )
+                        if upstream_blk:
+                            ctx_summary = f"upstream_prior + {ctx_summary}"
+                    else:
+                        ctx_summary = "upstream_prior_knowledge" if upstream_blk else "(context)"
+                    logger.info(
+                        "[Phase %s] extra_context: %d 字 | 来源: %s",
+                        phase_num,
+                        len(extra_context),
+                        ctx_summary,
                     )
-                    logger.info("[Phase %s] extra_context: %d 字 | 来源: %s", phase_num, len(extra_context), ctx_summary)
-                    _preview = extra_context[:400].replace("\n", " ").strip() + ("..." if len(extra_context) > 400 else "")
+                    _preview = extra_context[:400].replace("\n", " ").strip() + (
+                        "..." if len(extra_context) > 400 else ""
+                    )
                     logger.info("[Phase %s] extra_context 预览: %s", phase_num, _preview)
+                    ctx_ready_msg = (
+                        f"step {phase_num}/{total_phases} | "
+                        f"query: {qp} | "
+                        f"context assembled for this phase ({len(ctx_display)} in-group source(s))"
+                    )
+                    await self.emit_progress(
+                        "phase_context_ready",
+                        message=self._truncate_progress_message(ctx_ready_msg, 520),
+                        status="running",
+                        extra={
+                            "phase": phase_num,
+                            "total_phases": total_phases,
+                            "context_count": len(context_parts),
+                            "query_preview": qp,
+                            "context_from": self._truncate_progress_message(", ".join(ctx_display), 500),
+                        },
+                    )
                 elif context_from_names:
                     logger.info("[Phase %s] context_from 未找到有效结果，不传递 extra_context", phase_num)
 
@@ -1309,10 +1652,34 @@ class ExpertAgent(BaseAgent):
 
                 ok_count = sum(1 for (_, t) in results if t)
                 logger.info("[Phase %s] 完成: %d/%d 有内容", phase_num, ok_count, len(results))
+                phase_done_msg = (
+                    f"step {phase_num}/{total_phases} DONE | "
+                    f"query: {qp} | "
+                    f"results: {ok_count}/{len(results)} agent(s) with content"
+                )
+                await self.emit_progress(
+                    "phase_finished",
+                    message=self._truncate_progress_message(phase_done_msg, 560),
+                    status="done",
+                    extra={
+                        "phase": phase_num,
+                        "total_phases": total_phases,
+                        "ok_count": ok_count,
+                        "agent_count": len(results),
+                        "query_preview": qp,
+                        "parallel_agents": self._truncate_progress_message(agents_joined, 500),
+                    },
+                )
                 global_idx += len(phase_agents)
 
         logger.info("[SemanticGroup] get_knowledge 完成 | 总知识块数: %d", len(all_knowledge_parts))
-        return "\n\n".join(all_knowledge_parts) if all_knowledge_parts else ""
+        out = "\n\n".join(all_knowledge_parts) if all_knowledge_parts else ""
+        ## do not append upstream prior task answer in the knowledge which is from sd members of sg expert.
+        # ub = (getattr(self, "_upstream_prior_block", "") or "").strip()
+        # if ub:
+        #     sep = "\n\n================\n\n"
+        #     out = f"{ub}{sep}{out}".strip() if out else ub
+        return out
 
     def custom_json_serializer(self, obj):
 
@@ -1524,28 +1891,6 @@ class ExpertAgent(BaseAgent):
     async def run(self) -> AsyncIterable[str]:
         """Run the agent with streaming support."""
 
-        # 在 orchestrate.py 文件的第 613-631 行：
-        # send_message_payload: dict[str, Any] = {
-        #     'message': {
-        #         'role': 'user',
-        #         'parts': [
-        #             {'type': 'text', 'text': query}
-        #         ],
-        #         'messageId': uuid4().hex,
-        #     },
-        #     'metadata': {
-        #         'user_id': self.metadata['user_id'],
-        #         'agent_id': self.metadata['agent_id'],
-        #         'run_id': self.metadata['run_id'],
-        #         'trace_id': self.metadata['trace_id'],
-        #         'memory': memory,
-        #         'current_tasks_status': current_tasks_status,
-        #         'current_task': f"current task id: [{task_id}], task description: {query} ",
-        #         'current_task_id': f"{task_id}",
-        #     },
-        # }
-
-
         logger.debug(f"************** agent run, query: {self.query} **************")
         if self.state != AgentState.IDLE:
             raise RuntimeError(f"Cannot run agent from state: {self.state}")
@@ -1556,6 +1901,20 @@ class ExpertAgent(BaseAgent):
         # Resolve semantic group members -> agent registry for A2A (get_knowledge will use group_agent_cards)
         if self.semantic_group_id:
             await self.resolve_agents_for_semantic_group()
+            downstream_agents = [
+                getattr(ac, "name", "") or str(getattr(member, "group_name", "") or getattr(member, "dd_name", "") or "")
+                for member, ac in self.group_agent_cards[:5]
+            ]
+            downstream_list = [x for x in downstream_agents if x]
+            await self.emit_progress(
+                "group_members_resolved",
+                message=f"discovered {len(self.group_agent_cards)} downstream agent(s)",
+                status="done",
+                extra={
+                    "agent_count": len(self.group_agent_cards),
+                    "downstream_agents": downstream_list,
+                },
+            )
 
         async with self.state_context(AgentState.RUNNING):
             while (
@@ -1602,6 +1961,7 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
         stream: bool = True,
         temperature: float = 0.01,
         semantic_group_id:str = None,
+        agent_id: str = None,
         data_services_url: str = None,
         max_steps:int = 5
 
@@ -1613,6 +1973,7 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
         self.stream=stream
         self.temperature=temperature
         self.semantic_group_id=semantic_group_id
+        self.agent_id = agent_id
         self.data_services_url=data_services_url
         self.stream_enabled = stream
         self.max_steps = max_steps
@@ -1627,6 +1988,19 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
 
         metadata = context.metadata
         logger.info(f"=====user request metadata is {metadata}.")
+        _upk = (metadata or {}).get("upstream_prior_knowledge") if isinstance(metadata, dict) else None
+        _upk_s = str(_upk or "").strip()
+        if _upk_s:
+            logger.info(
+                "[Execute][SemanticGroupExpert] upstream_prior_knowledge (%d chars):\n%s",
+                len(_upk_s),
+                _upk_s,
+            )
+        else:
+            logger.info(
+                "[Execute][SemanticGroupExpert] upstream_prior_knowledge: (absent or empty) raw=%r",
+                _upk,
+            )
 
         current_tasks_status = None
         current_tasks_status_str = metadata.get('current_tasks_status', '')
@@ -1654,7 +2028,8 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
             metadata=metadata,
             max_steps=self.max_steps,
             current_tasks_status=current_tasks_status,
-            current_task_id=current_task_id
+            current_task_id=current_task_id,
+            agent_id=self.agent_id or self.semantic_group_id,
         )
 
         task = context.current_task
@@ -1665,6 +2040,13 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
         updater = TaskUpdater(event_queue, task.id, task.context_id)
 
         try:
+            async def _progress_callback(text: str) -> None:
+                await updater.add_artifact(
+                    [TextPart(text=text)],
+                    name=f'{agent.agent_name}-result',
+                )
+
+            agent.progress_callback = _progress_callback
             if self.stream_enabled:
                 async for chunk in agent.run():
                     if chunk:

@@ -646,6 +646,53 @@ class DataServicesClient:
                     detail=error_msg
                 )
 
+    async def get_semantic_group_with_members(self, group_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get semantic group by id with member semantic domains and child groups.
+        Returns dict with group, members, child_groups; or None if not found.
+        """
+        url = f"{self.base_url}/semantic_groups/{group_id}/with_members"
+        logger.info(
+            "[DataServices] get_semantic_group_with_members: url=%s, group_id=%s",
+            url, group_id,
+        )
+        try:
+            await self._create_session()
+            async with self.session.get(url) as response:
+                body = await response.text()
+                if response.status != 200:
+                    logger.warning(
+                        "[DataServices] get_semantic_group_with_members HTTP %s, body(first 500)=%s",
+                        response.status, body[:500] if body else "",
+                    )
+                    return None
+                try:
+                    data = json.loads(body)
+                except json.JSONDecodeError as e:
+                    logger.error("[DataServices] get_semantic_group_with_members JSON parse error: %s", e)
+                    return None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.error("[DataServices] get_semantic_group_with_members request error: %s", e)
+            return None
+        if data.get("status") != "success":
+            logger.warning(
+                "[DataServices] get_semantic_group_with_members status=%s (expected success)",
+                data.get("status"),
+            )
+            return None
+        inner = data.get("data")
+        if not inner:
+            logger.warning("[DataServices] get_semantic_group_with_members data is empty")
+            return None
+        child_groups = inner.get("child_groups")
+        child_count = len(child_groups) if isinstance(child_groups, list) else "N/A"
+        logger.info(
+            "[DataServices] get_semantic_group_with_members: keys=%s, child_groups_count=%s",
+            list(inner.keys()) if isinstance(inner, dict) else "?",
+            child_count,
+        )
+        return inner
+
     def parse_memory_search_results(self, response: MemorySearchResponse) -> List[MemorySearchResultItem]:
         """
         Parse memory search results
@@ -701,9 +748,29 @@ class DataServicesClient:
             "run_id": request.run_id,
             "messages": [{"role": msg.role, "content": msg.content, "think": msg.think} for msg in request.messages]
         }
-        
+
+        msg_count = len(payload.get("messages") or [])
+        content_lengths = [
+            len(str(m.get("content") or "")) for m in (payload.get("messages") or []) if isinstance(m, dict)
+        ]
+        content_preview = []
+        for m in (payload.get("messages") or []):
+            if not isinstance(m, dict):
+                continue
+            preview = str(m.get("content") or "").replace("\n", " ")[:160]
+            content_preview.append({"role": m.get("role"), "preview": preview})
+
         logger.info(f"Create history record request URL: {url}")
-        logger.info(f"Create history record request parameters: {payload}")
+        logger.info(
+            "Create history record request summary: user_id=%s agent_id=%s run_id=%s messages=%d content_lengths=%s preview=%s",
+            payload.get("user_id", ""),
+            payload.get("agent_id", ""),
+            payload.get("run_id", ""),
+            msg_count,
+            content_lengths,
+            content_preview,
+        )
+        logger.debug(f"Create history record request parameters: {payload}")
 
         try:
             await self._create_session()

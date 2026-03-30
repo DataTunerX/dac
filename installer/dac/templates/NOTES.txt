@@ -1,0 +1,86 @@
+============================================================
+  DAC (Data Agent Container) has been installed!
+============================================================
+
+Release:   {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+------------------------------------------------------------
+  Core Services
+------------------------------------------------------------
+{{- if .Values.apiserver.enabled }}
+  API Server:     {{ include "dac.componentName" (dict "context" . "name" "dac-apiserver") }}:{{ .Values.apiserver.service.port }}
+{{- end }}
+{{- if .Values.frontend.enabled }}
+  Frontend:       {{ include "dac.componentName" (dict "context" . "name" "frontend") }}:{{ .Values.frontend.service.port }}
+{{- end }}
+{{- if .Values.dataServices.enabled }}
+  Data Services:  {{ include "dac.dataServices.serviceName" . }}:{{ .Values.dataServices.service.port }}
+{{- end }}
+{{- if .Values.executionEngine.enabled }}
+  Execution Engine (Operator): {{ include "dac.componentName" (dict "context" . "name" "execution-engine") }}
+{{- end }}
+
+------------------------------------------------------------
+  Middleware
+------------------------------------------------------------
+{{- if .Values.mysql.enabled }}
+  MySQL:    {{ include "dac.mysql.serviceName" . }}:{{ .Values.mysql.port }}
+{{- end }}
+{{- if .Values.redis.enabled }}
+  Redis:    {{ include "dac.redis.serviceName" . }}:{{ .Values.redis.port }}
+{{- end }}
+{{- if .Values.pgvector.enabled }}
+  PGVector: {{ include "dac.pgvector.serviceName" . }}:{{ .Values.pgvector.port }}
+{{- end }}
+
+------------------------------------------------------------
+  CRDs Installed
+------------------------------------------------------------
+  - dataagentcontainers.dac.dac.io  (DataAgentContainer)
+  - datadescriptors.dac.dac.io      (DataDescriptor)
+
+  The execution-engine operator watches these CRDs and
+  dynamically creates orchestrator-agent, expert-agent,
+  code-agent, doc-agent and data-sinkers-job Jobs.
+
+------------------------------------------------------------
+  Next Steps: Create DataDescriptor / DataAgentContainer
+------------------------------------------------------------
+  After install, create a DataDescriptor CR to connect your
+  data sources, then create a DataAgentContainer CR to spin
+  up an agent:
+
+    kubectl apply -f your-data-descriptor.yaml -n {{ .Release.Namespace }}
+    kubectl apply -f your-data-agent-container.yaml -n {{ .Release.Namespace }}
+
+  See execution-engine/config/samples/ for examples.
+
+------------------------------------------------------------
+  Access the Frontend
+------------------------------------------------------------
+{{- if and .Values.frontend.ingress.enabled .Values.frontend.ingress.hosts }}
+  Ingress is enabled. Access via:
+  {{- range .Values.frontend.ingress.hosts }}
+    http{{ if $.Values.frontend.ingress.tls }}s{{ end }}://{{ .host }}
+  {{- end }}
+{{- else if eq .Values.frontend.service.type "NodePort" }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "dac.componentName" (dict "context" . "name" "frontend") }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "Frontend URL: http://$NODE_IP:$NODE_PORT"
+{{- else if eq .Values.frontend.service.type "ClusterIP" }}
+  kubectl port-forward --namespace {{ .Release.Namespace }} svc/{{ include "dac.componentName" (dict "context" . "name" "frontend") }} {{ .Values.frontend.service.port }}:{{ .Values.frontend.service.port }}
+  echo "Frontend URL: http://127.0.0.1:{{ .Values.frontend.service.port }}"
+{{- end }}
+
+------------------------------------------------------------
+  IMPORTANT: Update the following before production use
+------------------------------------------------------------
+  1. Replace global.llm.apiKey (sk-xxx) with your LLM provider API key
+  2. Replace global.embedding.apiKey (sk-xxx) with your embedding API key
+  3. Replace executionEngine.llmConfigs[].apiKey (sk-xxx) for operator-managed agents
+  4. Change mysql.rootPassword, redis.password, pgvector.password
+  5. Change apiserver.config.jwt.secret
+  6. Configure proper storage classes for persistence
+
+============================================================

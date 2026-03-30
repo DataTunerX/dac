@@ -1,0 +1,91 @@
+{{- if .Values.apiserver.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "dac-apiserver-config") }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "dac-apiserver") | nindent 4 }}
+data:
+  config.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: {{ .Values.apiserver.service.targetPort }}
+      mode: {{ .Values.apiserver.config.server.mode | quote }}
+      read_timeout: {{ .Values.apiserver.config.server.readTimeout }}
+      write_timeout: {{ .Values.apiserver.config.server.writeTimeout }}
+      max_request_body_size: {{ .Values.apiserver.config.server.maxRequestBodySize | int64 }}
+
+    log:
+      level: {{ .Values.apiserver.config.log.level | quote }}
+      format: {{ .Values.apiserver.config.log.format | quote }}
+      output: "stdout"
+      add_source: false
+
+    observability:
+      enable_metrics: {{ .Values.apiserver.config.observability.enableMetrics }}
+      metrics_port: {{ .Values.apiserver.service.metricsPort }}
+      enable_tracing: {{ .Values.apiserver.config.observability.enableTracing }}
+      tracing_endpoint: ""
+
+    jwt:
+      secret: {{ .Values.apiserver.config.jwt.secret | quote }}
+
+    routing_agent:
+      base_url: "http://{{ include "dac.bizRoutingAgent.serviceName" . }}:{{ .Values.bizRoutingAgent.service.port }}"
+      timeout: {{ .Values.apiserver.config.routingAgent.timeout }}
+      session_timeout: {{ .Values.apiserver.config.routingAgent.sessionTimeout }}
+
+    data_services:
+      base_url: {{ include "dac.dataServices.url" . | quote }}
+
+    database:
+      driver: "mysql"
+      host: {{ include "dac.mysql.serviceName" . | quote }}
+      port: {{ .Values.mysql.port }}
+      user: {{ .Values.apiserver.config.database.user | quote }}
+      password: {{ .Values.mysql.rootPassword | quote }}
+      database: {{ .Values.apiserver.config.database.database | quote }}
+      max_open_conns: {{ .Values.apiserver.config.database.maxOpenConns }}
+      max_idle_conns: {{ .Values.apiserver.config.database.maxIdleConns }}
+      conn_max_lifetime: {{ .Values.apiserver.config.database.connMaxLifetime }}
+
+  model.conf: |
+    [request_definition]
+    r = sub, obj, act
+
+    [policy_definition]
+    p = sub, obj, act
+
+    [role_definition]
+    g = _, _
+
+    [policy_effect]
+    e = some(where (p.eft == allow))
+
+    [matchers]
+    m = g(r.sub, p.sub) && keyMatch2(r.obj, p.obj) && (p.act == "*" || r.act == p.act)
+
+  policy.csv: |
+    p, admin, *, *
+    p, user, /api/v1/users/me, GET
+    p, user, /api/v1/chat/conversations, GET
+    p, user, /api/v1/chat/conversations/*, GET
+    p, user, /api/v1/agents, GET
+    p, user, /api/v1/descriptors, GET
+    p, user, /api/v1/namespaces, GET
+    p, user, /api/v1/namespaces/*/agents, GET
+    p, user, /api/v1/namespaces/*/agents/*, GET
+    p, user, /api/v1/namespaces/*/descriptors, GET
+    p, user, /api/v1/namespaces/*/descriptors/*, GET
+    p, user, /api/v1/namespaces/*/configmaps, GET
+    p, user, /api/v1/namespaces/*/configmaps/*, GET
+    p, user, /api/v1/semantic-groups, GET
+    p, user, /api/v1/semantic-groups/*, GET
+    p, user, /api/v1/discovery/scans, GET
+    p, user, /api/v1/discovery/scans/*, GET
+    p, user, /api/v1/knowledge-graph/*, POST
+    p, user, /v1/chat/completions, POST
+
+    g, admin, admin
+    g, user, user
+{{- end }}

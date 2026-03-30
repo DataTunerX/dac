@@ -3,6 +3,41 @@ import remarkGfm from "remark-gfm"
 
 type Components = Parameters<typeof ReactMarkdown>[0]["components"]
 
+/**
+ * Convert JSON-style escape sequences (literal \n, \t, etc.) into real characters.
+ * Use when content comes from API/DB as a string with escaped newlines (e.g. "line1\\n\\nline2").
+ */
+function unescapeJsonLike(input: string): string {
+  if (!input || typeof input !== "string") return input
+  return input
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\")
+}
+
+/** Collapse 4+ consecutive newlines to 2, so parsing doesn't produce huge gaps. */
+function normalizeExcessiveNewlines(input: string): string {
+  return (input || "").replace(/\n{4,}/g, "\n\n\n")
+}
+
+/**
+ * Balance unclosed code fences (```). Model output often omits the closing ```.
+ * Count line-starting ``` (optional language/tip); if odd, append a closing ```.
+ * Does not touch content inside code blocks.
+ */
+function normalizeCodeFences(input: string): string {
+  const text = input || ""
+  const lines = text.split("\n")
+  let count = 0
+  for (const line of lines) {
+    if (/^\s*```\s*[\w-]*\s*$/.test(line)) count++
+  }
+  if (count % 2 === 0) return text
+  return text.trimEnd() + "\n\n```\n"
+}
+
 function normalizeModelTablesListToGfmTable(input: string) {
   // Some model outputs describe "Tables:" as a numbered list instead of a GFM table, e.g.:
   //   Tables:
@@ -124,7 +159,7 @@ function normalizeBrokenSingleLineGfmTable(line: string) {
 
   // Insert newlines at likely row boundaries.
   // Only split when the next token looks like a new row start (separator row `:---` or text).
-  table = table.replace(/\|\s*\|\s*(?=:[-]{3}|[A-Za-z\u4e00-\u9fff])/g, "|\n| ")
+  table = table.replace(/\|\s*\|\s*(?=:[-]{3}|\S)/g, "|\n| ")
 
   // Normalize each line to start with a pipe.
   table = table
@@ -166,41 +201,56 @@ export function normalizeMarkdownTables(input: string) {
   return normalizeGfmTables(fixed)
 }
 
+/**
+ * Run all built-in normalizers: unescape \\n etc. → excessive newlines → code fences → tables.
+ * Safe to use for model/LLM output and for strings from API/DB with escaped newlines.
+ */
+export function normalizeMarkdown(input: string) {
+  const step0 = unescapeJsonLike(input || "")
+  const step1 = normalizeExcessiveNewlines(step0)
+  const step2 = normalizeCodeFences(step1)
+  return normalizeMarkdownTables(step2)
+}
+
 // Recommended dashboard-readable baseline:
 // - body: 14px (text-sm) with 24px line-height (leading-6)
 // - subtle spacing between blocks
 export const defaultMarkdownComponents: Components = {
-  p: (props) => <p className="text-sm text-slate-700 leading-6 mb-2 last:mb-0" {...props} />,
-  a: (props) => <a className="text-blue-600 hover:underline" target="_blank" {...props} />,
+  p: (props) => <p className="text-sm text-content leading-6 mb-2 last:mb-0" {...props} />,
+  a: (props) => <a className="text-cta hover:underline cursor-pointer" target="_blank" rel="noopener noreferrer" {...props} />,
   code: (props) => (
-    <code className="bg-slate-100 rounded px-1 py-0.5 font-mono text-[12px] text-slate-700" {...props} />
+    <code className="bg-surface-muted rounded px-1 py-0.5 font-mono text-[12px] text-content" {...props} />
   ),
-  ul: (props) => <ul className="text-sm text-slate-700 leading-6 list-disc pl-5 space-y-1 my-2" {...props} />,
-  ol: (props) => <ol className="text-sm text-slate-700 leading-6 list-decimal pl-5 space-y-1 my-2" {...props} />,
-  li: (props) => <li className="pl-1 marker:text-slate-400" {...props} />,
-  strong: (props) => <strong className="font-semibold text-slate-900" {...props} />,
-  em: (props) => <em className="italic text-slate-700" {...props} />,
-  del: (props) => <del className="line-through text-slate-400" {...props} />,
+  ul: (props) => <ul className="text-sm text-content leading-6 list-disc pl-5 space-y-1 my-2" {...props} />,
+  ol: (props) => <ol className="text-sm text-content leading-6 list-decimal pl-5 space-y-1 my-2" {...props} />,
+  li: (props) => <li className="pl-1 marker:text-content-muted" {...props} />,
+  strong: (props) => <strong className="font-semibold text-content" {...props} />,
+  em: (props) => <em className="italic text-content" {...props} />,
+  del: (props) => <del className="line-through text-content-muted" {...props} />,
   blockquote: (props) => (
-    <blockquote className="border-l-4 border-slate-200 pl-4 py-2 my-3 italic text-sm text-slate-600 bg-slate-50 rounded-r" {...props} />
+    <blockquote className="border-l-4 border-line pl-4 py-2 my-3 italic text-sm text-content bg-surface-muted rounded-r" {...props} />
   ),
-  hr: (props) => <hr className="my-6 border-slate-100" {...props} />,
+  hr: (props) => <hr className="my-6 border-line" {...props} />,
   table: (props) => (
-    <div className="my-4 w-full overflow-x-auto">
+    <div className="my-4 w-full overflow-x-auto rounded-lg border border-line bg-surface shadow-sm">
       <table className="w-full min-w-full text-sm text-left border-collapse" {...props} />
     </div>
   ),
-  thead: (props) => <thead className="bg-slate-50 text-slate-500 font-medium" {...props} />,
-  tbody: (props) => <tbody className="divide-y divide-slate-100 border-t border-slate-100" {...props} />,
-  tr: (props) => <tr className="transition-colors hover:bg-slate-50/50" {...props} />,
-  th: (props) => <th className="py-3 px-4 font-semibold text-slate-700 whitespace-nowrap" {...props} />,
-  td: (props) => <td className="py-3 px-4 text-slate-600 align-top" {...props} />,
-  h1: (props) => <h1 className="text-xl font-semibold text-slate-900 mt-6 mb-3" {...props} />,
-  h2: (props) => <h2 className="text-lg font-semibold text-slate-900 mt-5 mb-2.5" {...props} />,
-  h3: (props) => <h3 className="text-base font-semibold text-slate-900 mt-4 mb-2" {...props} />,
-  h4: (props) => <h4 className="text-sm font-semibold text-slate-900 mt-3 mb-2" {...props} />,
-  h5: (props) => <h5 className="text-sm font-semibold text-slate-700 mt-3 mb-2" {...props} />,
-  h6: (props) => <h6 className="text-sm font-semibold text-slate-600 mt-3 mb-2" {...props} />,
+  thead: (props) => <thead className="bg-surface-muted text-content font-medium" {...props} />,
+  tbody: (props) => (
+    <tbody className="bg-surface [&>tr]:border-b [&>tr]:border-line last:[&>tr]:border-b-0" {...props} />
+  ),
+  tr: (props) => <tr className="transition-colors hover:bg-surface-muted/50" {...props} />,
+  th: (props) => (
+    <th className="py-3 px-4 font-semibold text-content border-b border-line whitespace-nowrap" {...props} />
+  ),
+  td: (props) => <td className="py-3 px-4 text-content align-top border-b border-line" {...props} />,
+  h1: (props) => <h1 className="text-xl font-semibold text-content mt-6 mb-3" {...props} />,
+  h2: (props) => <h2 className="text-lg font-semibold text-content mt-5 mb-2.5" {...props} />,
+  h3: (props) => <h3 className="text-base font-semibold text-content mt-4 mb-2" {...props} />,
+  h4: (props) => <h4 className="text-sm font-semibold text-content mt-3 mb-2" {...props} />,
+  h5: (props) => <h5 className="text-sm font-semibold text-content mt-3 mb-2" {...props} />,
+  h6: (props) => <h6 className="text-sm font-semibold text-content mt-3 mb-2" {...props} />,
 }
 
 export function Markdown({
@@ -212,7 +262,7 @@ export function Markdown({
   normalizeTables?: boolean
   components?: Components
 }) {
-  const content = normalizeTables ? normalizeMarkdownTables(children) : children
+  const content = normalizeTables ? normalizeMarkdown(children) : children
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={components || defaultMarkdownComponents}>
       {content}

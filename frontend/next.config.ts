@@ -3,7 +3,13 @@ import type { NextConfig } from "next"
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   output: "standalone",
+  experimental: {
+    optimizePackageImports: ["lucide-react"],
+  },
   async rewrites() {
+    // Production (Docker): nginx proxies `/api/v1/*` and `/v1/*` before traffic hits Next.js,
+    // so these rewrites are inactive in the container. They apply for `next dev` / local runs
+    // without nginx.
     // Proxy frontend -> backend, so browser always calls same-origin `/api/v1/*`.
     // Configure in `.env.local`:
     //   BACKEND_URL=http://10.17.0.41:31580

@@ -74,6 +74,32 @@ func (h *SemanticGroupHandler) Get(ctx context.Context, c *app.RequestContext) {
 	SuccessResponse(c, dto.ToSemanticGroupResponse(g))
 }
 
+func (h *SemanticGroupHandler) GetWithMembers(ctx context.Context, c *app.RequestContext) {
+	id := c.Param("id")
+	w, err := h.usecase.GetWithMembers(ctx, id)
+	if err != nil {
+		ErrorResponse(c, err)
+		return
+	}
+	SuccessResponse(c, dto.ToSemanticGroupWithMembersResponse(w))
+}
+
+func (h *SemanticGroupHandler) ListRoots(ctx context.Context, c *app.RequestContext) {
+	items, total, err := h.usecase.ListRoots(ctx)
+	if err != nil {
+		ErrorResponse(c, err)
+		return
+	}
+	out := make([]*dto.SemanticGroupResponse, 0, len(items))
+	for i := range items {
+		out = append(out, dto.ToSemanticGroupResponse(&items[i]))
+	}
+	SuccessResponse(c, map[string]any{
+		"items":      out,
+		"totalCount": total,
+	})
+}
+
 func (h *SemanticGroupHandler) List(ctx context.Context, c *app.RequestContext) {
 	lo := parseLimitOffset(c, 50, 200)
 	items, total, err := h.usecase.List(ctx, lo.Limit, lo.Offset)
