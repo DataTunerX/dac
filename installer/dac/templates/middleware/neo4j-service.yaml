@@ -1,0 +1,20 @@
+{{- if .Values.neo4j.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.neo4j.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "neo4j") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: http
+      port: {{ .Values.neo4j.httpPort }}
+      targetPort: 7474
+    - name: bolt
+      port: {{ .Values.neo4j.boltPort }}
+      targetPort: 7687
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "neo4j") | nindent 4 }}
+{{- end }}

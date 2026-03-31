@@ -79,7 +79,7 @@ Namespace: {{ .Release.Namespace }}
   1. Replace global.llm.apiKey (sk-xxx) with your LLM provider API key
   2. Replace global.embedding.apiKey (sk-xxx) with your embedding API key
   3. Replace executionEngine.llmConfigs[].apiKey (sk-xxx) for operator-managed agents
-  4. Change mysql.rootPassword, redis.password, pgvector.password
+  4. Change mysql.rootPassword, redis.password, pgvector.password, neo4j.password
   5. Change apiserver.config.jwt.secret
   6. Configure proper storage classes for persistence
 

@@ -114,6 +114,8 @@ spec:
           value: "0.01"
         - name: CELERY_WORKER_AMOUNT
           value: "2"
+        - name: HIERARCHY_MERGE_DEBOUNCE_SECONDS
+          value: '60'
         resources:
           limits:
             cpu: 1000m

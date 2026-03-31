@@ -284,9 +284,9 @@ spec:
 
         # Gitea (SQLite)
         - name: gitea
-          # Build & push this image in your CI/registry, with ZEYSI_REPO_URL baked in:
+          # Build & push this image in your CI/registry, with SOURCE_REPO_URL baked in:
           #   docker build -t <YOUR_REGISTRY>/dac/sandbox-gitea:seed \
-          #     --build-arg ZEYSI_REPO_URL=<git-url> --build-arg ZEYSI_REPO_REF=main \
+          #     --build-arg SOURCE_REPO_URL=<git-url> --build-arg SOURCE_REPO_REF=main \
           #     -f sandbox/apps/gitea/Dockerfile sandbox/apps/gitea
           image: release.daocloud.io/dac/sandbox-gitea:seed
           imagePullPolicy: Always
@@ -306,7 +306,7 @@ spec:
             - name: GITEA_ADMIN_EMAIL
               value: admin@example.com
             - name: GITEA_REPO_NAME
-              value: zeysi-apiserver
+              value: sample-project
             - name: GITEA_SEED_SRC
               value: /seed/src
             - name: USER_UID

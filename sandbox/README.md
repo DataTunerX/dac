@@ -1,55 +1,77 @@
-# Sandbox Environment (Discovery / Scanning Playground)
+# Sandbox 环境
 
-This sandbox spins up a small-but-representative environment for building and testing:
-- Infra discovery (hosts/ports/services) — optional
-- Application discovery (APIs/config/runtime)
-- Data source discovery (DB/filesystem/object store)
-- Profiling & PII detection (sample schemas + sample files)
-- (Simple) data lake querying (Trino over S3/MinIO)
+用于 DAC 数据发现 / 扫描 / PII 检测的模拟目标环境。所有数据均为虚构样本，**请勿用于生产**。
 
-## What you get
+sandbox 包含两类数据：
 
-- **Database**: Postgres with sample `erp` schema + PII-like fields
-- **Filesystem**: local directories under `sandbox/data/filesystem/` (mounted into mock apps)
-- **Object store**: MinIO with buckets `objects` and `lake`
-- **Data lake**: Trino querying:
-  - Postgres tables (for relational discovery)
-  - Hive connector over MinIO bucket `lake` (Parquet/CSV objects as lake files)
-- **Applications (mock)**:
-  - `o365-mock`: minimal Mail/Drive-like APIs
-  - `erp-mock`: Customers/Orders APIs backed by Postgres
-  - `vertical-mock`: a generic industry app exposing a couple domain endpoints
-- **Source code repo (local folder)**: `sandbox/data/source-repos/sample-app/`
+1. **预置模拟数据** — Postgres ERP 表、MinIO 文件、Trino 外表等，供发现/扫描/PII 检测使用
+2. **组件自身数据** — Nextcloud / Odoo / ERPNext / Gitea 运行时自动产生的内部数据
 
-## Quick start
+## 包含的服务
 
-1) Start everything:
+| 服务 | 说明 | 镜像 |
+|------|------|------|
+| **Postgres** | ERP 样本库（`erp` / `appcfg` schema） | `postgres:16` |
+| **MinIO** | S3 兼容对象存储（`objects` / `lake` bucket） | `minio/minio` |
+| **Trino** | SQL 查询引擎（Hive + Postgres connector） | `trinodb/trino` |
+| **Nextcloud** | 替代 O365 的文件/协作平台 | `nextcloud:29-apache` |
+| **Odoo** | ERP 系统（客户/订单/库存等） | `odoo:17` |
+| **ERPNext** | 全功能 ERP（仅 K8s 模式） | `erpnext:v15.95.0` |
+| **Gitea** | Git 代码仓库 | `gitea/gitea:1.21.11` |
+
+## 凭据
+
+### 数据库
+
+| 服务 | Host | Port | 用户 | 密码 | 数据库 |
+|------|------|------|------|------|--------|
+| Postgres（主） | localhost | 5432 | `dac` | `dacpass` | `dac_sandbox` |
+| Postgres（Hive Metastore） | localhost | 5433 | `hive` | `hivepass` | `metastore` |
+| Postgres（Odoo） | localhost | 5434 | `odoo` | `odoopass` | `postgres` |
+| MariaDB（Nextcloud） | localhost | 3306 | `nextcloud` | `nextcloudpass` | `nextcloud`（root: `nextcloudroot`） |
+| MariaDB（ERPNext，仅 K8s） | localhost | 3306 | `root` | `admin` | — |
+
+### 应用
+
+| 服务 | 用户 | 密码 |
+|------|------|------|
+| MinIO Console | `minioadmin` | `minioadmin` |
+| Nextcloud | `admin` | `adminpass` |
+| Odoo | — | —（首次访问时设置） |
+| Gitea | `giteaadmin` | `giteaadminpass` |
+| ERPNext（仅 K8s） | `Administrator` | `admin` |
+
+## Docker Compose 模式
 
 ```bash
 cd sandbox
+cp env.example .env
+# 编辑 .env，设置 SOURCE_REPO_PATH（Gitea 初始化用的本地 Git 仓库路径）
+# 可选修改 SOURCE_REPO_NAME（仓库在 Gitea 中的名称，默认 sample-project）
 docker compose up -d
-```
-
-2) Verify:
-
-```bash
 docker compose ps
 ```
 
-Or run the helper scripts:
+访问地址：
+
+| 服务 | URL |
+|------|-----|
+| MinIO Console | http://localhost:9001 |
+| MinIO S3 API | http://localhost:9000 |
+| Trino | http://localhost:8080 |
+| Nextcloud | http://localhost:8011 |
+| Odoo | http://localhost:8012 |
+| Gitea | http://localhost:8013 |
+
+停止：
 
 ```bash
-sh ./bin/up.sh
-sh ./bin/verify.sh
+docker compose down
 ```
 
-## Kubernetes mode (single Pod = “one host IP” sandbox)
+## Kubernetes 模式
 
-If you run DAC on a Linux server / Kubernetes, this mode gives you a more realistic discovery target:
-all sandbox services run **in one Pod (multi-container)**, sharing a single network namespace/IP.
-So you can scan **one IP** and discover many open ports/services, like scanning a single Linux host.
-
-Apply:
+所有 sandbox 服务运行在**单个 Pod（多容器）**中，共享网络命名空间，适合模拟单主机多端口扫描。
 
 ```bash
 kubectl apply -f sandbox/k8s/00-namespace.yaml
@@ -57,53 +79,34 @@ kubectl apply -f sandbox/k8s/01-configmaps.yaml
 kubectl apply -f sandbox/k8s/03-services.yaml
 kubectl apply -f sandbox/k8s/02-statefulset.yaml
 kubectl apply -f sandbox/k8s/04-jobs.yaml
+
+# ERPNext（可选，资源消耗较大）
+kubectl apply -f sandbox/k8s/05-erp.yaml
 ```
 
-### Gitea repo seeding (bake source into the image)
-
-The Kubernetes sandbox uses a custom Gitea image (`release.daocloud.io/dac/sandbox-gitea:seed`) so the repo can be present without mounting local paths.
-
-If your code is only on your local machine, you can publish all required images (including the seeded Gitea image) into `release.daocloud.io/dac`:
-
-```bash
-docker login release.daocloud.io
-REGISTRY_NS=release.daocloud.io/dac LOCAL_REPO_PATH=~/go/src/zeysi-apiserver sh sandbox/bin/publish-images.sh
-```
-
-After pushing, apply the Kubernetes manifests as usual.
-
-If your cluster storage (PVC) is not available (e.g. NFS CSI issues), this sandbox uses **emptyDir (ephemeral)** storage by default.
-Recreating the Pod will reset all data — which is fine for discovery demos.
-
-Check:
+验证：
 
 ```bash
 kubectl -n dac-sandbox get pods -w
-kubectl -n dac-sandbox get svc dac-sandbox-host
-kubectl -n dac-sandbox get pod -l app=dac-sandbox-host -o wide
+kubectl -n dac-sandbox get svc
 ```
 
-4) Useful URLs
+> K8s 模式使用 emptyDir，Pod 重建后数据重置。
 
-- MinIO Console: `http://localhost:9001` (default: `minioadmin/minioadmin`)
-- MinIO S3 API: `http://localhost:9000`
-- Trino: `http://localhost:8080`
-- Nextcloud (O365 replacement): `http://localhost:8011`
-- Odoo (ERP): `http://localhost:8012`
-- Gitea (Repo): `http://localhost:8013`
+### Gitea 镜像构建
 
-## Notes / assumptions
+K8s 模式使用预置源码的 Gitea 镜像。如需重新构建并推送：
 
-- This sandbox is intentionally **non-production** and uses simple default credentials.
-- If your scanners require credentials, use the `.env` values and treat them as *sandbox-only*.
-- Some images will be pulled from Docker Hub on first run.
+```bash
+docker login release.daocloud.io
+REGISTRY_NS=release.daocloud.io/dac LOCAL_REPO_PATH=/path/to/your-local-repo sh sandbox/bin/publish-images.sh
+```
 
-## Seeded artifacts (for scanners)
+## 样本数据
 
-- **Filesystem**:
-  - `sandbox/data/filesystem/user-home/alice/` and `.../bob/` with a few files (including PII-like strings)
-- **Object store**:
-  - Bucket `objects`: mock documents under prefixes like `o365/drive/` and `erp/exports/`
-  - Bucket `lake`: lake files under `warehouse/demo.db/...`
-- **Source repos**:
-  - `sandbox/data/source-repos/sample-app/` with a few fake services + CI/CD configs
+| 类型 | 内容 |
+|------|------|
+| **Postgres** | `erp.customers`、`erp.orders`、`erp.employees`（含 PII 字段：national_id、ssn、payment_card_last4） |
+| **MinIO `objects`** | `o365/drive/readme.txt`、`erp/exports/customers.csv` |
+| **MinIO `lake`** | `warehouse/demo.db/orders/orders.csv`（Trino 外表） |
+| **Trino** | `hive.demo.orders`（S3 CSV）、`postgresql.dac_sandbox.erp.*`（关联查询） |

@@ -45,6 +45,7 @@ semanticGrouper:
   worker:
     replicas: 2
     celeryWorkerAmount: "4"
+    hierarchyMergeDebounceSeconds: "60"
 
 # -- Larger persistence volumes for production
 mysql:

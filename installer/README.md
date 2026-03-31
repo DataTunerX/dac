@@ -2,7 +2,7 @@
 
 [DAC](https://github.com/James-Dao/dac) 本 Chart 用于在 Kubernetes 集群中一键部署全部平台组件。
 
-> Chart 版本 `0.1.0` · App 版本 `0.8.0`
+> Chart 版本 `0.1.0` · App 版本 `0.9.0`
 
 ## 前置条件
 
@@ -29,13 +29,18 @@ global:
     provider: "openai_compatible"
     apiKey: "sk-your-real-key"
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    model: "qwen2.5-72b-instruct"
+    model: "deepseek-v3.2"
   embedding:
     provider: "dashscope"
     apiKey: "sk-your-real-key"
-    # baseUrl: "https://xxx/v1"  # dashscope 不需要；openai_compatible 需要填写
     model: "text-embedding-v4"
     dims: "1024"
+  # embedding:
+  #   provider: "openai_compatible"
+  #   apiKey: "sk-your-real-key"
+  #   # baseUrl: "https://xxx/v1"
+  #   model: "text-embedding-v4"
+  #   dims: "1024"
 
 # llmConfigs 条目留空的字段会自动继承 global.llm 对应值；
 # 如需为某个条目使用不同模型，可单独覆盖
@@ -45,29 +50,30 @@ executionEngine:
       provider: "openai_compatible"
       apiKey: "sk-your-real-key"
       baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-      model: "qwen2.5-72b-instruct"
-    # 示例：添加第二个 LLM 配置，使用不同模型
-    # - name: "llm-gpt4o"
-    #   baseUrl: "https://api.openai.com/v1"
-    #   apiKey: "sk-your-openai-key"
-    #   model: "gpt-4o"
+      model: "deepseek-v3.2"
 
 mysql:
-  rootPassword: "your-strong-password"
+  rootPassword: "changeme"
 redis:
-  password: "your-strong-password"
+  password: "changeme"
 pgvector:
-  password: "your-strong-password"
+  password: "changeme"
+neo4j:
+  password: "changeme"
 ```
 
 ### 2. 安装
+
+#### 2.1 预先pull 镜像
+
+有的镜像比较大，如果想启动速度快，可以提前将所有的镜像pull到机器上。所有相关镜像列表在images.md 文件中。
+
+#### 2.2 执行安装
 
 ```bash
 # 从 Chart 目录安装
 helm install dac ./installer/dac -n dac --create-namespace -f my-values.yaml
 
-# 或从打包文件安装
-helm install dac ./installer/dac-0.1.0.tgz -n dac --create-namespace -f my-values.yaml
 ```
 
 生产环境可叠加内置的 `values-prod.yaml`（更大副本数、资源配额与 Ingress）：
@@ -252,7 +258,7 @@ apiserver:
   enabled: true
   image:
     repository: apiserver
-    tag: "v0.8.0"
+    tag: "v0.9.0"
   # -- Number of replicas
   replicas: 1
   service:
@@ -312,7 +318,7 @@ frontend:
   enabled: true
   image:
     repository: frontend
-    tag: "v0.8.0"
+    tag: "v0.9.0"
   # -- Number of replicas
   replicas: 1
   service:
@@ -355,7 +361,7 @@ dataServices:
   enabled: true
   image:
     repository: data-services
-    tag: "v0.8.0-amd64"
+    tag: "v0.9.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -420,7 +426,7 @@ executionEngine:
   enabled: true
   image:
     repository: execution-engine
-    tag: "v0.8.3-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   resources:
     requests:
@@ -436,19 +442,19 @@ executionEngine:
   #    dac-data-services, data-sinkers-job and data-sinkers-status containers.
   agentImages:
     orchestratorAgent:
-      tag: "v0.8.0-amd64"
+      tag: "v0.9.0-amd64"
     expertAgent:
-      tag: "v0.8.0-amd64"
+      tag: "v0.9.0-amd64"
     codeAgent:
-      tag: "v0.8.0-amd64"
+      tag: "v0.9.0-amd64"
     docAgent:
-      tag: "v0.8.0-amd64"
+      tag: "v0.9.0-amd64"
     dacDataServices:
-      tag: "v0.8.0-amd64"
+      tag: "v0.9.0-amd64"
     dataSinkerJob:
-      tag: "v0.8.0-amd64"
+      tag: "v0.9.0-amd64"
     dataSinkerStatus:
-      tag: "v0.8.0-amd64"
+      tag: "v0.9.0-amd64"
 
   # -- dac-configuration ConfigMap values (read by DAC controller)
   dacConfig:
@@ -483,7 +489,7 @@ semanticGrouper:
   enabled: true
   image:
     repository: semantic-grouper
-    tag: "v0.8.0-amd64"
+    tag: "v0.9.0-amd64"
   api:
     replicas: 1
     resources:
@@ -497,6 +503,7 @@ semanticGrouper:
     replicas: 1
     # -- Number of Celery worker processes in each pod
     celeryWorkerAmount: "2"
+    hierarchyMergeDebounceSeconds: "60"
     resources:
       requests:
         cpu: 200m
@@ -531,7 +538,7 @@ orchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.7.0-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   config:
     # -- Vector collection name for agent cards
@@ -557,7 +564,7 @@ bizOrchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.7.0-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   config:
     collectionName: "biz_orchestrator_agent_cards"
@@ -585,7 +592,7 @@ bizRoutingAgent:
   enabled: true
   image:
     repository: routing-agent
-    tag: "v0.8.0-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state
@@ -614,7 +621,7 @@ bizChartAgent:
   enabled: true
   image:
     repository: chart-agent
-    tag: "v0.7.0-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   config:
     redisDb: "2"
@@ -838,10 +845,11 @@ kubectl get sc
                       │ watches CRD
                       ▼
         ┌─────────────────────────────┐
-        │    Operator 动态创建         │
+        │    Operator 动态创建          │
         │  orchestrator-agent         │
         │  expert-agent / code-agent  │
-        │  doc-agent / data-sinkers-job│
+        │  doc-agent / data-sinkers-job
+        │  data-sinkers-observer      |
         └─────────────────────────────┘
 ```
 
@@ -854,4 +862,4 @@ kubectl get sc
 | **Agent 注册中心** | orchestrator-registry、biz-orchestrator-registry | A2A Agent Card 发现 |
 | **Agent** | biz-routing-agent、biz-chart-agent | 路由 / 图表生成等业务 Agent |
 
-> `orchestrator-agent`、`expert-agent`、`code-agent`、`doc-agent`、`data-sinkers-job` 等组件**不在 Helm 中静态部署**，由 execution-engine Operator 根据 CR 动态管理。
+> `orchestrator-agent`、`expert-agent`、`code-agent`、`doc-agent`、`data-sinkers-job` 、`data-sinkers-observer` 等组件**不在 Helm 中静态部署**，由 execution-engine Operator 根据 CR 动态管理。

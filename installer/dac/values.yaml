@@ -150,6 +150,55 @@ pgvector:
       cpu: 1000m
       memory: 2Gi
 
+# ---------------------------------------------------------------------------
+# Neo4j (used by: data-services)
+# Mirrors docker compose: 5.18.0, 7474/7687, APOC, data/logs/import volumes.
+# For docker.m.daocloud.io/neo4j: set global.imageRegistry: "docker.m.daocloud.io"
+# ---------------------------------------------------------------------------
+neo4j:
+  # -- Deploy built-in Neo4j. Set false to use external Neo4j.
+  enabled: true
+  image:
+    repository: neo4j
+    tag: "5.18.0"
+  # -- Neo4j browser / HTTP Service port (container listens on 7474)
+  httpPort: 7474
+  # -- Neo4j Bolt Service port (container listens on 7687)
+  boltPort: 7687
+  # -- Neo4j auth username
+  username: neo4j
+  # -- Neo4j auth password (CHANGE THIS before production use)
+  password: "test123456"
+  # -- Set NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
+  acceptLicense: true
+  # -- Server plugins (becomes env NEO4J_PLUGINS JSON array)
+  plugins:
+    - apoc
+  apoc:
+    exportFileEnabled: true
+    importFileEnabled: true
+  persistence:
+    # -- Enable persistent storage via volumeClaimTemplates
+    enabled: true
+    # -- Override global.storageClass for Neo4j ("" = use global)
+    storageClass: ""
+    # -- PVC size for /data
+    data:
+      size: 10Gi
+    # -- PVC size for /logs
+    logs:
+      size: 2Gi
+    # -- PVC size for /var/lib/neo4j/import
+    import:
+      size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
 # =============================================================================
 # Core Platform Services
 # =============================================================================
@@ -162,7 +211,7 @@ apiserver:
   enabled: true
   image:
     repository: apiserver
-    tag: "v0.8.0"
+    tag: "v0.9.0"
   # -- Number of replicas
   replicas: 1
   service:
@@ -222,7 +271,7 @@ frontend:
   enabled: true
   image:
     repository: frontend
-    tag: "v0.8.0"
+    tag: "v0.9.0"
   # -- Number of replicas
   replicas: 1
   service:
@@ -265,7 +314,7 @@ dataServices:
   enabled: true
   image:
     repository: data-services
-    tag: "v0.8.0-amd64"
+    tag: "v0.9.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -300,7 +349,9 @@ dataServices:
       embeddingDims: "1024"
     # -- Neo4j connection (only needed if graphEnable=enable)
     neo4j:
-      url: "bolt://neo4j-server:7687"
+      # -- In-cluster: service name defaults to release component "neo4j" (see dac.neo4j.serviceName)
+      boltUrl: "bolt://neo4j:7687"
+      neo4jUrl: "neo4j://neo4j:7687"
       username: "neo4j"
       password: "test123456"
     llm:
@@ -330,7 +381,7 @@ executionEngine:
   enabled: true
   image:
     repository: execution-engine
-    tag: "v0.8.3-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   resources:
     requests:
@@ -346,19 +397,36 @@ executionEngine:
   #    dac-data-services, data-sinkers-job and data-sinkers-status containers.
   agentImages:
     orchestratorAgent:
-      tag: "v0.8.0-amd64"
+      # -- Repository name under global.imageRegistry
+      repository: "orchestrator-agent"
+      tag: "v0.9.0-amd64"
     expertAgent:
-      tag: "v0.8.0-amd64"
+      # -- Repository name under global.imageRegistry
+      repository: "expert-agent"
+      tag: "v0.9.0-amd64"
     codeAgent:
-      tag: "v0.8.0-amd64"
+      # -- Repository name under global.imageRegistry
+      repository: "code-agent"
+      tag: "v0.9.0-amd64"
     docAgent:
-      tag: "v0.8.0-amd64"
+      # -- Repository name under global.imageRegistry
+      repository: "doc-agent"
+      tag: "v0.9.0-amd64"
     dacDataServices:
-      tag: "v0.8.0-amd64"
+      # -- Repository name under global.imageRegistry
+      repository: "dac-data-services"
+      tag: "v0.9.0-amd64"
     dataSinkerJob:
-      tag: "v0.8.0-amd64"
+      # -- Repository name under global.imageRegistry (image = registry/repository:tag)
+      repository: "data-sinkers-job"
+      tag: "v0.9.0-amd64"
     dataSinkerStatus:
-      tag: "v0.8.0-amd64"
+      # -- Repository name under global.imageRegistry
+      repository: "data-sinkers-status"
+      tag: "v0.9.0-amd64"
+    dataSinkersObserver:
+      repository: "data-sinkers-observer"
+      tag: "v0.9.0-amd64"
 
   # -- dac-configuration ConfigMap values (read by DAC controller)
   dacConfig:
@@ -394,7 +462,7 @@ semanticGrouper:
   enabled: true
   image:
     repository: semantic-grouper
-    tag: "v0.8.0-amd64"
+    tag: "v0.9.0-amd64"
   api:
     replicas: 1
     resources:
@@ -408,6 +476,7 @@ semanticGrouper:
     replicas: 1
     # -- Number of Celery worker processes in each pod
     celeryWorkerAmount: "2"
+    hierarchyMergeDebounceSeconds: "60"
     resources:
       requests:
         cpu: 200m
@@ -442,7 +511,7 @@ orchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.7.0-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   config:
     # -- Vector collection name for agent cards
@@ -468,7 +537,7 @@ bizOrchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.7.0-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   config:
     collectionName: "biz_orchestrator_agent_cards"
@@ -496,7 +565,7 @@ bizRoutingAgent:
   enabled: true
   image:
     repository: routing-agent
-    tag: "v0.8.0-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state
@@ -525,7 +594,7 @@ bizChartAgent:
   enabled: true
   image:
     repository: chart-agent
-    tag: "v0.7.0-amd64"
+    tag: "v0.9.0-amd64"
   replicas: 1
   config:
     redisDb: "2"

@@ -9,7 +9,7 @@ set -euo pipefail
 #
 # Usage:
 #   REGISTRY_NS=release.daocloud.io/dac \
-#   LOCAL_REPO_PATH=/absolute/path/to/zeysi-apiserver \
+#   LOCAL_REPO_PATH=/absolute/path/to/your-local-repo \
 #   bash sandbox/bin/publish-images.sh
 #
 # Notes:
@@ -22,7 +22,7 @@ LOCAL_REPO_PATH="${LOCAL_REPO_PATH:-}"
 
 if [[ -z "${LOCAL_REPO_PATH}" ]]; then
   echo "ERROR: LOCAL_REPO_PATH is required (path to your local git repo)."
-  echo "Example: LOCAL_REPO_PATH=~/go/src/zeysi-apiserver"
+  echo "Example: LOCAL_REPO_PATH=~/path/to/your-local-repo"
   exit 1
 fi
 

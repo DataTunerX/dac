@@ -13,7 +13,7 @@ GITEA_URL="${GITEA_URL:-http://127.0.0.1:3000}"
 GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-giteaadmin}"
 GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-giteaadminpass}"
 GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@example.com}"
-GITEA_REPO_NAME="${GITEA_REPO_NAME:-zeysi-apiserver}"
+GITEA_REPO_NAME="${GITEA_REPO_NAME:-sample-project}"
 SEED_SRC="${GITEA_SEED_SRC:-/seed/src}"
 
 echo "[gitea-seed] waiting for gitea..."

@@ -33,7 +33,7 @@ fi
 
 AUTH="${GITEA_ADMIN_USER}:${GITEA_ADMIN_PASSWORD}"
 
-REPO_NAME="zeysi-apiserver"
+REPO_NAME="${GITEA_REPO_NAME:-sample-project}"
 
 echo "[gitea-init] ensure repo ${REPO_NAME} exists..."
 if ! curl -fsS "http://gitea:3000/api/v1/repos/${GITEA_ADMIN_USER}/${REPO_NAME}" >/dev/null 2>&1; then
@@ -42,7 +42,7 @@ if ! curl -fsS "http://gitea:3000/api/v1/repos/${GITEA_ADMIN_USER}/${REPO_NAME}"
     curl -sS -o /tmp/create_repo.json -w '%{http_code}' \
       -H "Content-Type: application/json" \
       -u "${AUTH}" \
-      -d "{\"name\":\"${REPO_NAME}\",\"private\":false,\"auto_init\":false,\"description\":\"DAC sandbox seeded repo from ~/go/src/zeysi-apiserver\"}" \
+      -d "{\"name\":\"${REPO_NAME}\",\"private\":false,\"auto_init\":false,\"description\":\"DAC sandbox seeded repo\"}" \
       http://gitea:3000/api/v1/user/repos
   )"
   if [ "${code}" != "201" ] && [ "${code}" != "409" ]; then
@@ -58,13 +58,13 @@ fi
 
 echo "[gitea-init] mirror push from /src (.git required) ..."
 if [ ! -d "/src/.git" ]; then
-  echo "[gitea-init] /src is not a git repo. Expecting ~/go/src/zeysi-apiserver to be mounted."
+  echo "[gitea-init] /src is not a git repo. Set SOURCE_REPO_PATH in .env to a local git repo."
   exit 1
 fi
 
-rm -rf /tmp/zeysi-apiserver.git
-git clone --mirror /src /tmp/zeysi-apiserver.git
-cd /tmp/zeysi-apiserver.git
+rm -rf /tmp/seed.git
+git clone --mirror /src /tmp/seed.git
+cd /tmp/seed.git
 git remote set-url origin "http://${GITEA_ADMIN_USER}:${GITEA_ADMIN_PASSWORD}@gitea:3000/${GITEA_ADMIN_USER}/${REPO_NAME}.git"
 git push --mirror -f origin
 

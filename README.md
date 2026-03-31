@@ -1,35 +1,25 @@
-# Component Description
+# Instructions
 
+## Deployment
 
-## api-server
-A service that receives API requests.
+For specific deployment steps, please refer to the README.md file under the `installer` folder.
 
-## execution-engine
-A Kubernetes controller.
+## Usage
 
-## celery-httpserver
-Asynchronous HTTP-based Celery web service.
+### Access Address
 
-## data-sinkers
-Processes data from DD.
+In Kubernetes, locate the `frontend` service under the `dac` namespace and find the corresponding NodePort.
 
-## data-services
-Provides APIs for operating vector data.
+### Login
 
-## agent-registry
-An intelligent agent registration center that registers A2A agent cards through MCP resources.
+Default account: admin/changeme
 
-## routing-agent
-Receives user requests and analyzes which orchestrator agent to call.
+### Configure the Default Model
 
-## orchestrator-agent
-Receives user requests and analyzes which ExpertAgents to call.
+Go to 【Configuration Management】, select 【Model Management】, and then click 【New Configuration】.
 
-## expert-agent
-The core of DAC, based on the A2A server.
+1. Name: `llm-default`
 
-## model_sdk
-Encapsulates the model invocation SDK, including large language models, vector models, and rerank models.
+2. Model: Must be the correct model name that can be accessed normally on the corresponding model platform.
 
-## vector_sdk
-Encapsulates the vector data processing SDK.
+3. Other parameters can be provided as needed.

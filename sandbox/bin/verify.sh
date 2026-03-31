@@ -37,7 +37,7 @@ echo "  ok"
 
 echo "[verify] Gitea (repo)"
 curl -4 -fsS http://127.0.0.1:8013/api/v1/version >/dev/null
-curl -4 -fsS "http://127.0.0.1:8013/api/v1/repos/${GITEA_ADMIN_USER:-giteaadmin}/zeysi-apiserver" >/dev/null
+curl -4 -fsS "http://127.0.0.1:8013/api/v1/repos/${GITEA_ADMIN_USER:-giteaadmin}/${SOURCE_REPO_NAME:-sample-project}" >/dev/null
 echo "  ok"
 
 echo "[verify] done"

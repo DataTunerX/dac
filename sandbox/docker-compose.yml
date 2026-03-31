@@ -203,10 +203,11 @@ services:
       GITEA_ADMIN_USER: ${GITEA_ADMIN_USER:-giteaadmin}
       GITEA_ADMIN_PASSWORD: ${GITEA_ADMIN_PASSWORD:-giteaadminpass}
       GITEA_ADMIN_EMAIL: ${GITEA_ADMIN_EMAIL:-admin@example.com}
+      GITEA_REPO_NAME: ${SOURCE_REPO_NAME:-sample-project}
     volumes:
       - ./seed/gitea:/seed:ro
       - dac_sandbox_gitea:/data
-      - ${ZEYSI_APISERVER_PATH:-/Users/lvyanru/go/src/zeysi-apiserver}:/src:ro
+      - ${SOURCE_REPO_PATH:?请在 .env 中设置 SOURCE_REPO_PATH}:/src:ro
     entrypoint: ["/bin/sh", "/seed/init.sh"]
     restart: "no"
 

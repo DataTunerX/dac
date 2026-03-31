@@ -58,6 +58,30 @@ spec:
 
 ---
 
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dianshang-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "10.17.0.41"
+        port: "30821"
+        user: "root"
+        password: "123"
+        database: "test1"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+
+---
 
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
@@ -423,6 +447,29 @@ spec:
       name: "minio-dianshang"
       metadata:
         host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "dactest"
+      extract:
+        files: ["dianshang.docx"]
+      prompts:
+        prompts:
+          name: ""
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: minio-dianshang
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  sources:
+    - type: minio
+      name: "minio-dianshang"
+      metadata:
+        host: "10.17.0.41:30389"
         access_key: "minioadmin"
         secret_key: "minioadmin"
         bucket: "dactest"

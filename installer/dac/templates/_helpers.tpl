@@ -84,6 +84,10 @@ app.kubernetes.io/component: {{ .name }}
 {{- include "dac.componentName" (dict "context" . "name" "pgvector") -}}
 {{- end }}
 
+{{- define "dac.neo4j.serviceName" -}}
+{{- include "dac.componentName" (dict "context" . "name" "neo4j") -}}
+{{- end }}
+
 {{- define "dac.dataServices.serviceName" -}}
 {{- include "dac.componentName" (dict "context" . "name" "data-services") -}}
 {{- end }}

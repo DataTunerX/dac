@@ -24,11 +24,12 @@ data:
   data-services-url: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.dataServices.serviceName" .) .Release.Namespace (.Values.dataServices.service.port | default 8000) | quote }}
   biz-orchestrator-agent-registry: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.bizOrchestratorRegistry.serviceName" .) .Release.Namespace (.Values.bizOrchestratorRegistry.service.port | default 8000) | quote }}
   orchestrator-agent-registry: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.orchestratorRegistry.serviceName" .) .Release.Namespace (.Values.orchestratorRegistry.service.port | default 8000) | quote }}
-  orchestrator-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" "orchestrator-agent" "tag" .Values.executionEngine.agentImages.orchestratorAgent.tag) | quote }}
-  expert-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" "expert-agent" "tag" .Values.executionEngine.agentImages.expertAgent.tag) | quote }}
-  ds-data-services-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" "dac-data-services" "tag" .Values.executionEngine.agentImages.dacDataServices.tag) | quote }}
-  code-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" "code-agent" "tag" .Values.executionEngine.agentImages.codeAgent.tag) | quote }}
-  doc-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" "doc-agent" "tag" .Values.executionEngine.agentImages.docAgent.tag) | quote }}
+  orchestrator-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.orchestratorAgent.repository | default "orchestrator-agent") "tag" .Values.executionEngine.agentImages.orchestratorAgent.tag) | quote }}
+  expert-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.expertAgent.repository | default "expert-agent") "tag" .Values.executionEngine.agentImages.expertAgent.tag) | quote }}
+  ds-data-services-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.dacDataServices.repository | default "dac-data-services") "tag" .Values.executionEngine.agentImages.dacDataServices.tag) | quote }}
+  code-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.codeAgent.repository | default "code-agent") "tag" .Values.executionEngine.agentImages.codeAgent.tag) | quote }}
+  doc-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.docAgent.repository | default "doc-agent") "tag" .Values.executionEngine.agentImages.docAgent.tag) | quote }}
+  dd-sync-observer-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.dataSinkersObserver.repository | default "data-sinkers-observer") "tag" .Values.executionEngine.agentImages.dataSinkersObserver.tag) | quote }}
   default-planner-llm: {{ .Values.executionEngine.dacConfig.defaultPlannerLLM | default "llm-default" | quote }}
   default-expert-llm: {{ .Values.executionEngine.dacConfig.defaultExpertLLM | default "llm-default" | quote }}
 {{- end }}

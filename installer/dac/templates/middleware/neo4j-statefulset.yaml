@@ -1,0 +1,105 @@
+{{- if .Values.neo4j.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "dac.neo4j.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "neo4j") | nindent 4 }}
+spec:
+  serviceName: {{ include "dac.neo4j.serviceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "neo4j") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "neo4j") | nindent 8 }}
+    spec:
+      containers:
+        - name: neo4j
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.neo4j.image.repository "tag" .Values.neo4j.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 7474
+            - name: bolt
+              containerPort: 7687
+          env:
+            - name: NEO4J_AUTH
+              value: {{ printf "%s/%s" .Values.neo4j.username .Values.neo4j.password | quote }}
+            {{- if .Values.neo4j.acceptLicense }}
+            - name: NEO4J_ACCEPT_LICENSE_AGREEMENT
+              value: "yes"
+            {{- end }}
+            {{- if .Values.neo4j.plugins }}
+            - name: NEO4J_PLUGINS
+              value: {{ .Values.neo4j.plugins | toJson | quote }}
+            {{- end }}
+            - name: NEO4J_apoc_export_file_enabled
+              value: {{ .Values.neo4j.apoc.exportFileEnabled | quote }}
+            - name: NEO4J_apoc_import_file_enabled
+              value: {{ .Values.neo4j.apoc.importFileEnabled | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: logs
+              mountPath: /logs
+            - name: import
+              mountPath: /var/lib/neo4j/import
+          livenessProbe:
+            tcpSocket:
+              port: 7687
+            initialDelaySeconds: 90
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: 7687
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.neo4j.resources | nindent 12 }}
+      {{- if not .Values.neo4j.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: import
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.neo4j.persistence.enabled }}
+  {{- $sc := .Values.neo4j.persistence.storageClass | default .Values.global.storageClass }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if $sc }}
+        storageClassName: {{ $sc | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.neo4j.persistence.data.size }}
+    - metadata:
+        name: logs
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if $sc }}
+        storageClassName: {{ $sc | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.neo4j.persistence.logs.size }}
+    - metadata:
+        name: import
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if $sc }}
+        storageClassName: {{ $sc | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.neo4j.persistence.import.size }}
+  {{- end }}
+{{- end }}

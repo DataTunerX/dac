@@ -9,9 +9,9 @@ RUN apk add --no-cache git curl wget ca-certificates
 
 # Bake source code into the image at build time.
 # Default: COPY the build context into /seed/src.
-# Optional: if ZEYSI_REPO_URL is provided, it will override /seed/src by cloning.
-ARG ZEYSI_REPO_URL=""
-ARG ZEYSI_REPO_REF="main"
+# Optional: if SOURCE_REPO_URL is provided, it will override /seed/src by cloning.
+ARG SOURCE_REPO_URL=""
+ARG SOURCE_REPO_REF="main"
 
 RUN mkdir -p /seed/src
 
@@ -21,10 +21,10 @@ RUN mkdir -p /seed/src
 #     <PATH_TO_LOCAL_REPO>
 COPY . /seed/src
 
-RUN if [ -n "${ZEYSI_REPO_URL}" ]; then \
-      echo "[build] overriding /seed/src by cloning ${ZEYSI_REPO_URL} (${ZEYSI_REPO_REF})"; \
+RUN if [ -n "${SOURCE_REPO_URL}" ]; then \
+      echo "[build] overriding /seed/src by cloning ${SOURCE_REPO_URL} (${SOURCE_REPO_REF})"; \
       rm -rf /seed/src && mkdir -p /seed/src; \
-      git clone --depth 1 --branch "${ZEYSI_REPO_REF}" "${ZEYSI_REPO_URL}" /seed/src; \
+      git clone --depth 1 --branch "${SOURCE_REPO_REF}" "${SOURCE_REPO_URL}" /seed/src; \
     fi
 
 RUN cat > /usr/local/bin/dac-gitea-entrypoint <<'EOF' && \
@@ -41,7 +41,7 @@ GITEA_URL="${GITEA_URL:-http://127.0.0.1:3000}"
 GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-giteaadmin}"
 GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-giteaadminpass}"
 GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@example.com}"
-GITEA_REPO_NAME="${GITEA_REPO_NAME:-zeysi-apiserver}"
+GITEA_REPO_NAME="${GITEA_REPO_NAME:-sample-project}"
 SEED_SRC="${GITEA_SEED_SRC:-/seed/src}"
 
 APP_INI="/data/gitea/conf/app.ini"

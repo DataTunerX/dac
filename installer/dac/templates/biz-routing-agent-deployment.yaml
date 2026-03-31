@@ -31,7 +31,7 @@ spec:
             - name: Agent_Port
               value: {{ .Values.bizRoutingAgent.service.targetPort | quote }}
             - name: AgentRegistry
-              value: "http://{{ include "dac.orchestratorRegistry.serviceName" . }}:{{ .Values.orchestratorRegistry.service.port }}"
+              value: "http://{{ include "dac.bizOrchestratorRegistry.serviceName" . }}:{{ .Values.bizOrchestratorRegistry.service.port }}"
             - name: AgentRegistryCollection
               value: {{ .Values.bizRoutingAgent.config.registryCollection | quote }}
             - name: max_retries
