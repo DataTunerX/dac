@@ -38,6 +38,7 @@ spec:
               value: {{ .Values.bizChartAgent.config.startMode | quote }}
             - name: REGISTER_AGENT
               value: {{ .Values.bizChartAgent.config.registerAgent | quote }}
+            {{- include "dac.langfuseEnv" . | nindent 12 }}
           args:
             - "--redis-host"
             - {{ include "dac.redis.serviceName" . | quote }}

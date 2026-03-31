@@ -36,6 +36,7 @@ spec:
               value: {{ .Values.bizRoutingAgent.config.registryCollection | quote }}
             - name: max_retries
               value: {{ .Values.bizRoutingAgent.config.maxRetries | quote }}
+            {{- include "dac.langfuseEnv" . | nindent 12 }}
           args:
             - "--redis-host"
             - {{ include "dac.redis.serviceName" . | quote }}

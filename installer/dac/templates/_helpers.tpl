@@ -143,6 +143,47 @@ Usage: {{ include "dac.llmArgs" . }}
 {{- end }}
 
 {{/*
+Optional Langfuse env vars for LLM tracing (inject under container env:)
+Usage: {{- include "dac.langfuseEnv" . | nindent 12 }}
+*/}}
+{{- define "dac.langfuseEnv" -}}
+{{- if and .Values.global.langfuse .Values.global.langfuse.enabled }}
+{{- $dac := .Values.executionEngine.dacConfig | default dict }}
+{{- $lf := .Values.global.langfuse }}
+- name: LANGFUSE_BASE_URL
+  value: {{ coalesce $dac.observationBaseUrl $lf.baseUrl | quote }}
+- name: LANGFUSE_SECRET_KEY
+  value: {{ coalesce $dac.observationSecretKey $lf.secretKey | quote }}
+- name: LANGFUSE_PUBLIC_KEY
+  value: {{ coalesce $dac.observationPublicKey $lf.publicKey | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
+Langfuse observation keys for dac-configuration / dd-configuration ConfigMap data:
+only when global.langfuse.enabled; dacConfig.observation* overrides global.langfuse.*
+Usage: {{- include "dac.observationConfigMapData" . | nindent 2 }}
+*/}}
+{{- define "dac.observationConfigMapData" -}}
+{{- if and .Values.global.langfuse .Values.global.langfuse.enabled }}
+{{- $dac := .Values.executionEngine.dacConfig | default dict }}
+{{- $lf := .Values.global.langfuse }}
+{{- $obsUrl := coalesce $dac.observationBaseUrl $lf.baseUrl }}
+{{- $obsSecret := coalesce $dac.observationSecretKey $lf.secretKey }}
+{{- $obsPublic := coalesce $dac.observationPublicKey $lf.publicKey }}
+{{- if $obsUrl }}
+observation-base-url: {{ $obsUrl | quote }}
+{{- end }}
+{{- if $obsSecret }}
+observation-secret-key: {{ $obsSecret | quote }}
+{{- end }}
+{{- if $obsPublic }}
+observation-public-key: {{ $obsPublic | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
 Image reference helper
 Usage: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" "data-services" "tag" .Values.dataServices.image.tag) }}
 */}}

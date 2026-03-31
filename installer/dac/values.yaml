@@ -37,6 +37,13 @@ global:
     # -- Default LLM temperature
     temperature: "0.01"
 
+  # -- Langfuse LLM observability (biz-routing-agent, biz-chart-agent); set enabled: true and fill keys to turn on
+  langfuse:
+    enabled: false
+    baseUrl: ""
+    secretKey: ""
+    publicKey: ""
+
   # -- Embedding model configuration (used by data-services)
   embedding:
     # -- Embedding provider name (dashscope | openai_compatible | azure)
@@ -434,7 +441,7 @@ executionEngine:
     defaultPlannerLLM: "llm-default"
     # -- Default expert LLM ConfigMap name
     defaultExpertLLM: "llm-default"
-    # -- Langfuse / observation (optional)
+    # -- Optional override for Langfuse URLs/keys (only used when global.langfuse.enabled; falls back to global.langfuse.*; also written as observation-* in dac-configuration / dd-configuration)
     observationBaseUrl: ""
     observationSecretKey: ""
     observationPublicKey: ""
