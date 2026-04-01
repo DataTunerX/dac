@@ -53,6 +53,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+PROGRESS_FRAME_PREFIX = "[[DAC_PROGRESS]] "
+DAC_PROGRESS_LAYER = "sd_chart"
+
 # System Instructions to Agent
 INSTRUCTIONS = """
 You are an intelligent chart expert to draw graph based on data.
@@ -295,6 +298,65 @@ class ChartAgent(BaseAgent):
         self._observe_reason_history: List[str] = []  # 多轮审核不通过的意见列表，下一轮生成时全部带入
         # LLM 模式：global=审核通过时仅返回 answer（默认）；agent=审核通过时带 reason 前缀
         self.start_mode: str = (os.getenv("CHART_AGENT_START_MODE", "global").strip().lower() or "global")
+        self.agent_id = "ChartAgent"
+
+    @staticmethod
+    def _step_query_preview(text: str, limit: int = 420) -> str:
+        """Single-line preview of the step query for DAC_PROGRESS."""
+        raw = (text or "").replace("\n", " ").strip()
+        if len(raw) <= limit:
+            return raw
+        return raw[: limit - 3] + "..."
+
+    @staticmethod
+    def build_progress_frame(
+        event: str,
+        *,
+        message: str = "",
+        status: str = "running",
+        run_id: str = "",
+        user_id: str = "",
+        agent_id: str = "",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload: Dict[str, Any] = {
+            "schema_version": "v1",
+            "layer": DAC_PROGRESS_LAYER,
+            "event": event,
+            "run_id": run_id or "",
+            "user_id": user_id or "",
+            "agent_id": agent_id or "",
+            "task_id": task_id,
+            "message": message or "",
+            "status": status or "",
+        }
+        if extra:
+            payload["extra"] = extra
+        return f"{PROGRESS_FRAME_PREFIX}{json.dumps(payload, ensure_ascii=False)}\n"
+
+    async def emit_progress(
+        self,
+        event: str,
+        *,
+        message: str,
+        status: str = "running",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        callback = getattr(self, "progress_callback", None)
+        if callback is None:
+            return
+        await callback(self.build_progress_frame(
+            event,
+            message=message,
+            status=status,
+            run_id=(self.metadata or {}).get("run_id", ""),
+            user_id=(self.metadata or {}).get("user_id", ""),
+            agent_id=self.agent_id,
+            task_id=task_id,
+            extra=extra,
+        ))
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
@@ -1068,11 +1130,51 @@ class ChartAgent(BaseAgent):
 
                 logger.info(f"******************** {current_task}, current query: {self.query}, Executing step {self.current_step}/{self.max_steps}")
 
+                step_query_snapshot = (self.query or "").strip()
+                step_query_preview = self._step_query_preview(step_query_snapshot)
+                step_started_msg = (
+                    f"executing step {self.current_step}/{self.max_steps}"
+                    f" | query: {step_query_preview}"
+                )
+                step_extra: Dict[str, Any] = {
+                    "step": self.current_step,
+                    "max_steps": self.max_steps,
+                    "step_query": step_query_preview,
+                }
+                ct = (current_task or "").strip()
+                if ct and ct != step_query_snapshot:
+                    step_extra["current_task"] = self._step_query_preview(ct, 260)
+                    step_started_msg += f" | task: {step_extra['current_task']}"
+                await self.emit_progress(
+                    "sd_step_started",
+                    message=step_started_msg,
+                    status="running",
+                    task_id=self.current_task_id,
+                    extra=step_extra,
+                )
+
                 step_result_str = f"step {self.current_step}/{self.max_steps}: query: {self.query}"
 
                 step_result = await self.step()
-                
+
                 # step_result = f"{step_result_str}\n\nanswer: {step_result}\n"
+
+                finished_query_preview = self._step_query_preview(step_query_snapshot)
+                await self.emit_progress(
+                    "sd_step_finished",
+                    message=(
+                        f"completed step {self.current_step}/{self.max_steps}"
+                        f" | query: {finished_query_preview}"
+                    ),
+                    status="done",
+                    task_id=self.current_task_id,
+                    extra={
+                        "step": self.current_step,
+                        "max_steps": self.max_steps,
+                        "step_query": finished_query_preview,
+                        "result_chars": len(str(step_result or "")),
+                    },
+                )
 
                 step_result = f"{step_result}\n"
 
@@ -1096,8 +1198,7 @@ class ChartAgentExecutor(AgentExecutor):
         model: str = "qwen2.5-72b-instruct",
         stream: bool = True,
         temperature: float = 0.01,
-        max_steps:int = 5
-
+        max_steps:int = 5,
     ):
         self.provider=provider
         self.api_key=api_key
@@ -1143,7 +1244,7 @@ class ChartAgentExecutor(AgentExecutor):
             metadata=metadata,
             max_steps=self.max_steps,
             current_tasks_status=current_tasks_status,
-            current_task_id=current_task_id
+            current_task_id=current_task_id,
         )
 
         task = context.current_task
@@ -1171,6 +1272,13 @@ class ChartAgentExecutor(AgentExecutor):
                 )
             else:
                 if self.stream_enabled:
+                    async def _progress_callback(text: str) -> None:
+                        await updater.add_artifact(
+                            [TextPart(text=text)],
+                            name=f'{agent.agent_name}-result',
+                        )
+
+                    agent.progress_callback = _progress_callback
                     async for chunk in agent.run():
                         if chunk:
                             part = TextPart(text=chunk)
@@ -1178,7 +1286,7 @@ class ChartAgentExecutor(AgentExecutor):
                                 [part],
                                 name=f'{agent.agent_name}-result',
                             )
-                                
+
                     await updater.complete(
                         message=new_agent_text_message(
                             "", context_id=task.context_id

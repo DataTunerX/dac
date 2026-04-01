@@ -138,7 +138,8 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
                 descriptor_types=descriptor_types_list,
                 data_services_url=data_services_url,
                 max_steps=max_steps,
-                code_paths=cloned_repos
+                code_paths=cloned_repos,
+                agent_id=agent_card.name,
             ),
             task_store=InMemoryTaskStore(),
             push_config_store=push_config_store,

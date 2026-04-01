@@ -57,6 +57,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+PROGRESS_FRAME_PREFIX = "[[DAC_PROGRESS]] "
+DAC_PROGRESS_LAYER = "sd_code"
+
 # Initialize Langfuse client
 langfuse = get_client()
 
@@ -1785,6 +1788,7 @@ class CodeAgent(BaseAgent):
         max_steps:int = 5,
         current_tasks_status: TaskStatusList = None,
         current_task_id: int = None,
+        agent_id: str = None,
         code_paths: Dict[str, str] = None,
         codebase_index: 'CodebaseIndex' = None,  # 外部传入的全局索引
         codebase_index_loaded: bool = False  # 索引是否已加载
@@ -1833,6 +1837,65 @@ class CodeAgent(BaseAgent):
         self.codebase_index = codebase_index if codebase_index is not None else CodebaseIndex()
         self._codebase_index_loaded = codebase_index_loaded  # 使用外部传入的状态
         logger.info(f"CodeAgent initialized with code_paths: {list(self.code_paths.keys())}, codebase_index_loaded: {self._codebase_index_loaded}")
+        self.agent_id = agent_id or (metadata or {}).get("agent_id") or self.agent_name
+
+    @staticmethod
+    def _step_query_preview(text: str, limit: int = 420) -> str:
+        """Single-line preview of the step query for DAC_PROGRESS."""
+        raw = (text or "").replace("\n", " ").strip()
+        if len(raw) <= limit:
+            return raw
+        return raw[: limit - 3] + "..."
+
+    @staticmethod
+    def build_progress_frame(
+        event: str,
+        *,
+        message: str = "",
+        status: str = "running",
+        run_id: str = "",
+        user_id: str = "",
+        agent_id: str = "",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload: Dict[str, Any] = {
+            "schema_version": "v1",
+            "layer": DAC_PROGRESS_LAYER,
+            "event": event,
+            "run_id": run_id or "",
+            "user_id": user_id or "",
+            "agent_id": agent_id or "",
+            "task_id": task_id,
+            "message": message or "",
+            "status": status or "",
+        }
+        if extra:
+            payload["extra"] = extra
+        return f"{PROGRESS_FRAME_PREFIX}{json.dumps(payload, ensure_ascii=False)}\n"
+
+    async def emit_progress(
+        self,
+        event: str,
+        *,
+        message: str,
+        status: str = "running",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        callback = getattr(self, "progress_callback", None)
+        if callback is None:
+            return
+        await callback(self.build_progress_frame(
+            event,
+            message=message,
+            status=status,
+            run_id=(self.metadata or {}).get("run_id", ""),
+            user_id=(self.metadata or {}).get("user_id", ""),
+            agent_id=self.agent_id,
+            task_id=task_id,
+            extra=extra,
+        ))
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
@@ -4629,7 +4692,14 @@ class CodeAgent(BaseAgent):
             answer_model = self.metadata.get('answer_model', '') if self.metadata else ''
             logger.info(f"[step] 检查 answer_model: '{answer_model}', metadata keys: {list(self.metadata.keys()) if self.metadata else 'None'}")
             if answer_model == "original":
+                _orig_success_prefix = (
+                    "reason:The current answer addresses the question very well.\n\n"
+                )
                 logger.info(f">>>>>> [answer_model=original] CodeAgent.step() 直接返回代码片段，跳过 answer_with_code 和 observe_common，共 {len(code_snippets)} 个代码片段 <<<<<<")
+                logger.info(
+                    "[step][llm-check-success] answer_model=original: prepending orchestrator success reason line "
+                    "(same format as observe_common pass path)"
+                )
                 if code_snippets:
                     self._log_code_snippets_info(code_snippets)
                     # 将代码片段格式化为可读文本直接返回
@@ -4648,13 +4718,15 @@ class CodeAgent(BaseAgent):
                         parts.append(f"{header}\n{code_content}")
                     raw_code = "\n\n".join(parts)
                     self.state = AgentState.FINISHED
-                    self.save_step_status(self.query, raw_code)
-                    return raw_code
+                    out = _orig_success_prefix + raw_code
+                    self.save_step_status(self.query, out)
+                    return out
                 else:
                     self.state = AgentState.FINISHED
                     no_code_msg = f"未找到与问题 '{self.query}' 相关的代码"
-                    self.save_step_status(self.query, no_code_msg)
-                    return no_code_msg
+                    out = _orig_success_prefix + no_code_msg
+                    self.save_step_status(self.query, out)
+                    return out
 
             # ========== Step 2: 基于代码生成回答 ==========
             if code_snippets:
@@ -4687,18 +4759,40 @@ class CodeAgent(BaseAgent):
                     conclusion="continue",
                     requery=requery_text
                 )
+                logger.info(
+                    "[step][llm-check-success] marker NOT added: empty code_snippets → conclusion=continue, "
+                    "observe_common skipped"
+                )
             
             # ========== Step 3: 验证回答质量 ==========
+            _success_marker_phrase = "The current answer addresses the question very well."
+            logger.info(
+                "[step][llm-check-success] before observe: llm_conclusion=%s code_snippet_count=%s "
+                "(marker only added if terminate + observe passes)",
+                getattr(llm_result, "conclusion", None) if llm_result else None,
+                len(code_snippets),
+            )
             if llm_result and llm_result.conclusion == "terminate":
                 # 构建代码相关的上下文，帮助 LLM 更好地判断回答质量
                 observe_context = self._build_observe_context(code_snippets, search_info)
                 
                 logger.info(f"[step] 开始验证回答质量")
                 observe_result = await self.observe_common(self.query, llm_result.answer, observe_context)
+                logger.info(
+                    "[step][llm-check-success] observe_common result: conclusion=%s reason_preview=%s",
+                    getattr(observe_result, "conclusion", None),
+                    ((observe_result.reason or "")[:240] + "…")
+                    if observe_result and len(observe_result.reason or "") > 240
+                    else (observe_result.reason if observe_result else ""),
+                )
                 
                 if observe_result.conclusion == "continue":
                     # 回答质量不佳，需要重新查询
                     logger.info(f"[step] 回答质量验证未通过: {observe_result.reason}")
+                    logger.info(
+                        "[step][llm-check-success] marker NOT added: observe conclusion=continue "
+                        "(orchestrator success reason line will be absent)"
+                    )
                     llm_result.conclusion = "continue"
                     self.state = AgentState.IDLE
                     
@@ -4709,8 +4803,18 @@ class CodeAgent(BaseAgent):
                 else:
                     # 回答质量通过，添加成功标记用于外部判断任务完成状态
                     logger.info(f"[step] 回答质量验证通过")
-                    step_status_llm_check_success = "The current answer addresses the question very well."
+                    step_status_llm_check_success = _success_marker_phrase
                     llm_result.answer = f"reason:{step_status_llm_check_success}\n\n{llm_result.answer}"
+                    logger.info(
+                        "[step][llm-check-success] marker ADDED: prepended 'reason:%s' (answer_len=%s)",
+                        step_status_llm_check_success[:48] + "…",
+                        len(llm_result.answer or ""),
+                    )
+            elif llm_result:
+                logger.info(
+                    "[step][llm-check-success] observe_common skipped: llm_conclusion=%s (not terminate)",
+                    llm_result.conclusion,
+                )
                     
         except Exception as e:
             logger.error(f"[step] 执行出错: {e}", exc_info=True)
@@ -4740,8 +4844,18 @@ class CodeAgent(BaseAgent):
 
             if not llm_result.answer:
                 answer = f"未能找到相关知识回答问题: {self.original_query}，将尝试其他方式!"
+                logger.info(
+                    "[step][llm-check-success] final return: empty answer fallback, contains_marker=False"
+                )
                 return answer
             else:
+                _final_has = _success_marker_phrase in (llm_result.answer or "")
+                logger.info(
+                    "[step][llm-check-success] final return: conclusion=%s answer_chars=%s contains_success_phrase=%s",
+                    llm_result.conclusion,
+                    len(llm_result.answer or ""),
+                    _final_has,
+                )
                 return llm_result.answer
         else:
             raise ValueError("step 执行异常: llm_result 为空")
@@ -4892,15 +5006,55 @@ class CodeAgent(BaseAgent):
 
                 logger.info(f"******************** {current_task}, current query: {self.query}, Executing step {self.current_step}/{self.max_steps}")
 
+                step_query_snapshot = (self.query or "").strip()
+                step_query_preview = self._step_query_preview(step_query_snapshot)
+                step_started_msg = (
+                    f"executing step {self.current_step}/{self.max_steps}"
+                    f" | query: {step_query_preview}"
+                )
+                step_extra: Dict[str, Any] = {
+                    "step": self.current_step,
+                    "max_steps": self.max_steps,
+                    "step_query": step_query_preview,
+                }
+                ct = (current_task or "").strip()
+                if ct and ct != step_query_snapshot:
+                    step_extra["current_task"] = self._step_query_preview(ct, 260)
+                    step_started_msg += f" | task: {step_extra['current_task']}"
+                await self.emit_progress(
+                    "sd_code_step_started",
+                    message=step_started_msg,
+                    status="running",
+                    task_id=self.current_task_id,
+                    extra=step_extra,
+                )
+
                 step_result_str = f"step {self.current_step}/{self.max_steps}: query: {self.query}"
 
                 step_result = await self.step()
 
                 steps_status = self.get_step_history_for_requery()
 
-                logger.debug(f"******************** steps status: \n\n {steps_status}")
+                logger.info(f"******************** step result: \n\n {step_result}")
                 
                 step_result = f"{step_result_str}\n\nanswer: {step_result}\n"
+
+                finished_query_preview = self._step_query_preview(step_query_snapshot)
+                await self.emit_progress(
+                    "sd_code_step_finished",
+                    message=(
+                        f"completed step {self.current_step}/{self.max_steps}"
+                        f" | query: {finished_query_preview}"
+                    ),
+                    status="done",
+                    task_id=self.current_task_id,
+                    extra={
+                        "step": self.current_step,
+                        "max_steps": self.max_steps,
+                        "step_query": finished_query_preview,
+                        "result_chars": len(str(step_result or "")),
+                    },
+                )
 
                 yield step_result
 
@@ -4927,7 +5081,8 @@ class CodeAgentExecutor(AgentExecutor):
         descriptor_types:list = None,
         data_services_url: str = None,
         max_steps:int = 5,
-        code_paths: Dict[str, str] = None
+        code_paths: Dict[str, str] = None,
+        agent_id: str = None,
 
     ):
         self.provider=provider
@@ -4942,6 +5097,7 @@ class CodeAgentExecutor(AgentExecutor):
         self.data_services_url=data_services_url
         self.stream_enabled = stream
         self.max_steps = max_steps
+        self.agent_id = agent_id
         self.code_paths = code_paths or {}  # 存储 clone 后的代码路径，key 为配置名称，value 为本地路径
         
         # 全局 codebase index，服务级别单例，只加载一次
@@ -5127,6 +5283,7 @@ class CodeAgentExecutor(AgentExecutor):
             max_steps=self.max_steps,
             current_tasks_status=current_tasks_status,
             current_task_id=current_task_id,
+            agent_id=self.agent_id,
             code_paths=self.code_paths,
             codebase_index=self._codebase_index,  # 传入全局索引
             codebase_index_loaded=self._codebase_index_loaded  # 传入加载状态
@@ -5140,19 +5297,26 @@ class CodeAgentExecutor(AgentExecutor):
         updater = TaskUpdater(event_queue, task.id, task.context_id)
 
         if self.stream_enabled:
-                async for chunk in agent.run():
-                    if chunk:
-                        part = TextPart(text=chunk)
-                        await updater.add_artifact(
-                            [part],
-                            name=f'{agent.agent_name}-result',
-                        )
-                            
-                await updater.complete(
-                    message=new_agent_text_message(
-                        "", context_id=task.context_id
-                    )
+            async def _progress_callback(text: str) -> None:
+                await updater.add_artifact(
+                    [TextPart(text=text)],
+                    name=f'{agent.agent_name}-result',
                 )
+
+            agent.progress_callback = _progress_callback
+            async for chunk in agent.run():
+                if chunk:
+                    part = TextPart(text=chunk)
+                    await updater.add_artifact(
+                        [part],
+                        name=f'{agent.agent_name}-result',
+                    )
+
+            await updater.complete(
+                message=new_agent_text_message(
+                    "", context_id=task.context_id
+                )
+            )
 
     async def cancel(
         self, context: RequestContext, event_queue: EventQueue

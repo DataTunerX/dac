@@ -118,7 +118,8 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
                 dd_namespace=dd_namespace,
                 descriptor_types_json_string=descriptor_types_json_string,
                 data_services_url=data_services_url,
-                max_steps=max_steps
+                max_steps=max_steps,
+                agent_id=agent_card.name,
             ),
             task_store=InMemoryTaskStore(),
             push_config_store=push_config_store,

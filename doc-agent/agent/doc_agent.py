@@ -53,6 +53,8 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+PROGRESS_FRAME_PREFIX = "[[DAC_PROGRESS]] "
+DAC_PROGRESS_LAYER = "sd_doc"
 
 
 # System Instructions to Agent
@@ -242,7 +244,8 @@ class DocAgent(BaseAgent):
         metadata: dict = None,
         max_steps:int = 5,
         current_tasks_status: TaskStatusList = None,
-        current_task_id: int = None
+        current_task_id: int = None,
+        agent_id: str = None,
 
     ):
         logger.info('Initializing ExpertAgent')
@@ -284,6 +287,66 @@ class DocAgent(BaseAgent):
         self.current_tasks_status = current_tasks_status
         self.current_task_id = current_task_id
         self.step_status_list: List[StepStatus] = []
+        # agent_name 历史为 ExpertAgent；进度里的 id 用部署/请求显式值，否则回退 DocAgent
+        self.agent_id = agent_id or (metadata or {}).get("agent_id") or "DocAgent"
+
+    @staticmethod
+    def _step_query_preview(text: str, limit: int = 420) -> str:
+        """Single-line preview of the step query for DAC_PROGRESS."""
+        raw = (text or "").replace("\n", " ").strip()
+        if len(raw) <= limit:
+            return raw
+        return raw[: limit - 3] + "..."
+
+    @staticmethod
+    def build_progress_frame(
+        event: str,
+        *,
+        message: str = "",
+        status: str = "running",
+        run_id: str = "",
+        user_id: str = "",
+        agent_id: str = "",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload: Dict[str, Any] = {
+            "schema_version": "v1",
+            "layer": DAC_PROGRESS_LAYER,
+            "event": event,
+            "run_id": run_id or "",
+            "user_id": user_id or "",
+            "agent_id": agent_id or "",
+            "task_id": task_id,
+            "message": message or "",
+            "status": status or "",
+        }
+        if extra:
+            payload["extra"] = extra
+        return f"{PROGRESS_FRAME_PREFIX}{json.dumps(payload, ensure_ascii=False)}\n"
+
+    async def emit_progress(
+        self,
+        event: str,
+        *,
+        message: str,
+        status: str = "running",
+        task_id: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        callback = getattr(self, "progress_callback", None)
+        if callback is None:
+            return
+        await callback(self.build_progress_frame(
+            event,
+            message=message,
+            status=status,
+            run_id=(self.metadata or {}).get("run_id", ""),
+            user_id=(self.metadata or {}).get("user_id", ""),
+            agent_id=self.agent_id,
+            task_id=task_id,
+            extra=extra,
+        ))
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
@@ -798,6 +861,7 @@ class DocAgent(BaseAgent):
         llm_result = None
 
         try:
+            _success_marker_phrase = "The current answer addresses the question very well."
             # generate final sql for this step
             if agent_type == "unstructured":
                 knowledge = await self.get_knowledge()
@@ -806,24 +870,46 @@ class DocAgent(BaseAgent):
                 answer_model = self.metadata.get('answer_model', '') if self.metadata else ''
                 logger.info(f"[step] 检查 answer_model: '{answer_model}'")
                 if answer_model == "original":
+                    _orig_success_prefix = (
+                        "reason:The current answer addresses the question very well.\n\n"
+                    )
                     logger.info(f">>>>>> [answer_model=original] DocAgent.step() 直接返回知识内容，跳过 invoke_unstructured 和 observe <<<<<<")
+                    logger.info(
+                        "[step][llm-check-success] answer_model=original: prepending orchestrator success reason line "
+                        "(same as observe-pass path)"
+                    )
                     if knowledge and knowledge.strip():
                         self.state = AgentState.FINISHED
-                        self.save_step_status(self.query, knowledge)
-                        return knowledge
+                        out = _orig_success_prefix + knowledge
+                        self.save_step_status(self.query, out)
+                        return out
                     else:
                         self.state = AgentState.FINISHED
                         no_knowledge_msg = f"未找到与问题 '{self.query}' 相关的知识"
-                        self.save_step_status(self.query, no_knowledge_msg)
-                        return no_knowledge_msg
+                        out = _orig_success_prefix + no_knowledge_msg
+                        self.save_step_status(self.query, out)
+                        return out
 
                 llm_result = await self.invoke_unstructured(knowledge)
                 if llm_result:
+                    _invoke_conc = getattr(llm_result, "conclusion", None)
+                    logger.info(
+                        "[step][llm-check-success] after invoke_unstructured: conclusion=%s "
+                        "(marker only if terminate → observe_unstructured passes)",
+                        _invoke_conc,
+                    )
                     if hasattr(llm_result, 'conclusion') and llm_result.conclusion == "terminate":
                         current_tasks_status_str =  self.format_tasks_status(self.current_tasks_status.tasks)
                         # observe 判断「answer」是否真正回答问题；第三参为任务状态（非原始 knowledge）
                         observe_result = await self.observe_unstructured(self.query, llm_result.answer, current_tasks_status_str)
                         observe_message = f"\nquery: {self.query} \n\nreason:{observe_result.reason}"
+                        logger.info(
+                            "[step][llm-check-success] observe_unstructured result: conclusion=%s reason_preview=%s",
+                            getattr(observe_result, "conclusion", None),
+                            ((observe_result.reason or "")[:240] + "…")
+                            if observe_result and len(observe_result.reason or "") > 240
+                            else (observe_result.reason if observe_result else ""),
+                        )
                         if observe_result.conclusion == "continue":
                             llm_result.conclusion = "continue"
                             self.state = AgentState.IDLE
@@ -831,9 +917,23 @@ class DocAgent(BaseAgent):
                             if requery.conclusion == "terminate" and requery.requery:
                                 llm_result.requery = requery.requery
                             llm_result.answer = f"knowledge can do not meet query, \n\nreason: {observe_result.reason}"
+                            logger.info(
+                                "[step][llm-check-success] marker NOT added: observe conclusion=continue"
+                            )
                         else:
-                            step_status_llm_check_success = "The current answer addresses the question very well."
+                            step_status_llm_check_success = _success_marker_phrase
                             llm_result.answer = f"{llm_result.answer}, \n\nreason:{step_status_llm_check_success} ,{observe_result.reason}"
+                            logger.info(
+                                "[step][llm-check-success] marker ADDED: appended reason:%s to answer (answer_len=%s)",
+                                step_status_llm_check_success[:48] + "…",
+                                len(llm_result.answer or ""),
+                            )
+                    else:
+                        logger.info(
+                            "[step][llm-check-success] observe_unstructured skipped: invoke conclusion=%s (not terminate), "
+                            "no success phrase appended",
+                            _invoke_conc,
+                        )
             else:
                 raise ValueError(f"Unknown agent type: {agent_type}")
         except Exception as e:
@@ -865,8 +965,18 @@ class DocAgent(BaseAgent):
 
             if not llm_result.answer:
                 answer = f"No relevant knowledge available to answer the question: {self.original_query}, will try a different question!"
+                logger.info(
+                    "[step][llm-check-success] final return: empty answer fallback, contains_marker=False"
+                )
                 return answer
             else:
+                _final_has = _success_marker_phrase in (llm_result.answer or "")
+                logger.info(
+                    "[step][llm-check-success] final return: conclusion=%s answer_chars=%s contains_success_phrase=%s",
+                    getattr(llm_result, "conclusion", None),
+                    len(llm_result.answer or ""),
+                    _final_has,
+                )
                 return llm_result.answer
         else:
             raise ValueError("step can not handle normal!")
@@ -992,6 +1102,29 @@ class DocAgent(BaseAgent):
 
                 logger.info(f"******************** {current_task}, current query: {self.query}, Executing step {self.current_step}/{self.max_steps}")
 
+                step_query_snapshot = (self.query or "").strip()
+                step_query_preview = self._step_query_preview(step_query_snapshot)
+                step_started_msg = (
+                    f"executing step {self.current_step}/{self.max_steps}"
+                    f" | query: {step_query_preview}"
+                )
+                step_extra: Dict[str, Any] = {
+                    "step": self.current_step,
+                    "max_steps": self.max_steps,
+                    "step_query": step_query_preview,
+                }
+                ct = (current_task or "").strip()
+                if ct and ct != step_query_snapshot:
+                    step_extra["current_task"] = self._step_query_preview(ct, 260)
+                    step_started_msg += f" | task: {step_extra['current_task']}"
+                await self.emit_progress(
+                    "sd_doc_step_started",
+                    message=step_started_msg,
+                    status="running",
+                    task_id=self.current_task_id,
+                    extra=step_extra,
+                )
+
                 step_result_str = f"step {self.current_step}/{self.max_steps}: query: {self.query}"
 
                 step_result = await self.step()
@@ -999,6 +1132,23 @@ class DocAgent(BaseAgent):
                 steps_status = self.get_step_history_for_requery()
 
                 logger.debug(f"******************** steps status: \n\n {steps_status}")
+
+                finished_query_preview = self._step_query_preview(step_query_snapshot)
+                await self.emit_progress(
+                    "sd_doc_step_finished",
+                    message=(
+                        f"completed step {self.current_step}/{self.max_steps}"
+                        f" | query: {finished_query_preview}"
+                    ),
+                    status="done",
+                    task_id=self.current_task_id,
+                    extra={
+                        "step": self.current_step,
+                        "max_steps": self.max_steps,
+                        "step_query": finished_query_preview,
+                        "result_chars": len(str(step_result or "")),
+                    },
+                )
 
                 yield step_result
 
@@ -1028,7 +1178,8 @@ class DocAgentExecutor(AgentExecutor):
         dd_namespace:str = None,
         descriptor_types_json_string: str = None,
         data_services_url: str = None,
-        max_steps:int = 5
+        max_steps:int = 5,
+        agent_id: str = None,
 
     ):
         self.provider=provider
@@ -1043,6 +1194,7 @@ class DocAgentExecutor(AgentExecutor):
         self.data_services_url=data_services_url
         self.stream_enabled = stream
         self.max_steps = max_steps
+        self.agent_id = agent_id
 
     async def execute(
         self,
@@ -1085,7 +1237,8 @@ class DocAgentExecutor(AgentExecutor):
             metadata=metadata,
             max_steps=self.max_steps,
             current_tasks_status=current_tasks_status,
-            current_task_id=current_task_id
+            current_task_id=current_task_id,
+            agent_id=self.agent_id,
         )
 
         task = context.current_task
@@ -1096,6 +1249,13 @@ class DocAgentExecutor(AgentExecutor):
         updater = TaskUpdater(event_queue, task.id, task.context_id)
 
         if self.stream_enabled:
+            async def _progress_callback(text: str) -> None:
+                await updater.add_artifact(
+                    [TextPart(text=text)],
+                    name=f'{agent.agent_name}-result',
+                )
+
+            agent.progress_callback = _progress_callback
             async for chunk in agent.run():
                 if chunk:
                     part = TextPart(text=chunk)
