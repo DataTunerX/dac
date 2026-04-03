@@ -402,23 +402,15 @@ dataServices:
       database: "agent_memory"
       # -- Default memory collection name
       collection: "memories"
-      # -- Memory embedding vector dimensions
-      embeddingDims: "1024"
       minConnection: "1"
       maxConnection: "50"
       # -- Graph memory (enable | disable). Requires Neo4j.
       graphEnable: "disable"
-    knowledgeGraph:
-      embeddingDims: "1024"
     # -- Neo4j connection (only needed if graphEnable=enable)
     neo4j:
       url: "bolt://neo4j-server:7687"
       username: "neo4j"
       password: "test123456"
-    llm:
-      # -- LLM model used by data-services (can differ from agent model)
-      model: "deepseek-v3"
-      temperature: "0.01"
   resources:
     requests:
       cpu: 200m

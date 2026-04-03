@@ -128,9 +128,10 @@ def compute_minio_object_list_hash(
     minio_client: Any,
 ) -> Optional[str]:
     """
-    Single implementation for MinIO object_list_hash — observer and extractors must call this only.
+    Hash a fixed list of object paths via ``stat_object`` (legacy / tests).
 
-    minio_client: object with ``stat_object(bucket, object_name)`` (e.g. ``minio.Minio`` behind ``GeneralMinio.conn``).
+    For production MinIO sync, use ``compute_minio_bucket_object_list_hash`` so the fingerprint
+    matches all objects in the bucket; ``extract.files`` is not used.
     """
     try:
         items = []
@@ -144,6 +145,34 @@ def compute_minio_object_list_hash(
         return hashlib.md5(json.dumps(items).encode()).hexdigest()
     except Exception as e:
         logger.warning("compute_minio_object_list_hash failed: %s", e)
+        return None
+
+
+def compute_minio_bucket_object_list_hash(
+    bucket: str,
+    minio_client: Any,
+) -> Optional[str]:
+    """
+    MinIO object_list_hash over all objects in the bucket (full bucket; no prefix filter).
+
+    Uses ``list_objects`` (path, etag, size) so job and observer agree; ``extract.files`` ignored.
+    minio_client: ``minio.Minio`` (e.g. ``GeneralMinio.conn``).
+    """
+    try:
+        items: List[tuple] = []
+        for obj in minio_client.list_objects(bucket, prefix="", recursive=True):
+            if getattr(obj, "is_dir", False):
+                continue
+            name = getattr(obj, "object_name", "") or ""
+            if name.endswith("/"):
+                continue
+            etag = getattr(obj, "etag", None) or ""
+            size = int(getattr(obj, "size", 0) or 0)
+            items.append((name, etag, size))
+        items.sort(key=lambda x: x[0])
+        return hashlib.md5(json.dumps(items).encode()).hexdigest()
+    except Exception as e:
+        logger.warning("compute_minio_bucket_object_list_hash failed: %s", e)
         return None
 
 

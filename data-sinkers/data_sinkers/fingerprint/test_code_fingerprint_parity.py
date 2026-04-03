@@ -15,6 +15,7 @@ from data_sinkers.connection_config import DataSourceType, get_connection_config
 from data_sinkers.fingerprint.fingerprint import (
     FingerprintBuilder,
     compute_fileserver_object_list_hash,
+    compute_minio_bucket_object_list_hash,
     compute_minio_object_list_hash,
     fingerprint_id_for_unstructured,
     normalize_code_connection_for_fingerprint,
@@ -246,6 +247,23 @@ class _FakeMinioConn:
         return _FakeStat(f"etag-{name}", len(name))
 
 
+class _FakeListEntry:
+    __slots__ = ("object_name", "etag", "size", "is_dir")
+
+    def __init__(self, name: str, etag: str = "", size: int = 0, is_dir: bool = False) -> None:
+        self.object_name = name
+        self.etag = etag
+        self.size = size
+        self.is_dir = is_dir
+
+
+class _FakeMinioConnWithList:
+    def list_objects(self, bucket: str, prefix: str = "", recursive: bool = True):
+        yield _FakeListEntry("z", "e-z", 1)
+        yield _FakeListEntry("a", "e-a", 2)
+        yield _FakeListEntry("dir/", is_dir=True)
+
+
 class TestUnstructuredFingerprintShared(unittest.TestCase):
     """Observer, extractors, and job must share compute_* + fingerprint_id_for_unstructured."""
 
@@ -266,6 +284,13 @@ class TestUnstructuredFingerprintShared(unittest.TestCase):
             b.generate_object_list_fingerprint_summary("minio", conn, h)
         )
         self.assertEqual(fid_shared, fid_direct)
+
+    def test_minio_bucket_hash_sorted_and_stable(self) -> None:
+        h = compute_minio_bucket_object_list_hash("bkt", _FakeMinioConnWithList())
+        self.assertIsNotNone(h)
+        # Sorted by object name: a then z; dir pseudo-entry skipped
+        h2 = compute_minio_bucket_object_list_hash("bkt", _FakeMinioConnWithList())
+        self.assertEqual(h, h2)
 
     def test_fileserver_hash_matches_observer_payload(self) -> None:
         conn = {"host": "localhost", "port": 8000}

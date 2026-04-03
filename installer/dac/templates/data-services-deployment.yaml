@@ -47,9 +47,9 @@ spec:
             - name: LLM_BASE_URL
               value: {{ .Values.global.llm.baseUrl | quote }}
             - name: LLM_MODEL
-              value: {{ .Values.dataServices.config.llm.model | quote }}
+              value: {{ .Values.global.llm.model | quote }}
             - name: LLM_TEMPERATURE
-              value: {{ .Values.dataServices.config.llm.temperature | quote }}
+              value: {{ .Values.global.llm.temperature | quote }}
             # Memory pgvector
             - name: MEMORY_PGVECTOR_HOST
               value: {{ include "dac.pgvector.serviceName" . | quote }}
@@ -68,7 +68,7 @@ spec:
             - name: MEMORY_COLLECTION
               value: {{ .Values.dataServices.config.memory.collection | quote }}
             - name: MEMORY_EMBEDDING_DIMS
-              value: {{ .Values.dataServices.config.memory.embeddingDims | quote }}
+              value: {{ .Values.global.embedding.dims | quote }}
             - name: MEMORY_GRAPH_ENABLE
               value: {{ .Values.dataServices.config.memory.graphEnable | quote }}
             - name: MEMORY_GRAPH_DB_PROVIDER
@@ -80,7 +80,7 @@ spec:
             - name: MEMORY_GRAPH_DB_PASSWORD
               value: {{ .Values.neo4j.password | quote }}
             - name: MEMORY_GRAPH_LLM_MODEL
-              value: {{ .Values.dataServices.config.llm.model | quote }}
+              value: {{ .Values.global.llm.model | quote }}
             - name: MEMORY_GRAPH_LLM_APIKEY
               value: {{ .Values.global.llm.apiKey | quote }}
             - name: MEMORY_GRAPH_LLM_BASEURL
@@ -123,7 +123,7 @@ spec:
             - name: KNOWLEDGE_GRAPH_DB_PASSWORD
               value: {{ .Values.neo4j.password | quote }}
             - name: KNOWLEDGE_GRAPH_EMBEDDING_DIMS
-              value: {{ .Values.dataServices.config.knowledgeGraph.embeddingDims | quote }}
+              value: {{ .Values.global.embedding.dims | quote }}
           resources:
             {{- toYaml .Values.dataServices.resources | nindent 12 }}
 {{- end }}

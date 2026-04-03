@@ -27,7 +27,7 @@ from .fingerprint.fingerprint import (
     FingerprintBuilder,
     CODE_COMMIT_SHA_METADATA_KEY,
     compute_fileserver_object_list_hash,
-    compute_minio_object_list_hash,
+    compute_minio_bucket_object_list_hash,
     fingerprint_id_for_unstructured,
     resolve_code_commit_sha_for_fingerprint,
 )
@@ -424,10 +424,9 @@ def _detect_postgres_change(
 
 def _detect_minio_change(
     connection_config: Dict[str, Any],
-    extract_files: List[str],
     stored_fingerprint: Optional[str],
 ) -> bool:
-    """MinIO change detection: list objects, hash (path, etag, size), compare."""
+    """MinIO change detection: list whole bucket, hash (path, etag, size), compare."""
     try:
         from .readers.minio.minio_conn import GeneralMinio
     except ImportError as e:
@@ -441,9 +440,7 @@ def _detect_minio_change(
             secret_key=connection_config.get("secret_key", ""),
         )
         bucket = connection_config.get("bucket", "")
-        obj_hash = compute_minio_object_list_hash(
-            bucket, extract_files or [], client.conn
-        )
+        obj_hash = compute_minio_bucket_object_list_hash(bucket, client.conn)
         current_hash = fingerprint_id_for_unstructured(
             "minio", connection_config, obj_hash
         )
@@ -553,7 +550,6 @@ def detect_source_change(
         files = [files] if files else []
     elif not isinstance(files, list):
         files = []
-
     # Get stored fingerprint from data-services
     try:
         resp = signature_client.search_signatures_by_dd(dd_namespace, dd_name)
@@ -654,7 +650,7 @@ def detect_source_change(
             source_type, conn_config, stored_fingerprint, stored_code_commit_sha
         )
     if source_type == "minio":
-        return _detect_minio_change(conn_config, files, stored_fingerprint)
+        return _detect_minio_change(conn_config, stored_fingerprint)
     if source_type == "fileserver":
         return _detect_fileserver_change(conn_config, files, stored_fingerprint)
     logger.info(

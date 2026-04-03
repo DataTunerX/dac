@@ -5,7 +5,7 @@ from ..readers.minio.minio_reader import MinIOReader
 from ..api.base import DocumentModel
 from model_sdk import ModelManager
 from .base import FileAnalyzer
-from ..fingerprint.fingerprint import compute_minio_object_list_hash
+from ..fingerprint.fingerprint import compute_minio_bucket_object_list_hash
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -33,15 +33,8 @@ def extract_minio(
 
     results: List[DocumentModel] = []
 
-    object_names = extract.get('files')
-
-    if object_names is None:
-        raise ValueError("object_names is None - 'files' key not found in extract dictionary")
-    
-    if not isinstance(object_names, list):
-        raise ValueError(f"object_names must be a list, got {type(object_names)}")
-
-    results = reader.query(objects=object_names)
+    # Full bucket only; extract.files and extract.prefix are ignored.
+    results = reader.query(prefix="", recursive=True, objects=None)
 
     file_analyzer = FileAnalyzer(llm, max_workers=50, batch_size=50)
 
@@ -56,9 +49,7 @@ def extract_minio(
     agent_card = file_analyzer.agent_card(outline)
 
     bucket = reader.config.get("bucket")
-    object_list_hash = compute_minio_object_list_hash(
-        bucket, object_names, reader.client.conn
-    )
+    object_list_hash = compute_minio_bucket_object_list_hash(bucket, reader.client.conn)
 
     fingerprint_associated_info = {
         "ddd": summary,
