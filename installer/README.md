@@ -35,33 +35,31 @@ global:
     apiKey: "sk-your-real-key"
     model: "text-embedding-v4"
     dims: "1024"
-  # LLM 观测（Langfuse）：Chart 默认关闭。开启后（enabled: true）。routing/chart Agent 的 LANGFUSE_* 与 dac-configuration、dd-configuration 中 observation-* 由同一开关控制；地址与密钥填在 global.langfuse 即可，executionEngine.dacConfig.observation* 仅作可选覆盖
+  # embedding:
+  #   provider: "openai_compatible"
+  #   apiKey: "sk-your-real-key"
+  #   baseUrl: "https://xxx/v1"
+  #   model: "bge-m3"
+  #   dims: "1024"
+
+  # LLM 观测（Langfuse）：默认关闭，开启后（enabled: true），用于观测所有对话过程中llm的调用的观测数据。
   langfuse:
     enabled: false
     baseUrl: "http://your-langfuse-host:3000"
     secretKey: "sk-lf-your-langfuse-secret-key"
     publicKey: "pk-lf-your-langfuse-public-key"
-  # embedding:
-  #   provider: "openai_compatible"
-  #   apiKey: "sk-your-real-key"
-  #   # baseUrl: "https://xxx/v1"
-  #   model: "text-embedding-v4"
-  #   dims: "1024"
 
-# llmConfigs 条目留空的字段会自动继承 global.llm 对应值；
-# 如需为某个条目使用不同模型，可单独覆盖
+# llmConfigs 条目留空的字段会自动继承 global.llm 对应值；如需为某个条目使用不同模型，可单独覆盖
 executionEngine:
-  # 可选：仅当需要与 global.langfuse 使用不同观测端点/密钥时才填 observation*（会覆盖 global.langfuse 对应项写入 ConfigMap 与 Agent env）
-  # dacConfig:
-  #   observationBaseUrl: "http://other-langfuse:3000"
-  #   observationSecretKey: "sk-lf-..."
-  #   observationPublicKey: "pk-lf-..."
   llmConfigs:
     - name: "llm-default"
       provider: "openai_compatible"
       apiKey: "sk-your-real-key"
       baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1"
       model: "deepseek-v3.2"
+
+# 配置k8s的存储，用于mysql, redis, pgvector, neo4j的数据持久化，根据环境真实storage class设置
+storageClass: "nfs-csi"
 
 mysql:
   rootPassword: "changeme"

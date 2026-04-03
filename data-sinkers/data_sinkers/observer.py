@@ -11,7 +11,6 @@ Env:
   DATA_DESCRIPTOR: must match dac-data-services DATA_DESCRIPTOR (namespace_name with '-' -> '_')
   SYNC_SCHEDULE: interval like "6h", "1h" or seconds (default "6h")
 """
-import hashlib
 import json
 import logging
 import os
@@ -24,7 +23,14 @@ from typing import Dict, Any, List, Optional
 import requests
 
 from .client.signature_client import SignatureClient
-from .fingerprint.fingerprint import FingerprintBuilder, get_remote_commit_sha
+from .fingerprint.fingerprint import (
+    FingerprintBuilder,
+    CODE_COMMIT_SHA_METADATA_KEY,
+    compute_fileserver_object_list_hash,
+    compute_minio_object_list_hash,
+    fingerprint_id_for_unstructured,
+    resolve_code_commit_sha_for_fingerprint,
+)
 
 
 def _configure_observer_logging() -> None:
@@ -56,6 +62,27 @@ _LOG = "[dd-sync-observer]"
 SYNC_REQUESTED_AT_ANNOTATION = "dac.dac.io/sync-requested-at"
 
 # Log grep anchor: DD-OBSERVER-CYCLE-BOUNDARY
+
+
+def _dd_sync_should_defer_patch(dd: Dict[str, Any]) -> Optional[str]:
+    """
+    If we should skip PATCH sync-requested-at this cycle despite detected source change,
+    return the current overallPhase (for logs); otherwise None.
+
+    When overallPhase is set and not Ready, execution-engine is usually still running (or
+    settling) a data-sinker job. Patching again overlaps with SYNC_SCHEDULE < job duration
+    and caused duplicate triggers. Empty/missing phase keeps previous behaviour (e.g. API
+    omitting status).
+    """
+    status = dd.get("status") or {}
+    if not isinstance(status, dict):
+        return None
+    phase = str(status.get("overallPhase") or "").strip()
+    if not phase:
+        return None
+    if phase == "Ready":
+        return None
+    return phase
 
 
 def _log_dd_check_cycle_boundary(
@@ -299,6 +326,15 @@ def _get_connection_config(source_type: str, metadata: Dict[str, Any]) -> Dict[s
             "bucket": metadata.get("bucket", ""),
             "secure": metadata.get("secure", False),
         }
+    if type_lower == "fileserver":
+        # Must match job.get_connection_config(FILESERVER): fingerprint embeds
+        # connection_information JSON — previously we returned full metadata here, while
+        # the job only persisted {host, port}, causing perpetual Fingerprint changed for
+        # unstructured / fileserver DDs (same object_list_hash, different summary).
+        return {
+            "host": metadata.get("host", "localhost"),
+            "port": metadata.get("port", 8000),
+        }
     return metadata
 
 
@@ -405,20 +441,12 @@ def _detect_minio_change(
             secret_key=connection_config.get("secret_key", ""),
         )
         bucket = connection_config.get("bucket", "")
-        items = []
-        for obj_name in extract_files or []:
-            try:
-                stat = client.conn.stat_object(bucket, obj_name)
-                items.append((obj_name, stat.etag or "", stat.size))
-            except Exception:
-                items.append((obj_name, "", 0))
-        items.sort(key=lambda x: x[0])
-        obj_hash = hashlib.md5(json.dumps(items).encode()).hexdigest()
-        builder = FingerprintBuilder()
-        summary = builder.generate_object_list_fingerprint_summary(
+        obj_hash = compute_minio_object_list_hash(
+            bucket, extract_files or [], client.conn
+        )
+        current_hash = fingerprint_id_for_unstructured(
             "minio", connection_config, obj_hash
         )
-        current_hash = builder.generate_fingerprint_id(summary)
         if not stored_fingerprint:
             return False
         if current_hash != stored_fingerprint:
@@ -441,17 +469,10 @@ def _detect_fileserver_change(
     stored_fingerprint: Optional[str],
 ) -> bool:
     """Fileserver change detection: hash (host, port, files list)."""
-    payload = {
-        "host": connection_config.get("host"),
-        "port": connection_config.get("port"),
-        "files": sorted(extract_files) if isinstance(extract_files, list) else [],
-    }
-    obj_hash = hashlib.md5(json.dumps(payload).encode()).hexdigest()
-    builder = FingerprintBuilder()
-    summary = builder.generate_object_list_fingerprint_summary(
+    obj_hash = compute_fileserver_object_list_hash(connection_config, extract_files)
+    current_hash = fingerprint_id_for_unstructured(
         "fileserver", connection_config, obj_hash
     )
-    current_hash = builder.generate_fingerprint_id(summary)
     if not stored_fingerprint:
         return False
     if current_hash != stored_fingerprint:
@@ -469,14 +490,21 @@ def _detect_code_change(
     source_type: str,
     connection_config: Dict[str, Any],
     stored_fingerprint: Optional[str],
+    stored_commit_sha: Optional[str] = None,
 ) -> bool:
     """
-    Code repo change: fingerprint includes connection_information + commit_sha (git ls-remote).
+    Code repo change: same commit resolution as data-sinker job (ls-remote, then last synced metadata).
     """
     repo_url = connection_config.get("codeRepoPath") or ""
     branch = connection_config.get("codeRepoBranch") or "main"
     token = connection_config.get("token") or connection_config.get("codeRepoToken") or ""
-    commit_sha = get_remote_commit_sha(repo_url, branch, token or None)
+    commit_sha = resolve_code_commit_sha_for_fingerprint(
+        repo_url,
+        branch,
+        token or None,
+        resolved_head_sha=None,
+        stored_commit_sha=stored_commit_sha,
+    )
     builder = FingerprintBuilder()
     summary = builder.generate_code_fingerprint_summary(source_type, connection_config, commit_sha)
     current_hash = builder.generate_fingerprint_id(summary)
@@ -539,16 +567,38 @@ def detect_source_change(
         )
         return False
 
-    data = resp.get("data") or resp.get("records") or []
-    if isinstance(data, dict):
-        data = data.get("items", data.get("records", []))
+    raw = resp.get("data") or resp.get("records") or []
+    if isinstance(raw, dict):
+        raw = raw.get("items", raw.get("records", []))
+    if isinstance(raw, list):
+        records: List[Dict[str, Any]] = [r for r in raw if isinstance(r, dict)]
+    elif isinstance(raw, dict):
+        records = [raw]
+    else:
+        records = []
+
     stored_fingerprint = None
-    if data:
-        first = data[0] if isinstance(data, list) else data
-        if isinstance(first, dict):
-            stored_fingerprint = first.get("fingerprint")
-            if not stored_fingerprint and first.get("metadata_content"):
-                stored_fingerprint = json.dumps(first.get("metadata_content", {}), sort_keys=True)
+    stored_code_commit_sha: Optional[str] = None
+
+    if source_type in ("github", "gitee", "gitlab"):
+        baseline = next(
+            (r for r in records if str(r.get("sig_type", "")).lower() == "application"),
+            None,
+        )
+        if baseline:
+            stored_fingerprint = baseline.get("fingerprint")
+            meta = baseline.get("metadata_content")
+            if isinstance(meta, dict):
+                c = meta.get(CODE_COMMIT_SHA_METADATA_KEY)
+                if c is not None and str(c).strip():
+                    stored_code_commit_sha = str(c).strip()
+            if not stored_fingerprint and baseline.get("metadata_content"):
+                stored_fingerprint = json.dumps(baseline.get("metadata_content", {}), sort_keys=True)
+    elif records:
+        first = records[0]
+        stored_fingerprint = first.get("fingerprint")
+        if not stored_fingerprint and first.get("metadata_content"):
+            stored_fingerprint = json.dumps(first.get("metadata_content", {}), sort_keys=True)
 
     src_name = source.get("name") or ""
     has_baseline = bool(stored_fingerprint)
@@ -600,7 +650,9 @@ def detect_source_change(
             )
         return _detect_postgres_change(conn_config, tables, stored_fingerprint)
     if source_type in ("github", "gitee", "gitlab"):
-        return _detect_code_change(source_type, conn_config, stored_fingerprint)
+        return _detect_code_change(
+            source_type, conn_config, stored_fingerprint, stored_code_commit_sha
+        )
     if source_type == "minio":
         return _detect_minio_change(conn_config, files, stored_fingerprint)
     if source_type == "fileserver":
@@ -653,6 +705,17 @@ def run_cycle(
                 break
 
         if changed:
+            defer_phase = _dd_sync_should_defer_patch(dd)
+            if defer_phase is not None:
+                cycle_outcome = "defer_patch_dd_not_ready"
+                logger.info(
+                    "%s feature=run_cycle Source change detected but deferring PATCH sync-requested-at: "
+                    "overallPhase=%r (job likely in progress; retry next cycle). "
+                    "Avoids overlapping triggers when SYNC_SCHEDULE is shorter than data-sinker runtime.",
+                    _LOG,
+                    defer_phase,
+                )
+                return False
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             ok = _patch_dd_annotation_via_http(
                 data_services_url,

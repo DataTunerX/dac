@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import subprocess
 from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
 from ..api.base import DocumentModel
@@ -13,6 +14,24 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("code_extractor")
+
+
+def _local_git_head_sha(repo_dir: str) -> Optional[str]:
+    if not repo_dir or not os.path.isdir(repo_dir):
+        return None
+    try:
+        r = subprocess.run(
+            ["git", "-C", repo_dir, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception as e:
+        logger.debug("rev-parse HEAD failed for %s: %s", repo_dir, e)
+    return None
+
 
 manager = ModelManager()
 
@@ -63,7 +82,8 @@ def extract_code(reader, descriptor, repo_type) -> List[DocumentModel]:
 
     fingerprint_associated_info = {
         "ddd": code_ddd,
-        "agent_card": agent_card
+        "agent_card": agent_card,
+        "resolved_head_sha": _local_git_head_sha(local_repo_dir),
     }
 
     # 为每个模块组创建独立的文档

@@ -1,5 +1,3 @@
-import hashlib
-import json
 import os
 from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
@@ -7,6 +5,7 @@ from ..readers.fileserver.fileserver_reader import FileServerReader
 from ..api.base import DocumentModel
 from model_sdk import ModelManager
 from .base import FileAnalyzer
+from ..fingerprint.fingerprint import compute_fileserver_object_list_hash
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -73,17 +72,7 @@ def extract_fileserver(
 
     agent_card = file_analyzer.agent_card(outline)
 
-    # Compute object list hash for change detection (host, port, files list)
-    object_list_hash = None
-    try:
-        payload = {
-            "host": reader.config.get("host"),
-            "port": reader.config.get("port"),
-            "files": sorted(files) if isinstance(files, list) else [],
-        }
-        object_list_hash = hashlib.md5(json.dumps(payload).encode()).hexdigest()
-    except Exception as e:
-        logger.warning("Failed to compute object_list_hash: %s", e)
+    object_list_hash = compute_fileserver_object_list_hash(reader.config, files)
 
     fingerprint_associated_info = {
         "ddd": summary,

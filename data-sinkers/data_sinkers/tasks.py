@@ -6,7 +6,6 @@ from celery import Celery
 from data_sinkers import get_reader
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
-from enum import Enum
 import logging
 import re
 from .client.knowledge_pyramid_client import KnowledgePyramidClient
@@ -24,8 +23,15 @@ from .extractors.code import extract_code
 from .extractors.minio import extract_minio
 from .extractors.fileserver import extract_fileserver
 from .extractors.knowledge_graph import Knowledge_Graph
-from .fingerprint.fingerprint import FingerprintBuilder
+from .fingerprint.fingerprint import (
+    FingerprintBuilder,
+    CODE_COMMIT_SHA_METADATA_KEY,
+    fingerprint_id_for_unstructured,
+    resolve_code_commit_sha_for_fingerprint,
+)
 from .semantic_group.semantic_group import SemanticGrouper
+from .source_helpers import merge_code_repo_into_metadata
+from .connection_config import DataSourceType, get_connection_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("data_sinkers")
@@ -51,15 +57,6 @@ data_services_url = os.getenv('DATA_SERVICES', 'http://localhost:8000')
 
 # URL encode the password if it contains special characters
 password_part = f':{quote_plus(redis_password)}@' if redis_password else ''
-
-class DataSourceType(str, Enum):
-    MYSQL = "mysql"
-    MINIO = "minio"
-    POSTGRESQL = "postgres"
-    FILESERVER = "fileserver"
-    GITHUB = "github"
-    GITEE = "gitee"
-    GITLAB = "gitlab"
 
 class DataSourceConfig(BaseModel):
     type: DataSourceType
@@ -93,52 +90,6 @@ celery.conf.update(
     },
     task_track_started=True
 )
-
-def get_connection_config(source_type: DataSourceType, metadata: Dict[str, Any]) -> Dict[str, Any]:
-    config_map = {
-        DataSourceType.MYSQL: {
-            "host": metadata.get("host", "localhost"),
-            "port": metadata.get("port", 3306),
-            "user": metadata.get("user", "root"),
-            "password": metadata.get("password", ""),
-            "database": metadata.get("database", ""),
-        },
-        DataSourceType.POSTGRESQL: {
-            "host": metadata.get("host", "localhost"),
-            "port": metadata.get("port", 5432),
-            "user": metadata.get("user", "postgres"),
-            "password": metadata.get("password", ""),
-            "database": metadata.get("database", "postgres"),
-        },
-        DataSourceType.MINIO: {
-            "host": metadata.get("host", "localhost:9000"),
-            "access_key": metadata.get("access_key", ""),
-            "secret_key": metadata.get("secret_key", ""),
-            "bucket": metadata.get("bucket", ""),
-            "secure": metadata.get("secure", False),
-        },
-        DataSourceType.FILESERVER: {
-            "host": metadata.get("host", "localhost"),
-            "port": metadata.get("port", 8000),
-        },
-        DataSourceType.GITHUB: {
-            "codeRepoPath": metadata.get("codeRepoPath", "https://github.com/octocat/Hello-World"),
-            "codeRepoBranch": metadata.get("codeRepoBranch", "main"),
-            "token": metadata.get("codeRepoToken", ""),
-        },
-        DataSourceType.GITEE: {
-            "codeRepoPath": metadata.get("codeRepoPath", "https://github.com/octocat/Hello-World"),
-            "codeRepoBranch": metadata.get("codeRepoBranch", "main"),
-            "token": metadata.get("codeRepoToken", ""),
-        },
-        DataSourceType.GITLAB: {
-            "codeRepoPath": metadata.get("codeRepoPath", "https://gitlab.com/octocat/Hello-World"),
-            "codeRepoBranch": metadata.get("codeRepoBranch", "main"),
-            "token": metadata.get("codeRepoToken", ""),
-        }
-    }
-    return config_map.get(source_type, {})
-
 
 #build KnowledgePyramidClient to send documents to data-services
 knowledge_pyramid_client = KnowledgePyramidClient(base_url=data_services_url, timeout=600)
@@ -232,11 +183,11 @@ def process_data(self, data: Dict[str, Any]):
             source_type = DataSourceType(source_data.get('type'))
         except ValueError as e:
             raise ValueError(f"Unsupported data source type: {source_data.get('type')}") from e
-        
-        connection_config = get_connection_config(
-            source_type, 
-            source_data.get('metadata', {})
+
+        source_metadata = merge_code_repo_into_metadata(
+            source_data.get("metadata", {}), codeRepo
         )
+        connection_config = get_connection_config(source_type, source_metadata)
         
         logger.info(f"connection_config = {connection_config}")
 
@@ -338,21 +289,40 @@ def send_add_signature(data_type, connection_config, descriptor, fingerprint_ass
     fingerprintBuilder = FingerprintBuilder()
 
     fingerprint_summary = ""
+    commit_sha: Optional[str] = None
+    fingerprint_id: Optional[str] = None
 
     if data_type == DataSourceType.MYSQL:
         fingerprint_summary = fingerprintBuilder.generate_db_fingerprint_summary(data_type, fingerprint_associated_info["tables_schema_md_list"])
     elif data_type == DataSourceType.POSTGRESQL:
         fingerprint_summary = fingerprintBuilder.generate_db_fingerprint_summary(data_type, fingerprint_associated_info["tables_schema_md_list"])
-    elif data_type == DataSourceType.GITHUB:
-        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(data_type, connection_config)
-    elif data_type == DataSourceType.GITLAB:
-        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(data_type, connection_config)
+    elif data_type in (DataSourceType.GITHUB, DataSourceType.GITEE, DataSourceType.GITLAB):
+        repo_url = connection_config.get("codeRepoPath") or ""
+        branch = connection_config.get("codeRepoBranch") or "main"
+        token = connection_config.get("token") or connection_config.get("codeRepoToken") or ""
+        commit_sha = resolve_code_commit_sha_for_fingerprint(
+            repo_url,
+            branch,
+            token or None,
+            resolved_head_sha=fingerprint_associated_info.get("resolved_head_sha"),
+            stored_commit_sha=None,
+        )
+        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(
+            data_type, connection_config, commit_sha
+        )
     elif data_type == DataSourceType.MINIO:
-        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(data_type, connection_config)
+        obj_hash = fingerprint_associated_info.get("object_list_hash")
+        fingerprint_id = fingerprint_id_for_unstructured(
+            data_type, connection_config, obj_hash
+        )
     elif data_type == DataSourceType.FILESERVER:
-        fingerprint_summary = fingerprintBuilder.generate_code_fingerprint_summary(data_type, connection_config)
+        obj_hash = fingerprint_associated_info.get("object_list_hash")
+        fingerprint_id = fingerprint_id_for_unstructured(
+            data_type, connection_config, obj_hash
+        )
 
-    fingerprint_id = fingerprintBuilder.generate_fingerprint_id(fingerprint_summary)
+    if fingerprint_id is None:
+        fingerprint_id = fingerprintBuilder.generate_fingerprint_id(fingerprint_summary)
 
     # Determine sig_type based on data source type
     sig_type_map = {
@@ -413,6 +383,9 @@ def send_add_signature(data_type, connection_config, descriptor, fingerprint_ass
             "tables_relationship": fingerprint_associated_info.get("tables_relationship", {}),
             "tables_schema_md_list": fingerprint_associated_info.get("tables_schema_md_list", [])
         })
+    elif data_type in (DataSourceType.GITHUB, DataSourceType.GITEE, DataSourceType.GITLAB):
+        if commit_sha:
+            metadata_content[CODE_COMMIT_SHA_METADATA_KEY] = commit_sha
 
     signature = SignatureData(
         sig_type=sig_type,
