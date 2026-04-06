@@ -1,0 +1,116 @@
+global:
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent
+
+  llm:
+    provider: "openai_compatible"
+    apiKey: "sk-youre-real-key-123"
+    baseUrl: "http://10.124.48.200:8001/v1"
+    model: "nvidia/nemotron-3-super"
+
+  embedding:
+    provider: "openai_compatible"
+    apiKey: "sk-youre-real-key-123"
+    baseUrl: "http://10.124.48.200:8050/v1"
+    model: "bge-m3"
+    dims: "1024"
+
+  langfuse:
+    enabled: false
+    baseUrl: "http://your-langfuse-host:3000"
+    secretKey: "sk-lf-your-langfuse-secret-key"
+    publicKey: "pk-lf-your-langfuse-public-key"
+
+apiserver:
+  image:
+    repository: "ljtbbt/dac"
+    tag: "apiserver-v0.9.0"
+
+frontend:
+  image:
+    repository: "ljtbbt/dac"
+    tag: "frontend-v0.9.0"
+
+dataServices:
+  image:
+    repository: "ljtbbt/dac"
+    tag: "data-services-v0.9.0-amd64"
+
+executionEngine:
+  image:
+    repository: "ljtbbt/dac"
+    tag: "execution-engine-v0.9.0-amd64"
+  agentImages:
+    orchestratorAgent:
+      repository: "ljtbbt/dac"
+      tag: "orchestrator-agent-v0.9.0-amd64"
+    expertAgent:
+      repository: "ljtbbt/dac"
+      tag: "expert-agent-v0.9.0-amd64"
+    codeAgent:
+      repository: "ljtbbt/dac"
+      tag: "code-agent-v0.9.0-amd64"
+    docAgent:
+      repository: "ljtbbt/dac"
+      tag: "doc-agent-v0.9.0-amd64"
+    dacDataServices:
+      repository: "ljtbbt/dac"
+      tag: "dac-data-services-v0.9.0-amd64"
+    dataSinkerJob:
+      repository: "ljtbbt/dac"
+      tag: "data-sinkers-job-v0.9.0-amd64"
+    dataSinkerStatus:
+      repository: "ljtbbt/dac"
+      tag: "data-sinkers-status-v0.9.0-amd64"
+    dataSinkersObserver:
+      repository: "ljtbbt/dac"
+      tag: "data-sinkers-observer-v0.9.0-amd64"
+  llmConfigs:
+    - name: "llm-default"
+      provider: "openai_compatible"
+      apiKey: "sk-youre-real-key-123"
+      baseUrl: "http://10.124.48.200:8001/v1"
+      model: "nvidia/nemotron-3-super"
+
+semanticGrouper:
+  image:
+    repository: "ljtbbt/dac"
+    tag: "semantic-grouper-v0.9.0-amd64"
+  config:
+    llm:
+      model: "nvidia/nemotron-3-super"
+
+orchestratorRegistry:
+  image:
+    repository: "ljtbbt/dac"
+    tag: "agent-registry-v0.9.0-amd64"
+
+bizOrchestratorRegistry:
+  image:
+    repository: "ljtbbt/dac"
+    tag: "agent-registry-v0.9.0-amd64"
+
+bizRoutingAgent:
+  image:
+    repository: "ljtbbt/dac"
+    tag: "routing-agent-v0.9.0-amd64"
+
+bizChartAgent:
+  image:
+    repository: "ljtbbt/dac"
+    tag: "chart-agent-v0.9.0-amd64"
+
+mysql:
+  rootPassword: "changeme"
+
+redis:
+  password: "changeme"
+
+pgvector:
+  image:
+    repository: "registry.cn-shanghai.aliyuncs.com/jamesxiong/pgvector"
+    tag: "pg16-amd64"
+  password: "changeme"
+
+neo4j:
+  password: "changeme"
