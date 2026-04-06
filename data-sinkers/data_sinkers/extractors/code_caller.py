@@ -24,22 +24,11 @@ DEFAULT_CODE_DOWNLOAD_DIR = "/app/download_dir"
 
 manager = ModelManager()
 
-# llm = manager.get_llm(
-#     provider=os.getenv("PROVIDER","openai_compatible"),
-#     api_key=os.getenv("API_KEY"),
-#     base_url=os.getenv("BASE_URL"),
-#     model=os.getenv("Model"),
-#     temperature=0.01,
-#     extra_body={
-#         "enable_thinking": False
-#     },
-# )
-
 llm = manager.get_llm(
-    provider="openai_compatible",
-    api_key="sk-xxx",
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model="deepseek-v3.2",
+    provider=os.getenv("PROVIDER", "openai_compatible"),
+    api_key=os.getenv("API_KEY"),
+    base_url=os.getenv("BASE_URL"),
+    model=os.getenv("Model"),
     temperature=0.01,
     extra_body={
         "enable_thinking": False
