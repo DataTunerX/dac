@@ -58,6 +58,11 @@ class AsyncPostgresPoolManager:
                 await pool.close()
             cls._pools.clear()
 
+def _pg_quote_ident(ident: str) -> str:
+    """Quote a PostgreSQL identifier for use in SQL text (asyncpg has no public helper)."""
+    return '"' + str(ident).replace('"', '""') + '"'
+
+
 class AsyncPostgresReader:
     
     def __init__(self, config: Union[Dict[str, Any], PostgresConfig]):
@@ -170,6 +175,7 @@ class AsyncPostgresReader:
         try:
             tables_sql = """
                 SELECT 
+                    t.table_schema,
                     t.table_name,
                     pg_catalog.obj_description(pc.oid, 'pg_class') as table_comment
                 FROM 
@@ -226,6 +232,7 @@ class AsyncPostgresReader:
                 WHERE 
                     c.table_schema NOT IN ('pg_catalog', 'information_schema')
                     AND c.table_name = $1
+                    AND c.table_schema = $2
                 ORDER BY c.ordinal_position
             """
             
@@ -237,9 +244,12 @@ class AsyncPostgresReader:
 
                 result = []
                 for table in tables:
-                    columns = await conn.fetch(columns_sql, table['table_name'])
+                    columns = await conn.fetch(
+                        columns_sql, table['table_name'], table['table_schema']
+                    )
                     
                     result.append({
+                        'table_schema': table['table_schema'],
                         'table_name': table['table_name'],
                         'table_comment': table['table_comment'] or '',
                         'columns': [dict(col) for col in columns]
@@ -251,26 +261,64 @@ class AsyncPostgresReader:
             logger.error(f"Failed to retrieve schema: {e}")
             raise RuntimeError(f"Failed to retrieve schema: {e}")
 
+    async def _qualified_table_pairs(
+        self, conn, table_names: List[str]
+    ) -> List[tuple]:
+        """Resolve bare table names to (table_schema, table_name) for sampling.
+
+        Unqualified ``FROM name`` fails when the table is outside ``search_path``.
+        Prefer ``public`` when the same name exists in multiple schemas.
+        """
+        pairs: List[tuple] = []
+        for raw in table_names:
+            name = str(raw or "").strip()
+            if not name:
+                continue
+            rows = await conn.fetch(
+                """
+                SELECT table_schema, table_name
+                FROM information_schema.tables t
+                WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema')
+                  AND t.table_type = 'BASE TABLE'
+                  AND t.table_name = $1
+                ORDER BY CASE WHEN t.table_schema = 'public' THEN 0 ELSE 1 END,
+                         t.table_schema
+                """,
+                name,
+            )
+            for r in rows:
+                pairs.append((r["table_schema"], r["table_name"]))
+        return pairs
+
     async def sample(self, table_names: Optional[List[str]] = None) -> str:
         try:
-            if not table_names:
-                schema_info = await self.schema()
-                table_names = [table['table_name'] for table in schema_info]
+            async with self._get_connection() as conn:
+                if not table_names:
+                    schema_info = await self.schema()
+                    qualified = [
+                        (t["table_schema"], t["table_name"]) for t in schema_info
+                    ]
+                else:
+                    qualified = await self._qualified_table_pairs(conn, table_names)
             
             results = []
-            for table_name in table_names:
+            for table_schema, table_name in qualified:
+                label = f"{table_schema}.{table_name}"
                 try:
-                    query = f'SELECT * FROM "{table_name}" LIMIT 10'
+                    fq = f"{_pg_quote_ident(table_schema)}.{_pg_quote_ident(table_name)}"
+                    query = f"SELECT * FROM {fq} LIMIT 10"
                     sample_data = await self.query(query)
                     
                     results.append({
+                        'table_schema': table_schema,
                         'table_name': table_name,
                         'sample_data': sample_data[0] if sample_data else None
                     })
                     
                 except Exception as e:
-                    logger.error(f"Error sampling table {table_name}: {e}")
+                    logger.error(f"Error sampling table {label}: {e}")
                     results.append({
+                        'table_schema': table_schema,
                         'table_name': table_name,
                         'sample_data': None,
                         'error': str(e)
@@ -368,19 +416,19 @@ class AsyncPostgresReader:
         }
         """
         try:
-            schema = 'public'
-            params = [schema]
-            
+            params: List[Any] = []
             table_condition = ""
             if table_names:
-                placeholders = ','.join([f'${i+2}' for i in range(len(table_names))])
+                placeholders = ','.join([f'${i+1}' for i in range(len(table_names))])
                 table_condition = f"AND tc.table_name IN ({placeholders})"
                 params.extend(table_names)
 
             foreign_keys_sql = f"""
                 SELECT
+                    tc.table_schema as from_schema,
                     tc.table_name as from_table,
                     kcu.column_name as from_column,
+                    ccu.table_schema as to_schema,
                     ccu.table_name as to_table,
                     ccu.column_name as to_column,
                     tc.constraint_name
@@ -394,10 +442,10 @@ class AsyncPostgresReader:
                       AND ccu.table_schema = tc.table_schema
                 WHERE 
                     tc.constraint_type = 'FOREIGN KEY' 
-                    AND tc.table_schema = $1
+                    AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
                     {table_condition}
                 ORDER BY
-                    tc.table_name, kcu.ordinal_position
+                    tc.table_schema, tc.table_name, kcu.ordinal_position
             """
 
             async with self._get_connection() as conn:
@@ -476,10 +524,19 @@ def format_schema_to_markdown(schema_results):
     
     formatted = []
     for table_info in schema_results:
+        table_schema = table_info.get('table_schema') or 'public'
         table_name = table_info.get('table_name', 'unknown')
+        qualified = (
+            f"{table_schema}.{table_name}"
+            if table_schema and str(table_schema).strip()
+            else table_name
+        )
         table_comment = table_info.get('table_comment', '')
         
-        formatted.append(f"\n## Table: `{table_name}`")
+        formatted.append(
+            f"\n## Table: `{qualified}`\n"
+            f"*Use this full `schema.table` name in generated SQL (not the bare table name alone).*"
+        )
         if table_comment:
             formatted.append(f"*{table_comment}*")
         
@@ -539,6 +596,5 @@ async def get_postgres_tables_relationship(config, table_names: Optional[List[st
 
 async def get_postgres_tables_sampledata(config, table_names: Optional[List[str]] = None)-> str:
     async with AsyncPostgresReaderContextManager(config) as reader:
-        results = await reader.sample(table_names)
-        relationship_str = json.dumps(results, ensure_ascii=False, indent=2)
-        return relationship_str
+        # sample() already returns a JSON string
+        return await reader.sample(table_names)

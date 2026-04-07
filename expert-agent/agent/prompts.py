@@ -339,7 +339,7 @@ POSTGRES_NEXT_STEP_PROMPT_ZH = """
 请严格按照以下JSON格式响应，使用双引号：
 
 正确格式：
-{"answer": "内容", "conclusion": "terminate|continue", "requery": "问题"}
+{{"answer": "内容", "conclusion": "terminate|continue", "requery": "问题"}}
 
 
 **示例参考：**
@@ -443,7 +443,7 @@ Wrong (forbidden): {{'answer': 'SELECT ...', 'conclusion': 'terminate'}}  // sin
 Please strictly follow the following JSON format, using double quotes:
 
 Correct format:
-{"answer": "content", "conclusion": "terminate|continue", "requery": "question"}
+{{"answer": "content", "conclusion": "terminate|continue", "requery": "question"}}
 
 **Example Reference:**
 
