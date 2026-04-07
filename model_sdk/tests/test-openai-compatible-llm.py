@@ -9,7 +9,7 @@ async def demonstrate_usage():
         provider="openai_compatible",
         api_key="sk-xxx",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        model="qwen-plus",
+        model="MiniMax-M2.5",
         temperature=0.01,
         extra_body={
             "enable_thinking": False  # default to True

@@ -1141,6 +1141,33 @@ class ExpertAgent(BaseAgent):
         )
         if m:
             return {"reason": m.group(1).replace('\\"', '"').replace('\\\\', '\\'), "conclusion": m.group(2)}
+        # ObserveResult: single-quoted Python dict (e.g. MiniMax)
+        m = re.search(
+            r"'reason'\s*:\s*'(.+)'\s*,\s*'conclusion'\s*:\s*'([^']*)'\s*[\)}]",
+            content,
+            re.DOTALL,
+        )
+        if m:
+            return {"reason": m.group(1), "conclusion": m.group(2)}
+        # RequeryResult: double quotes
+        m = re.search(
+            r'"requery"\s*:\s*"(.+)"\s*,\s*"conclusion"\s*:\s*"([^"]*)"\s*[\)}]',
+            content,
+            re.DOTALL,
+        )
+        if m:
+            return {
+                "requery": m.group(1).replace('\\"', '"').replace('\\\\', '\\'),
+                "conclusion": m.group(2),
+            }
+        # RequeryResult: single-quoted Python dict
+        m = re.search(
+            r"'requery'\s*:\s*'(.+)'\s*,\s*'conclusion'\s*:\s*'([^']*)'\s*[\)}]",
+            content,
+            re.DOTALL,
+        )
+        if m:
+            return {"requery": m.group(1), "conclusion": m.group(2)}
         return None
 
     def format_llm_ouput(self, answer) -> dict:
@@ -1151,49 +1178,63 @@ class ExpertAgent(BaseAgent):
             data_dict = json.loads(raw_content)
         except (json.JSONDecodeError, TypeError):
 
-            cleaned_content = raw_content.strip()
+            fence_stripped = raw_content.strip()
 
-            if cleaned_content.startswith("```json"):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith("```"):
-                cleaned_content = cleaned_content[3:]
+            if fence_stripped.startswith("```json"):
+                fence_stripped = fence_stripped[7:]
+            elif fence_stripped.startswith("```"):
+                fence_stripped = fence_stripped[3:]
 
-            if cleaned_content.endswith("```"):
-                cleaned_content = cleaned_content[:-3]
+            if fence_stripped.endswith("```"):
+                fence_stripped = fence_stripped[:-3]
 
-            cleaned_content = cleaned_content.strip()
+            fence_stripped = fence_stripped.strip()
 
-            # Normalize Unicode smart quotes: use single quote to avoid breaking JSON string values.
-            # Replacing with " would break when reason/answer contains quoted text like "问题".
-            cleaned_content = cleaned_content.replace("\u201c", "'").replace("\u201d", "'")
+            # Before normalizing Unicode smart quotes to ASCII ': literal_eval accepts
+            # Python dicts with “ ” inside string values; replacing them first breaks parsing.
+            try:
+                import ast
+
+                _parsed = ast.literal_eval(fence_stripped)
+                if isinstance(_parsed, dict):
+                    return _parsed
+            except (ValueError, SyntaxError, TypeError):
+                pass
+
+            cleaned_content = fence_stripped.replace("\u201c", "'").replace("\u201d", "'")
             cleaned_content = cleaned_content.replace("\u2018", "'").replace("\u2019", "'")
 
             try:
                 data_dict = json.loads(cleaned_content)
             except json.JSONDecodeError as e2:
                 logger.error(f" === format_llm_ouput, Parsing failed after cleanup.: {e2}")
+                data_dict = None
                 try:
                     import ast
 
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
+                    _p = ast.literal_eval(cleaned_content)
+                    if isinstance(_p, dict):
+                        data_dict = _p
+                except (ValueError, SyntaxError, TypeError) as e3:
                     logger.error(f" === format_llm_ouput, ast parsing fail: {e3}")
+                if data_dict is None:
                     try:
                         # Naive replace breaks when values contain single quotes (e.g. SQL)
                         cleaned_content_replaced = cleaned_content.replace("'", '"')
                         data_dict = json.loads(cleaned_content_replaced)
+                        if not isinstance(data_dict, dict):
+                            data_dict = None
                     except json.JSONDecodeError as e4:
                         logger.error(
                             f" === format_llm_output, secondary parsing failed: {e4}, trying regex fallback"
                         )
-                        # Fallback: Python dict with nested single quotes (e.g. kimi-k2.5)
-                        data_dict = self._extract_llm_result_from_python_dict_with_nested_quotes(
-                            raw_content
-                        )
-                        if data_dict is None:
+                        data_dict = None
+                        for candidate in (raw_content.strip(), fence_stripped, cleaned_content):
                             data_dict = self._extract_llm_result_from_python_dict_with_nested_quotes(
-                                cleaned_content
+                                candidate
                             )
+                            if data_dict is not None:
+                                break
                         if data_dict is None:
                             logger.error(
                                 " === format_llm_output, regex fallback also failed, using default value"

@@ -136,6 +136,7 @@ SEMANTIC_GROUP_CONSOLIDATION_SYSTEM_PROMPT = """
         4. ✅ 是否说明了"任何与该领域相关的问题都能处理"？
         5. ✅ skills 是否按子领域划分，而非按具体操作划分？
         6. ✅ tags 是否包含了足够的同义词和关联词？
+        7. ✅ 当输入里已经包含「语义组旧的 description / agent_card」或与成员域语义高度重叠时，输出的 description 必须是**重新归纳后的单一去重正文**，禁止把旧 description 整段保留再在文末追加「补充」造成同一子领域写两遍。
 
         ### 最终要求：
         1. 基于用户提供的业务描述，生成完整的JSON
@@ -911,6 +912,11 @@ class SemanticGrouper:
 
     CONFIDENCE_GAP_THRESHOLD = 0.05
     JOIN_MIN_VECTOR_SCORE = 0.62
+    # Short semantic_domain text yields weaker embeddings; strict 0.62 can veto a unanimous
+    # high-confidence LLM JOIN + prompt_contract_pass. Allow JOIN when the model's target
+    # still clears a relaxed floor (vector is corroborating, not sole authority).
+    JOIN_MIN_VECTOR_SCORE_LLM_CONFIDENT = 0.50
+    LLM_JOIN_CONFIDENCE_FOR_RELAXED_VECTOR = 0.85
     MERGE_COVERAGE_THRESHOLD = 0.55
 
     _FK_RE = re.compile(r'\b[a-z_]+_id\b')
@@ -1078,6 +1084,51 @@ class SemanticGrouper:
         merged["skills"] = merged_skills
         return merged
 
+    def merge_consolidated_agent_card(
+        self, old_card: Dict[str, Any], candidate_card: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Apply LLM consolidation output without stacking duplicate prose onto the old card.
+
+        consolidate_semantic_domain(s)_into_semantic_group already passes the stored
+        semantic_group_agent_card into the model; the returned candidate is a full
+        rewrite. safe_merge_agent_card would append under 【增量语义补充】, duplicating
+        the same子领域 blocks (e.g. 商品/订单/用户各写两遍).
+        """
+        old = deepcopy(old_card or {})
+        cand = deepcopy(candidate_card or {})
+        if not old:
+            return cand
+        if not cand:
+            return old
+
+        merged = deepcopy(cand)
+        merged["name"] = str(old.get("name", "")).strip() or str(
+            cand.get("name", "")
+        ).strip()
+
+        cand_desc = str(cand.get("description", "")).strip()
+        old_desc = str(old.get("description", "")).strip()
+        merged["description"] = cand_desc or old_desc
+
+        cand_skills: List[Dict[str, Any]] = []
+        for sk in merged.get("skills", []) or []:
+            if isinstance(sk, dict):
+                cand_skills.append(deepcopy(sk))
+        seen_ids = {
+            str(s.get("id", "")).strip()
+            for s in cand_skills
+            if str(s.get("id", "")).strip()
+        }
+        for sk in old.get("skills", []) or []:
+            if not isinstance(sk, dict):
+                continue
+            sid = str(sk.get("id", "")).strip()
+            if sid and sid not in seen_ids:
+                cand_skills.append(deepcopy(sk))
+                seen_ids.add(sid)
+        merged["skills"] = cand_skills
+        return merged
+
     def validate_semantic_coverage(
         self,
         old_card: Dict[str, Any],
@@ -1159,9 +1210,37 @@ class SemanticGrouper:
             join_score += 0.25
         if best_leaf_idx < 0:
             join_score = 0.0
-        join_eligible = best_leaf_idx >= 0 and (
+
+        join_eligible_strict = best_leaf_idx >= 0 and (
             best_leaf_score >= self.JOIN_MIN_VECTOR_SCORE or strong_join
         )
+        llm_target_score = (
+            self._safe_score(candidate_groups[llm_idx].get("score"))
+            if 0 <= llm_idx < len(candidate_groups)
+            else 0.0
+        )
+        llm_relaxed_join = (
+            not join_eligible_strict
+            and best_leaf_idx >= 0
+            and llm_action == "JOIN"
+            and not decision_conflict
+            and prompt_contract_pass
+            and llm_conf >= self.LLM_JOIN_CONFIDENCE_FOR_RELAXED_VECTOR
+            and 0 <= llm_idx < len(candidate_groups)
+            and self._is_leaf_candidate(candidate_groups[llm_idx])
+            and llm_target_score >= self.JOIN_MIN_VECTOR_SCORE_LLM_CONFIDENT
+        )
+        join_eligible = join_eligible_strict or llm_relaxed_join
+        if llm_relaxed_join:
+            logger.info(
+                "[IncrementalArbitration] llm_confident_JOIN: relax vector floor | "
+                "llm_idx=%s llm_target_score=%.4f strict_min=%.2f relaxed_min=%.2f llm_conf=%.4f",
+                llm_idx,
+                llm_target_score,
+                self.JOIN_MIN_VECTOR_SCORE,
+                self.JOIN_MIN_VECTOR_SCORE_LLM_CONFIDENT,
+                llm_conf,
+            )
         if not join_eligible:
             join_score = 0.0
         join_score = max(0.0, min(1.0, join_score))
@@ -1181,6 +1260,9 @@ class SemanticGrouper:
             "strong_join_signal": strong_join,
             "decision_conflict": decision_conflict,
             "join_eligible": join_eligible,
+            "join_eligible_strict": join_eligible_strict,
+            "llm_relaxed_join": llm_relaxed_join,
+            "llm_target_vector_score": round(llm_target_score, 4),
             "prompt_contract_pass": prompt_contract_pass,
             "prompt_contract_fallback_used": prompt_contract_fallback_used,
             "fallback_used": prompt_contract_fallback_used,
@@ -1217,7 +1299,12 @@ class SemanticGrouper:
         final_action = ranking[0][0]
         gap = ranking[0][1] - ranking[1][1]
 
-        if gap < self.CONFIDENCE_GAP_THRESHOLD and final_action != "CREATE":
+        # Near-tie fallback would undo llm_relaxed_join (JOIN barely edges CREATE by ~0.05).
+        if (
+            gap < self.CONFIDENCE_GAP_THRESHOLD
+            and final_action != "CREATE"
+            and not llm_relaxed_join
+        ):
             final_action = "CREATE"
             score_breakdown["confidence_gap_fallback"] = True
 
@@ -2648,7 +2735,9 @@ class SemanticGrouper:
                         if isinstance(consolidated_result, dict)
                         else self._parse_agent_card(consolidated_result)
                     )
-                    merged_card = self.safe_merge_agent_card(old_card, candidate_card)
+                    merged_card = self.merge_consolidated_agent_card(
+                        old_card, candidate_card
+                    )
                     coverage_check = self.validate_semantic_coverage(old_card, merged_card)
                     logger.info(
                         "[MergeGuard] group_id=%s pass=%s coverage_score=%s missing_requirements=%s",
@@ -2875,7 +2964,10 @@ class SemanticGrouper:
             f"semantic_group_description:\n{semantic_group.get('description', '')}\n\n"
             f"semantic_group_agent_card:\n{semantic_group.get('agent_card', '')}\n\n"
             f"must_keep_contract(必须保留):\n{json.dumps(preservation_contract, ensure_ascii=False)}\n\n"
-            "要求：严格保留 must_keep_contract 中的 required_name、required_description、required_skill_ids。"
+            "要求：严格保留 must_keep_contract 中的 required_name、required_description、required_skill_ids。\n\n"
+            "【去重要求】输出的 description 必须是基于 semantic_domain 与语义组信息**重新撰写的单一合并正文**；"
+            "若 semantic_group_agent_card / semantic_group_description 与域内容语义重复，须在输出中合并为不重复表述，"
+            "禁止整段复制旧组 description 再追加新段落。"
         )
 
         system_message = SystemMessage(content=prompt)
@@ -2984,7 +3076,10 @@ class SemanticGrouper:
             f"semantic_group_agent_card:\n{semantic_group.get('agent_card', '')}\n\n"
             f"must_keep_contract(必须保留):\n"
             f"{json.dumps(preservation_contract, ensure_ascii=False)}\n\n"
-            "要求：严格保留 must_keep_contract 中的 required_name、required_description、required_skill_ids。"
+            "要求：严格保留 must_keep_contract 中的 required_name、required_description、required_skill_ids。\n\n"
+            "【去重要求】多个成员域与 semantic_group 输入之间常有重叠；输出的 description 必须是**一份**联合归纳后的去重正文，"
+            "禁止把旧组 description 原样保留再在文末叠加与成员域重复的子领域展开；skills 中同一子领域也只保留合并后的单一描述，"
+            "勿在 skill.description 里用「增量补充」堆叠与旧文高度相似的段落。"
         )
 
         system_message = SystemMessage(content=prompt)
@@ -3154,6 +3249,7 @@ class SemanticGrouper:
         4. ✅ 是否说明了"任何与该领域相关的问题都能处理"？
         5. ✅ skills 是否按子领域划分，而非按具体操作划分？
         6. ✅ tags 是否包含了足够的同义词和关联词？
+        7. ✅ 当输入里已经包含「语义组旧的 description / agent_card」或与成员域语义高度重叠时，输出的 description 必须是**重新归纳后的单一去重正文**，禁止把旧 description 整段保留再在文末追加「补充」造成同一子领域写两遍。
 
         ### 最终要求：
         1. 基于用户提供的业务描述，生成完整的JSON

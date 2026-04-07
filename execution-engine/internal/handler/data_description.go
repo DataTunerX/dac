@@ -272,9 +272,13 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 	logger := h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name)
 	logger.Info("DoAddOrUpdate Processing DataDescriptor")
 
-	// Tracks dd-sync-observer resync path. Annotation is cleared only after Deployment is ensured
-	// so a failed create does not strand the DD in Ready-without-annotation (which skips recreate).
+	// Tracks dd-sync-observer resync path (reset DD status only when entering from Ready+annotation).
+	// hadSyncRequestedAt: if true, clear dac.dac.io/sync-requested-at after Deployment is ensured.
+	// That must not be gated on resyncFromObserver alone: if observer PATCHes again while DD is already
+	// NotReady (mid job), resyncFromObserver is false and leaving the annotation stranded causes
+	// Ready+annotation on the next reconcile → endless data-sinker job loops.
 	resyncFromObserver := false
+	hadSyncRequestedAt := dd.Annotations != nil && strings.TrimSpace(dd.Annotations[annotationSyncRequestedAt]) != ""
 
 	// Skip create/update when DD is being deleted (controller handles deletion separately)
 	if dd.DeletionTimestamp != nil {
@@ -286,7 +290,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 	// 重启时不应再创建 deployment，否则会重复跑 data-sinker job。
 	// 但当 observer 设置了 sync-requested-at 时，需清除该 annotation 并重新创建 deployment 触发 re-sync。
 	if dd.Status.OverallPhase == "Ready" {
-		if dd.Annotations != nil && dd.Annotations[annotationSyncRequestedAt] != "" {
+		if hadSyncRequestedAt {
 			resyncFromObserver = true
 			logger.Info(
 				"dd-sync observer: sync-requested-at present; will ensure data-sinker deployment then clear annotation",
@@ -346,7 +350,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 	deploymentName := generator.DataDescriptorResourceName(dd)
 	_, err := h.K8sServices.GetDeployment(dd.Namespace, deploymentName)
 	deploymentExists := err == nil
-	if resyncFromObserver {
+	if hadSyncRequestedAt {
 		logger.Info(
 			"resync path: probed data-sinker deployment",
 			"feature", "sync_requested_at_resync",
@@ -361,7 +365,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 	if !deploymentExists {
 		// 仅当 deployment 不存在时创建 ConfigMap 和 deployment（真正创建 DD 或首次 Reconcile）
 		// 1. 为 data-sinker-job 生成 ConfigMap（operation: AddOrUpdate）
-		if resyncFromObserver {
+		if hadSyncRequestedAt {
 			logger.Info(
 				"resync path: deployment missing — creating ConfigMap then Deployment",
 				"feature", "sync_requested_at_resync",
@@ -370,7 +374,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 			)
 		}
 		if err := h.createOrUpdateDataSinkerJobConfigMap(ctx, dd); err != nil {
-			if resyncFromObserver {
+			if hadSyncRequestedAt {
 				logger.Error(err,
 					"resync path: createOrUpdateDataSinkerJobConfigMap failed; sync-requested-at was NOT cleared — will retry on next reconcile",
 					"feature", "sync_requested_at_resync",
@@ -388,7 +392,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 		}
 		logger.Info("Creating deployment for DataDescriptor")
 		if err := ddGenerator.Do(ctx, dd); err != nil {
-			if resyncFromObserver {
+			if hadSyncRequestedAt {
 				logger.Error(err,
 					"resync path: DataDescriptorGenerator.Do failed; sync-requested-at was NOT cleared — will retry on next reconcile",
 					"feature", "sync_requested_at_resync",
@@ -398,7 +402,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 			}
 			return fmt.Errorf("failed to create deployment for data descriptor: %w", err)
 		}
-		if resyncFromObserver {
+		if hadSyncRequestedAt {
 			logger.Info(
 				"resync path: DataDescriptorGenerator.Do completed (deployment create submitted)",
 				"feature", "sync_requested_at_resync",
@@ -408,7 +412,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 		}
 	} else {
 		logger.Info("Deployment already exists, skipping ConfigMap/deployment create (status sync only)")
-		if resyncFromObserver {
+		if hadSyncRequestedAt {
 			logger.Info(
 				"resync path: deployment already exists — no new Deployment/ConfigMap; only wait + status sync. "+
 					"If full re-sync was expected, cleanup may not have removed this Deployment or a race kept it alive.",
@@ -419,7 +423,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 		}
 	}
 
-	if resyncFromObserver {
+	if hadSyncRequestedAt {
 		if err := h.clearSyncRequestedAtAnnotation(ctx, dd.Namespace, dd.Name, logger); err != nil {
 			logger.Error(err, "resync path: failed to clear sync-requested-at after ensuring deployment",
 				"feature", "sync_requested_at_resync",
@@ -434,7 +438,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 	}
 
 	logger.Info("Waiting for deployment to be ready", "deployment", deploymentName)
-	if resyncFromObserver {
+	if hadSyncRequestedAt {
 		logger.Info(
 			"resync path: waiting for deployment ready (up to 5m)",
 			"feature", "sync_requested_at_resync",
@@ -446,7 +450,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 	defer cancel()
 
 	if err := h.waitForDeploymentReady(waitCtx, dd.Namespace, deploymentName, dd.Name); err != nil {
-		if resyncFromObserver {
+		if hadSyncRequestedAt {
 			logger.Error(err, "resync path: wait for deployment ready failed or timed out",
 				"feature", "sync_requested_at_resync",
 				"step", "wait_deployment_ready_error",
@@ -459,7 +463,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 		return fmt.Errorf("deployment not ready: %w", err)
 	}
 	logger.Info("Deployment is ready, start checking data-sinker job status via status service")
-	if resyncFromObserver {
+	if hadSyncRequestedAt {
 		logger.Info(
 			"resync path: deployment ready — calling handleDDStatus",
 			"feature", "sync_requested_at_resync",
@@ -471,7 +475,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 	// 3. 通过 data-sinker-status 判断 job 状态并更新 dd.Status
 	taskIDs := make(map[string]string) // 保持签名一致，目前不再使用 taskID
 	if err := h.handleDDStatus(ctx, dd, taskIDs); err != nil {
-		if resyncFromObserver {
+		if hadSyncRequestedAt {
 			logger.Error(err, "resync path: handleDDStatus failed",
 				"feature", "sync_requested_at_resync",
 				"step", "handle_dd_status_error",
@@ -479,7 +483,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 		}
 		return fmt.Errorf("failed to update status: %w", err)
 	}
-	if resyncFromObserver {
+	if hadSyncRequestedAt {
 		logger.Info(
 			"resync path: DoAddOrUpdate finished after observer resync (handleDDStatus ok)",
 			"feature", "sync_requested_at_resync",

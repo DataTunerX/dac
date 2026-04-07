@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Type, Union
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Sequence, Type, Union
 from ...api.base import BaseLLM
 import logging
 from langchain_openai import ChatOpenAI
@@ -6,6 +6,8 @@ from langchain_core.callbacks import CallbackManagerForLLMRun, AsyncCallbackMana
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.messages import BaseMessage, AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatResult, ChatGeneration, ChatGenerationChunk
+from langchain_core.runnables import Runnable
+from langchain_core.language_models import LanguageModelInput
 from pydantic import Field
 
 
@@ -16,6 +18,25 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_minimax_model(model: str) -> bool:
+    """True if model id contains 'minimax' (case-insensitive, e.g. MiniMax-M2)."""
+    return "minimax" in (model or "").lower()
+
+
+def _strip_enable_thinking_from_extra_body(kwargs: Dict[str, Any], model: str) -> None:
+    """MiniMax on DashScope compatible API only allows enable_thinking=True; omit the key instead."""
+    if not _is_minimax_model(model):
+        return
+    extra = kwargs.get("extra_body")
+    if not isinstance(extra, dict) or "enable_thinking" not in extra:
+        return
+    new_extra = {k: v for k, v in extra.items() if k != "enable_thinking"}
+    if new_extra:
+        kwargs["extra_body"] = new_extra
+    else:
+        kwargs.pop("extra_body", None)
 
 
 class OpenAICompatibleLLM(BaseLLM):
@@ -38,7 +59,8 @@ class OpenAICompatibleLLM(BaseLLM):
     ):
         # Initialize model_kwargs with any additional kwargs
         model_kwargs = kwargs.copy()
-        
+        _strip_enable_thinking_from_extra_body(model_kwargs, model)
+
         super().__init__(
             provider=provider,
             model=model,
@@ -47,6 +69,20 @@ class OpenAICompatibleLLM(BaseLLM):
             model_kwargs=model_kwargs
         )
         self._openai_client = self._create_openai_client()
+
+    def bind_tools(
+        self,
+        tools: Sequence[
+            Union[Dict[str, Any], type, Callable[..., Any], Any]
+        ],
+        *,
+        tool_choice: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Runnable[LanguageModelInput, AIMessage]:
+        """Delegate tool binding to the underlying ChatOpenAI client."""
+        return self._openai_client.bind_tools(
+            tools, tool_choice=tool_choice, **kwargs
+        )
 
     def _create_openai_client(self) -> ChatOpenAI:
         """Create and configure the OpenAI-compatible client."""
@@ -69,6 +105,7 @@ class OpenAICompatibleLLM(BaseLLM):
         """Prepare the final kwargs for API calls."""
         final_kwargs = self.model_kwargs.copy()
         final_kwargs.update(kwargs)
+        _strip_enable_thinking_from_extra_body(final_kwargs, self.model)
         if stop is not None:
             final_kwargs["stop"] = stop
         return final_kwargs
