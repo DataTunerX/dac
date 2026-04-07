@@ -542,6 +542,25 @@ class ExpertAgent(BaseAgent):
         return cls._normalize_db_object_name(parts[-1])
 
     @classmethod
+    def _is_system_catalog_from_ref(cls, raw: str) -> bool:
+        """FROM/JOIN target is under a system schema (not user-selected data tables)."""
+        s = str(raw or "").strip()
+        if not s or s.startswith("("):
+            return False
+        s = re.sub(r"[`\"]", "", s)
+        parts = [p.strip() for p in re.split(r"\s*\.\s*", s) if p.strip()]
+        if len(parts) < 2:
+            return False
+        schema = cls._normalize_db_object_name(parts[-2])
+        return schema in (
+            "information_schema",
+            "pg_catalog",
+            "performance_schema",
+            "sys",
+            "mysql",
+        )
+
+    @classmethod
     def _coerce_table_name_list(cls, payload: Any) -> List[str]:
         if isinstance(payload, list):
             items = payload
@@ -620,7 +639,10 @@ class ExpertAgent(BaseAgent):
         table_names: List[str] = []
         seen = set()
         for match in pattern.finditer(raw_sql):
-            normalized = self._normalize_table_reference(match.group(1))
+            raw_ref = match.group(1)
+            if self._is_system_catalog_from_ref(raw_ref):
+                continue
+            normalized = self._normalize_table_reference(raw_ref)
             if not normalized or normalized in seen:
                 continue
             table_names.append(normalized)
@@ -2564,7 +2586,7 @@ class ExpertAgent(BaseAgent):
                                 error_message = f"Execution error: sql error: {e}"
                                 error_code = self._extract_db_error_code(str(e))
                                 if not error_code and "selected whitelist" in str(e):
-                                    error_code = "1146"
+                                    error_code = "SQL_WHITELIST"
                                 structured_control = self._build_structured_control(
                                     reason_code="execution_error",
                                     non_retryable=False,
