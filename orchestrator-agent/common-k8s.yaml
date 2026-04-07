@@ -64,7 +64,7 @@ spec:
           - "--provider"
           - "openai_compatible"
           - "--api-key"
-          - "sk-7f6c05a219b14b4ba5850bfeb49575b2"
+          - "sk-xxx"
           - "--base-url"
           - "https://dashscope.aliyuncs.com/compatible-mode/v1"
           - "--model"
@@ -92,7 +92,7 @@ spec:
           - '--provider'
           - openai_compatible
           - '--api-key'
-          - sk-7f6c05a219b14b4ba5850bfeb49575b2
+          - sk-xxx
           - '--base-url'
           - https://dashscope.aliyuncs.com/compatible-mode/v1
           - '--model'

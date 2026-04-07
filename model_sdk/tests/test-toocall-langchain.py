@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 def _build_llm():
     manager = ModelManager()
-    api_key = os.environ.get("DASHSCOPE_API_KEY", "sk-7f6c05a219b14b4ba5850bfeb49575b2")
+    api_key = os.environ.get("DASHSCOPE_API_KEY", "sk-xxx")
     if not api_key:
         raise RuntimeError(
             "Set DASHSCOPE_API_KEY to run this test (DashScope compatible OpenAI API)."
