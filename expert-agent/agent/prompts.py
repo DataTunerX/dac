@@ -99,6 +99,9 @@ MYSQL_NEXT_STEP_PROMPT_ZH = """
 **当前时间**
 {current_time}
 
+**历史的执行结果，作为本次生成sql的重要的参考，必要要分析一下之前历史执行结果中的问题和答案，特别是答案中生成了错误的sql，那本次就必须要避免重复发生之前已经遇到的问题**
+历史的执行结果如下: {step_history}
+
 
 **SQL 生成要求：**
 1. 生成完整的、符合 MySQL 语法的查询，可直接运行
@@ -280,6 +283,9 @@ POSTGRES_NEXT_STEP_PROMPT_ZH = """
 
 **当前时间**
 {current_time}
+
+**历史的执行结果，作为本次生成sql的重要的参考，必要要分析一下之前历史执行结果中的问题和答案，特别是答案中生成了错误的sql，那本次就必须要避免重复发生之前已经遇到的问题**
+历史的执行结果如下: {step_history}
 
 
 **SQL 生成要求：**
@@ -1195,6 +1201,52 @@ New similar questions:
 - Historical questions include: `{history_querys}`  
 
 **Note:** Please strictly adhere to the JSON format for output. Do not include any additional explanations or text.
+"""
+
+# Classify SQL execution failure for repeated-failure / is_stuck policy (syntax vs other).
+# partial_variables: sql_failure_kind_example_syntax, sql_failure_kind_example_other (JSON strings);
+# human = dynamic user_query / generated_sql / error_text (see invoke_sql_execution_failure_kind).
+SQL_EXEC_FAILURE_KIND_PROMPT_ZH = """
+你是一位数据库执行失败归因助手。
+
+**当前时间**
+{current_time}
+
+**数据库类型（方言提示）**
+{db_type}
+
+**任务**
+阅读用户在下一轮消息中给出的「用户问题」「拟执行的 SQL」「数据库返回的错误信息」，判断失败应归入哪一类。
+
+**类别（必须二选一；勿罗列固定错误码或错误形态清单来套）**
+- `syntax_issue`：失败主要说明 **SQL 写法/结构在引擎侧不合法**，核心手段是 **改写 SQL** 后有望执行（含广义「语法」及引擎对语句规则的拒绝）。
+- `other`：失败主要来自 **连接、认证、环境、库中不存在对象、权限/资源** 等，**不是**「这条 SQL 在引擎规则下是否成立」这一类问题。
+
+判不定时：整体更像「换一条 SQL 能过」→ `syntax_issue`；更像「环境或库里就没有这个东西」→ `other`。
+
+**输出要求**
+- 仅输出 **一个** JSON 对象，可被 `json.loads()` 解析，不要输出任何其它文字或 Markdown 代码围栏。
+- JSON 的 **字段名、取值类型** 必须与下方示例完全一致；`sql_failure_kind` 只能是字符串 `"syntax_issue"` 或 `"other"`；`reason` 为简短中文理由。
+
+**输出结构示例（键名与类型必须一致；每类一条仅为形态示意，`reason` 请按本轮实际错误填写；你最终只输出其中一个 JSON）**
+
+- 当判定为 `syntax_issue` 时，形态示例：
+{sql_failure_kind_example_syntax}
+
+- 当判定为 `other` 时，形态示例：
+{sql_failure_kind_example_other}
+"""
+
+SQL_EXEC_FAILURE_KIND_HUMAN_ZH = """请按系统说明归类（只输出 JSON）。
+
+**用户问题**
+{user_query}
+
+**拟执行的 SQL**
+{generated_sql}
+
+**数据库返回的错误信息**
+{error_text}
 """
 
 

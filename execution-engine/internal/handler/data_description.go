@@ -1793,10 +1793,10 @@ func ddDeterministicSuffix(namespace, name string) string {
 func resolveAgentLimits(descriptorType string) (maxLoops string, maxSteps string) {
 	dt := strings.ToLower(descriptorType)
 	if strings.HasPrefix(dt, "structured") {
-		return "2", "3"
+		return "0", "5"
 	}
 	// code, unstructured, or anything else
-	return "1", "1"
+	return "0", "1"
 }
 
 // sanitizeK8sName converts a name to a valid lowercase Kubernetes RFC-1123 name fragment.

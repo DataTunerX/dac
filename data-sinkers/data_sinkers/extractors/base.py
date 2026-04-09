@@ -3910,7 +3910,7 @@ class SQLAnalyzer:
         chunk_summary = None
         
         if not isinstance(group_info, dict):
-            logging.warning(f"handle_tables_summary: group information is not in dictionary format: {type(group_info)}")
+            logging.warning(f"process_group: group information is not in dictionary format: {type(group_info)}")
             return None, None
 
         for key, value in group_info.items():
@@ -3919,10 +3919,12 @@ class SQLAnalyzer:
 
             if isinstance(value, list):
                 filtered_tables_schema_markdown = sql_format_schema_to_markdown(schema_results, value)
-                logging.info(f"handle_tables_summary, filtered_tables_schema_markdown for module '{key}'")
+                logging.info(f"process_group, group_info = {group_info}, filtered_tables_schema_markdown for module '{key}', value={value}")
 
                 try:
                     module_tables_summary = self.generate_tables_summary(filtered_tables_schema_markdown, db_and_code_ddd_summary)
+                    logging.info(f"process_group, group_info = {group_info}, module_tables_summary =  {module_tables_summary}")
+
                     module_tables_summary_format_str = self.format_domain_information_structured(module_tables_summary)
                     group_tables_for_chunk_summary = self.group_tables_for_chunk_summary(module_tables_summary)
                     tables_info_for_chunk_summary = self.tables_info_for_chunk_summary(batch_process_schemas_result, value)
@@ -3948,7 +3950,7 @@ class SQLAnalyzer:
                     # facts_data = self.facts(tables_document)
                     # facts = facts_data["facts"]
                     # facts_str = "\n".join([f"{i+1}. {item}" for i, item in enumerate(facts)])
-                    # logging.info(f"handle_tables_summary, facts :\n{facts_str}")
+                    # logging.info(f"process_group, facts :\n{facts_str}")
                     ### facts end
 
                     tables_document = (
@@ -3963,7 +3965,7 @@ class SQLAnalyzer:
 
                     summary_item = {key: tables_document}
                     chunk_summary = {key: chunk_summary_with_tables_info}
-                    logging.debug(f"handle_tables_summary, generate_tables_summary completed for module: [ {key} ]")
+                    logging.debug(f"process_group, generate_tables_summary completed for module: [ {key} ]")
 
                 except RuntimeError:
                     raise
@@ -3971,7 +3973,7 @@ class SQLAnalyzer:
                     logging.error(f"Failed to generate tables summary for module '{key}': {str(e)}")
                     summary_item = {key: f"summary generation failed: {str(e)}"}
             else:
-                logging.warning(f"handle_tables_summary: The value of module '{key}' is not in list format: {type(value)}")
+                logging.warning(f"process_group: The value of module '{key}' is not in list format: {type(value)}")
 
             if summary_item is not None:
                 return summary_item, chunk_summary

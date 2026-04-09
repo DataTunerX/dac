@@ -45,7 +45,9 @@ from .prompts import (
     REQUERY_PROMPT_ZH,
     REQUERY_SQL_PROMPT_ZH,
     OBSERVE_PROMPT_SQL_ZH,
-    OBSERVE_PROMPT_COMMON_ZH
+    OBSERVE_PROMPT_COMMON_ZH,
+    SQL_EXEC_FAILURE_KIND_PROMPT_ZH,
+    SQL_EXEC_FAILURE_KIND_HUMAN_ZH,
 )
 from .executors.mysql.mysql_reader import AsyncMySQLReaderContextManager, execute_mysql, get_mysql_tables_schema, get_mysql_tables_relationship, get_mysql_tables_sampledata
 from .executors.postgres.postgres_reader import AsyncPostgresReaderContextManager, execute_postgres, get_postgres_tables_schema, get_postgres_tables_relationship, get_postgres_tables_sampledata
@@ -277,6 +279,16 @@ class ObserveResult(BaseModel):
     conclusion: Optional[str] = Field(
         description='whether the answer meet your question.'
     )
+
+
+class SqlFailureKindResult(BaseModel):
+    """LLM output for SQL execution failure attribution (invoke_sql_execution_failure_kind)."""
+
+    model_config = {"extra": "ignore"}
+
+    sql_failure_kind: str = Field(description='syntax_issue or other')
+    reason: str = Field(default="", description="Brief reason in Chinese.")
+
 
 class FailureSnapshot(BaseModel):
     step_id: int = Field(description='Step id for this failure snapshot.')
@@ -750,8 +762,9 @@ class ExpertAgent(BaseAgent):
         error_code: str = "",
         error_stage: str = "",
         retryable: bool = True,
+        sql_failure_kind: str = "",
     ) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "reason_code": str(reason_code or ""),
             "non_retryable": bool(non_retryable),
             "error_type": str(error_type or ""),
@@ -759,6 +772,9 @@ class ExpertAgent(BaseAgent):
             "error_stage": str(error_stage or ""),
             "retryable": bool(retryable),
         }
+        if str(sql_failure_kind or "").strip():
+            d["sql_failure_kind"] = str(sql_failure_kind).strip()
+        return d
 
     @staticmethod
     def _extract_structured_error_from_text(text: str) -> Dict[str, Any]:
@@ -789,6 +805,22 @@ class ExpertAgent(BaseAgent):
             if isinstance(data, dict):
                 return data
         return {}
+
+    @staticmethod
+    def _last_structured_control_from_text(text: str) -> Dict[str, Any]:
+        last: Dict[str, Any] = {}
+        for line in str(text or "").splitlines():
+            stripped = line.strip()
+            if not stripped.lower().startswith("structured_control:"):
+                continue
+            payload = stripped.split(":", 1)[1].strip()
+            try:
+                data = json.loads(payload)
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                last = data
+        return last
 
     @staticmethod
     def _extract_sql_from_answer(text: str) -> str:
@@ -1753,10 +1785,12 @@ class ExpertAgent(BaseAgent):
             "requery": "能否提供Python编程语言的具体介绍和特点？"
         }
 
+        step_history = self.get_step_history_for_requery()
+
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
-            input_variables=["knowledge","original_query","history_querys","memory", "dimensions","current_time"],
+            input_variables=["knowledge","original_query","history_querys","memory", "dimensions","current_time", "step_history"],
             partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
@@ -1775,7 +1809,7 @@ class ExpertAgent(BaseAgent):
         chain = chat_prompt | self.llm
         
         with langfuse.start_as_current_span(
-            name="expert-sql_dict",
+            name="expert-sql_generate",
             trace_context={"trace_id": trace_id}
         ) as span:
             span.update_trace(
@@ -1785,7 +1819,7 @@ class ExpertAgent(BaseAgent):
             )
 
             answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": tables_knowledge,"original_query": self.original_query,"history_querys": history_querys,"memory": memory, "dimensions":dimensions, "current_time":current_time},
+                {"query": self.query, "knowledge": tables_knowledge,"original_query": self.original_query,"history_querys": history_querys,"memory": memory, "dimensions":dimensions, "current_time":current_time, "step_history": step_history},
                 config={"callbacks": [langfuse_handler]}
             )
          
@@ -2129,6 +2163,83 @@ class ExpertAgent(BaseAgent):
 
         return llm_result
 
+    async def invoke_sql_execution_failure_kind(
+        self,
+        *,
+        user_query: str,
+        generated_sql: str,
+        error_text: str,
+        db_type: str,
+    ) -> str:
+        """Classify SQL execution failure: syntax_issue vs other (for is_stuck / repeated-failure)."""
+        sql_failure_kind_example_syntax = json.dumps(
+            {
+                "sql_failure_kind": "syntax_issue",
+                "reason": "引擎指出 SQL 不合法，预期可通过改写 SQL 解决。",
+            },
+            ensure_ascii=False,
+        )
+        sql_failure_kind_example_other = json.dumps(
+            {
+                "sql_failure_kind": "other",
+                "reason": "表或列在当前库中不存在，属环境/元数据问题而非 SQL 写法笔误。",
+            },
+            ensure_ascii=False,
+        )
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        system_prompt = SystemMessagePromptTemplate.from_template(
+            template=SQL_EXEC_FAILURE_KIND_PROMPT_ZH,
+            input_variables=["current_time", "db_type"],
+            partial_variables={
+                "sql_failure_kind_example_syntax": sql_failure_kind_example_syntax,
+                "sql_failure_kind_example_other": sql_failure_kind_example_other,
+            },
+        )
+        human_prompt = HumanMessagePromptTemplate.from_template(SQL_EXEC_FAILURE_KIND_HUMAN_ZH)
+        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
+        user_id = self.metadata["user_id"]
+        run_id = self.metadata["run_id"]
+        trace_id = self.metadata["trace_id"]
+        chain = chat_prompt | self.llm
+        try:
+            with langfuse.start_as_current_span(
+                name="expert-sql_exec_failure_kind",
+                trace_context={"trace_id": trace_id},
+            ) as span:
+                span.update_trace(
+                    user_id=user_id,
+                    session_id=run_id,
+                    input={"query": user_query},
+                )
+                llm_answer = await chain.ainvoke(
+                    {
+                        "current_time": current_time,
+                        "db_type": str(db_type or "unknown"),
+                        "user_query": str(user_query or ""),
+                        "generated_sql": str(generated_sql or ""),
+                        "error_text": str(error_text or ""),
+                    },
+                    config={"callbacks": [langfuse_handler]},
+                )
+                span.update_trace(output={"answer": llm_answer})
+            langfuse.flush()
+        except Exception as e:
+            logger.warning("invoke_sql_execution_failure_kind failed | %s", e)
+            return "other"
+
+        logger.info(" === ExpertAgent.invoke_sql_execution_failure_kind, answer = %s", llm_answer)
+        data_dict = self.format_llm_ouput(llm_answer)
+        if data_dict is None:
+            return "other"
+        try:
+            parsed = SqlFailureKindResult(**data_dict)
+        except Exception as e:
+            logger.warning("invoke_sql_execution_failure_kind parse failed | %s | data=%s", e, data_dict)
+            return "other"
+        kind = str(parsed.sql_failure_kind or "").strip().lower()
+        if kind == "syntax_issue":
+            return "syntax_issue"
+        return "other"
 
     async def observe_common(self, query, answer, knowledge) -> ObserveResult:
 
@@ -2587,6 +2698,12 @@ class ExpertAgent(BaseAgent):
                                 error_code = self._extract_db_error_code(str(e))
                                 if not error_code and "selected whitelist" in str(e):
                                     error_code = "SQL_WHITELIST"
+                                sql_failure_kind = await self.invoke_sql_execution_failure_kind(
+                                    user_query=self.query,
+                                    generated_sql=str(llm_result.answer or ""),
+                                    error_text=error_message,
+                                    db_type=db_type,
+                                )
                                 structured_control = self._build_structured_control(
                                     reason_code="execution_error",
                                     non_retryable=False,
@@ -2594,6 +2711,7 @@ class ExpertAgent(BaseAgent):
                                     error_code=error_code,
                                     error_stage="execute_db_query",
                                     retryable=True,
+                                    sql_failure_kind=sql_failure_kind,
                                 )
                                 self._last_sql_execution_error = True
                                 llm_result.reason_code = "execution_error"
@@ -3051,6 +3169,20 @@ class ExpertAgent(BaseAgent):
                         f"consecutive_similar_failures={consecutive_matches}"
                         f"/threshold={STUCK_MIN_SIMILAR_FAILURES}: {joined_reason}"
                     )
+                    latest_step_id = snapshots[0].step_id
+                    latest_answer = ""
+                    for st in self.step_status_list:
+                        if int(getattr(st, "id", 0) or 0) == int(latest_step_id):
+                            latest_answer = str(getattr(st, "answer", "") or "")
+                            break
+                    latest_sc = self._last_structured_control_from_text(latest_answer)
+                    latest_kind = str(latest_sc.get("sql_failure_kind") or "").strip().lower()
+                    if latest_kind == "syntax_issue":
+                        logger.info(
+                            "Repeated failure threshold met but latest step sql_failure_kind=syntax_issue (step_id=%s); not stuck",
+                            latest_step_id,
+                        )
+                        return False
                     task_id = getattr(self, "current_task_id", None)
                     step_no = getattr(self, "current_step", 0)
                     logger.warning(
