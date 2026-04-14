@@ -181,7 +181,7 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 # 角色：首席战略规划师（多智能体编排专家）
 
 ## 核心使命
-根据业务领域将用户查询分解为可执行任务。你必须通过 **[执行上下文]** 建立反馈闭环，结合 **[对话历史]** 的语境，确保规划路径既能解决指代关系，又能避免重复失败、复用已有数据。
+根据业务领域将用户查询分解为可执行任务。你必须通过 **[执行上下文]** 建立反馈闭环，结合 **[对话历史]** 的语境，确保规划路径既能解决指代关系，又能避免重复失败。
 
 ## 战略思考过程（思维链）
 在生成 JSON 之前，请严格执行以下 **业务领域决策流**：
@@ -3823,12 +3823,12 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         query_for_plan = query
 
         # make plans for user question, each plan is the name of agent card
-        steps = await agent.get_plan(query_for_plan)
+        tasks = await agent.get_plan(query_for_plan)
 
         think = []
 
-        if steps is None:
-            logger.info(f"===== OrchestratorAgentExecutor, steps is empty.")
+        if tasks is None:
+            logger.info(f"===== OrchestratorAgentExecutor, tasks is empty.")
             not_found_agents = (
                 NO_SIDECAR_FALLBACK_DESCRIPTION
                 if getattr(agent, "_no_sidecar_fallback", False)
@@ -3848,7 +3848,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             )
         else:
             plan_msg, plan_extra = OrchestratorAgent.build_group_plan_ready_progress(
-                task_list=steps,
+                task_list=tasks,
                 user_query=query_for_plan,
             )
             await agent.emit_progress(
@@ -3861,12 +3861,12 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             )
             if self.debug == 1:
                 participant_chain = (metadata or {}).get("participant_chain")
-                steps_str = tasklist_to_string(steps, participant_chain=participant_chain)
-                think.append(steps_str)
+                tasks_str = tasklist_to_string(tasks, participant_chain=participant_chain)
+                think.append(tasks_str)
 
             # call each agent to get the knowledge owned by each agent, then get some knowledges from agents
             task_name = f'{agent.agent_name}-result'
-            task_knowledges = await agent.a2a_tasks(query_for_plan, steps, updater, task_name, think)
+            task_knowledges = await agent.a2a_tasks(query_for_plan, tasks, updater, task_name, think)
 
             _tk_preview = [str(tk)[:200] + "..." for tk in task_knowledges] if task_knowledges else []
             logger.info(f"===== OrchestratorAgentExecutor.task_knowledges count={len(task_knowledges) if task_knowledges else 0}, preview: {_tk_preview}")

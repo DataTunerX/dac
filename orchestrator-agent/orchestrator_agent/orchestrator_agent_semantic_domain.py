@@ -76,209 +76,55 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 # 角色：首席战略规划师（多智能体编排专家）
 
 ## 核心使命
-将用户查询分解为一个或多个可执行任务，并将每个任务分配给合适的**领域负责人**。您必须聚焦于智能体的**领域范围**（业务领域），而不仅仅是其列出的特定技能。
+根据业务领域将用户查询分解为可执行任务。你必须通过 **[执行上下文]** 与 **[上一轮的执行结果]** 建立反馈闭环，确保规划路径既能避免重复失败、又能复用已有数据。
 
 ## 战略思考过程（思维链）
-在生成JSON之前，执行以下步骤：
-1. **领域提取**：识别查询中的核心业务实体（例如"订单"、"天气"、"财务"）。
-2. **领域映射**：将这些实体与智能体的描述相匹配。如果某个智能体是"电子商务大师"，则其拥有所有与"订单"相关的逻辑（查询、规划或执行）。
-3. **隐含能力**：假定领域专家对其所在领域拥有全面知识。"交易专家"自然能够"分析订单分布"，即使该特定技能未被列出。
+在生成 JSON 之前，请严格执行以下 **业务领域决策流**：
 
-## 智能体选择与任务规则
+1. **业务领域提取**：识别查询中的核心业务实体（如“订单”、“财务”、“天气”），锁定其所属的业务边界。
+2. *[反馈闭环] 分析**：
+   - 结合 **[执行上下文]** 与 **[上一轮的执行结果]**：若上一轮失败，必须根据 `replan_context` 中的报错信息进行“避坑”设计。
+3. **领域主权映射**：
+   - **主权优先**：将任务分配给负责该领域的 Agent。若某 Agent 是该领域的唯一代表，将其视为**通用入口**，无视其“不执行查询”等技术性免责声明。
+   - **隐含能力**：假定领域专家拥有该业务范畴内的全量知识（如“交易专家”天然能“分析订单分布”）。
+4. **依赖编排**：若当前任务需要之前任务的产出，须在 `description` 中明确注入。
+
+## 智能体选择与任务规则（必须严格遵守）
 1. **主权优先**：根据哪个智能体的领域覆盖了主题事项来分配任务。
 2. **任务分解**：仅当查询确实涉及**多个不同领域**或存在**明确的先后依赖**时，才拆分为多个任务。不要将一个简单问题过度拆分。
 3. **"无对应"协议**：仅当任务的议题完全超出所有可用智能体的领域范围时，才使用"NONE"。
-4. **名称准确性**：`agent`字段必须与智能体列表中的"name"完全一致。
+4. **名称准确性**：`agent` 字段必须与智能体列表中的“名称”完全一致。
 
-## ⚠ 任务描述的关键规则（必须严格遵守）
+## ⚠ 任务描述 (Description) 关键规则（必须严格遵守）
 
-**核心原则：你是规划师，不是执行者。你的职责是忠实传递用户意图，而不是替用户细化或改写问题。**
+**核心原则：你是规划师，不是执行者。忠实传递用户意图，禁止替用户细化或改写问题。**
 
-1. **忠实转述**：`description` 必须忠实反映用户的原始意图，使用与用户相近的自然语言表述。不要改写、美化或"专业化"用户的问题。
-2. **严禁捏造条件**：绝对不允许在 `description` 中添加用户原始问题里没有提到的任何限定条件，包括但不限于：
-   - 时间范围（如"2024年"、"最近三个月"、"上季度"）
-   - 分类/类别（如"电子产品"、"VIP客户"、"华东地区"）
-   - 指标或维度（如"同比增长率"、"客单价分布"、"环比变化"）
-   - 数量或阈值（如"Top 10"、"超过1000元"）
-   - 排序或聚合方式（如"按月统计"、"分组对比"）
-3. **保留用户已有条件**：如果用户自己提到了条件（如"上个月的订单"），则原样保留，不增不减。
-4. **宁简勿繁**：当用户问题本身比较宽泛时（如"看看订单情况"），任务描述也应保持宽泛（如"查询订单情况"），让领域专家自行决定如何解读和执行。
-
-**正确示例：**
-- 用户："查一下订单情况" → description："查询订单情况" ✅
-- 用户："上个月的销售额是多少" → description："查询上个月的销售额" ✅
-
-**错误示例（严禁）：**
-- 用户："查一下订单情况" → description："查询2024年Q4电子产品订单的销售额及同比增长" ❌ （捏造了时间、类别、指标）
-- 用户："看看客户数据" → description："统计VIP客户的购买频次和客单价分布" ❌ （捏造了分类和指标）
+1. **忠实转述与结果注入**：忠实反映意图，并主动注入 **[上一轮的执行结果]** 中的关键结果（如已获 ID、特定报错原因）。
+2. **严禁捏造条件（重点）**：绝对不允许在描述中添加用户未提及的任何限制。
+   - **正确示例**：用户“查订单” → `description`：“查询订单情况” ✅
+   - **错误示例**：用户“查订单” → `description`：“查询2024年Q4电子产品订单及同比增长” ❌（捏造了时间、类别、指标）
+3. **宁简勿繁**：问题宽泛时，描述也保持宽泛，由领域专家自行解读。
 
 ---
-**可用智能体：**
-{agents}
 
-**上下文参考数据：**
-{information}
-
-**重规划上下文（JSON，仅在重试时提供，首轮通常为空）：**
-{replan_context}
-
-**重规划指导（仅在重试时提供，首轮通常为空）：**
-{replan_guidance}
-
----
-## 输出要求
-1. **格式**：仅返回一个有效的JSON字符串。
-2. **结构**：
-   - `thought_process`：关于领域映射和主权原则的简明推理。
-   - `original_query`：原始用户输入。
-   - `tasks`：对象列表，包含：
-     - `id`：整数（从1开始）。
-     - `description`：转述给智能体的子任务或问题（忠实于用户原始表述，禁止添加额外条件）。
-     - `agent`：确切的智能体名称或"NONE"。
-
-## 示例
-{instructions}
-
-或当未找到智能体时：
-{none_instructions}
-
-问题：
-"""
-
-
-PLANNER_COT_INSTRUCTIONS_EN = """
-# Role: Chief Strategy Planner (Expert in Multi-Agent Orchestration)
-
-## Core Mission
-Decompose the user's query into one or more executable tasks and assign each task to the appropriate **Domain Owner**. You must focus on the agent's **Territory** (business domain) rather than just the specific skills listed.
-
-## Strategic Thinking Process (Chain of Thought)
-Before generating the JSON, perform these steps:
-1. **Domain Extraction**: Identify the core business entities in the query (e.g., "Order", "Weather", "Financials").
-2. **Territory Mapping**: Match these entities to an agent's description. If an agent is a "Master of E-commerce," they own all logic related to "Orders" (Querying, Planning, or Executing).
-3. **Implicit Capacity**: Assume domain experts have total knowledge of their field. A "Transaction Expert" can naturally "Analyze Order Distribution" even if that specific skill isn't listed.
-4. **Authority Over Disclaimer**: If an agent is the only one representing a business entity (e.g., "Order"), you MUST assign the task to it, even if the agent's description contains technical disclaimers like "I don't do queries." In the planning phase, we treat the domain expert as the universal gateway for that entity.
-
-## Agent Selection & Task Rules
-1. **Sovereignty First**: Assign tasks based on which agent's domain covers the subject matter.
-2. **Task Decomposition**: Only split into multiple tasks when the query genuinely involves **multiple different domains** or has **clear sequential dependencies**. Do not over-decompose a simple question.
-3. **The "NONE" Protocol**: Only use "NONE" if a task's subject is completely outside all available agents' territories.
-4. **Name Accuracy**: The `agent` field must exactly match the "name" from the agent list.
-
-## ⚠ Critical Rules for Task Descriptions (MUST follow strictly)
-
-**Core Principle: You are a planner, NOT an executor. Your job is to faithfully relay the user's intent, NOT to refine or rewrite their question.**
-
-1. **Faithful Relay**: The `description` must faithfully reflect the user's original intent using wording close to what the user said. Do NOT rephrase, embellish, or "professionalize" the user's question.
-2. **NEVER fabricate conditions**: You must NEVER add any qualifying conditions to the `description` that are not present in the user's original query, including but not limited to:
-   - Time ranges (e.g., "in 2024", "last 3 months", "Q4")
-   - Categories (e.g., "electronics", "VIP customers", "East region")
-   - Metrics or dimensions (e.g., "year-over-year growth", "average order value distribution")
-   - Quantities or thresholds (e.g., "Top 10", "over $1000")
-   - Sorting or aggregation methods (e.g., "grouped by month", "compared by category")
-3. **Preserve user-specified conditions**: If the user mentioned a condition (e.g., "last month's orders"), keep it exactly as stated — do not add to it or remove from it.
-4. **Keep it simple**: When the user's question is broad (e.g., "check order status"), the task description should remain broad (e.g., "Check order status"), letting the domain expert decide how to interpret and execute.
-
----
-**Available Agents:**
+**[可用智能体] (Agents):**
 {agents}
 
 
-**Contextual Reference Data:**
+**[执行上下文] (Information):**
 {information}
 
-**Replan Context (JSON, provided on retries, usually empty on first attempt):**
-{replan_context}
 
-**Replan Guidance (provided on retries, usually empty on first attempt):**
+**[上一轮的执行结果]:**
+{replan_context}
+*注：包含之前已执行的任务 ID、任务描述、执行 Agent 以及执行结果（成功/失败/具体数据）。*
+
+
+**[replan的指导规则]（仅在重试时提供，首轮通常为空）：**
 {replan_guidance}
 
 ---
-## Output Requirements
-1. **Format**: Return ONLY a valid JSON string.
-2. **Schema**:
-   - `thought_process`: Concise reasoning of domain mapping and sovereignty.
-   - `original_query`: The raw user input.
-   - `tasks`: A list of objects containing:
-     - `id`: Integer (starting from 1).
-     - `description`: The sub-task or question relayed to the agent (faithful to the user's original wording, NO fabricated conditions).
-     - `agent`: The exact agent name or "NONE".
 
-## Examples
-{instructions}
-
-Or when no agent is found:
-{none_instructions}
-
-Questions:
-"""
-
-PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
-# 角色：首席战略规划师（多智能体编排专家）
-
-## 核心使命
-将用户查询分解为一个或多个可执行任务，并将每个任务分配给合适的**领域负责人**。您必须关注智能体的**领域范围**（业务领域），而不仅仅是其列出的特定技能。
-
-## 战略思考过程（思维链）
-在生成JSON之前，执行以下步骤：
-1. **领域提取**：识别查询中的核心业务实体（例如"订单"、"天气"、"财务"）。
-2. **领域映射**：将这些实体与智能体的描述相匹配。如果一个智能体是"电商大师"，那么所有与"订单"相关的逻辑（查询、规划或执行）都由其负责。
-3. **隐含能力**：假定领域专家对其领域拥有全部知识。即使未列出特定技能，"交易专家"自然能够"分析订单分布"。
-4. **权限优先原则**：如果一个智能体是某个业务实体（如"订单"）的唯一代表，您必须将相关任务分配给该智能体，即使其描述中包含"我不执行查询"等技术性免责声明。在规划阶段，我们将领域专家视为该实体的通用入口。
-
-## 智能体选择与任务规则
-1. **主权优先**：根据哪个智能体的领域覆盖了主题事项来分配任务。
-2. **任务分解**：仅当查询确实涉及**多个不同领域**或存在**明确的先后依赖**时，才拆分为多个任务。不要将一个简单问题过度拆分。
-3. **"无对应"协议**：仅当任务的议题完全超出所有可用智能体的领域范围时，才使用"NONE"。
-4. **名称准确性**：`agent`字段必须与智能体列表中的"名称"完全一致。
-
-## ⚠ 任务描述的关键规则（必须严格遵守）
-
-**核心原则：你是规划师，不是执行者。你的职责是忠实传递用户意图，而不是替用户细化或改写问题。**
-
-1. **忠实转述**：`description` 必须忠实反映用户的原始意图，使用与用户相近的自然语言表述。不要改写、美化或"专业化"用户的问题。
-2. **严禁捏造条件**：绝对不允许在 `description` 中添加用户原始问题里没有提到的任何限定条件，包括但不限于：
-   - 时间范围（如"2024年"、"最近三个月"、"上季度"）
-   - 分类/类别（如"电子产品"、"VIP客户"、"华东地区"）
-   - 指标或维度（如"同比增长率"、"客单价分布"、"环比变化"）
-   - 数量或阈值（如"Top 10"、"超过1000元"）
-   - 排序或聚合方式（如"按月统计"、"分组对比"）
-3. **保留用户已有条件**：如果用户自己提到了条件（如"上个月的订单"），则原样保留，不增不减。
-4. **宁简勿繁**：当用户问题本身比较宽泛时（如"看看订单情况"），任务描述也应保持宽泛（如"查询订单情况"），让领域专家自行决定如何解读和执行。
-
-**正确示例：**
-- 用户："查一下订单情况" → description："查询订单情况" ✅
-- 用户："上个月的销售额是多少" → description："查询上个月的销售额" ✅
-
-**错误示例（严禁）：**
-- 用户："查一下订单情况" → description："查询2024年Q4电子产品订单的销售额及同比增长" ❌ （捏造了时间、类别、指标）
-- 用户："看看客户数据" → description："统计VIP客户的购买频次和客单价分布" ❌ （捏造了分类和指标）
-
-## 对话历史使用规则
-- **仅用于理解指代**：对话历史仅用于理解当前问题中的指代关系（如"它"指什么、"继续"指继续什么、"那个"指哪个）。
-- **禁止无关条件搬运**：不要将历史对话中与当前追问无关的过滤条件搬运到当前任务的 description 中。
-- **对比性追问须继承完整上下文**：当用户使用对比性语言追问（如"那XX呢"、"换成XX呢"、"XX怎么样"），说明用户只想更改其中一个维度，其余维度（如年份、机构、指标等）均需从历史中继承，以确保 description 完整且无歧义。
-  例如：上轮查询"某某银行总行2023年12月的存款总额"，用户说"那9月份呢" → description 应为"查询某某银行总行2023年9月份的存款总额" ✅，而不是"查询某某银行总行9月份的存款总额" ❌（缺少年份会导致歧义）。
-- **指代追问必须自包含**：当用户的问题是指代性的后续追问（如"更详细一点"、"继续"、"那个呢"），`description` 必须补充历史中被指代的主题，使其对不了解上下文的人也能理解。
-  例如：上轮谈的是"订单数据"，用户说"更详细一点" → description 应为"更详细地查询订单数据"，而不是只写"更详细一点"。
-
----
-**对话历史：**
-{history}
-
-**可用智能体：**
-{agents}
-
-**上下文参考数据：**
-{information}
-
-**重规划上下文（JSON，仅在重试时提供，首轮通常为空）：**
-{replan_context}
-
-**重规划指导（仅在重试时提供，首轮通常为空）：**
-{replan_guidance}
-
----
 ## 输出要求
 1. **格式**：仅返回一个有效的JSON字符串。
 2. **结构**：
@@ -299,83 +145,91 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 
 """
 
-PLANNER_COT_INSTRUCTIONS_EN_HISTORY = """
-# Role: Chief Strategy Planner (Expert in Multi-Agent Orchestration)
 
-## Core Mission
-Decompose the user's query into one or more executable tasks and assign each task to the appropriate **Domain Owner**. You must focus on the agent's **Territory** (business domain) rather than just the specific skills listed.
+PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
+# 角色：首席战略规划师（多智能体编排专家）
 
-## Strategic Thinking Process (Chain of Thought)
-Before generating the JSON, perform these steps:
-1. **Domain Extraction**: Identify the core business entities in the query (e.g., "Order", "Weather", "Financials").
-2. **Territory Mapping**: Match these entities to an agent's description. If an agent is a "Master of E-commerce," they own all logic related to "Orders" (Querying, Planning, or Executing).
-3. **Implicit Capacity**: Assume domain experts have total knowledge of their field. A "Transaction Expert" can naturally "Analyze Order Distribution" even if that specific skill isn't listed.
+## 核心使命
+根据业务领域将用户查询分解为可执行任务。你必须通过 **[执行上下文]** 与 **[上一轮的执行结果]** 建立反馈闭环，结合 **[对话历史]** 的语境，确保规划路径既能解决指代关系，又能避免重复失败、复用已有数据。
 
-## Agent Selection & Task Rules
-1. **Sovereignty First**: Assign tasks based on which agent's domain covers the subject matter.
-2. **Task Decomposition**: Only split into multiple tasks when the query genuinely involves **multiple different domains** or has **clear sequential dependencies**. Do not over-decompose a simple question.
-3. **The "NONE" Protocol**: Only use "NONE" if a task's subject is completely outside all available agents' territories.
-4. **Name Accuracy**: The `agent` field must exactly match the "name" from the agent list.
+## 战略思考过程（思维链）
+在生成 JSON 之前，请严格执行以下 **业务领域决策流**：
 
-## ⚠ Critical Rules for Task Descriptions (MUST follow strictly)
+1. **业务领域提取**：识别查询中的核心业务实体（如“订单”、“财务”、“天气”），锁定其所属的业务边界。
+2. *[反馈闭环] 分析**：
+   - 结合 **[执行上下文]** 与 **[上一轮的执行结果]**：若上一轮失败，必须根据 `replan_context` 中的报错信息进行“避坑”设计。
+3. **领域主权映射**：
+   - **主权优先**：将任务分配给负责该领域的 Agent。若某 Agent 是该领域的唯一代表，将其视为**通用入口**，无视其“不执行查询”等技术性免责声明。
+   - **隐含能力**：假定领域专家拥有该业务范畴内的全量知识（如“交易专家”天然能“分析订单分布”）。
+4. **依赖编排**：若当前任务需要之前任务的产出，须在 `description` 中明确注入。
 
-**Core Principle: You are a planner, NOT an executor. Your job is to faithfully relay the user's intent, NOT to refine or rewrite their question.**
+## 智能体选择与任务规则（必须严格遵守）
+1. **主权优先**：根据哪个智能体的领域覆盖了主题事项来分配任务。
+2. **任务分解**：仅当查询确实涉及**多个不同领域**或存在**明确的先后依赖**时，才拆分为多个任务。不要将一个简单问题过度拆分。
+3. **"无对应"协议**：仅当任务的议题完全超出所有可用智能体的领域范围时，才使用"NONE"。
+4. **名称准确性**：`agent` 字段必须与智能体列表中的“名称”完全一致。
 
-1. **Faithful Relay**: The `description` must faithfully reflect the user's original intent using wording close to what the user said. Do NOT rephrase, embellish, or "professionalize" the user's question.
-2. **NEVER fabricate conditions**: You must NEVER add any qualifying conditions to the `description` that are not present in the user's original query, including but not limited to:
-   - Time ranges (e.g., "in 2024", "last 3 months", "Q4")
-   - Categories (e.g., "electronics", "VIP customers", "East region")
-   - Metrics or dimensions (e.g., "year-over-year growth", "average order value distribution")
-   - Quantities or thresholds (e.g., "Top 10", "over $1000")
-   - Sorting or aggregation methods (e.g., "grouped by month", "compared by category")
-3. **Preserve user-specified conditions**: If the user mentioned a condition (e.g., "last month's orders"), keep it exactly as stated — do not add to it or remove from it.
-4. **Keep it simple**: When the user's question is broad (e.g., "check order status"), the task description should remain broad (e.g., "Check order status"), letting the domain expert decide how to interpret and execute.
+## ⚠ 对话历史使用规则（指代与继承）
+1. **仅用于理解指代**：解析“它”、“那个”、“继续”等含义。
+2. **禁止无关条件搬运**：不要将历史对话中与当前追问无关的过滤条件搬运到当前任务中。
+3. **对比性追问须继承完整上下文**：用户进行对比追问（如“那2024年呢”），必须从历史中完整继承未变化的维度（年份、机构、指标等），确保 `description` 语义自包含。
+4. **指代追问必须自包含**：对于“更详细一点”这类指代，描述必须补充历史主题，使其对 Agent 而言是完整的。
 
-## Conversation History Usage Rules
-- **Only for resolving references**: Conversation history is only for understanding references in the current question (e.g., what "it" refers to, what "continue" means, what "that" points to).
-- **Do NOT carry over unrelated conditions**: Do NOT carry over filter conditions from previous conversations that are unrelated to the current follow-up question.
-- **Comparative follow-ups must inherit full context**: When the user uses comparative language (e.g., "what about X?", "how about X instead?", "and for X?"), it means they want to change only ONE dimension while keeping everything else the same. All other dimensions (e.g., year, entity, metric) must be inherited from the history to ensure the description is complete and unambiguous.
-  Example: Previous turn queried "total deposits for ABC Bank HQ in December 2023", user says "what about September?" → description should be "Query total deposits for ABC Bank HQ in September 2023" ✅, NOT "Query total deposits for ABC Bank HQ in September" ❌ (missing year causes ambiguity).
-- **Follow-up references must be self-contained**: When the user's question is a referential follow-up (e.g., "more details please", "continue", "what about that"), the `description` must incorporate the referenced topic from history so that it is understandable without context.
-  Example: Previous turn was about "order data", user says "more details please" → description should be "Provide more details on order data", NOT just "more details please".
+## ⚠ 任务描述 (Description) 关键规则（必须严格遵守）
+
+**核心原则：你是规划师，不是执行者。忠实传递用户意图，禁止替用户细化或改写问题。**
+
+1. **忠实转述与结果注入**：忠实反映意图，并主动注入 **[上一轮的执行结果]** 中的关键结果（如已获 ID、特定报错原因）。
+2. **严禁捏造条件（重点）**：绝对不允许在描述中添加用户未提及的任何限制。
+   - **正确示例**：用户“查订单” → `description`：“查询订单情况” ✅
+   - **错误示例**：用户“查订单” → `description`：“查询2024年Q4电子产品订单及同比增长” ❌（捏造了时间、类别、指标）
+3. **宁简勿繁**：问题宽泛时，描述也保持宽泛，由领域专家自行解读。
 
 ---
-**Conversation History:**
+
+**[对话历史] (History):**
 {history}
+*注：包含用户与系统的自然语言对话，用于理解语境和指代。*
 
 
-**Available Agents:**
+**[可用智能体] (Agents):**
 {agents}
 
 
-**Contextual Reference Data:**
+**[执行上下文] (Information):**
 {information}
 
-**Replan Context (JSON, provided on retries, usually empty on first attempt):**
-{replan_context}
 
-**Replan Guidance (provided on retries, usually empty on first attempt):**
+**[上一轮的执行结果]:**
+{replan_context}
+*注：包含之前已执行的任务 ID、任务描述、执行 Agent 以及执行结果（成功/失败/具体数据）。*
+
+
+**[replan的指导规则]（仅在重试时提供，首轮通常为空）：**
 {replan_guidance}
 
 ---
-## Output Requirements
-1. **Format**: Return ONLY a valid JSON string.
-2. **Schema**:
-   - `thought_process`: Concise reasoning of domain mapping and sovereignty.
-   - `original_query`: The raw user input.
-   - `tasks`: A list of objects containing:
-     - `id`: Integer (starting from 1).
-     - `description`: The sub-task or question relayed to the agent (faithful to the user's original wording, NO fabricated conditions; comparative follow-ups must inherit full context; follow-up references must include context to be self-contained).
-     - `agent`: The exact agent name or "NONE".
 
-## Examples
+## 输出要求
+1. **格式**：仅返回一个有效的JSON字符串。
+2. **结构**：
+   - `thought_process`：关于领域映射和主权原则的简明推理。
+   - `original_query`：原始用户输入。
+   - `tasks`：包含以下字段的对象列表：
+     - `id`：整数（从1开始）。
+     - `description`：转述给智能体的子任务或问题（忠实于用户原始表述，禁止添加额外条件；对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含）。
+     - `agent`：确切的智能体名称或"NONE"。
+
+## 示例
 {instructions}
 
-Or when no agent is found:
+或当未找到智能体时：
 {none_instructions}
 
-Questions:
+问题：
+
 """
+
 
 Orchestrator_INSTRUCTIONS_ZH = """
 你是一位知识分析与总结专家。你的任务是基于提供的子问题答案（`knowledge`）和对话上下文（`history`），通过逻辑严密的分析，回答用户的原始问题。
@@ -1215,16 +1069,21 @@ class OrchestratorAgent(BaseAgent):
         query,
         replan_context: Optional[Dict[str, Any]] = None,
         replan_guidance: str = "",
+        *,
+        recovery_retry_index: int = 0,
     ) -> TaskList:
+        """recovery_retry_index: 0 = first plan from the request entrypoint (may use single-agent fast path).
+        >= 1 = replan after failed execution rounds inside a2a_tasks (aligned with retry_count after increment);
+        those calls always run make_plan for single-agent so the LLM sees replan_context.
+        """
 
         self.agent_cards = await self.list_agent_cards(query)
 
         if len(self.agent_cards) == 0:
             return None
 
-        # Fast path: single agent available (typical for Semantic Domain with USE_ONLY_OWN_CAPABILITY=true).
-        # Skip LLM planning entirely — the only possible plan is "send query to the sole agent".
-        if len(self.agent_cards) == 1:
+        # Fast path: single agent, initial plan only (USE_ONLY_OWN_CAPABILITY=true).
+        if len(self.agent_cards) == 1 and recovery_retry_index == 0:
             sole_agent = self.agent_cards[0]
             history_note = ""
             if self.enable_history == "enable":
@@ -1241,7 +1100,15 @@ class OrchestratorAgent(BaseAgent):
                 tasks=[PlannerTask(id=1, description=query, agent=sole_agent.name)]
             )
 
-        # Multi-agent path: use LLM planner to decompose and assign tasks
+        if len(self.agent_cards) == 1 and recovery_retry_index > 0:
+            sole_name = self.agent_cards[0].name
+            logger.info(
+                "Single agent (%s), recovery_retry_index=%s — using LLM make_plan (replan after failure)",
+                sole_name,
+                recovery_retry_index,
+            )
+
+        # Single-agent replan or multi-agent path: LLM planner decomposes / refines tasks
         steps = await self.planner_agent.make_plan(
             query,
             self.agent_cards,
@@ -1755,8 +1622,10 @@ class OrchestratorAgent(BaseAgent):
     def _decide_retry_action(self, reason_code: str, same_plan_retry_count: int) -> str:
         if reason_code in {"agent_not_found", "no_agent_available", "out_of_scope_non_retryable", "repeated_failure_non_retryable"}:
             return "abort"
-        if reason_code in {"execution_error", "empty_answer"} and same_plan_retry_count < 1:
-            return "retry_same_plan"
+        # retry_same_plan disabled: go straight to replan on execution_error / empty_answer instead of
+        # re-running the identical plan once. Handler for retry_same_plan below is kept for easy revert.
+        # if reason_code in {"execution_error", "empty_answer"} and same_plan_retry_count < 1:
+        #     return "retry_same_plan"
         return "replan"
 
     def _select_retry_reason_code(self, failed_tasks: List[TaskStatus]) -> str:
@@ -2260,6 +2129,7 @@ class OrchestratorAgent(BaseAgent):
                         query,
                         replan_context=replan_context,
                         replan_guidance=replan_guidance,
+                        recovery_retry_index=retry_count,
                     )
 
                     if new_tasks is None or not hasattr(new_tasks, 'tasks') or not new_tasks.tasks:
@@ -2674,12 +2544,12 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
 
         # make plans for user question, each plan is the name of agent card
-        steps = await agent.get_plan(query)
+        tasks = await agent.get_plan(query)
 
         think = []
 
-        if steps is None:
-            logger.info(f"===== OrchestratorAgentExecutor, steps is empty.")
+        if tasks is None:
+            logger.info(f"===== OrchestratorAgentExecutor, tasks is empty.")
             not_found_agents = "Not found agents. You can provide more information."
             await agent.emit_progress(
                 updater,
@@ -2701,7 +2571,7 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
             )
         else:
             plan_msg, plan_extra = OrchestratorAgent.build_sd_plan_ready_progress(
-                task_list=steps,
+                task_list=tasks,
                 user_query=query,
             )
             await agent.emit_progress(
@@ -2713,16 +2583,16 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
                 extra=plan_extra,
             )
             if self.debug == 1:
-                steps_str = tasklist_to_string(steps)
+                tasks_str = tasklist_to_string(tasks)
                 await updater.add_artifact(
-                    [TextPart(text=steps_str)],
+                    [TextPart(text=tasks_str)],
                     name=f'{agent.agent_name}-result',
                 )
-                think.append(steps_str)
+                think.append(tasks_str)
 
             # call each agent to get the knowledge owned by each agent, then get some knowledges from agents
             task_name = f'{agent.agent_name}-result'
-            task_knowledges = await agent.a2a_tasks(query, steps, updater, task_name, think)
+            task_knowledges = await agent.a2a_tasks(query, tasks, updater, task_name, think)
 
             _tk_preview = [str(tk)[:200] + "..." for tk in task_knowledges] if task_knowledges else []
             logger.info(f"===== OrchestratorAgentExecutor.task_knowledges count={len(task_knowledges) if task_knowledges else 0}, preview: {_tk_preview}")

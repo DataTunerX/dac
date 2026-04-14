@@ -831,6 +831,109 @@ class ExpertAgent(BaseAgent):
         return ""
 
     @staticmethod
+    def _split_sql_statements(sql: str) -> List[str]:
+        """
+        Split a script into statements on ';' outside quotes / backtick identifiers (best-effort).
+        Needed because drivers return only one result set per execute (MySQL) or reject multi-command
+        queries in common asyncpg usage.
+        """
+        raw = str(sql or "").strip()
+        if not raw:
+            return []
+        statements: List[str] = []
+        buf: List[str] = []
+        i = 0
+        n = len(raw)
+        in_single = False
+        in_double = False
+        in_backtick = False
+        escape = False
+        while i < n:
+            c = raw[i]
+            if escape:
+                buf.append(c)
+                escape = False
+                i += 1
+                continue
+            if in_single:
+                if c == "\\" and i + 1 < n:
+                    escape = True
+                    buf.append(c)
+                    i += 1
+                    continue
+                if c == "'" and i + 1 < n and raw[i + 1] == "'":
+                    buf.append("''")
+                    i += 2
+                    continue
+                if c == "'":
+                    in_single = False
+                buf.append(c)
+                i += 1
+                continue
+            if in_double:
+                if c == '"' and i + 1 < n and raw[i + 1] == '"':
+                    buf.append('""')
+                    i += 2
+                    continue
+                if c == '"':
+                    in_double = False
+                buf.append(c)
+                i += 1
+                continue
+            if in_backtick:
+                if c == "`" and i + 1 < n and raw[i + 1] == "`":
+                    buf.append("``")
+                    i += 2
+                    continue
+                if c == "`":
+                    in_backtick = False
+                buf.append(c)
+                i += 1
+                continue
+            if c == "'":
+                in_single = True
+                buf.append(c)
+                i += 1
+                continue
+            if c == '"':
+                in_double = True
+                buf.append(c)
+                i += 1
+                continue
+            if c == "`":
+                in_backtick = True
+                buf.append(c)
+                i += 1
+                continue
+            if c == ";":
+                piece = "".join(buf).strip()
+                if piece:
+                    statements.append(piece)
+                buf = []
+                i += 1
+                continue
+            buf.append(c)
+            i += 1
+        tail = "".join(buf).strip()
+        if tail:
+            statements.append(tail)
+        return statements
+
+    @staticmethod
+    def _flatten_query_result_rows(
+        query_results: Union[List[Dict[str, Any]], Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Normalize execute_db_query output to a flat row list (for dimension aggregation)."""
+        if isinstance(query_results, list):
+            return query_results
+        if isinstance(query_results, dict) and query_results.get("multi_statement"):
+            flat: List[Dict[str, Any]] = []
+            for batch in query_results.get("batches") or []:
+                flat.extend(batch.get("rows") or [])
+            return flat
+        return []
+
+    @staticmethod
     def _prepare_sql_for_signature(sql: str) -> str:
         raw = str(sql or "").strip().lower()
         if not raw:
@@ -1390,7 +1493,9 @@ class ExpertAgent(BaseAgent):
 
         return sql_schema, sql_relationship, sql_sample_data
 
-    async def execute_db_query(self, db_connect_config: dict, dbtype: str, sql: str) -> List[Dict[str, Any]]:
+    async def execute_db_query(
+        self, db_connect_config: dict, dbtype: str, sql: str
+    ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
         try:
             if not db_connect_config:
                 raise ValueError("Database connection configuration cannot be empty.")
@@ -1402,13 +1507,29 @@ class ExpertAgent(BaseAgent):
                 raise ValueError("Database type cannot be empty.")
             
             dbtype_lower = dbtype.lower()
-            
-            if dbtype_lower == 'mysql':
-                return await execute_mysql(db_connect_config, sql)
-            elif dbtype_lower == 'postgres':
-                return await execute_postgres(db_connect_config, sql)
-            else:
+            statements = self._split_sql_statements(sql)
+            if not statements:
+                raise ValueError("SQL statement cannot be empty.")
+
+            async def _run_one(stmt: str) -> List[Dict[str, Any]]:
+                if dbtype_lower == "mysql":
+                    return await execute_mysql(db_connect_config, stmt)
+                if dbtype_lower == "postgres":
+                    return await execute_postgres(db_connect_config, stmt)
                 raise ValueError(f"Unsupported database type: {dbtype}")
+
+            if len(statements) == 1:
+                return await _run_one(statements[0])
+
+            batches: List[Dict[str, Any]] = []
+            for idx, stmt in enumerate(statements):
+                rows = await _run_one(stmt)
+                batches.append({"statement_index": idx, "sql": stmt, "rows": rows})
+            return {
+                "multi_statement": True,
+                "statement_count": len(statements),
+                "batches": batches,
+            }
                 
         except ValueError as ve:
             raise ve
@@ -1435,9 +1556,10 @@ class ExpertAgent(BaseAgent):
         for dimension in dimensions.dimensions:
             try:
                 query_results = await self.execute_db_query(db_connect_config, dbtype, dimension.sql)
+                row_list = self._flatten_query_result_rows(query_results)
                 
                 values = set()
-                for row in query_results:
+                for row in row_list:
                     for value in row.values():
                         if value is not None and str(value).strip():
                             if isinstance(value, bool):
@@ -2677,7 +2799,7 @@ class ExpertAgent(BaseAgent):
                             self.state = AgentState.FINISHED
                             source_metadata = self.analyze_descriptor_source_metadata()
                             db_connect_config = source_metadata[ddname]
-                            sql_result :List[Dict[str, Any]] = []
+                            sql_result: Union[List[Dict[str, Any]], Dict[str, Any]] = []
                             # Execute the SQL statement generated by the large model.
                             try:
                                 sql_tables_valid, unknown_tables = self._validate_sql_table_whitelist(
@@ -3304,17 +3426,29 @@ class ExpertAgent(BaseAgent):
 
                 logger.debug(f"******************** steps status: \n\n {steps_status}")
                 
+                step_answer_raw = step_result
+                dac_progress_message = ""
+
                 if not dimensions and not dimensions_reason:
-                    step_result = f"{step_result_str}\n\nanswer: {step_result}\n"
+                    dac_progress_message = f"answer: {step_answer_raw}\n"
+                    step_result = f"{step_result_str}\n\nanswer: {step_answer_raw}\n"
 
-                if dimensions and not dimensions_reason:
-                    step_result = f"{step_result_str} \n\nconditions:{dimensions} \n\nanswer: {step_result} \n"
-                
-                if dimensions_reason and not dimensions:
-                    step_result = f"{step_result_str} \n\nconditions:{dimensions_reason} \n\nanswer: {step_result} \n"
+                elif dimensions and not dimensions_reason:
+                    dac_progress_message = f"conditions:{dimensions} \n\nanswer: {step_answer_raw}\n"
+                    step_result = f"{step_result_str} \n\nconditions:{dimensions} \n\nanswer: {step_answer_raw} \n"
 
-                if dimensions_reason and dimensions:
-                    step_result = f"{step_result_str} \n\nconditions: {dimensions}, {dimensions_reason} \n\nanswer: {step_result} \n"
+                elif dimensions_reason and not dimensions:
+                    dac_progress_message = f"conditions:{dimensions_reason} \n\nanswer: {step_answer_raw}\n"
+                    step_result = f"{step_result_str} \n\nconditions:{dimensions_reason} \n\nanswer: {step_answer_raw} \n"
+
+                elif dimensions_reason and dimensions:
+                    dac_progress_message = (
+                        f"conditions: {dimensions}, {dimensions_reason} \n\nanswer: {step_answer_raw}\n"
+                    )
+                    step_result = (
+                        f"{step_result_str} \n\nconditions: {dimensions}, {dimensions_reason} "
+                        f"\n\nanswer: {step_answer_raw} \n"
+                    )
 
                 stuck = await self.is_stuck()
                 if stuck:
@@ -3349,7 +3483,8 @@ class ExpertAgent(BaseAgent):
                     "sd_step_finished",
                     message=(
                         f"completed step {self.current_step}/{self.max_steps}"
-                        f" | query: {finished_query_preview}"
+                        f" | query: {finished_query_preview}" 
+                        f" | {dac_progress_message}" 
                     ),
                     status="done",
                     task_id=self.current_task_id,
