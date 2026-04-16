@@ -357,8 +357,7 @@ function ConfigMapsContent() {
         setLlmProvider(p === "openai" ? "openai_compatible" : p)
         setLlmBaseUrl(data["base-url"] || "")
         setLlmModel(data["model"] || "")
-        // api-key is redacted by backend; keep blank unless user wants to change it
-        setLlmApiKey("")
+        setLlmApiKey(data["api-key"] || "")
       } else {
         setPromptsFewshots(data["fewshots.json"] || "")
         setPromptsBackground(data["background_knowledge.json"] || "")

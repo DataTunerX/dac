@@ -294,7 +294,7 @@ func (h *DataDescriptorGenerator) getConfig(ctx context.Context) (*DDConfig, err
 func (h *DataDescriptorGenerator) getLLMConfig(ctx context.Context, dd *dacv1alpha1.DataDescriptor, ddConfig *DDConfig) (*LLMConfig, error) {
 	configMap := &corev1.ConfigMap{}
 
-	err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: ddConfig.LLMConfig, Namespace: dd.Namespace}, configMap)
+	err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: ddConfig.LLMConfig, Namespace: "dac"}, configMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get ConfigMap: %v", err)
 	}

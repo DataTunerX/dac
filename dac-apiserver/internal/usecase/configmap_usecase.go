@@ -82,7 +82,12 @@ func (u *configMapUsecase) Update(ctx context.Context, namespace, name string, r
 		existing.Labels = req.Labels
 	}
 	if req.Data != nil {
-		existing.Data = req.Data
+		if existing.Data == nil {
+			existing.Data = map[string]string{}
+		}
+		for k, v := range req.Data {
+			existing.Data[k] = v
+		}
 	}
 
 	cmType := domain.ConfigMapType("")
