@@ -1,17 +1,17 @@
 global:
   imageRegistry: ""
-  imagePullPolicy: IfNotPresent
+  imagePullPolicy: Always
 
   llm:
     provider: "openai_compatible"
     apiKey: "sk-youre-real-key-123"
     baseUrl: "http://10.124.48.200:8001/v1"
-    model: "nvidia/nemotron-3-super"
+    model: "google/gemma-4-31B-it"
 
   embedding:
     provider: "openai_compatible"
     apiKey: "sk-youre-real-key-123"
-    baseUrl: "http://10.124.48.200:8050/v1"
+    baseUrl: "http://10.124.48.50:8000/v1"
     model: "bge-m3"
     dims: "1024"
 
@@ -70,7 +70,7 @@ executionEngine:
       provider: "openai_compatible"
       apiKey: "sk-youre-real-key-123"
       baseUrl: "http://10.124.48.200:8001/v1"
-      model: "nvidia/nemotron-3-super"
+      model: "google/gemma-4-31B-it"
 
 semanticGrouper:
   image:
@@ -78,7 +78,7 @@ semanticGrouper:
     tag: "semantic-grouper-v0.9.0-amd64"
   config:
     llm:
-      model: "nvidia/nemotron-3-super"
+      model: "google/gemma-4-31B-it"
 
 orchestratorRegistry:
   image:
