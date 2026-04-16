@@ -482,7 +482,7 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 func (h *DataAgentContainerGenerator) getPlannerLLMConfig(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) (*LLMConfig, error) {
 	configMap := &corev1.ConfigMap{}
 
-	err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: dac.Spec.Model.PlannerLLM, Namespace: dac.Namespace}, configMap)
+	err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: dac.Spec.Model.PlannerLLM, Namespace: "dac"}, configMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get ConfigMap: %v", err)
 	}
@@ -499,7 +499,7 @@ func (h *DataAgentContainerGenerator) getPlannerLLMConfig(ctx context.Context, d
 func (h *DataAgentContainerGenerator) getExpertLLMConfig(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) (*LLMConfig, error) {
 	configMap := &corev1.ConfigMap{}
 
-	err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: dac.Spec.Model.ExpertLLM, Namespace: dac.Namespace}, configMap)
+	err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: dac.Spec.Model.ExpertLLM, Namespace: "dac"}, configMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get ConfigMap: %v", err)
 	}
