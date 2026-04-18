@@ -127,6 +127,20 @@ class KnowledgePyramidClient:
         endpoint = f"/knowledge_pyramid/{collection_name}/delete_all"
         
         return self._make_request("DELETE", endpoint)
+
+    def delete_by_metadata_field(
+        self,
+        collection_name: str,
+        key: str,
+        value: str,
+    ) -> Dict[str, Any]:
+        """
+        Delete documents in the knowledge pyramid collection whose metadata matches key=value.
+        Matches data-services DELETE /knowledge_pyramid/{collection_name}/delete_by_metadata_field.
+        """
+        payload = {"key": key, "value": value}
+        endpoint = f"/knowledge_pyramid/{collection_name}/delete_by_metadata_field"
+        return self._make_request("DELETE", endpoint, payload)
     
     def add_documents(
         self,

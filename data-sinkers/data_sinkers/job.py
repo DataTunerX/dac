@@ -14,12 +14,13 @@ from .client.semantic_group_client import SemanticGroupClient
 from .client.celery_httpserver_client import CeleryHttpserverClient
 from .client.knowledge_graph_client import KnowledgeGraphClient, convert_to_knowledge_graph
 from .client.codebase_indexer_client import CodebaseIndexerClient, CodebaseIndexerData
+from .client.unstructured_files_client import UnstructuredFilesClient, UnstructuredFileRecord
 from .client.semantic_grouper_client import SemanticGrouperClient
 from .api.base import DocumentModel
 from .extractors.mysql import extract_mysql
 from .extractors.postgres import extract_postgres
 from .extractors.code import extract_code
-from .extractors.minio import extract_minio
+from .extractors.minio import extract_minio, delete_minio_objects_from_pyramid_and_inventory
 from .extractors.fileserver import extract_fileserver
 from .extractors.knowledge_graph import Knowledge_Graph
 from .fingerprint.fingerprint import (
@@ -28,7 +29,7 @@ from .fingerprint.fingerprint import (
     fingerprint_id_for_unstructured,
     resolve_code_commit_sha_for_fingerprint,
 )
-from .source_helpers import merge_code_repo_into_metadata
+from .source_helpers import merge_code_repo_into_metadata, coerce_semantic_domain_text
 from .connection_config import DataSourceType, get_connection_config
 
 logging.basicConfig(level=logging.INFO)
@@ -86,6 +87,9 @@ knowledgeGraphClient = KnowledgeGraphClient(base_url=data_services_url, timeout=
 #build codebase indexer client to send codebase index to data-services
 codebase_indexer_client = CodebaseIndexerClient(base_url=data_services_url, timeout=600)
 
+# unstructured-files (MinIO file inventory) in data-services MySQL
+unstructured_files_client = UnstructuredFilesClient(base_url=data_services_url, timeout=600)
+
 def process_data(self, data: Dict[str, Any]):
     logger.info(f"============= start task {self.request.id} ===================")
     
@@ -127,6 +131,9 @@ def process_data(self, data: Dict[str, Any]):
                 # Delete codebase index records
                 send_delete_codebase_index(dd_namespace=dd_namespace, dd_name=dd_name)
                 logger.info(f"Successfully sent delete codebase index request for {dd_namespace}/{dd_name}")
+
+                send_delete_unstructured_files_from_dataservices(dd_namespace, dd_name)
+                logger.info("Successfully sent delete unstructured-files request for %s/%s", dd_namespace, dd_name)
                 
                 semantic_group_data = {
                     "operation": "Delete",
@@ -160,6 +167,7 @@ def process_data(self, data: Dict[str, Any]):
 
         reader = None
         result: List[DocumentModel] = []
+        minio_incremental = False
 
         try:
             reader = get_reader(source_type.value, connection_config)
@@ -179,7 +187,36 @@ def process_data(self, data: Dict[str, Any]):
                 result, fingerprint_associated_info, codebase_index_result = extract_code(reader, descriptor, "gitlab")
 
             elif source_type == DataSourceType.MINIO:
-                result, fingerprint_associated_info = extract_minio(reader, descriptor, extract, prompts)
+                dd_ns = descriptor.get("namespace")
+                dd_nm = descriptor.get("name")
+                # 增量处理
+                if reader.has_unstructured_inventory_baseline(dd_ns, dd_nm, unstructured_files_client):
+                    minio_incremental = True
+                    added, removed, modified = reader.diff_against_saved_inventory(dd_ns, dd_nm, unstructured_files_client)
+                    stale = sorted(set(removed) | set(modified))
+                    if stale:
+                        bucket = connection_config.get("bucket") or reader.config.get("bucket")
+                        delete_minio_objects_from_pyramid_and_inventory(collection_name=collection_name, bucket=bucket, dd_namespace=dd_ns, dd_name=dd_nm, object_names=stale, knowledge_pyramid_client=knowledge_pyramid_client, unstructured_files_client=unstructured_files_client)
+                    to_read = sorted(set(added) | set(modified))
+                    logger.info("[data-sinker] feature=minio_incremental dd=%s/%s added=%d removed=%d modified=%d read_objects=%d", dd_ns,dd_nm,len(added),len(removed),len(modified),len(to_read))
+                    result, fingerprint_associated_info = extract_minio(
+                        reader,
+                        descriptor,
+                        extract,
+                        prompts,
+                        objects_for_document_query=to_read,
+                        unstructured_files_client=unstructured_files_client,
+                    )
+                else:
+                    # 全量处理
+                    result, fingerprint_associated_info = extract_minio(
+                        reader,
+                        descriptor,
+                        extract,
+                        prompts,
+                        objects_for_document_query=None,
+                        unstructured_files_client=unstructured_files_client,
+                    )
 
             elif source_type == DataSourceType.FILESERVER:
                 result, fingerprint_associated_info = extract_fileserver(reader, descriptor, extract, prompts) 
@@ -192,15 +229,19 @@ def process_data(self, data: Dict[str, Any]):
             dd_name = descriptor.get('name')
             try:
                 signature_client.delete_signatures_by_dd_info(dd_namespace, dd_name)
-                knowledge_pyramid_client.delete_collection(collection_name)
+                if not (source_type == DataSourceType.MINIO and minio_incremental):
+                    knowledge_pyramid_client.delete_collection(collection_name)
                 send_delete_knowledge_graph(collection_name)
                 if source_type in [DataSourceType.GITHUB, DataSourceType.GITEE, DataSourceType.GITLAB]:
                     codebase_indexer_client.delete_codebase_indexers_by_dd_info(dd_namespace, dd_name)
+                if source_type == DataSourceType.MINIO and not minio_incremental:
+                    send_delete_unstructured_files_from_dataservices(dd_namespace, dd_name)
                 logger.info(
-                    "[data-sinker] feature=add_or_update_preclear Cleared signature/pyramid/graph/codebase_indexer "
-                    "for AddOrUpdate re-sync dd=%s/%s",
+                    "[data-sinker] feature=add_or_update_preclear Cleared signature/pyramid/graph/codebase_indexer/unstructured_files "
+                    "for AddOrUpdate re-sync dd=%s/%s minio_incremental=%s",
                     dd_namespace,
                     dd_name,
+                    minio_incremental,
                 )
             except Exception as clear_err:
                 logger.warning(
@@ -209,6 +250,17 @@ def process_data(self, data: Dict[str, Any]):
                     dd_name,
                     clear_err,
                 )
+
+            pyramid_result = None
+
+            serializable_result = [item.dict() for item in result] if result else []
+
+            if serializable_result:
+                try:
+                    pyramid_result = send_add_documents_to_knowledge_pyramid(documents=serializable_result, collection_name=collection_name)
+                    logger.info(f"Successfully sent {len(serializable_result)} documents to Knowledge Pyramid")
+                except Exception as e:
+                    raise ValueError(f"KnowledgePyramidClient to send documents to data-services fail: {data}") from e
 
             send_add_signature(source_type, connection_config, descriptor, fingerprint_associated_info)
             logger.info(f"Successfully sent add collection request {collection_name} to signature")
@@ -224,17 +276,10 @@ def process_data(self, data: Dict[str, Any]):
                 if codebase_index_result:
                     send_codebase_index_to_dataservices(codebase_index_result, descriptor)
                     logger.info(f"Successfully sent codebase index to data-services for {collection_name}")
-            
-            serializable_result = [item.dict() for item in result] if result else []
 
-            pyramid_result = None
-
-            if serializable_result:
-                try:
-                    pyramid_result = send_add_documents_to_knowledge_pyramid(documents=serializable_result, collection_name=collection_name)
-                    logger.info(f"Successfully sent {len(serializable_result)} documents to Knowledge Pyramid")
-                except Exception as e:
-                    raise ValueError(f"KnowledgePyramidClient to send documents to data-services fail: {data}") from e
+            if source_type == DataSourceType.MINIO:
+                send_add_unstructured_files_to_dataservices(fingerprint_associated_info)
+                logger.info("Successfully sent unstructured-files inventory to data-services for %s", collection_name)
 
             semantic_group_data = {
                 "operation": "AddOrUpdate",
@@ -411,30 +456,6 @@ def send_add_signature(data_type, connection_config, descriptor, fingerprint_ass
         raise
 
 
-def _coerce_semantic_domain_text(fingerprint_associated_info: Dict[str, Any]) -> Optional[str]:
-    """
-    Normalize the DDD text sent to data-services as semantic_domain.
-
-    - ``ddd`` should be a string; postgres historically set it to a dict (full ddd result).
-    - If ``ddd`` is missing/empty but ``db_ddd`` / ``code_ddd`` exist, use those so PUT
-      includes semantic_domain (otherwise the API omits the field and the DB keeps the old value).
-    """
-    raw = fingerprint_associated_info.get("ddd")
-    if isinstance(raw, dict):
-        raw = raw.get("summary")
-    if raw is not None:
-        s = raw if isinstance(raw, str) else str(raw)
-        if s.strip():
-            return s
-    for key in ("db_ddd", "code_ddd"):
-        fb = fingerprint_associated_info.get(key)
-        if fb is not None:
-            s = fb if isinstance(fb, str) else str(fb)
-            if s.strip():
-                return s
-    return None
-
-
 def send_add_semantic_domain(descriptor, fingerprint_associated_info):
     """
     Create or update semantic domain record in data-services.
@@ -442,7 +463,7 @@ def send_add_semantic_domain(descriptor, fingerprint_associated_info):
     to avoid relationship disruption (dd_group_relation references semantic_domain_id).
     """
     agent_card = json.dumps(fingerprint_associated_info.get("agent_card", {}), ensure_ascii=False, indent=4)
-    semantic_domain_text = _coerce_semantic_domain_text(fingerprint_associated_info)
+    semantic_domain_text = coerce_semantic_domain_text(fingerprint_associated_info)
     if semantic_domain_text is None:
         logger.warning(
             "send_add_semantic_domain: no non-empty ddd/db_ddd/code_ddd; "
@@ -548,20 +569,37 @@ def send_delete_collection_to_knowledge_pyramid(collection_name: str) -> Dict[st
 
 def send_add_knowledge_graph(collection_name, fingerprint_associated_info):
     try:
+        semantic_domain_text = coerce_semantic_domain_text(fingerprint_associated_info or {})
+        if semantic_domain_text is None:
+            logger.warning(
+                "[data-sinker] send_add_knowledge_graph skip (no ddd/db_ddd/code_ddd text) collection=%s",
+                collection_name,
+            )
+            return None
+
+        logger.info(f"send_add_knowledge_graph, semantic_domain_text={semantic_domain_text}")
+
         knowledge_graph = Knowledge_Graph()
-
-        semantic_domain_text = _coerce_semantic_domain_text(fingerprint_associated_info)
-
         knowledge_graph_result = knowledge_graph.knowledge_graph(semantic_domain_text)
 
         nodes, relationships = convert_to_knowledge_graph(knowledge_graph_result)
 
         logger.info(f"send_add_knowledge_graph, nodes={nodes}, relationships={relationships}")
 
+        if not nodes:
+            # data-services KnowledgeGraphVectorService.add() rejects empty nodes ("nodes 不能为空").
+            # Occurs e.g. MinIO incremental with no file changes (no chunks -> empty DDD -> empty graph).
+            logger.info(
+                "[data-sinker] send_add_knowledge_graph skip add_with_source (empty nodes) "
+                "collection=%s (KG preclear already ran earlier in AddOrUpdate)",
+                collection_name,
+            )
+            return None
+
         knowledgeGraphClient.add_with_source(source=collection_name, nodes=nodes, relationships=relationships, clear_existing=True)
 
     except Exception as e:
-        logger.error(f"delete collection fail: {str(e)}", exc_info=True)
+        logger.error(f"send_add_knowledge_graph fail: {str(e)}", exc_info=True)
         raise
 
 def send_delete_knowledge_graph(collection_name):
@@ -646,6 +684,72 @@ def send_delete_codebase_index(dd_namespace: str, dd_name: str) -> Dict[str, Any
         raise
 
 
+def send_add_unstructured_files_to_dataservices(
+    fingerprint_associated_info: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    将minio里bucket中的每一个文件的信息保存到数据库，用于后续的指纹比对。
+    """
+    try:
+        raw_list = fingerprint_associated_info.get("minio_file_descriptors") or []
+
+        if not raw_list:
+            logger.info("No minio_file_descriptors to send to unstructured-files API")
+            return {"status": "success", "message": "No minio file descriptors to send"}
+
+        records: List[UnstructuredFileRecord] = []
+        for item in raw_list:
+            if not isinstance(item, dict):
+                continue
+            try:
+                raw_fs = item.get("file_summary")
+                file_summary_value: Optional[str] = (
+                    raw_fs.strip() if isinstance(raw_fs, str) and raw_fs.strip() else None
+                )
+                records.append(
+                    UnstructuredFileRecord(
+                        dd_namespace=str(item.get("dd_namespace") or ""),
+                        dd_name=str(item.get("dd_name") or ""),
+                        file_name=str(item.get("file_name") or ""),
+                        bucket=str(item.get("bucket") or ""),
+                        minio_path=str(item.get("minio_path") or ""),
+                        file_size=int(item.get("file_size") or 0),
+                        file_summary=file_summary_value,
+                    )
+                )
+            except (TypeError, ValueError) as conv_err:
+                logger.warning("Skip invalid minio_file_descriptor entry %r: %s", item, conv_err)
+                continue
+
+        if not records:
+            logger.info("minio_file_descriptors present but none could be parsed as records")
+            return {"status": "success", "message": "No valid records to send"}
+
+        result = unstructured_files_client.batch_upsert_unstructured_files(records)
+        logger.info(
+            "Batch upsert unstructured-files: count=%s result=%s",
+            len(records),
+            result,
+        )
+        return result
+    except Exception as e:
+        logger.error("send_add_unstructured_files_to_dataservices fail: %s", e, exc_info=True)
+        raise
+
+
+def send_delete_unstructured_files_from_dataservices(
+    dd_namespace: str, dd_name: str,
+) -> Dict[str, Any]:
+    try:
+        result = unstructured_files_client.delete_unstructured_files_by_dd(
+            dd_namespace=dd_namespace,
+            dd_name=dd_name,
+        )
+        logger.info("delete unstructured-files by dd: %s", result)
+        return result
+    except Exception as e:
+        logger.error("send_delete_unstructured_files_from_dataservices fail: %s", e, exc_info=True)
+        raise
 
 
 # def send_delete_documents_from_vector_semantic_groups(descriptor) -> Dict[str, Any]:

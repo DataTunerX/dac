@@ -322,7 +322,27 @@ curl -X DELETE "http://192.168.xxx.xxx:22000/knowledge_pyramid/test_knowledge_py
 # output
 
 
-# 7. Delete All Documents and Memories in a Collection
+# 7. Delete Documents by metadata field
+
+# Deletes all chunks whose metadata has the given key-value (same semantics as vector delete_by_metadata_field).
+
+curl -X DELETE "http://192.168.xxx.xxx:22000/knowledge_pyramid/test_knowledge_pyramid123/delete_by_metadata_field" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "category",
+    "value": "AI"
+  }' | jq .
+
+# output
+
+# {
+#   "status": "success",
+#   "message": "Delete operation completed",
+#   "collection": "test_knowledge_pyramid123"
+# }
+
+
+# 8. Delete All Documents and Memories in a Collection
 
 curl -X DELETE "http://192.168.xxx.xxx:22000/knowledge_pyramid/test_knowledge_pyramid123/delete_all" \
   -H "Content-Type: application/json" \

@@ -19,11 +19,12 @@ from .memory.memory import AsyncMemoryService
 from uvicorn.config import LOGGING_CONFIG
 from .api.base import DocumentModel, SearchType, CreateRequest, AddTextsRequest, SearchRequest,DeleteRequest, MetadataRequest
 from .api.base import MemoryMessage, MemoryAddRequest, MemoryUpdateRequest, MemorySearchRequest, MemoryGetAllRequest, MemoryDeleteRequest, MemoryResponse
-from .api.base import KnowledgePyramidAddRequest, KnowledgePyramidSearchRequest, KnowledgePyramidDeleteRequest
+from .api.base import KnowledgePyramidAddRequest, KnowledgePyramidSearchRequest, KnowledgePyramidDeleteRequest, KnowledgePyramidDeleteByMetadataRequest
 from .api.base import VectorAddDocumentsRequest, VectorDeleteDocumentsRequest, VectorSearchRequest, VectorCreateCollectionRequest, VectorDeleteCollectionRequest, VectorDeleteDocumentsByMetaFieldRequest, VectorGetIdsByMetaFieldRequest, VectorGetIdsByMetaFieldResponse
 from .api.base import SignatureCreateRequest, SignatureUpdateRequest, SignatureResponse, SignatureSearchByDDRequest, SignatureListResponse
 from .api.base import SemanticDomainCreateRequest, SemanticDomainUpdateRequest, SemanticDomainResponse, SemanticDomainSearchByDDRequest, SemanticDomainListResponse
 from .api.base import CodebaseIndexer, CodebaseIndexerCreateRequest, CodebaseIndexerUpdateRequest, CodebaseIndexerResponse, CodebaseIndexerSearchByDDRequest, CodebaseIndexerSearchByFilepathRequest, CodebaseIndexerListResponse
+from .api.base import UnstructuredFile, UnstructuredFileUpsertRequest, UnstructuredFileBatchUpsertRequest, UnstructuredFileDeleteByObjectRequest, UnstructuredFileDeleteByDdRequest, UnstructuredFileResponse, UnstructuredFileListResponse
 from .api.base import SemanticGroupCreateRequest, SemanticGroupUpdateRequest, SemanticGroupResponse, SemanticGroupListResponse, DDGroupRelationCreateRequest, DDGroupRelationUpdateRequest, DDGroupRelationListResponse, SemanticGroupWithMembersResponse, SemanticGroupWithMembersData, SemanticGroupMemberDetail, SemanticGroupInfo
 from .api.base import CreateHistoryRequest, CreateHistoryResponse, SearchHistoryRequest, SearchHistoryResponse, HistoryRecordResponse, HistoryRecord, HistoryMessage,SearchHistoryRequestByUserAndRun
 from .api.base import KnowledgeGraphAddRequest, KnowledgeGraphSearchRequest, KnowledgeGraphDeleteRequest, KnowledgeGraphGetGraphRequest, KnowledgeGraphResponse
@@ -35,6 +36,7 @@ from psycopg2 import pool
 from .signature.signature import AsyncSignatureService
 from .semantic_domain.semantic_domain import AsyncSemanticDomainService
 from .codebase_indexer.codebase_indexer import AsyncCodebaseIndexerService
+from .unstructured_files import AsyncUnstructuredFilesService
 from .semantic_group.semantic_group import AsyncSemanticGroupService
 from .api.base import Signature, SemanticDomain, SemanticGroup, DDGroupRelation
 from .knowledge_graph.knowledge_graph import KnowledgeGraphVectorService
@@ -83,12 +85,13 @@ semantic_group_service = None
 history_service = None
 knowledge_graph_service = None
 codebase_indexer_service = None
+unstructured_files_service = None
 
 
 async def initialize_services():
 
     # initial all services
-    global knowledge_pyramid_service, async_memory_service, vector_service, signature_service, semantic_domain_service, semantic_group_service, history_service, knowledge_graph_service, codebase_indexer_service
+    global knowledge_pyramid_service, async_memory_service, vector_service, signature_service, semantic_domain_service, semantic_group_service, history_service, knowledge_graph_service, codebase_indexer_service, unstructured_files_service
 
     # init knowledge pyramid service
     try:
@@ -388,6 +391,17 @@ You should detect the language of the user input and record the facts in the sam
         raise
     except Exception as e:
         logger.error(f"Failed to initialize Codebase indexer service: {str(e)}", exc_info=True)
+        raise
+
+    # init unstructured-files service (MySQL table: unstructured_files)
+    try:
+        unstructured_files_service = AsyncUnstructuredFilesService(pool_size=50)
+        await unstructured_files_service.initialize()
+        logger.info("unstructured-files service initialized successfully")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to initialize unstructured-files service: {str(e)}", exc_info=True)
         raise
 
 
@@ -715,6 +729,26 @@ async def delete_documents_and_memorys_by_ids(
     except Exception as e:
         logger.error(f"Error in delete_documents_by_ids: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/knowledge_pyramid/{collection_name}/delete_by_metadata_field")
+async def delete_documents_by_metadata_with_knowledge_pyramid(
+    collection_name: str,
+    request: KnowledgePyramidDeleteByMetadataRequest,
+):
+    try:
+        result = await knowledge_pyramid_service.delete_documents_by_metadata(
+            collection_name=collection_name,
+            key=request.key,
+            value=request.value,
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in delete_documents_by_metadata: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # knowledge pyramid routes
 @app.delete("/knowledge_pyramid/{collection_name}/delete_all")
@@ -1723,6 +1757,216 @@ async def get_codebase_indexer_count():
     except Exception as e:
         logger.error(f"Error getting codebase indexer count: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+################################### unstructured-files routes (MySQL: unstructured_files) ############################
+
+
+@app.post("/unstructured-files", response_model=UnstructuredFileResponse)
+async def unstructured_files_upsert_one(request: UnstructuredFileUpsertRequest):
+    try:
+        rec = UnstructuredFile(
+            dd_namespace=request.dd_namespace,
+            dd_name=request.dd_name,
+            file_name=request.file_name,
+            bucket=request.bucket,
+            minio_path=request.minio_path,
+            file_size=request.file_size,
+            file_summary=request.file_summary,
+        )
+        row_id = await unstructured_files_service.upsert(rec)
+        saved = await unstructured_files_service.get_by_id(row_id)
+        if not saved:
+            saved = await unstructured_files_service.get_by_dd_bucket_path(
+                request.dd_namespace,
+                request.dd_name,
+                request.bucket,
+                request.minio_path,
+            )
+        return UnstructuredFileResponse(
+            status="success",
+            message="unstructured-files upsert success",
+            data=saved.model_dump() if saved else {"id": row_id},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"unstructured-files upsert error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/unstructured-files/batch", response_model=UnstructuredFileResponse)
+async def unstructured_files_batch_upsert(request: UnstructuredFileBatchUpsertRequest):
+    try:
+        records = [
+            UnstructuredFile(
+                dd_namespace=f.dd_namespace,
+                dd_name=f.dd_name,
+                file_name=f.file_name,
+                bucket=f.bucket,
+                minio_path=f.minio_path,
+                file_size=f.file_size,
+                file_summary=f.file_summary,
+            )
+            for f in request.files
+        ]
+        n = await unstructured_files_service.batch_upsert(records)
+        return UnstructuredFileResponse(
+            status="success",
+            message=f"unstructured-files batch upsert success ({n} rows)",
+            count=n,
+            data={"upserted": n},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"unstructured-files batch upsert error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/unstructured-files/{row_id}", response_model=UnstructuredFileResponse)
+async def unstructured_files_get_by_id(row_id: int):
+    try:
+        row = await unstructured_files_service.get_by_id(row_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="unstructured-files record not found")
+        return UnstructuredFileResponse(
+            status="success",
+            data=row.model_dump(),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"unstructured-files get error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/unstructured-files", response_model=UnstructuredFileListResponse)
+async def unstructured_files_list(
+    bucket: Optional[str] = None,
+    dd_namespace: Optional[str] = None,
+    dd_name: Optional[str] = None,
+    limit: int = 500,
+    offset: int = 0,
+):
+    try:
+        if (dd_namespace is not None or dd_name is not None) and (
+            dd_namespace is None or dd_name is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="dd_namespace and dd_name must both be set when filtering by DataDescriptor",
+            )
+        if bucket:
+            rows = await unstructured_files_service.list_by_bucket(
+                bucket,
+                limit=limit,
+                offset=offset,
+                dd_namespace=dd_namespace,
+                dd_name=dd_name,
+            )
+        elif dd_namespace is not None:
+            rows = await unstructured_files_service.list_by_dd(
+                dd_namespace, dd_name, limit=limit, offset=offset
+            )
+        else:
+            rows = await unstructured_files_service.list_all(
+                limit=limit, offset=offset, dd_namespace=dd_namespace, dd_name=dd_name
+            )
+        return UnstructuredFileListResponse(
+            status="success",
+            data=rows,
+            count=len(rows),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"unstructured-files list error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/unstructured-files/{row_id}", response_model=UnstructuredFileResponse)
+async def unstructured_files_delete_by_id(row_id: int):
+    try:
+        ok = await unstructured_files_service.delete_by_id(row_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="unstructured-files record not found")
+        return UnstructuredFileResponse(
+            status="success",
+            message="unstructured-files deleted",
+            data={"id": row_id},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"unstructured-files delete error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/unstructured-files/delete-by-object", response_model=UnstructuredFileResponse)
+async def unstructured_files_delete_by_object(request: UnstructuredFileDeleteByObjectRequest):
+    try:
+        ok = await unstructured_files_service.delete_by_dd_bucket_path(
+            request.dd_namespace,
+            request.dd_name,
+            request.bucket,
+            request.minio_path,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="unstructured-files record not found")
+        return UnstructuredFileResponse(
+            status="success",
+            message="unstructured-files deleted by bucket and path",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"unstructured-files delete-by-object error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/unstructured-files/delete-by-dd", response_model=UnstructuredFileResponse)
+async def unstructured_files_delete_by_dd(request: UnstructuredFileDeleteByDdRequest):
+    """Remove every unstructured_files row for the given DataDescriptor (dd_namespace + dd_name)."""
+    try:
+        n = await unstructured_files_service.delete_by_dd(
+            request.dd_namespace,
+            request.dd_name,
+        )
+        return UnstructuredFileResponse(
+            status="success",
+            message=(
+                f"unstructured-files deleted {n} row(s) for dd_namespace={request.dd_namespace!r} "
+                f"dd_name={request.dd_name!r}"
+                if n
+                else "no unstructured-files rows matched this DataDescriptor"
+            ),
+            count=n,
+            data={"deleted": n},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"unstructured-files delete-by-dd error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/unstructured-files/bucket/{bucket}", response_model=UnstructuredFileResponse)
+async def unstructured_files_delete_by_bucket(bucket: str):
+    try:
+        n = await unstructured_files_service.delete_by_bucket(bucket)
+        return UnstructuredFileResponse(
+            status="success",
+            message=f"unstructured-files deleted {n} row(s) for bucket",
+            count=n,
+            data={"deleted": n},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"unstructured-files delete bucket error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 ################################### semantic group routes ############################
 @app.post("/semantic_groups", response_model=SemanticGroupResponse)

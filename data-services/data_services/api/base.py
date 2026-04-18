@@ -97,6 +97,10 @@ class KnowledgePyramidSearchRequest(BaseModel):
 class KnowledgePyramidDeleteRequest(BaseModel):
     documents: List[str]
 
+class KnowledgePyramidDeleteByMetadataRequest(BaseModel):
+    key: str
+    value: str
+
 ## vector
 class VectorAddDocumentsRequest(BaseModel):
     documents: List[DocumentModel]
@@ -224,6 +228,61 @@ class CodebaseIndexerSearchByFilepathRequest(BaseModel):
 class CodebaseIndexerListResponse(BaseModel):
     status: str
     data: List[CodebaseIndexer]
+    count: int
+
+
+# unstructured-files (MySQL: unstructured_files, HTTP: /unstructured-files)
+
+class UnstructuredFile(BaseModel):
+    id: Optional[int] = Field(None, description="Row primary key")
+    dd_namespace: str = Field(..., description="DataDescriptor namespace")
+    dd_name: str = Field(..., description="DataDescriptor name")
+    file_name: str = Field(..., description="File name")
+    bucket: str = Field(..., description="MinIO bucket name")
+    minio_path: str = Field(..., description="Full MinIO object path or URI (e.g. minio://bucket/key)")
+    file_size: int = Field(0, ge=0, description="File size in bytes")
+    file_summary: Optional[str] = Field(None, description="Optional summary or analysis text for the file")
+    created_at: Optional[datetime] = Field(None, description="Record creation time")
+
+
+class UnstructuredFileUpsertRequest(BaseModel):
+    dd_namespace: str = Field(..., description="DataDescriptor namespace")
+    dd_name: str = Field(..., description="DataDescriptor name")
+    file_name: str = Field(..., description="File name")
+    bucket: str = Field(..., description="MinIO bucket name")
+    minio_path: str = Field(..., description="Full MinIO object path or URI")
+    file_size: int = Field(0, ge=0, description="File size in bytes")
+    file_summary: Optional[str] = Field(None, description="Optional summary or analysis text for the file")
+
+
+class UnstructuredFileBatchUpsertRequest(BaseModel):
+    files: List[UnstructuredFileUpsertRequest] = Field(..., description="Files to upsert")
+
+
+class UnstructuredFileDeleteByObjectRequest(BaseModel):
+    dd_namespace: str = Field(..., description="DataDescriptor namespace")
+    dd_name: str = Field(..., description="DataDescriptor name")
+    bucket: str
+    minio_path: str
+
+
+class UnstructuredFileDeleteByDdRequest(BaseModel):
+    """Delete all unstructured_files rows scoped to one DataDescriptor (no bucket/path)."""
+
+    dd_namespace: str = Field(..., description="DataDescriptor namespace")
+    dd_name: str = Field(..., description="DataDescriptor name")
+
+
+class UnstructuredFileResponse(BaseModel):
+    status: str
+    data: Optional[Any] = None
+    message: Optional[str] = None
+    count: Optional[int] = None
+
+
+class UnstructuredFileListResponse(BaseModel):
+    status: str
+    data: List[UnstructuredFile]
     count: int
 
 

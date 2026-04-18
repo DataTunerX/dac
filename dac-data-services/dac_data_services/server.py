@@ -17,11 +17,12 @@ from uvicorn.config import LOGGING_CONFIG
 import httpx
 from .api.base import DocumentModel, SearchType, CreateRequest, AddTextsRequest, SearchRequest,DeleteRequest, MetadataRequest
 from .api.base import MemoryMessage, MemoryAddRequest, MemoryUpdateRequest, MemorySearchRequest, MemoryGetAllRequest, MemoryDeleteRequest, MemoryResponse
-from .api.base import KnowledgePyramidAddRequest, KnowledgePyramidSearchRequest, KnowledgePyramidDeleteRequest
+from .api.base import KnowledgePyramidAddRequest, KnowledgePyramidSearchRequest, KnowledgePyramidDeleteRequest, KnowledgePyramidDeleteByMetadataRequest
 from .api.base import VectorAddDocumentsRequest, VectorDeleteDocumentsRequest, VectorSearchRequest, VectorCreateCollectionRequest, VectorDeleteCollectionRequest, VectorDeleteDocumentsByMetaFieldRequest, VectorGetIdsByMetaFieldRequest, VectorGetIdsByMetaFieldResponse
 from .api.base import SignatureCreateRequest, SignatureUpdateRequest, SignatureResponse, SignatureSearchByDDRequest, SignatureListResponse
 from .api.base import SemanticDomainCreateRequest, SemanticDomainUpdateRequest, SemanticDomainResponse, SemanticDomainSearchByDDRequest, SemanticDomainListResponse
 from .api.base import CodebaseIndexer, CodebaseIndexerCreateRequest, CodebaseIndexerUpdateRequest, CodebaseIndexerResponse, CodebaseIndexerSearchByDDRequest, CodebaseIndexerSearchByFilepathRequest, CodebaseIndexerListResponse
+from .api.base import UnstructuredFileUpsertRequest, UnstructuredFileBatchUpsertRequest, UnstructuredFileDeleteByObjectRequest, UnstructuredFileDeleteByDdRequest, UnstructuredFileResponse, UnstructuredFileListResponse
 from .api.base import SemanticGroupCreateRequest, SemanticGroupUpdateRequest, SemanticGroupResponse, SemanticGroupListResponse, DDGroupRelationCreateRequest, DDGroupRelationUpdateRequest, DDGroupRelationListResponse, SemanticGroupWithMembersResponse
 from .api.base import CreateHistoryRequest, CreateHistoryResponse, SearchHistoryRequest, SearchHistoryResponse, HistoryRecordResponse, HistoryRecord, HistoryMessage,SearchHistoryRequestByUserAndRun
 from .api.base import KnowledgeGraphAddRequest, KnowledgeGraphSearchRequest, KnowledgeGraphDeleteRequest, KnowledgeGraphGetGraphRequest, KnowledgeGraphResponse
@@ -327,6 +328,21 @@ async def delete_documents_and_memorys_by_ids(
 ):
     """代理请求到后端服务，保留原有的 request 类型用于验证和文档"""
     return await proxy_request("DELETE", f"/knowledge_pyramid/{collection_name}/delete_by_ids", http_request)
+
+
+@app.delete("/knowledge_pyramid/{collection_name}/delete_by_metadata_field")
+async def delete_documents_by_metadata_with_knowledge_pyramid(
+    collection_name: str,
+    _request: KnowledgePyramidDeleteByMetadataRequest,
+    http_request: Request,
+):
+    """代理请求到后端服务，保留原有的 request 类型用于验证和文档"""
+    return await proxy_request(
+        "DELETE",
+        f"/knowledge_pyramid/{collection_name}/delete_by_metadata_field",
+        http_request,
+    )
+
 
 # knowledge pyramid routes
 @app.delete("/knowledge_pyramid/{collection_name}/delete_all")
@@ -709,6 +725,57 @@ async def delete_relations_by_group_id(group_id: str, http_request: Request):
 async def delete_relations_by_sd_id(sd_id: str, http_request: Request):
     """代理请求到后端服务，保留原有的 request 类型用于验证和文档"""
     return await proxy_request("DELETE", f"/dd_group_relations/sd/{sd_id}", http_request)
+
+
+################################### unstructured-files routes (backend: /unstructured-files) ############################
+# Order aligned with data-services; DELETE /bucket/{bucket} must register before DELETE /{row_id}.
+@app.post("/unstructured-files", response_model=UnstructuredFileResponse)
+async def unstructured_files_upsert_one(_request: UnstructuredFileUpsertRequest, http_request: Request):
+    """代理到 data-services：单条 upsert（含可选 file_summary）"""
+    return await proxy_request("POST", "/unstructured-files", http_request)
+
+
+@app.post("/unstructured-files/batch", response_model=UnstructuredFileResponse)
+async def unstructured_files_batch_upsert(_request: UnstructuredFileBatchUpsertRequest, http_request: Request):
+    """代理到 data-services：批量 upsert MinIO 文件元数据（含可选 file_summary）"""
+    return await proxy_request("POST", "/unstructured-files/batch", http_request)
+
+
+@app.get("/unstructured-files/{row_id}", response_model=UnstructuredFileResponse)
+async def unstructured_files_get_by_id(row_id: int, http_request: Request):
+    """代理到 data-services：按主键 id 查询"""
+    return await proxy_request("GET", f"/unstructured-files/{row_id}", http_request)
+
+
+@app.get("/unstructured-files", response_model=UnstructuredFileListResponse)
+async def unstructured_files_list(http_request: Request):
+    """代理到 data-services：列表（query: bucket, dd_namespace, dd_name, limit, offset）"""
+    return await proxy_request("GET", "/unstructured-files", http_request)
+
+
+@app.post("/unstructured-files/delete-by-object", response_model=UnstructuredFileResponse)
+async def unstructured_files_delete_by_object(_request: UnstructuredFileDeleteByObjectRequest, http_request: Request):
+    """代理到 data-services：按 bucket + minio_path + DD 删除一条"""
+    return await proxy_request("POST", "/unstructured-files/delete-by-object", http_request)
+
+
+@app.post("/unstructured-files/delete-by-dd", response_model=UnstructuredFileResponse)
+async def unstructured_files_delete_by_dd(_request: UnstructuredFileDeleteByDdRequest, http_request: Request):
+    """代理到 data-services：删除某 DataDescriptor 下全部 unstructured_files 行"""
+    return await proxy_request("POST", "/unstructured-files/delete-by-dd", http_request)
+
+
+@app.delete("/unstructured-files/bucket/{bucket}", response_model=UnstructuredFileResponse)
+async def unstructured_files_delete_by_bucket(bucket: str, http_request: Request):
+    """代理到 data-services：按 bucket 全删（慎用）"""
+    return await proxy_request("DELETE", f"/unstructured-files/bucket/{bucket}", http_request)
+
+
+@app.delete("/unstructured-files/{row_id}", response_model=UnstructuredFileResponse)
+async def unstructured_files_delete_by_id(row_id: int, http_request: Request):
+    """代理到 data-services：按主键 id 删除"""
+    return await proxy_request("DELETE", f"/unstructured-files/{row_id}", http_request)
+
 
 ################################### history routes ############################
 @app.post("/history/create", response_model=CreateHistoryResponse)

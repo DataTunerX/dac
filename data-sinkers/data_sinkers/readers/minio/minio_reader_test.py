@@ -21,9 +21,10 @@ def test_minio_download():
     reader = MinIOReader(config)
     
     try:
-        # docs = reader.query()
-        docs = reader.query(objects=test_objects)
+        docs, file_descriptors, per_file_summaries = reader.query(objects=test_objects)
         print(f"\nTesting docs for: {docs}")
+        print(f"\nFile descriptors (from query): {file_descriptors}")
+        print(f"\nPer-file summaries (empty without file_analyzer): {per_file_summaries}")
                 
     finally:
         reader.close()

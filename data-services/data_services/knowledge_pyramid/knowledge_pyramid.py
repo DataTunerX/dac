@@ -411,3 +411,29 @@ class KnowledgePyramidService:
             "message": "Delete operation completed",
             "collection": collection_name
         }
+
+
+    # delete knowledge pyramid for documents with metadata
+    async def delete_documents_by_metadata(self, collection_name: str, key: str, value: str) -> Dict[str, Any]:
+
+        try:
+            vector = self.get_vector_instance(collection_name)
+            if vector is None:
+                logger.error(f"Vector instance for collection '{collection_name}' is None")
+                return {
+                    "status": "error",
+                    "message": f"Vector service not initialized for collection '{collection_name}'",
+                    "collection": collection_name
+                }
+            await vector.adelete_by_metadata_field(key=key, value=value)
+        except Exception as e:
+            logger.error(f"Error adelete_by_metadata_field , adelete_by_metadata_field: {str(e)}")
+            raise
+
+        logger.info("Delete documents completed")
+
+        return {
+            "status": "success",
+            "message": "Delete operation completed",
+            "collection": collection_name
+        }

@@ -106,7 +106,7 @@ spec:
           value: "test123456"
         - name: KNOWLEDGE_GRAPH_EMBEDDING_DIMS
           value: "1024"
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/data-services:v0.6.0-amd64
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/data-services:v0.10.0-amd64
         imagePullPolicy: IfNotPresent
         ports:
           - containerPort: 8000
