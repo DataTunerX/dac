@@ -321,7 +321,7 @@ dataServices:
   enabled: true
   image:
     repository: data-services
-    tag: "v0.9.0-amd64"
+    tag: "v0.10.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -414,18 +414,18 @@ executionEngine:
     dacDataServices:
       # -- Repository name under global.imageRegistry
       repository: "dac-data-services"
-      tag: "v0.9.0-amd64"
+      tag: "v0.10.0-amd64"
     dataSinkerJob:
       # -- Repository name under global.imageRegistry (image = registry/repository:tag)
       repository: "data-sinkers-job"
-      tag: "v0.9.0-amd64"
+      tag: "v0.10.0-amd64"
     dataSinkerStatus:
       # -- Repository name under global.imageRegistry
       repository: "data-sinkers-status"
-      tag: "v0.9.0-amd64"
+      tag: "v0.10.0-amd64"
     dataSinkersObserver:
       repository: "data-sinkers-observer"
-      tag: "v0.9.0-amd64"
+      tag: "v0.10.0-amd64"
 
   # -- dac-configuration ConfigMap values (read by DAC controller)
   dacConfig:

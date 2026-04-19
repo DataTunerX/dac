@@ -21,27 +21,27 @@ nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/apiserver:v0.9.0
 
 # 5. dac-data-services
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/dac-data-services:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/dac-data-services:v0.10.0-amd64
 
 
 # 6. data-services
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/data-services:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/data-services:v0.10.0-amd64
 
 
 # 7. data-sinkers-job
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers-job:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers-job:v0.10.0-amd64
 
 
 # 8. data-sinkers-status
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers-status:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers-status:v0.10.0-amd64
 
 
 # 9. data-sinkers-observer
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers-observer:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers-observer:v0.10.0-amd64
 
 
 # 10. doc-agent 
