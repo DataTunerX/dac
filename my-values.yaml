@@ -46,7 +46,7 @@ executionEngine:
       tag: "orchestrator-agent-v0.9.0-amd64"
     expertAgent:
       repository: "ljtbbt/dac"
-      tag: "expert-agent-v0.9.0-amd64"
+      tag: "expert-agent-v0.10.0-amd64"
     codeAgent:
       repository: "ljtbbt/dac"
       tag: "code-agent-v0.9.0-amd64"
