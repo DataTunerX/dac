@@ -9,6 +9,8 @@ import os
 import asyncio
 import re
 import hashlib
+import time as _time
+import time as _time
 from typing import Any
 from uuid import uuid4
 from contextlib import asynccontextmanager
@@ -35,6 +37,7 @@ from a2a.types import (
     TaskStatusUpdateEvent,
     MessageSendParams,
     SendStreamingMessageRequest,
+    AgentCapabilities,
     AgentCard,
     AgentSkill,
     TaskState,
@@ -58,6 +61,97 @@ from .dataservices_client import DataServicesClient, CreateHistoryRequest, Histo
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 from .agentregistry_client import AgentRegistryClient
+from .agent_card_resolve import resolve_agent_card_by_planner_name
+
+try:
+    from skill_sdk.skill.runner import SkillRunner  # noqa: F401  (used when local skills enabled)
+except ImportError:  # pragma: no cover - skill_sdk is an optional runtime dep
+    SkillRunner = None  # type: ignore[assignment]
+
+try:
+    from skill_sdk.tool.code_execution import CodeExecution
+except ImportError:  # pragma: no cover
+    CodeExecution = None  # type: ignore[assignment,misc]
+
+try:
+    # json_repair is a tolerant JSON parser designed specifically for LLM output.
+    # It handles common failure modes such as unescaped inner double quotes,
+    # trailing commas, missing quotes, python-style single quotes, etc.
+    from json_repair import repair_json as _json_repair  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional runtime dep, fail-soft
+    _json_repair = None  # type: ignore[assignment]
+
+
+# Fields in the planner output that carry free-form natural language and are
+# the most frequent victims of "LLM forgot to escape inner quotes" — typical
+# failure mode is a user query containing a JSON/code fragment inlined as the
+# value without escaping the inner ``"`` characters. The helper below surgically
+# escapes unescaped inner double quotes *only* for these specific fields.
+_KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
+    "original_query",
+    "description",
+    "thought_process",
+    "reason",
+    "rationale",
+    "final_answer",
+)
+
+
+def _escape_known_string_field_inner_quotes(text: str) -> str:
+    """Best-effort escape of unescaped inner ``"`` inside known single-line
+    string fields of a planner-style JSON payload.
+
+    We deliberately restrict the pre-pass to a whitelist of known fields where
+    the value is a single JSON string on one line so we can recognize the end
+    of the value by the structural pattern ``"`` followed by an optional
+    comma/whitespace and a newline. Multi-line values and nested structures
+    are left untouched (json_repair handles those as a later fallback).
+    """
+    if not text or '"' not in text:
+        return text
+
+    pattern_fields = "|".join(re.escape(f) for f in _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES)
+    # Match:  "field": "<body possibly containing unescaped ">"<optional , >\n
+    #
+    # The closing ``"`` must sit at end-of-line (optionally followed by a
+    # trailing comma and whitespace). This anchor is strong enough to
+    # disambiguate against unescaped inner quotes that happen to be followed
+    # by ``,`` mid-line, e.g. ``"手机",`` inside ``{"category":"手机",...}``.
+    #
+    # We keep ``.*?`` without DOTALL so the body cannot accidentally span
+    # lines — the failure mode we care about always puts the offending field
+    # value on a single pretty-printed line.
+    pattern = re.compile(
+        rf'("(?:{pattern_fields})"\s*:\s*")'   # group 1: "field": "
+        r'(.*?)'                                # group 2: value body (lazy, single line)
+        r'((?<!\\)"[ \t]*,?[ \t]*$)',          # group 3: closing " at end of line
+        re.MULTILINE,
+    )
+
+    def _repl(m: "re.Match[str]") -> str:
+        head, body, tail = m.group(1), m.group(2), m.group(3)
+        # Escape any ``"`` in the body that is not already escaped. We walk
+        # character-by-character so we don't mis-handle ``\"`` (already
+        # escaped) or ``\\`` (escaped backslash that does NOT escape a
+        # following quote).
+        fixed_chars: List[str] = []
+        i = 0
+        while i < len(body):
+            ch = body[i]
+            if ch == "\\" and i + 1 < len(body):
+                # Preserve any escape sequence untouched.
+                fixed_chars.append(body[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                fixed_chars.append('\\"')
+                i += 1
+                continue
+            fixed_chars.append(ch)
+            i += 1
+        return head + "".join(fixed_chars) + tail
+
+    return pattern.sub(_repl, text)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -94,7 +188,16 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
     },
     "group_execution_round_started": {"round", "retry_count", "max_retries"},
     "task_answer": {"task_agent"},
-    "task_finished": {"task_agent", "task_status"},
+    "task_finished": {
+        "task_agent",
+        "task_status",
+        # LocalSkill (route B) extras — see _run_local_skill_task / _try_local_skill_fallback_for_none.
+        "execution_mode",
+        "local_skill_name",
+        "local_skill_attempts",
+        "local_skill_status",
+        "reason_code",
+    },
     "task_error": set(),
     "group_retry_same_plan": {"retry_count", "reason_code"},
     "group_replan_failed": {"retry_count"},
@@ -167,6 +270,10 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
      - `id`：整数（从1开始）。
      - `description`：转述给智能体的子任务或问题（忠实于用户原始表述，禁止添加额外条件）。
      - `agent`：确切的智能体名称或"NONE"。
+3. **JSON 转义（必须严格遵守）**：
+   - 当字符串值（如 `original_query`、`description`、`thought_process`）内部出现双引号 `"` 时，**必须写成 `\\"`** 以避免非法 JSON。
+   - 典型场景：用户原话中包含 JSON 片段 `{{"category":"手机"}}`，应写成 `"original_query": "请将 JSON {{\\"category\\":\\"手机\\"}} ..."`，**不得**直接粘贴未转义的内部引号。
+   - 反斜杠 `\\` 本身在字符串值中需写成 `\\\\`；换行需写成 `\\n`。
 
 ## 示例
 {instructions}
@@ -245,6 +352,10 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
      - `id`：整数（从1开始）。
      - `description`：转述给智能体的子任务或问题（忠实于用户原始表述，禁止添加额外条件；对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含）。
      - `agent`：确切的智能体名称或"NONE"。
+3. **JSON 转义（必须严格遵守）**：
+   - 当字符串值（如 `original_query`、`description`、`thought_process`）内部出现双引号 `"` 时，**必须写成 `\\"`** 以避免非法 JSON。
+   - 典型场景：用户原话中包含 JSON 片段 `{{"category":"手机"}}`，应写成 `"original_query": "请将 JSON {{\\"category\\":\\"手机\\"}} ..."`，**不得**直接粘贴未转义的内部引号。
+   - 反斜杠 `\\` 本身在字符串值中需写成 `\\\\`；换行需写成 `\\n`。
 
 ## 示例
 {instructions}
@@ -801,6 +912,59 @@ AGENT_SELECTION_EVALUATION_PROMPT = """你是一个智能体选择专家。给�
 # 无可用 agent 且未配置 expert agent 时的提示（HAS_EXPERTAGENT=false），展示给用户
 NO_SIDECAR_FALLBACK_DESCRIPTION = "暂时没有找到可以处理此问题的智能体，请稍后再试或换个方式描述您的问题。"
 
+# ---------------------------------------------------------------------------
+# Local skill (route B) configuration — mirrors orchestrator_agent_semantic_domain.py.
+# ---------------------------------------------------------------------------
+# When enabled, the SemanticGroup orchestrator carries a process-wide SkillRunner
+# and exposes it to the planner as a synthetic AgentCard named
+# ``LOCAL_SKILL_AGENT_NAME``. Tasks the planner routes to this agent are executed
+# in-process via ``SkillRunner.plan_and_run`` instead of being dispatched over A2A.
+#
+# Environment variables (all optional, defaults matched with SemanticDomain):
+#   ENABLE_LOCAL_SKILLS            : "true" to turn the feature on (default: true)
+#   LOCAL_SKILLS_DIR               : directory containing skill zip packs (default: /app/skills/)
+#   LOCAL_SKILL_AGENT_NAME         : display name of the synthetic card (default: LocalSkill)
+#   LOCAL_SKILL_MAX_STEPS          : per-call ReAct step budget passed to SkillRunner
+#   LOCAL_SKILL_CMD_TIMEOUT_SEC    : subprocess timeout passed to SkillRunner
+#   LOCAL_SKILL_MAX_CONCURRENCY    : max concurrent plan_cmd executions, 0 = unlimited
+#   LOCAL_SKILL_FALLBACK_ON_NONE   : when planner emits agent=NONE, try LocalSkill first
+#   LOCAL_SKILL_INJECT_CARD        : auto|always|never (default: auto)
+LOCAL_SKILL_AGENT_NAME = os.getenv("LOCAL_SKILL_AGENT_NAME", "LocalSkill").strip() or "LocalSkill"
+LOCAL_SKILLS_ENABLED = os.getenv("ENABLE_LOCAL_SKILLS", "true").strip().lower() in ("1", "true", "yes")
+LOCAL_SKILLS_DIR = os.getenv("LOCAL_SKILLS_DIR", "/app/skills/").strip()
+LOCAL_SKILL_FALLBACK_ON_NONE = os.getenv("LOCAL_SKILL_FALLBACK_ON_NONE", "true").strip().lower() in ("1", "true", "yes")
+LOCAL_SKILL_INJECT_MODE = os.getenv("LOCAL_SKILL_INJECT_CARD", "auto").strip().lower()
+try:
+    LOCAL_SKILL_MAX_STEPS = int(os.getenv("LOCAL_SKILL_MAX_STEPS", "20"))
+except (TypeError, ValueError):
+    LOCAL_SKILL_MAX_STEPS = 20
+try:
+    LOCAL_SKILL_CMD_TIMEOUT_SEC = int(os.getenv("LOCAL_SKILL_CMD_TIMEOUT_SEC", "30"))
+except (TypeError, ValueError):
+    LOCAL_SKILL_CMD_TIMEOUT_SEC = 30
+try:
+    LOCAL_SKILL_MAX_CONCURRENCY = int(os.getenv("LOCAL_SKILL_MAX_CONCURRENCY", "8"))
+except (TypeError, ValueError):
+    LOCAL_SKILL_MAX_CONCURRENCY = 8
+
+# CodeExecution — inject ``code_exec`` tool into SkillRunner ReAct loop.
+ENABLE_CODE_EXEC = os.getenv("ENABLE_CODE_EXEC", "true").strip().lower() in ("1", "true", "yes")
+try:
+    CODE_EXEC_MAX_RETRIES = int(os.getenv("CODE_EXEC_MAX_RETRIES", "3"))
+except (TypeError, ValueError):
+    CODE_EXEC_MAX_RETRIES = 3
+
+# Failure reason codes emitted when LocalSkill cannot complete a task.
+# Listed in the priority order used by ``_select_retry_reason_code``.
+LOCAL_SKILL_FAIL_REASONS: tuple[str, ...] = (
+    "local_skill_declined",
+    "local_skill_max_steps",
+    "local_skill_no_finish",
+    "local_skill_no_selection",
+    "local_skill_not_found",
+    "local_skill_error",
+)
+
 def tasklist_to_string(task_list: TaskList, participant_chain: Optional[List[str]] = None) -> str:
     """Format task list for UI. participant_chain: full path [root -> ... -> leaf] for display when forwarded."""
     lines = []
@@ -952,43 +1116,97 @@ class PlannerAgent(BaseAgent):
         return collection_name
 
 
-    def format_llm_ouput(self, answer) -> dict:
-        data_dict = None
-    
+    def format_llm_output(self, answer) -> dict:
+        """Parse the planner LLM output into a dict with heavy tolerance.
+
+        LLMs frequently emit malformed JSON — the most common failure in our
+        logs is a user query containing a JSON/code fragment being inlined into
+        a string value without escaping the inner double quotes, e.g.::
+
+            "original_query": "请将 JSON {"category":"手机"} 格式化..."
+
+        The recovery chain below handles this progressively:
+
+        1. Strict ``json.loads`` on the raw content.
+        2. Strict ``json.loads`` after stripping ``` code fences.
+        3. Targeted inner-quote escaping for known long-string fields
+           (``original_query`` / ``description`` / ``thought_process`` /
+           ``reason``) — the fields where this failure pattern overwhelmingly
+           occurs.
+        4. ``json_repair`` — a tolerant LLM-oriented parser (external dep,
+           fails soft if not installed).
+        5. ``ast.literal_eval`` for python-style dict literals.
+        6. Naive single-quote -> double-quote substitution as a last resort.
+
+        Returns the parsed dict, or ``None`` if every strategy failed.
+        """
+        raw = getattr(answer, "content", "") or ""
+
         try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
 
-            cleaned_content = answer.content.strip()
+        cleaned_content = raw.strip()
+        if cleaned_content.startswith('```json'):
+            cleaned_content = cleaned_content[7:]
+        elif cleaned_content.startswith('```'):
+            cleaned_content = cleaned_content[3:]
+        if cleaned_content.endswith('```'):
+            cleaned_content = cleaned_content[:-3]
+        cleaned_content = cleaned_content.strip()
 
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-            
+        try:
+            return json.loads(cleaned_content)
+        except json.JSONDecodeError as e2:
+            logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
+
+        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
+        if escaped_content != cleaned_content:
             try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_ouput, Parsing failed after cleanup.: {e2}")
-                try:
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
-                    logger.error(f" === format_llm_ouput, ast parsing fail: {e3}")
-                    try:
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
-                    except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
+                parsed = json.loads(escaped_content)
+                logger.info(" === format_llm_output, recovered via inner-quote field escaping")
+                return parsed
+            except json.JSONDecodeError as e_esc:
+                logger.warning(f" === format_llm_output, field-escape pre-pass still invalid: {e_esc}")
 
-        return data_dict
+        if _json_repair is not None:
+            try:
+                repaired = _json_repair(escaped_content, return_objects=True)
+                if isinstance(repaired, dict):
+                    logger.info(" === format_llm_output, recovered via json_repair")
+                    return repaired
+                if isinstance(repaired, str):
+                    parsed = json.loads(repaired)
+                    if isinstance(parsed, dict):
+                        logger.info(" === format_llm_output, recovered via json_repair (string)")
+                        return parsed
+            except Exception as e_rep:  # noqa: BLE001
+                logger.error(f" === format_llm_output, json_repair failed: {e_rep}")
+        else:
+            logger.warning(
+                " === format_llm_output, json_repair not installed; "
+                "add 'json-repair' to dependencies to improve LLM JSON tolerance"
+            )
+
+        try:
+            import ast
+            parsed = ast.literal_eval(cleaned_content)
+            if isinstance(parsed, dict):
+                return parsed
+        except (ValueError, SyntaxError) as e3:
+            logger.error(f" === format_llm_output, ast parsing fail: {e3}")
+        except Exception as e5:  # noqa: BLE001
+            logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
+
+        try:
+            parsed = json.loads(cleaned_content.replace("'", '"'))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError as e4:
+            logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
+
+        return None
 
     async def make_plan(
         self,
@@ -1146,7 +1364,7 @@ class PlannerAgent(BaseAgent):
 
         logger.info(f" === PlannerAgent.make_plan , llm result = {answer.content}")
 
-        data_dict = self.format_llm_ouput(answer)
+        data_dict = self.format_llm_output(answer)
         if data_dict is None or not isinstance(data_dict, dict):
             logger.error("PlannerAgent.make_plan: LLM output could not be parsed as JSON")
             raise ValueError("LLM plan output could not be parsed; please retry or rephrase.")
@@ -1179,7 +1397,8 @@ class OrchestratorAgent(BaseAgent):
         enable_history:str = None,
         agent_id: str = None,
         max_loops: int = None,
-        agent_card: AgentCard = None
+        agent_card: AgentCard = None,
+        skill_runner: "SkillRunner | None" = None,
     ):
         logger.info('Initializing OrchestratorAgent')
         logger.info(f"OrchestratorAgent received semantic_group_id: {semantic_group_id}")
@@ -1238,6 +1457,441 @@ class OrchestratorAgent(BaseAgent):
         self._last_retry_action = ""
         self._task_eval_results: Dict[int, TaskOutcomeEval] = {}
         self._last_split_decision_trace: Dict[str, Any] = {}
+        # LocalSkill (route B) binding. When non-None, the orchestrator exposes
+        # a synthetic AgentCard named ``LOCAL_SKILL_AGENT_NAME`` to the planner
+        # and intercepts tasks routed to it in ``a2a_tasks``.
+        self.skill_runner = skill_runner
+        self.local_skill_agent_name = LOCAL_SKILL_AGENT_NAME
+        if self.skill_runner is not None:
+            try:
+                _loaded = len(getattr(self.skill_runner.lister, "skills", []) or [])
+            except Exception:  # noqa: BLE001
+                _loaded = -1
+            logger.info(
+                "[LocalSkill][Bind] SemanticGroup OrchestratorAgent bound SkillRunner: agent_name=%s "
+                "skills_loaded=%s max_concurrency=%s",
+                self.local_skill_agent_name,
+                _loaded,
+                getattr(self.skill_runner, "max_concurrency", None),
+            )
+
+    # ------------------------------------------------------------------
+    # LocalSkill (route B) helpers
+    # ------------------------------------------------------------------
+    def _has_local_skill(self) -> bool:
+        return self.skill_runner is not None and SkillRunner is not None
+
+    def _is_local_skill_task(self, task: "PlannerTask") -> bool:
+        if not self._has_local_skill():
+            return False
+        return (getattr(task, "agent", "") or "").strip() == self.local_skill_agent_name
+
+    def _should_inject_local_skill_card(self) -> bool:
+        """Decide whether to add the synthetic LocalSkill card to agent_cards."""
+        if not self._has_local_skill():
+            logger.info(
+                "[LocalSkill][InjectDecision] skip: skill_runner not available "
+                "(ENABLE_LOCAL_SKILLS=%s, skill_sdk_importable=%s)",
+                LOCAL_SKILLS_ENABLED,
+                SkillRunner is not None,
+            )
+            return False
+        mode = LOCAL_SKILL_INJECT_MODE
+        if mode == "never":
+            logger.info("[LocalSkill][InjectDecision] skip: LOCAL_SKILL_INJECT_CARD=never")
+            return False
+        if mode == "always":
+            logger.info("[LocalSkill][InjectDecision] inject: LOCAL_SKILL_INJECT_CARD=always")
+            return True
+        # auto: inject when we have loaded zip skills.
+        try:
+            skills_loaded = len(getattr(self.skill_runner.lister, "skills", []) or [])
+        except Exception:  # noqa: BLE001
+            logger.exception("[LocalSkill][InjectDecision] failed to read skills list")
+            return False
+        if skills_loaded > 0:
+            logger.info(
+                "[LocalSkill][InjectDecision] inject (mode=auto): skills_loaded=%d",
+                skills_loaded,
+            )
+            return True
+        logger.info(
+            "[LocalSkill][InjectDecision] skip (mode=auto): no skills loaded "
+            "(LOCAL_SKILLS_DIR=%s)",
+            LOCAL_SKILLS_DIR or "(empty)",
+        )
+        return False
+
+    def _build_local_skill_card(self) -> AgentCard:
+        """Render currently-loaded skills into an AgentCard description.
+
+        The URL is a sentinel — ``find_agent`` will resolve it but A2A dispatch
+        never actually contacts it; ``a2a_tasks`` intercepts the task earlier.
+        """
+        lines: list[str] = []
+        try:
+            for s in (self.skill_runner.lister.skills or []):
+                name = str(getattr(s, "name", "") or "").strip()
+                desc = str(getattr(s, "description", "") or "").strip().replace("\n", " ")
+                if len(desc) > 140:
+                    desc = desc[:140] + "..."
+                if name:
+                    lines.append(f"- {name}: {desc}")
+        except Exception:  # noqa: BLE001
+            logger.exception("[LocalSkill][CardBuild] failed to render skill list for AgentCard")
+        if not lines:
+            description = (
+                "本地技能执行器。当前未加载任何技能；若被选中，将回退为不可用。"
+            )
+            logger.warning(
+                "[LocalSkill][CardBuild] rendering empty LocalSkill card (no skills loaded); "
+                "planner will see a no-op capability"
+            )
+        else:
+            preview = lines[:30]
+            description = "本地技能执行器，可在本进程内直接运行以下技能：\n" + "\n".join(preview)
+            if len(lines) > 30:
+                description += f"\n（另有 {len(lines) - 30} 个技能未列出）"
+            logger.info(
+                "[LocalSkill][CardBuild] rendered AgentCard: skills_count=%d (shown=%d, hidden=%d)",
+                len(lines),
+                min(len(lines), 30),
+                max(0, len(lines) - 30),
+            )
+        return AgentCard(
+            name=self.local_skill_agent_name,
+            description=description,
+            url="local://skill-runner",
+            version="1.0.0",
+            skills=[],
+            capabilities=AgentCapabilities(),
+            default_input_modes=["text", "text/plain"],
+            default_output_modes=["text", "text/plain"],
+        )
+
+    @staticmethod
+    def _map_skill_runner_status(raw_status: Any) -> tuple[str, str]:
+        """Map ``SkillRunner.plan_and_run`` status -> (task_status, failure_reason_code)."""
+        s = str(raw_status or "").strip().lower()
+        if s == "completed":
+            return "complete", ""
+        if s == "no_suitable_skill":
+            return "fail", "local_skill_declined"
+        if s == "no_skill_selected":
+            return "fail", "local_skill_no_selection"
+        if s == "skill_not_found":
+            return "fail", "local_skill_not_found"
+        if s == "max_steps_exceeded":
+            return "fail", "local_skill_max_steps"
+        if s == "completed_without_finish":
+            return "fail", "local_skill_no_finish"
+        return "fail", "local_skill_error"
+
+    def _apply_local_skill_reason_code(self, task_id: int, reason_code: str) -> None:
+        """Overwrite the failure_reason_code on a task_status entry.
+
+        ``_update_task_status`` only assigns ``failure_reason_code`` when an
+        ``eval_result`` is provided. For LocalSkill runs there is no
+        TaskOutcomeEval, so we set the code directly (same contract as
+        SemanticDomain).
+        """
+        if not reason_code:
+            return
+        for t in self.tasks_status:
+            if t.id == task_id:
+                t.failure_reason_code = reason_code
+                break
+
+    def _maybe_append_local_skill_card(self, cards: list[AgentCard]) -> list[AgentCard]:
+        """Append the synthetic LocalSkill card when route B is enabled + allowed."""
+        if not self._should_inject_local_skill_card():
+            return cards
+        try:
+            card = self._build_local_skill_card()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[LocalSkill][Inject] failed to build local skill AgentCard; skipping injection"
+            )
+            return cards
+        try:
+            skills_count = len(getattr(self.skill_runner.lister, "skills", []) or [])
+        except Exception:  # noqa: BLE001
+            skills_count = -1
+        logger.info(
+            "[LocalSkill][Inject] appended synthetic AgentCard name=%s skills_count=%d "
+            "(total cards: %d → %d)",
+            card.name,
+            skills_count,
+            len(cards),
+            len(cards) + 1,
+        )
+        return list(cards) + [card]
+
+    async def _run_local_skill_task(
+        self,
+        task: "PlannerTask",
+        *,
+        updater,
+        task_name: str,
+        think: list,
+        current_agents_knowledge: list,
+        retry_count: int,
+        task_desc_preview: str,
+    ) -> None:
+        """Execute a task routed to the local skill executor.
+
+        Never raises; every failure lands in ``TaskStatus`` with a
+        ``local_skill_*`` reason code so the existing replan logic can pick it
+        up. The caller is expected to ``continue`` the outer loop immediately
+        after this returns.
+        """
+        metadata = self.metadata or {}
+        trace_id = metadata.get("trace_id") if isinstance(metadata, dict) else None
+        user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
+        run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
+
+        desc_preview = (task.description or "").replace("\n", " ")
+        if len(desc_preview) > 180:
+            desc_preview = desc_preview[:180] + "..."
+        logger.info(
+            "[LocalSkill][RunStart] task_id=%s retry=%d query=%r (user_id=%s run_id=%s)",
+            task.id,
+            retry_count,
+            desc_preview,
+            user_id,
+            run_id,
+        )
+        t0 = _time.perf_counter()
+
+        try:
+            result = await self.skill_runner.plan_and_run(
+                query=task.description,
+                user_id=user_id,
+                run_id=run_id,
+                trace_id=trace_id,
+            )
+        except asyncio.CancelledError:
+            logger.warning("[LocalSkill][RunCancel] task_id=%s cancelled", task.id)
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[LocalSkill][RunError] plan_and_run raised for task_id=%s", task.id)
+            result = {
+                "status": "local_skill_error",
+                "skill": "",
+                "final_answer": f"LocalSkill execution error: {exc}",
+                "attempts": [],
+            }
+
+        elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+        status_code, reason_code = self._map_skill_runner_status(result.get("status"))
+        final_answer = str(result.get("final_answer") or "").strip()
+        skill_name_used = str(result.get("skill") or "")
+        attempts = result.get("attempts") or []
+
+        try:
+            _result_dump = json.dumps(result, ensure_ascii=False, indent=2, default=str)
+        except Exception:  # noqa: BLE001
+            _result_dump = repr(result)
+        logger.info(
+            "[LocalSkill][RunResult] task_id=%s skill=%s status=%s elapsed_ms=%d result:\n%s",
+            task.id,
+            skill_name_used or "(unknown)",
+            result.get("status"),
+            elapsed_ms,
+            _result_dump,
+        )
+
+        answer_preview = final_answer.replace("\n", " ")
+        if len(answer_preview) > 200:
+            answer_preview = answer_preview[:200] + "..."
+
+        if status_code == "complete":
+            logger.info(
+                "[LocalSkill][RunOK] task_id=%s skill=%s attempts=%d elapsed_ms=%d answer=%r",
+                task.id,
+                skill_name_used or "(unknown)",
+                len(attempts),
+                elapsed_ms,
+                answer_preview,
+            )
+        else:
+            logger.warning(
+                "[LocalSkill][RunFail] task_id=%s skill=%s status=%s reason=%s attempts=%d "
+                "elapsed_ms=%d answer=%r",
+                task.id,
+                skill_name_used or "(none)",
+                result.get("status"),
+                reason_code,
+                len(attempts),
+                elapsed_ms,
+                answer_preview or "(empty)",
+            )
+
+        display_answer = final_answer or (
+            f"LocalSkill did not produce a final answer (status={result.get('status')})."
+        )
+        # No TaskOutcomeEval is produced for LocalSkill runs; status is set directly.
+        self._update_task_status(task.id, status_code, display_answer)
+        if status_code == "fail" and reason_code:
+            self._apply_local_skill_reason_code(task.id, reason_code)
+
+        current_agents_knowledge.append(
+            self._format_task_knowledge(
+                task.id,
+                task.description,
+                self.local_skill_agent_name,
+                display_answer,
+            )
+        )
+
+        if self.debug == 1:
+            dbg_text = (
+                f"Task [{task.id}] via LocalSkill"
+                f"{f' (skill={skill_name_used})' if skill_name_used else ''}:\n"
+                f"{display_answer}\n"
+            )
+            think.append(dbg_text)
+
+        extra: Dict[str, Any] = {
+            "task_agent": self.local_skill_agent_name,
+            "task_status": status_code,
+            "execution_mode": "local_skill",
+            "local_skill_name": skill_name_used,
+            "local_skill_attempts": len(attempts),
+            "local_skill_status": str(result.get("status") or ""),
+        }
+        if reason_code:
+            extra["reason_code"] = reason_code
+        await self.emit_progress(
+            updater,
+            task_name,
+            event="task_finished",
+            message=(
+                f"completed task {task.id} via LocalSkill"
+                if status_code == "complete"
+                else f"failed task {task.id} via LocalSkill ({reason_code or 'error'})"
+            ),
+            status="done" if status_code == "complete" else "fail",
+            task_id=task.id,
+            extra=extra,
+        )
+
+    async def _try_local_skill_fallback_for_none(
+        self,
+        task: "PlannerTask",
+        *,
+        updater,
+        task_name: str,
+        think: list,
+        current_agents_knowledge: list,
+        retry_count: int,
+        task_desc_preview: str,
+    ) -> bool:
+        """Attempt LocalSkill as a fallback when planner returned ``agent=NONE``.
+
+        Returns ``True`` iff LocalSkill completed successfully; the caller
+        should skip the default NONE handling in that case. Failures (including
+        explicit skill declines) return ``False`` so the caller can fall back
+        to the original ``NONE_TASK_DESCRIPTION`` behaviour.
+        """
+        desc_preview = (task.description or "").replace("\n", " ")
+        if len(desc_preview) > 180:
+            desc_preview = desc_preview[:180] + "..."
+        logger.info(
+            "[LocalSkill][NoneFallback] task_id=%s retry=%d — planner returned NONE, trying LocalSkill; query=%r",
+            task.id,
+            retry_count,
+            desc_preview,
+        )
+        metadata = self.metadata or {}
+        trace_id = metadata.get("trace_id") if isinstance(metadata, dict) else None
+        user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
+        run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
+        t0 = _time.perf_counter()
+        try:
+            result = await self.skill_runner.plan_and_run(
+                query=task.description,
+                user_id=user_id,
+                run_id=run_id,
+                trace_id=trace_id,
+            )
+        except asyncio.CancelledError:
+            logger.warning("[LocalSkill][NoneFallback] task_id=%s cancelled during fallback", task.id)
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[LocalSkill][NoneFallback] plan_and_run raised for task_id=%s — falling back to NONE",
+                task.id,
+            )
+            return False
+
+        elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+        try:
+            _result_dump = json.dumps(result, ensure_ascii=False, indent=2, default=str)
+        except Exception:  # noqa: BLE001
+            _result_dump = repr(result)
+        logger.info(
+            "[LocalSkill][NoneFallback][RunResult] task_id=%s skill=%s status=%s elapsed_ms=%d result:\n%s",
+            task.id,
+            result.get("skill") or "(unknown)",
+            result.get("status"),
+            elapsed_ms,
+            _result_dump,
+        )
+        if str(result.get("status") or "").strip().lower() != "completed":
+            logger.info(
+                "[LocalSkill][NoneFallback] task_id=%s declined (status=%s skill=%s elapsed_ms=%d) "
+                "— falling back to NONE",
+                task.id,
+                result.get("status"),
+                result.get("skill") or "(none)",
+                elapsed_ms,
+            )
+            return False
+
+        final_answer = str(result.get("final_answer") or "").strip() or NONE_TASK_DESCRIPTION
+        skill_name_used = str(result.get("skill") or "")
+        answer_preview = final_answer.replace("\n", " ")
+        if len(answer_preview) > 200:
+            answer_preview = answer_preview[:200] + "..."
+        logger.info(
+            "[LocalSkill][NoneFallback] task_id=%s rescued by skill=%s elapsed_ms=%d answer=%r",
+            task.id,
+            skill_name_used or "(unknown)",
+            elapsed_ms,
+            answer_preview,
+        )
+
+        self._update_task_status(task.id, "complete", final_answer)
+        current_agents_knowledge.append(
+            self._format_task_knowledge(
+                task.id, task.description, self.local_skill_agent_name, final_answer
+            )
+        )
+        if self.debug == 1:
+            dbg_text = (
+                f"Task [{task.id}] via LocalSkill (NONE fallback"
+                f"{f', skill={skill_name_used}' if skill_name_used else ''}):\n"
+                f"{final_answer}\n"
+            )
+            think.append(dbg_text)
+
+        await self.emit_progress(
+            updater,
+            task_name,
+            event="task_finished",
+            message=f"completed task {task.id} via LocalSkill (NONE fallback)",
+            status="done",
+            task_id=task.id,
+            extra={
+                "task_agent": self.local_skill_agent_name,
+                "task_status": "complete",
+                "execution_mode": "local_skill_fallback",
+                "local_skill_name": skill_name_used,
+                "reason_code": "local_skill_fallback_ok",
+            },
+        )
+        return True
 
     def _count_replan_context_markers(self, text: str) -> int:
         raw = str(text or "")
@@ -1520,9 +2174,14 @@ class OrchestratorAgent(BaseAgent):
         """Reads agent cards from registry.
         - SemanticGroup mode: scoped pool (own expert + utility agents, no cross-tree)
         - SemanticDomain mode: controlled by AGENT_SELECTION_MODE (batch_llm / vector)
+
+        The synthetic LocalSkill card (route B) is appended at the end when
+        ``_should_inject_local_skill_card`` allows it, so every selection path
+        uniformly exposes it to the planner.
         """
         if self.semantic_group_id:
-            return await self._list_agent_cards_semantic_group(query)
+            cards = await self._list_agent_cards_semantic_group(query)
+            return self._maybe_append_local_skill_card(cards)
 
         agent_registry_client = AgentRegistryClient()
         collection_name = os.getenv("CollectionName", "biz_expert_agent_cards")
@@ -1530,8 +2189,10 @@ class OrchestratorAgent(BaseAgent):
 
         try:
             if mode == "vector":
-                return await self._list_agent_cards_vector(query, agent_registry_client, collection_name)
-            return await self._list_agent_cards_batch_llm(query, agent_registry_client, collection_name)
+                cards = await self._list_agent_cards_vector(query, agent_registry_client, collection_name)
+            else:
+                cards = await self._list_agent_cards_batch_llm(query, agent_registry_client, collection_name)
+            return self._maybe_append_local_skill_card(cards)
         except Exception as e:
             logger.error(f"An error occurred during list_agent_cards: {e}")
             raise ValueError(f"An error occurred during list_agent_cards: {e}")
@@ -1773,14 +2434,7 @@ class OrchestratorAgent(BaseAgent):
 
     # find one AgentCard with agent name which is from plan task
     async def find_agent(self, agent_name) -> AgentCard:
-        # find agentcard using agent name
-        agent_card = None
-
-        for agentcard in self.agent_cards:
-            if agentcard.name == agent_name:
-                agent_card = agentcard
-
-        return agent_card
+        return resolve_agent_card_by_planner_name(self.agent_cards, agent_name)
 
 
     # call agent with a2a according to agent name which is from plan task (stream mode)
@@ -2609,6 +3263,13 @@ class OrchestratorAgent(BaseAgent):
 
     def _classify_task_failure_reason(self, task: TaskStatus) -> str:
         """Classify failure reason into coarse-grained reason codes."""
+        # LocalSkill reason codes are set directly via
+        # ``_apply_local_skill_reason_code`` (no TaskOutcomeEval is produced for
+        # synthetic LocalSkill runs). Preserve them so retry selection and the
+        # replan context see the root cause instead of a heuristic re-label.
+        existing = str(getattr(task, "failure_reason_code", "") or "").strip()
+        if existing in LOCAL_SKILL_FAIL_REASONS:
+            return existing
         text = f"{task.description}\n{task.answer}".lower()
         if NON_RETRYABLE_MARKER.lower() in text:
             logger.warning(
@@ -2664,6 +3325,11 @@ class OrchestratorAgent(BaseAgent):
             return "retry_same_plan"
         if reason_code in ("cross_source_join_unavailable", "missing_relation_in_context"):
             return "replan_with_decomposition"
+        # LocalSkill (route B) failures: allow the planner to redraft the plan.
+        # The failed skill name is already captured in ``execution_results`` so
+        # the LLM can naturally avoid LocalSkill or pick a different skill.
+        if reason_code in LOCAL_SKILL_FAIL_REASONS:
+            return "replan_standard"
         return "replan_standard"
 
     def _select_retry_reason_code(self, failed_tasks: List[TaskStatus]) -> str:
@@ -2676,6 +3342,14 @@ class OrchestratorAgent(BaseAgent):
             "invalid_request",
             "agent_not_found",
             "no_agent_available",
+            # LocalSkill codes — ranked above generic failure codes so the
+            # planner receives a LocalSkill-specific hint first.
+            "local_skill_declined",
+            "local_skill_max_steps",
+            "local_skill_no_finish",
+            "local_skill_no_selection",
+            "local_skill_not_found",
+            "local_skill_error",
         )
         for code in priority:
             if code in reason_codes:
@@ -2775,14 +3449,41 @@ class OrchestratorAgent(BaseAgent):
             for task in current_tasks.tasks:
                 self._update_task_status(task.id, "start", "")
                 logger.info(f"Task {task.id}: {task.description} -> [{task.agent}]")
+                task_desc_preview = self._truncate_progress_message(task.description or "", 220)
+
+                # Route B: planner routed this task to the local skill executor.
+                if self._is_local_skill_task(task):
+                    await self._run_local_skill_task(
+                        task,
+                        updater=updater,
+                        task_name=task_name,
+                        think=think,
+                        current_agents_knowledge=current_agents_knowledge,
+                        retry_count=retry_count,
+                        task_desc_preview=task_desc_preview,
+                    )
+                    continue
 
                 # When planner returned agent=NONE (no relevant agent), use fixed description and skip A2A
                 if (task.agent or "").strip().upper() == "NONE":
+                    # Optional fallback: try LocalSkill once before giving up.
+                    if self._has_local_skill() and LOCAL_SKILL_FALLBACK_ON_NONE:
+                        handled = await self._try_local_skill_fallback_for_none(
+                            task,
+                            updater=updater,
+                            task_name=task_name,
+                            think=think,
+                            current_agents_knowledge=current_agents_knowledge,
+                            retry_count=retry_count,
+                            task_desc_preview=task_desc_preview,
+                        )
+                        if handled:
+                            continue
+
                     none_description = NONE_TASK_DESCRIPTION
                     logger.info("Task %s: agent=NONE (no relevant agent)", task.id)
                     self._update_task_status(task.id, "complete", none_description)
                     current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, "", none_description))
-                    task_desc_preview = self._truncate_progress_message(task.description or "", 220)
                     none_progress_msg = (
                         f"Task [{task.id}]: {none_description.strip()} - [NONE]"
                     )
@@ -3113,6 +3814,51 @@ class OrchestratorAgent(BaseAgent):
         )
         return last_round_knowledge
 
+    def schedule_add_memory(self, query, final_answer) -> None:
+        """Fire-and-forget wrapper for ``add_memory``.
+
+        Memory writes are best-effort observability — if the upstream
+        mem0/data-services pipeline is slow or down we must never block
+        (or worse, break) the orchestrator stream back to the user. Wrap
+        the coroutine in a background task that swallows any exception
+        and logs it, and keep a reference so the event loop does not GC
+        the task mid-flight.
+        """
+        async def _runner() -> None:
+            try:
+                await self.add_memory(query, final_answer)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "[MemoryOp][SG] schedule_add_memory failed — ignoring "
+                    "(run_id=%s)",
+                    (self.metadata or {}).get('run_id', ''),
+                )
+
+        try:
+            tracker = self.__dict__.setdefault("_background_memory_tasks", set())
+            task = asyncio.create_task(_runner())
+            tracker.add(task)
+            task.add_done_callback(tracker.discard)
+        except RuntimeError:
+            # No running event loop (e.g. sync test harness). Fall back to
+            # "best-effort inline" but still guard the exception so the
+            # caller flow is unaffected.
+            logger.warning(
+                "[MemoryOp][SG] schedule_add_memory: no running loop — "
+                "falling back to inline execution"
+            )
+
+            async def _inline() -> None:
+                try:
+                    await self.add_memory(query, final_answer)
+                except Exception:  # noqa: BLE001
+                    logger.exception("[MemoryOp][SG] inline add_memory failed")
+
+            try:
+                asyncio.get_event_loop().run_until_complete(_inline())
+            except Exception:  # noqa: BLE001
+                logger.exception("[MemoryOp][SG] inline fallback also failed")
+
     async def add_memory(self, query, final_answer):
         final_answer_str = "".join(final_answer)
         memory_owner = self._get_sg_memory_owner()
@@ -3278,7 +4024,11 @@ class OrchestratorAgent(BaseAgent):
         # human_template = "background knowledge: {knowledge}。\n\n history memory: {memory}\n\nuser question:{query}"
         human_template = "background knowledge: {knowledge}。\n\nuser question:{query}"
 
-        logger.info(f"============ biz orchestrator stream, answer user question, knowledge length: {len(knowledge)}, preview: {knowledge[:300]}...")
+        logger.info(
+            "============ biz orchestrator stream, answer user question, knowledge length: %s, knowledge (full):\n%s",
+            len(knowledge),
+            knowledge,
+        )
 
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
@@ -3342,8 +4092,9 @@ class OrchestratorAgent(BaseAgent):
                 think_str = "".join(think)
                 await self.add_history(query, final_answer, think_str)
 
-        # add memory
-        await self.add_memory(query, final_answer)
+        # add memory — fire-and-forget so a slow/failing upstream never
+        # blocks the stream close or surfaces an exception to the caller.
+        self.schedule_add_memory(query, final_answer)
 
 
 class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
@@ -3393,6 +4144,236 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             stream=stream,
             extra_body=_extra_body,
         )
+        # LocalSkill (route B) — a process-wide SkillRunner shared across all
+        # requests. Lazily initialised on first request so startup stays fast
+        # even when skill loading would be expensive. Disabled when
+        # ``ENABLE_LOCAL_SKILLS`` is false or ``skill_sdk`` is not installed.
+        self._skill_runner: "SkillRunner | None" = None
+        self._skill_runner_initialised = False
+        self._skill_runner_lock = asyncio.Lock()
+        self._log_local_skill_executor_config()
+
+    @staticmethod
+    def _log_local_skill_executor_config() -> None:
+        """One-shot snapshot at executor construction (server startup for SemanticGroup)."""
+        use_only = os.getenv("USE_ONLY_OWN_CAPABILITY", "true").strip()
+        logger.info(
+            "[LocalSkill][Config] route_B env snapshot (effective on first request that needs skills): "
+            "ENABLE_LOCAL_SKILLS=%s LOCAL_SKILLS_DIR=%r LOCAL_SKILL_AGENT_NAME=%s "
+            "LOCAL_SKILL_INJECT_CARD=%s LOCAL_SKILL_FALLBACK_ON_NONE=%s "
+            "LOCAL_SKILL_MAX_STEPS=%d LOCAL_SKILL_CMD_TIMEOUT_SEC=%d LOCAL_SKILL_MAX_CONCURRENCY=%d "
+            "USE_ONLY_OWN_CAPABILITY=%s skill_sdk_importable=%s",
+            LOCAL_SKILLS_ENABLED,
+            LOCAL_SKILLS_DIR,
+            LOCAL_SKILL_AGENT_NAME,
+            LOCAL_SKILL_INJECT_MODE,
+            LOCAL_SKILL_FALLBACK_ON_NONE,
+            LOCAL_SKILL_MAX_STEPS,
+            LOCAL_SKILL_CMD_TIMEOUT_SEC,
+            LOCAL_SKILL_MAX_CONCURRENCY,
+            use_only,
+            SkillRunner is not None,
+        )
+
+    def _build_skill_runner_llm(self):
+        """Build a dedicated LLM for SkillRunner using the executor-level config.
+
+        Kept separate from the per-request orchestration LLM so that SkillRunner
+        can be a true process-wide singleton.
+        """
+        mgr = ModelManager()
+        _extra_body = (
+            {"enable_thinking": False}
+            if os.getenv("ENABLE_THINKING_PARAM", "true").strip().lower() not in ("false", "0", "no")
+            else {}
+        )
+        return mgr.get_llm(
+            provider=self.provider,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            temperature=self.temperature,
+            stream=False,
+            extra_body=_extra_body,
+        )
+
+    def _build_code_execution(self, llm: Any) -> Any | None:
+        """构造 ``CodeExecution`` 并与 SkillRunner **共用**同一 ``llm``。"""
+        if not ENABLE_CODE_EXEC:
+            logger.info("[LocalSkill][Init] ENABLE_CODE_EXEC=false — code_exec tool not exposed")
+            return None
+        if CodeExecution is None:
+            logger.warning(
+                "[LocalSkill][Init] ``CodeExecution`` not importable — "
+                "``code_exec`` will be missing; model may fall back to plan_cmd/python."
+            )
+            return None
+        inst = CodeExecution(llm=llm, max_retries=CODE_EXEC_MAX_RETRIES)
+        logger.info(
+            "[LocalSkill][Init] CodeExecution enabled (max_retries=%s) — ReAct exposes code_exec",
+            CODE_EXEC_MAX_RETRIES,
+        )
+        return inst
+
+    def _init_skill_runner_sync(self) -> "SkillRunner | None":
+        """Build SkillRunner + load skills synchronously. Safe at startup or on first request.
+
+        Logs the full skill inventory so operators can immediately see what the
+        orchestrator will expose as LocalSkill.
+        """
+        if not LOCAL_SKILLS_ENABLED:
+            logger.info(
+                "[LocalSkill][Init] ENABLE_LOCAL_SKILLS=false — skipping SkillRunner initialisation"
+            )
+            return None
+        if SkillRunner is None:
+            logger.warning(
+                "[LocalSkill][Init] ENABLE_LOCAL_SKILLS=true but skill_sdk is not importable; "
+                "LocalSkill disabled for this process. (Check that the `skill_sdk` wheel is installed "
+                "in the image and includes the route-B async changes.)"
+            )
+            return None
+        logger.info(
+            "[LocalSkill][Init] bootstrapping SkillRunner: dir=%s max_steps=%d "
+            "cmd_timeout_sec=%d max_concurrency=%d inject_mode=%s fallback_on_none=%s "
+            "agent_card_name=%s",
+            LOCAL_SKILLS_DIR or "(unset)",
+            LOCAL_SKILL_MAX_STEPS,
+            LOCAL_SKILL_CMD_TIMEOUT_SEC,
+            LOCAL_SKILL_MAX_CONCURRENCY,
+            LOCAL_SKILL_INJECT_MODE,
+            LOCAL_SKILL_FALLBACK_ON_NONE,
+            LOCAL_SKILL_AGENT_NAME,
+        )
+        t0 = _time.perf_counter()
+        try:
+            llm = self._build_skill_runner_llm()
+            code_execution = self._build_code_execution(llm)
+            try:
+                runner = SkillRunner(
+                    llm=llm,
+                    max_steps=LOCAL_SKILL_MAX_STEPS,
+                    cmd_timeout_sec=LOCAL_SKILL_CMD_TIMEOUT_SEC,
+                    max_concurrency=LOCAL_SKILL_MAX_CONCURRENCY,
+                    code_execution=code_execution,
+                )
+            except TypeError:
+                logger.warning(
+                    "[LocalSkill][Init] installed skill_sdk does not accept max_concurrency "
+                    "(stale wheel?). Falling back to single-process mode; rebuild the wheel to "
+                    "get the async concurrency upgrade."
+                )
+                runner = SkillRunner(
+                    llm=llm,
+                    max_steps=LOCAL_SKILL_MAX_STEPS,
+                    cmd_timeout_sec=LOCAL_SKILL_CMD_TIMEOUT_SEC,
+                    code_execution=code_execution,
+                )
+            if LOCAL_SKILLS_DIR:
+                load_t0 = _time.perf_counter()
+                loaded = runner.load_from_dir(LOCAL_SKILLS_DIR)
+                load_ms = int((_time.perf_counter() - load_t0) * 1000)
+                loaded = loaded or []
+                loaded_names = [str(getattr(s, "name", "") or "").strip() for s in loaded]
+                loaded_names = [n for n in loaded_names if n]
+                logger.info(
+                    "[LocalSkill][Init] load_from_dir finished: count=%d path=%s elapsed_ms=%d "
+                    "(summary: %s)",
+                    len(loaded),
+                    LOCAL_SKILLS_DIR,
+                    load_ms,
+                    ", ".join(loaded_names) if loaded_names else "(none)",
+                )
+                if loaded:
+                    logger.info(
+                        "[LocalSkill][Init] ---- skill inventory (%d) ----",
+                        len(loaded),
+                    )
+                    for idx, sk in enumerate(loaded, start=1):
+                        nm = str(getattr(sk, "name", "") or "").strip() or "(unnamed)"
+                        ver = str(getattr(sk, "version", "") or "").strip() or "?"
+                        desc = str(getattr(sk, "description", "") or "").strip().replace("\n", " ")
+                        if len(desc) > 140:
+                            desc = desc[:140] + "..."
+                        logger.info(
+                            "[LocalSkill][Init]   %3d. name=%r version=%r description=%s",
+                            idx,
+                            nm,
+                            ver,
+                            desc,
+                        )
+                    logger.info("[LocalSkill][Init] ---- end skill inventory ----")
+                else:
+                    logger.warning(
+                        "[LocalSkill][Init] no skills loaded from %s — expected *.zip skill packs; "
+                        "LocalSkill card will be empty until packs appear",
+                        LOCAL_SKILLS_DIR,
+                    )
+            else:
+                logger.warning(
+                    "[LocalSkill][Init] ENABLE_LOCAL_SKILLS=true but LOCAL_SKILLS_DIR is empty; "
+                    "no skills were loaded — LocalSkill will advertise an empty capability."
+                )
+            logger.info(
+                "[LocalSkill][Init] ready in %dms (llm=%s model=%s)",
+                int((_time.perf_counter() - t0) * 1000),
+                self.provider,
+                self.model,
+            )
+            return runner
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[LocalSkill][Init] failed to initialise SkillRunner — disabling for this process"
+            )
+            return None
+
+    def preload_skill_runner(self) -> "SkillRunner | None":
+        """Eagerly initialise the process-wide SkillRunner at server startup.
+
+        Call this synchronously from the server bootstrap so the full skill
+        inventory is logged **before** the first A2A request arrives. Safe to
+        call multiple times — the second call is a no-op.
+        """
+        if self._skill_runner_initialised:
+            return self._skill_runner
+        self._skill_runner = self._init_skill_runner_sync()
+        self._skill_runner_initialised = True
+        return self._skill_runner
+
+    async def _ensure_skill_runner(self) -> "SkillRunner | None":
+        """Return the process-wide SkillRunner, constructing it on first use.
+
+        Normally a no-op because :meth:`preload_skill_runner` ran at startup;
+        this path only fires when preload was skipped or failed to short-circuit.
+        """
+        if self._skill_runner_initialised:
+            return self._skill_runner
+        async with self._skill_runner_lock:
+            if self._skill_runner_initialised:
+                return self._skill_runner
+            runner = await asyncio.to_thread(self._init_skill_runner_sync)
+            self._skill_runner = runner
+            self._skill_runner_initialised = True
+        return self._skill_runner
+
+    def shutdown_skill_runner(self) -> None:
+        """Release any resources held by the shared SkillRunner.
+
+        Safe to call repeatedly; only meaningful once, so follow-up calls are
+        no-ops. Intended to be wired into process shutdown hooks.
+        """
+        runner, self._skill_runner = self._skill_runner, None
+        already_initialised = self._skill_runner_initialised
+        self._skill_runner_initialised = True  # don't re-init after shutdown
+        if runner is not None:
+            logger.info("[LocalSkill][Shutdown] closing SkillRunner …")
+            try:
+                runner.close()
+                logger.info("[LocalSkill][Shutdown] SkillRunner closed cleanly")
+            except Exception:  # noqa: BLE001
+                logger.exception("[LocalSkill][Shutdown] SkillRunner.close() raised")
+        elif already_initialised:
+            logger.debug("[LocalSkill][Shutdown] no active SkillRunner to close")
 
     @staticmethod
     def is_progress_frame(text: str) -> bool:
@@ -3792,6 +4773,8 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 multi_hop_paths,
             )
 
+        skill_runner = await self._ensure_skill_runner()
+
         agent = OrchestratorAgent(
             provider=self.provider,
             api_key=self.api_key,
@@ -3806,7 +4789,8 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             enable_history=self.enable_history,
             agent_id=self.agent_id,
             max_loops=self.max_loops,
-            agent_card=self.agent_card
+            agent_card=self.agent_card,
+            skill_runner=skill_runner,
         )
 
         if not context.message:
@@ -3868,8 +4852,15 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             task_name = f'{agent.agent_name}-result'
             task_knowledges = await agent.a2a_tasks(query_for_plan, tasks, updater, task_name, think)
 
-            _tk_preview = [str(tk)[:200] + "..." for tk in task_knowledges] if task_knowledges else []
-            logger.info(f"===== OrchestratorAgentExecutor.task_knowledges count={len(task_knowledges) if task_knowledges else 0}, preview: {_tk_preview}")
+            if task_knowledges:
+                logger.info(
+                    "===== OrchestratorAgentExecutor.task_knowledges count=%s",
+                    len(task_knowledges),
+                )
+                for _i, tk in enumerate(task_knowledges):
+                    logger.info("===== task_knowledge[%s] (full):\n%s", _i, tk)
+            else:
+                logger.info("===== OrchestratorAgentExecutor.task_knowledges count=0")
 
             # SemanticGroup orchestrator 始终需要 LLM 总结回答，不跳过
             # （answer_model=original 仅透传给下游 agent 让它们跳过各自的 LLM，但本层一定要总结）

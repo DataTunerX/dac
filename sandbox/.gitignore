@@ -1,7 +1,5 @@
-# Sandbox runtime data should never be kept in git.
-data/**
-!data/filesystem/**
-
-# Local env files
-.env
-
+scripts/.vendor-cache/
+seed/datasets/ml-1m/
+seed/mysql/99-sakila.sql
+seed/postgres/98-pagila.sql
+seed/postgres/99-chinook.sql

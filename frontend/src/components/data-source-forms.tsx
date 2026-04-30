@@ -4,10 +4,10 @@ import { useEffect, useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
-import { ChevronDown, Eye, EyeOff } from "lucide-react"
-import { api } from "@/lib/api"
+import { Eye, EyeOff, Loader2, Plug } from "lucide-react"
 import { listNamespaces } from "@/lib/namespaces-api"
 import { listConfigMaps } from "@/lib/configmaps-api"
+import { probeDataSource, type ProbeRequest } from "@/lib/datasource-probe-api"
 import {
   Dialog,
   DialogContent,
@@ -19,6 +19,7 @@ import {
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -52,7 +53,10 @@ const dataSourceSchema = z.object({
   // DB
   user: z.string().optional(),
   password: z.string().optional(),
-  database: z.string().optional(),
+  // Multi-database: a single DataDescriptor can fan out into one logical source
+  // per selected database. Empty array means "user hasn't selected anything yet";
+  // the cross-field validator below enforces non-empty for mysql/postgres.
+  databases: z.array(z.string().min(1, "数据库名不能为空")).optional(),
 
   // MinIO
   accessKey: z.string().optional(),
@@ -92,8 +96,25 @@ const dataSourceSchema = z.object({
       if (!v.password?.trim()) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["password"], message: "密码必填" })
       }
-      if (!v.database?.trim()) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["database"], message: "数据库名必填" })
+      const dbs = (v.databases ?? []).map((s) => s.trim()).filter(Boolean)
+      if (dbs.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["databases"],
+          message: "请至少选择或填写一个数据库",
+        })
+      }
+      const seen = new Set<string>()
+      for (const d of dbs) {
+        if (seen.has(d)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["databases"],
+            message: `数据库 "${d}" 重复`,
+          })
+          break
+        }
+        seen.add(d)
       }
     }
     if (v.type === "minio") {
@@ -106,14 +127,10 @@ const dataSourceSchema = z.object({
       if (!v.bucket?.trim()) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bucket"], message: "Bucket 必填" })
       }
-      // data-sinkers MinIO extractor requires extract.files
-      if (!v.extractFiles?.trim()) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["extractFiles"],
-          message: "请填写要抽取的对象列表（每行一个 object key）",
-        })
-      }
+      // NOTE: data-sinkers MinIO extractor scans the entire bucket and ignores
+      // extract.files / extract.prefix, so we do not collect or validate an
+      // object list in the UI. The payload still emits extract.files = [] to
+      // satisfy the CR schema.
     }
 
     if (v.type === "fileserver") {
@@ -162,7 +179,7 @@ const defaultFormValues: DataSourceFormValues = {
   port: "3306",
   user: "",
   password: "",
-  database: "",
+  databases: [],
   accessKey: "",
   secretKey: "",
   bucket: "",
@@ -176,6 +193,204 @@ const defaultFormValues: DataSourceFormValues = {
 }
 
 // --- Components ---
+
+type DatabaseMultiSelectProps = {
+  value: string[]
+  onChange: (next: string[]) => void
+  buildProbeRequest: () => { ok: true; req: ProbeRequest } | { ok: false; reason: string }
+  disabled?: boolean
+}
+
+/**
+ * DatabaseMultiSelect lets the operator probe a live MySQL / PostgreSQL instance
+ * and pick one or more databases (or fall back to manual entry).
+ *
+ * Probe lifecycle is owned locally; the parent only sees the resulting string[].
+ * This keeps react-hook-form integration trivial (it remains a controlled value)
+ * while encapsulating all probe state (loading, error, available list, server meta).
+ */
+function DatabaseMultiSelect({
+  value,
+  onChange,
+  buildProbeRequest,
+  disabled,
+}: DatabaseMultiSelectProps) {
+  const [isProbing, setIsProbing] = useState(false)
+  const [probeError, setProbeError] = useState<string | null>(null)
+  const [available, setAvailable] = useState<string[] | null>(null)
+  const [meta, setMeta] = useState<{ version?: string; latencyMs: number } | null>(null)
+  const [manualInput, setManualInput] = useState("")
+
+  const selectedSet = useMemo(() => new Set(value), [value])
+
+  // The chip pool is the union of probed databases and currently-selected
+  // databases. Probed entries persist in the pool whether selected or not, so
+  // operators can toggle them on and off. Manually-typed entries only appear
+  // while they remain selected; deselecting a manual entry removes it from
+  // both the selection and the pool.
+  const knownList = useMemo(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    if (available) {
+      for (const name of available) {
+        if (!seen.has(name)) {
+          seen.add(name)
+          out.push(name)
+        }
+      }
+    }
+    for (const name of value) {
+      if (!seen.has(name)) {
+        seen.add(name)
+        out.push(name)
+      }
+    }
+    return out
+  }, [available, value])
+
+  const handleProbe = async () => {
+    const built = buildProbeRequest()
+    if (!built.ok) {
+      setProbeError(built.reason)
+      setAvailable(null)
+      setMeta(null)
+      return
+    }
+    setIsProbing(true)
+    setProbeError(null)
+    try {
+      const res = await probeDataSource(built.req)
+      setAvailable(res.databases ?? [])
+      setMeta({ version: res.version, latencyMs: res.latencyMs })
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } }; message?: string }
+      setProbeError(err?.response?.data?.message || err?.message || "测试连接失败")
+      setAvailable(null)
+      setMeta(null)
+    } finally {
+      setIsProbing(false)
+    }
+  }
+
+  const toggle = (name: string) => {
+    if (selectedSet.has(name)) {
+      onChange(value.filter((v) => v !== name))
+    } else {
+      onChange([...value, name])
+    }
+  }
+
+  const addManual = () => {
+    const trimmed = manualInput.trim()
+    if (!trimmed) {
+      return
+    }
+    if (selectedSet.has(trimmed)) {
+      setManualInput("")
+      return
+    }
+    onChange([...value, trimmed])
+    setManualInput("")
+  }
+
+  const hasProbed = available !== null
+  const probeButtonLabel = hasProbed ? "重新探测" : "探测数据库"
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="space-y-0.5">
+          <FormLabel className="m-0">数据库</FormLabel>
+          <div className="text-xs text-content-muted">
+            每个选中的数据库会创建一个独立的数据源
+          </div>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={handleProbe}
+          disabled={disabled || isProbing}
+        >
+          {isProbing ? (
+            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+          ) : (
+            <Plug className="h-3.5 w-3.5 mr-1.5" />
+          )}
+          {probeButtonLabel}
+        </Button>
+      </div>
+
+      {meta && (
+        <div className="text-xs text-content-muted">
+          连接成功{meta.version ? ` · ${meta.version}` : ""} · {meta.latencyMs}ms
+        </div>
+      )}
+
+      {probeError && <div className="text-xs text-destructive">{probeError}</div>}
+
+      <div className="rounded-md border border-line bg-surface p-3 space-y-2">
+        <div className="flex items-center justify-between text-xs text-content-muted">
+          <span>
+            {hasProbed
+              ? "点击切换选中状态"
+              : "尚未探测，可点击右上方按钮探测，或在下方手动添加"}
+          </span>
+          <span>
+            已选 {value.length}
+            {knownList.length > 0 ? ` / 共 ${knownList.length}` : ""}
+          </span>
+        </div>
+
+        {knownList.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {knownList.map((name) => {
+              const isSelected = selectedSet.has(name)
+              return (
+                <button
+                  type="button"
+                  key={name}
+                  onClick={() => toggle(name)}
+                  className={cn(
+                    "px-2 py-1 rounded-md border text-xs cursor-pointer transition-colors",
+                    isSelected
+                      ? "border-cta bg-cta/10 text-cta"
+                      : "border-line bg-surface text-content hover:border-cta/50"
+                  )}
+                >
+                  {name}
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="text-xs text-content-muted py-1">
+            {hasProbed
+              ? "探测未发现可用业务数据库，请在下方手动添加"
+              : "暂无候选数据库"}
+          </div>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          <Input
+            placeholder="手动添加数据库名"
+            value={manualInput}
+            onChange={(e) => setManualInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault()
+                addManual()
+              }
+            }}
+          />
+          <Button type="button" variant="outline" onClick={addManual} disabled={!manualInput.trim()}>
+            添加
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export function CreateDataSourceDialog({ 
   open, 
@@ -361,55 +576,49 @@ export function CreateDataSourceDialog({
                   <FormField
                     control={form.control}
                     name="type"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>类型</FormLabel>
-                        <Select
-                          onValueChange={(v) => {
-                            field.onChange(v)
-                            const nextDefault = defaultPortByType[v as keyof typeof defaultPortByType]
-                            // If user hasn't customized port (still on known defaults), update it.
-                            const curPort = form.getValues("port") || ""
-                            if (Object.values(defaultPortByType).includes(curPort) && nextDefault) {
-                              form.setValue("port", nextDefault, { shouldValidate: true })
-                            }
-                          }}
-                          key={field.value}
-                          value={field.value}
-                          disabled={!!initialValues?.type}
-                        >
-                          <FormControl>
-                            <SelectTrigger className="w-full">
-                              <SelectValue placeholder="选择数据库类型" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
-                            <SelectItem value="mysql">MySQL</SelectItem>
-                            <SelectItem value="postgres">Postgres</SelectItem>
-                            <SelectItem value="minio">MinIO</SelectItem>
-                            <SelectItem value="fileserver">Fileserver</SelectItem>
-                            <SelectItem value="coderepo">代码仓库</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  {typeValue === "mysql" || typeValue === "postgres" ? (
-                    <FormField
-                      control={form.control}
-                      name="database"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>数据库名</FormLabel>
-                          <FormControl>
-                            <Input placeholder="例如：corporate_hr" {...field} />
-                          </FormControl>
+                    render={({ field }) => {
+                      // Whether this row has a meaningful "second column".
+                      // For mysql/postgres we render the multi-database picker as
+                      // its own full-width section below, and for coderepo there
+                      // is no second cell at all — so let the type select span
+                      // the full row in those cases.
+                      const hasSecondCell = typeValue === "minio" || typeValue === "fileserver"
+                      return (
+                        <FormItem className={cn(!hasSecondCell && "sm:col-span-2")}>
+                          <FormLabel>类型</FormLabel>
+                          <Select
+                            onValueChange={(v) => {
+                              field.onChange(v)
+                              const nextDefault = defaultPortByType[v as keyof typeof defaultPortByType]
+                              // If user hasn't customized port (still on known defaults), update it.
+                              const curPort = form.getValues("port") || ""
+                              if (Object.values(defaultPortByType).includes(curPort) && nextDefault) {
+                                form.setValue("port", nextDefault, { shouldValidate: true })
+                              }
+                            }}
+                            key={field.value}
+                            value={field.value}
+                            disabled={!!initialValues?.type}
+                          >
+                            <FormControl>
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="选择数据库类型" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
+                              <SelectItem value="mysql">MySQL</SelectItem>
+                              <SelectItem value="postgres">Postgres</SelectItem>
+                              <SelectItem value="minio">MinIO</SelectItem>
+                              <SelectItem value="fileserver">Fileserver</SelectItem>
+                              <SelectItem value="coderepo">代码仓库</SelectItem>
+                            </SelectContent>
+                          </Select>
                           <FormMessage />
                         </FormItem>
-                      )}
-                    />
-                  ) : typeValue === "minio" ? (
+                      )
+                    }}
+                  />
+                  {typeValue === "minio" ? (
                     <FormField
                       control={form.control}
                       name="bucket"
@@ -419,11 +628,12 @@ export function CreateDataSourceDialog({
                           <FormControl>
                             <Input placeholder="例如：lake" {...field} />
                           </FormControl>
+                          <FormDescription>整个 bucket 会被自动扫描，无需指定对象列表</FormDescription>
                           <FormMessage />
                         </FormItem>
                       )}
                     />
-                  ) : typeValue !== "coderepo" ? (
+                  ) : typeValue === "fileserver" ? (
                     <FormField
                       control={form.control}
                       name="path"
@@ -471,21 +681,17 @@ export function CreateDataSourceDialog({
                   </div>
                 ) : null}
 
-                {typeValue === "minio" || typeValue === "fileserver" ? (
+                {typeValue === "fileserver" ? (
                   <FormField
                     control={form.control}
                     name="extractFiles"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>{typeValue === "minio" ? "抽取对象" : "抽取文件列表"}</FormLabel>
+                        <FormLabel>抽取文件列表</FormLabel>
                         <FormControl>
                           <Textarea
                             rows={5}
-                            placeholder={
-                              typeValue === "minio"
-                                ? "每行一个 object key（相对 bucket 路径），例如：\nfolder/a.pdf\nerp/exports/customers.csv"
-                                : "每行一个文件路径，例如：\n/data/docs/a.pdf\n/data/docs/b.txt"
-                            }
+                            placeholder={"每行一个文件路径，例如：\n/data/docs/a.pdf\n/data/docs/b.txt"}
                             {...field}
                           />
                         </FormControl>
@@ -594,6 +800,55 @@ export function CreateDataSourceDialog({
                   ) : null}
                 </div>
 
+                {typeValue === "mysql" || typeValue === "postgres" ? (
+                  <FormField
+                    control={form.control}
+                    name="databases"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormControl>
+                          <DatabaseMultiSelect
+                            value={field.value ?? []}
+                            onChange={(next) =>
+                              field.onChange(next.length > 0 ? next : [])
+                            }
+                            disabled={isSubmitting}
+                            buildProbeRequest={() => {
+                              // Validate just enough to attempt a probe; the full
+                              // form will still re-validate on submit.
+                              const v = form.getValues()
+                              const portNum = Number(v.port)
+                              if (!v.host?.trim()) {
+                                return { ok: false, reason: "请先填写主机" }
+                              }
+                              if (!v.port?.trim() || !Number.isFinite(portNum) || portNum <= 0 || portNum > 65535) {
+                                return { ok: false, reason: "请先填写有效的端口 (1-65535)" }
+                              }
+                              if (!v.user?.trim()) {
+                                return { ok: false, reason: "请先填写用户名" }
+                              }
+                              if (!v.password?.trim()) {
+                                return { ok: false, reason: "请先填写密码" }
+                              }
+                              return {
+                                ok: true,
+                                req: {
+                                  type: v.type,
+                                  host: v.host.trim(),
+                                  port: portNum,
+                                  user: v.user.trim(),
+                                  password: v.password,
+                                },
+                              }
+                            }}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ) : null}
+
                 {typeValue === "coderepo" ? (
                   <div className="rounded-md border border-line bg-surface p-3 space-y-3">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -613,7 +868,6 @@ export function CreateDataSourceDialog({
                                 <SelectItem value="github">GitHub</SelectItem>
                                 <SelectItem value="gitlab">GitLab</SelectItem>
                                 <SelectItem value="gitee">Gitee</SelectItem>
-                                <SelectItem value="gitea">Gitea</SelectItem>
                               </SelectContent>
                             </Select>
                             <FormMessage />

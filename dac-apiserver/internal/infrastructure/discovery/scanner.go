@@ -1,50 +1,70 @@
 package discovery
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 )
 
+// Scanner orchestrates a fixed-order list of Probes against a target port.
+//
+// The scanner itself owns no protocol knowledge: it dials once for liveness,
+// then dispatches to each registered Probe in order. The first probe that
+// returns a Match wins. Adding a new protocol means implementing Probe and
+// appending to the list in NewScanner; ScanPort never needs to change.
 type Scanner struct {
-	dialer  net.Dialer
+	dialer  *net.Dialer
 	timeout time.Duration
-	client  *http.Client
+	probes  []Probe
 }
 
+// NewScanner returns a Scanner with the default probe stack:
+//
+//	mysql → postgres → redis → http (with HTTP fingerprinters)
+//
+// Probes are ordered cheapest-first within each protocol family, and
+// active-talk protocols (mysql sends a banner, postgres replies to
+// SSLRequest) are tried before HTTP so we don't waste a full round-trip
+// on text/html for a database port.
 func NewScanner(timeout time.Duration) *Scanner {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
+	dialer := &net.Dialer{Timeout: timeout}
+	httpClient := newHTTPClient(timeout)
+
 	return &Scanner{
-		dialer:  net.Dialer{Timeout: timeout},
+		dialer:  dialer,
 		timeout: timeout,
-		client: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				Proxy:               http.ProxyFromEnvironment,
-				DialContext:         (&net.Dialer{Timeout: timeout}).DialContext,
-				TLSHandshakeTimeout: timeout,
-				DisableKeepAlives:   true,
+		probes: []Probe{
+			&mysqlProbe{dialer: dialer, timeout: timeout},
+			&postgresProbe{dialer: dialer, timeout: timeout},
+			&redisProbe{dialer: dialer, timeout: timeout},
+			&httpProbe{
+				client:    httpClient,
+				timeout:   timeout,
+				detectors: defaultHTTPDetectors(),
+				fallbacks: defaultHTTPFallbacks(),
 			},
 		},
 	}
 }
 
+// ScanPort runs the registered probes against host:port. A reachable port
+// always produces a DiscoveredService (with ServiceType="unknown" if no
+// probe matched) so the caller can distinguish "open but unidentified"
+// from "closed/filtered".
 func (s *Scanner) ScanPort(ctx context.Context, host string, port int) (*domain.DiscoveredService, bool) {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := s.dialer.DialContext(ctx, "tcp", addr)
+	target := Target{Host: host, Port: port}
+
+	// Liveness check. Without this, every closed port would burn
+	// timeout × len(probes) waiting for handshakes that never come.
+	conn, err := s.dialer.DialContext(ctx, "tcp", target.Addr())
 	if err != nil {
 		return nil, false
 	}
@@ -58,206 +78,99 @@ func (s *Scanner) ScanPort(ctx context.Context, host string, port int) (*domain.
 		Metadata:    map[string]string{},
 	}
 
-	// Protocol probes (cheap, best-effort)
-	if ok, meta := s.probeMySQL(ctx, host, port); ok {
-		svc.ServiceType = "mysql"
-		for k, v := range meta {
-			svc.Metadata[k] = v
+	for _, p := range s.probes {
+		if ctx.Err() != nil {
+			break
 		}
+		m := p.Probe(ctx, target)
+		if m == nil {
+			continue
+		}
+		applyMatch(svc, m)
 		return svc, true
 	}
-	if ok := s.probePostgres(ctx, host, port); ok {
-		svc.ServiceType = "postgres"
-		return svc, true
-	}
-	if ok := s.probeRedis(ctx, host, port); ok {
-		svc.ServiceType = "redis"
-		return svc, true
-	}
-
-	// HTTP/TLS probes (also used to derive product)
-	if ok, tlsOK := s.probeHTTP(ctx, svc); ok {
-		svc.ServiceType = "http"
-		svc.TLS = tlsOK
-		return svc, true
-	}
-
 	return svc, true
 }
 
-func (s *Scanner) probeRedis(ctx context.Context, host string, port int) bool {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := s.dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return false
+// applyMatch merges a Probe's result into the destination service.
+// Empty fields on the match leave the corresponding service field
+// untouched, so probes can return partial information without clobbering
+// defaults.
+func applyMatch(svc *domain.DiscoveredService, m *Match) {
+	if m.ServiceType != "" {
+		svc.ServiceType = m.ServiceType
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(s.timeout))
-	if _, err := conn.Write([]byte("PING\r\n")); err != nil {
-		return false
+	if m.Product != "" {
+		svc.Product = m.Product
 	}
-	buf := make([]byte, 16)
-	n, _ := conn.Read(buf)
-	return bytes.HasPrefix(buf[:n], []byte("+PONG"))
+	if m.Version != "" {
+		svc.Version = m.Version
+	}
+	if m.TLS {
+		svc.TLS = true
+	}
+	for k, v := range m.Metadata {
+		svc.Metadata[k] = v
+	}
 }
 
-func (s *Scanner) probeMySQL(ctx context.Context, host string, port int) (bool, map[string]string) {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := s.dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return false, nil
+// newHTTPClient builds the HTTP client shared by httpProbe and all
+// HTTPFingerprinters. Keep-alives are disabled because each port-scan
+// produces at most a handful of requests and we never reuse the same
+// host between targets.
+func newHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		// Don't follow redirects: a redirect from / to /login would
+		// hide the original Server header and confuse fingerprinters.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			DialContext:         (&net.Dialer{Timeout: timeout}).DialContext,
+			TLSHandshakeTimeout: timeout,
+			DisableKeepAlives:   true,
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+		},
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(s.timeout))
-
-	// MySQL sends a handshake packet immediately.
-	r := bufio.NewReader(conn)
-	header := make([]byte, 4)
-	if _, err := io.ReadFull(r, header); err != nil {
-		return false, nil
-	}
-	payloadLen := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
-	if payloadLen <= 0 || payloadLen > 4096 {
-		return false, nil
-	}
-	payload := make([]byte, payloadLen)
-	if _, err := io.ReadFull(r, payload); err != nil {
-		return false, nil
-	}
-	// payload[0] is protocol version (0x0a for modern MySQL)
-	if len(payload) < 2 || payload[0] != 0x0a {
-		return false, nil
-	}
-	// server version is NUL-terminated string starting at payload[1]
-	nul := bytes.IndexByte(payload[1:], 0x00)
-	if nul <= 0 {
-		return true, map[string]string{}
-	}
-	version := string(payload[1 : 1+nul])
-	return true, map[string]string{"version": version}
 }
 
-func (s *Scanner) probePostgres(ctx context.Context, host string, port int) bool {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := s.dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(s.timeout))
+// Probe identifies a service speaking a particular protocol on a TCP port.
+//
+// Implementations must:
+//   - return promptly when ctx is cancelled
+//   - never panic
+//   - return nil to mean "this is not my protocol", a non-nil *Match
+//     to mean "I identified the service"
+type Probe interface {
+	// Name returns a stable identifier for logs and tests (e.g. "mysql").
+	Name() string
 
-	// Send SSLRequest: int32 len=8, int32 code=80877103.
-	var buf [8]byte
-	binary.BigEndian.PutUint32(buf[0:4], 8)
-	binary.BigEndian.PutUint32(buf[4:8], 80877103)
-	if _, err := conn.Write(buf[:]); err != nil {
-		return false
-	}
-	resp := make([]byte, 1)
-	if _, err := io.ReadFull(conn, resp); err != nil {
-		return false
-	}
-	// 'S' or 'N' means it's a Postgres server.
-	return resp[0] == 'S' || resp[0] == 'N'
+	// Probe runs the protocol-specific identification dance against
+	// target. A non-nil return short-circuits the rest of the probe stack.
+	Probe(ctx context.Context, target Target) *Match
 }
 
-func (s *Scanner) probeHTTP(ctx context.Context, svc *domain.DiscoveredService) (bool, bool) {
-	host := svc.Host
-	port := svc.Port
-
-	// Try plain HTTP first
-	if ok := s.httpProbe(ctx, svc, "http", host, port); ok {
-		return true, false
-	}
-
-	// Try TLS handshake quickly
-	if s.tlsHandshake(ctx, host, port) {
-		if ok := s.httpProbe(ctx, svc, "https", host, port); ok {
-			return true, true
-		}
-	}
-	return false, false
+// Target is the (host, port) pair under inspection.
+type Target struct {
+	Host string
+	Port int
 }
 
-func (s *Scanner) tlsHandshake(ctx context.Context, host string, port int) bool {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	d := &net.Dialer{Timeout: s.timeout}
-	conn, err := tls.DialWithDialer(d, "tcp", addr, &tls.Config{
-		InsecureSkipVerify: true,
-		ServerName:         host,
-	})
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
+// Addr returns host:port suitable for net.Dial.
+func (t Target) Addr() string {
+	return net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
 }
 
-func (s *Scanner) httpProbe(ctx context.Context, svc *domain.DiscoveredService, scheme, host string, port int) bool {
-	base := fmt.Sprintf("%s://%s:%d", scheme, host, port)
-
-	// Ordered, cheap identification paths
-	paths := []string{
-		"/minio/health/ready", // MinIO
-		"/api/v1/version",     // Gitea
-		"/status.php",         // Nextcloud
-		"/v1/info",            // Trino
-		"/web/login",          // Odoo
-		"/",                   // fallback
-	}
-
-	for _, p := range paths {
-		u := base + p
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		req.Header.Set("User-Agent", "dac-discovery/0.1")
-		resp, err := s.client.Do(req)
-		if err != nil {
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		_ = resp.Body.Close()
-
-		// Any HTTP response means it's HTTP-ish.
-		svc.Metadata["http.status"] = fmt.Sprintf("%d", resp.StatusCode)
-		if ct := resp.Header.Get("Content-Type"); ct != "" {
-			svc.Metadata["http.contentType"] = ct
-		}
-		if server := resp.Header.Get("Server"); server != "" {
-			svc.Metadata["http.server"] = server
-		}
-
-		// Product heuristics
-		if strings.Contains(strings.ToLower(resp.Header.Get("Server")), "minio") || bytes.Contains(body, []byte("MinIO")) {
-			svc.Product = "minio"
-			return true
-		}
-		if p == "/api/v1/version" && resp.StatusCode == 200 && bytes.Contains(body, []byte("version")) {
-			svc.Product = "gitea"
-			var v struct{ Version string `json:"version"` }
-			_ = json.Unmarshal(body, &v)
-			if v.Version != "" {
-				svc.Version = v.Version
-			}
-			return true
-		}
-		if p == "/status.php" && resp.StatusCode == 200 && bytes.Contains(body, []byte("Nextcloud")) {
-			svc.Product = "nextcloud"
-			return true
-		}
-		if p == "/v1/info" && resp.StatusCode == 200 && bytes.Contains(body, []byte("nodeVersion")) {
-			svc.Product = "trino"
-			return true
-		}
-		if p == "/web/login" && resp.StatusCode >= 200 && resp.StatusCode < 500 && bytes.Contains(bytes.ToLower(body), []byte("odoo")) {
-			svc.Product = "odoo"
-			return true
-		}
-
-		// Generic HTTP
-		if resp.StatusCode > 0 {
-			return true
-		}
-	}
-	return false
+// Match is the positive identification a Probe returns.
+//
+// Fields are additive: empty values let the scanner keep whatever a
+// later probe (or the unknown default) provides.
+type Match struct {
+	ServiceType string            // "http", "mysql", "postgres", "redis"
+	Product     string            // "gitlab", "minio", "nginx", ...
+	Version     string            // free-form version string when known
+	TLS         bool              // true if the probe spoke (or detected) TLS
+	Metadata    map[string]string // small, opaque key/value pairs for the UI
 }
-

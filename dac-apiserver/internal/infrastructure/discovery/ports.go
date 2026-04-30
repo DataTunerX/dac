@@ -9,17 +9,17 @@ import (
 
 func DefaultPorts() []int {
 	// Small but useful defaults; user can override with portsSpec.
-	// Include DAC sandbox common ports (Gitea/Odoo + multiple Postgres).
+	// Include DAC sandbox common ports (GitLab/Odoo + multiple Postgres).
 	return []int{
 		22, 80, 443,
-		3000, // gitea
 		3306, // mysql/mariadb
 		5432, 5433, 5434, // postgres (main/metastore/odoo)
-		6379,             // redis
-		8069,             // odoo
-		8080,             // trino
+		6379, // redis
+		8069, // odoo
+		8080, // trino
+		8929, // gitlab (sandbox custom port)
 		9000, 9001, // minio api/console
-		9083,       // hive metastore thrift
+		9083, // hive metastore thrift
 	}
 }
 

@@ -200,7 +200,7 @@ neo4j:
       size: 5Gi
   resources:
     requests:
-      cpu: 100m
+      cpu: 200m
       memory: 512Mi
     limits:
       cpu: 1000m
@@ -217,8 +217,8 @@ apiserver:
   # -- Enable apiserver deployment
   enabled: true
   image:
-    repository: apiserver
-    tag: "v0.9.0"
+    repository: dac-apiserver
+    tag: "v0.10.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -264,11 +264,11 @@ apiserver:
       secret: "dac-jwt-secret-change-me"
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 500m
+      cpu: 200m
       memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
 
 # ---------------------------------------------------------------------------
 # frontend - Next.js UI with nginx reverse proxy
@@ -278,7 +278,7 @@ frontend:
   enabled: true
   image:
     repository: frontend
-    tag: "v0.9.0"
+    tag: "v0.10.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -307,11 +307,11 @@ frontend:
     #      - dac.example.com
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 500m
+      cpu: 200m
       memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
 
 # ---------------------------------------------------------------------------
 # data-services - Core data/vector/memory/knowledge-graph API
@@ -380,15 +380,15 @@ executionEngine:
   enabled: true
   image:
     repository: execution-engine
-    tag: "v0.9.0-amd64"
+    tag: "v0.10.0-amd64"
   replicas: 1
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 200m
+      memory: 512Mi
     limits:
-      cpu: 500m
-      memory: 256Mi
+      cpu: 1000m
+      memory: 1Gi
 
   # -- Images the operator injects into dynamically created Deployments.
   #    When a DataAgentContainer CR is created, the operator uses these images
@@ -398,19 +398,19 @@ executionEngine:
     orchestratorAgent:
       # -- Repository name under global.imageRegistry
       repository: "orchestrator-agent"
-      tag: "v0.9.0-amd64"
+      tag: "v0.10.0-amd64"
     expertAgent:
       # -- Repository name under global.imageRegistry
       repository: "expert-agent"
-      tag: "v0.9.0-amd64"
+      tag: "v0.10.0-amd64"
     codeAgent:
       # -- Repository name under global.imageRegistry
       repository: "code-agent"
-      tag: "v0.9.0-amd64"
+      tag: "v0.10.0-amd64"
     docAgent:
       # -- Repository name under global.imageRegistry
       repository: "doc-agent"
-      tag: "v0.9.0-amd64"
+      tag: "v0.10.0-amd64"
     dacDataServices:
       # -- Repository name under global.imageRegistry
       repository: "dac-data-services"
@@ -461,15 +461,15 @@ semanticGrouper:
   enabled: true
   image:
     repository: semantic-grouper
-    tag: "v0.9.0-amd64"
+    tag: "v0.10.0-amd64"
   api:
     replicas: 1
     resources:
       requests:
-        cpu: 100m
+        cpu: 200m
         memory: 256Mi
       limits:
-        cpu: 500m
+        cpu: 1000m
         memory: 512Mi
   worker:
     replicas: 1
@@ -510,7 +510,7 @@ orchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.9.0-amd64"
+    tag: "v0.10.0-amd64"
   replicas: 1
   config:
     # -- Vector collection name for agent cards
@@ -523,10 +523,10 @@ orchestratorRegistry:
     targetPort: 8000
   resources:
     requests:
-      cpu: 50m
+      cpu: 200m
       memory: 256Mi
     limits:
-      cpu: 100m
+      cpu: 1000m
       memory: 1Gi
 
 # ---------------------------------------------------------------------------
@@ -536,7 +536,7 @@ bizOrchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.9.0-amd64"
+    tag: "v0.10.0-amd64"
   replicas: 1
   config:
     collectionName: "biz_orchestrator_agent_cards"
@@ -547,10 +547,10 @@ bizOrchestratorRegistry:
     targetPort: 8000
   resources:
     requests:
-      cpu: 50m
+      cpu: 200m
       memory: 256Mi
     limits:
-      cpu: 100m
+      cpu: 1000m
       memory: 1Gi
 
 # =============================================================================
@@ -564,7 +564,7 @@ bizRoutingAgent:
   enabled: true
   image:
     repository: routing-agent
-    tag: "v0.9.0-amd64"
+    tag: "v0.10.0-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state
@@ -580,7 +580,7 @@ bizRoutingAgent:
     targetPort: 10100
   resources:
     requests:
-      cpu: 100m
+      cpu: 200m
       memory: 512Mi
     limits:
       cpu: 1000m
@@ -593,7 +593,7 @@ bizChartAgent:
   enabled: true
   image:
     repository: chart-agent
-    tag: "v0.9.0-amd64"
+    tag: "v0.10.0-amd64"
   replicas: 1
   config:
     redisDb: "2"
@@ -609,10 +609,96 @@ bizChartAgent:
     targetPort: 10100
   resources:
     requests:
-      cpu: 50m
+      cpu: 200m
       memory: 512Mi
     limits:
-      cpu: 100m
+      cpu: 1000m
+      memory: 2Gi
+
+# ---------------------------------------------------------------------------
+# biz-skill-agent - Skill execution agent (self-registers to biz registry)
+# ---------------------------------------------------------------------------
+bizSkillAgent:
+  enabled: true
+  image:
+    repository: skill-agent
+    tag: "v0.10.0-amd64"
+  replicas: 1
+  config:
+    # -- Redis DB index for agent state / registration
+    redisDb: "2"
+    # -- Agent card name registered to the biz registry
+    agentName: "SkillAgent"
+    # -- Whether to self-register to agent registry
+    registerAgent: "true"
+    # -- Max ReAct steps per plan_and_run invocation (env: LOCAL_SKILL_MAX_STEPS)
+    maxSteps: "20"
+    # -- plan_cmd subprocess timeout in seconds (env: LOCAL_SKILL_CMD_TIMEOUT_SEC)
+    cmdTimeoutSec: "30"
+    # -- Max in-process plan_cmd concurrency, "0" = unlimited (env: LOCAL_SKILL_MAX_CONCURRENCY)
+    maxConcurrency: "8"
+    # -- Skills to pull from skill-hub at startup (env: SKILLS). Names must
+    #    match each zip's SKILL.md frontmatter `name`. Empty list = no download.
+    skills:
+      - weather
+      - web_fetch
+      - tavily-search
+      - code_execution
+      - extract_pdf
+    # -- Override skill-hub base URL. Empty string uses the in-cluster skill-hub
+    #    Service (see dac.skillHub.url).
+    skillHubUrl: ""
+    # -- Where the agent writes downloaded zips. Must match LOCAL_SKILLS_DIR so
+    #    SkillRunner preload picks them up (env: SKILLS_DOWNLOAD_DIR).
+    skillsDownloadDir: "/app/skills/"
+    # -- Re-download even if the zip already exists locally (env: SKILL_DOWNLOAD_OVERWRITE)
+    skillDownloadOverwrite: "true"
+    # -- Parallel download worker count (env: SKILL_DOWNLOAD_CONCURRENCY)
+    skillDownloadConcurrency: "8"
+    # -- Per-request HTTP timeout in seconds. "" -> use module default (30).
+    skillDownloadTimeout: ""
+  service:
+    type: ClusterIP
+    # -- A2A protocol port
+    port: 10100
+    targetPort: 10100
+  resources:
+    requests:
+      cpu: 200m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# ---------------------------------------------------------------------------
+# skill-hub - HTTP index/download service for skill zip packages.
+# skill-agent (and orchestrator-agent's skill_download.py) fetches
+# `{SKILL_HUB_URL}/{name}.zip` from this service at startup.
+# Images bake the zip packs into /app/skills/, so no PVC is required.
+# ---------------------------------------------------------------------------
+skillHub:
+  enabled: true
+  image:
+    repository: skill-hub
+    tag: "v0.10.0-amd64"
+  replicas: 1
+  config:
+    # -- Silence the transitive langfuse "client disabled" log from skill_sdk.
+    #    Set to "true" only if a real langfuse instance is configured.
+    langfuseEnabled: "false"
+    # -- Override SKILLS_DIR inside the container. Empty string keeps the
+    #    image default (/app/skills/). Useful if you mount a volume.
+    skillsDir: ""
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
       memory: 2Gi
 
 # =============================================================================

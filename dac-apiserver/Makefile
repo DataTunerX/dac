@@ -1,4 +1,4 @@
-.PHONY: help build run clean test test-integration coverage lint fmt vet docker-build docker-push build-cli install-cli
+.PHONY: help build run clean test test-integration coverage lint fmt vet build-cli install-cli
 
 # Default target
 .DEFAULT_GOAL := help
@@ -14,12 +14,6 @@ BUILD_TIME := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 BIN_DIR := bin
 CMD_DIR := cmd/server
 CLI_CMD_DIR := cmd/dactl
-
-# Docker configuration
-DOCKER_REGISTRY ?= release.daocloud.io
-DOCKER_NAMESPACE ?= dac
-DOCKER_IMAGE := $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/apiserver
-DOCKER_TAG ?= v0.1
 
 # Go related variables
 GOCMD := go
@@ -123,30 +117,7 @@ install-cli: build-cli ## Install CLI tool
 
 install-all: install install-cli ## Install API Server and CLI tool
 
-docker-build: ## Build Docker image
-	@echo "Building Docker image..."
-	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
-	docker tag $(DOCKER_IMAGE):$(DOCKER_TAG) $(DOCKER_IMAGE):latest
-	@echo "Docker image built: $(DOCKER_IMAGE):$(DOCKER_TAG)"
-
-docker-push: ## Push Docker image
-	@echo "Pushing Docker image..."
-	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)
-	docker push $(DOCKER_IMAGE):latest
-	@echo "Docker image pushed"
-
-docker-run: ## Run Docker container
-	@echo "Running Docker container..."
-	docker run -d \
-		--name $(APP_NAME) \
-		-p 8080:8080 \
-		-p 9090:9090 \
-		$(DOCKER_IMAGE):$(DOCKER_TAG)
-
-docker-stop: ## Stop Docker container
-	@echo "Stopping Docker container..."
-	docker stop $(APP_NAME) || true
-	docker rm $(APP_NAME) || true
+# Docker image build/push: see build.md (use `docker buildx` directly).
 
 k8s-deploy: ## Deploy to Kubernetes
 	@echo "Deploying to Kubernetes..."

@@ -50,6 +50,76 @@ from .prompts import (
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 
+try:
+    # json_repair is a tolerant JSON parser designed specifically for LLM output.
+    # It handles common failure modes such as unescaped inner double quotes,
+    # trailing commas, missing quotes, python-style single quotes, etc.
+    from json_repair import repair_json as _json_repair  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional runtime dep, fail-soft
+    _json_repair = None  # type: ignore[assignment]
+
+
+# String keys for ``format_llm_output`` in this file:
+# - Next-step / observe: ``answer``, ``requery``, ``reason`` (same shape as domain expert).
+# - Execution planning LLM: top-level ``reasoning``; ``excluded_agents[].reason`` also matches
+#   the ``reason`` key. Shared planner / upstream keys kept for embedded or propagated JSON.
+# - ``execution_plan`` is an array, not whitelisted (nested repair via json_repair).
+_KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
+    "original_query",
+    "description",
+    "thought_process",
+    "reason",
+    "rationale",
+    "final_answer",
+    "answer",
+    "requery",
+    "reasoning",
+)
+
+
+def _escape_known_string_field_inner_quotes(text: str) -> str:
+    """Best-effort escape of unescaped inner ``"`` inside known single-line
+    string fields of a planner-style JSON payload.
+
+    We deliberately restrict the pre-pass to a whitelist of known fields where
+    the value is a single JSON string on one line so we can recognize the end
+    of the value by the structural pattern ``"`` followed by an optional
+    comma/whitespace and a newline. Multi-line values and nested structures
+    are left untouched (json_repair handles those as a later fallback).
+    """
+    if not text or '"' not in text:
+        return text
+
+    pattern_fields = "|".join(re.escape(f) for f in _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES)
+    # See the sibling implementation in orchestrator_agent_semantic_group.py
+    # for detailed rationale about the regex anchoring strategy.
+    pattern = re.compile(
+        rf'("(?:{pattern_fields})"\s*:\s*")'
+        r'(.*?)'
+        r'((?<!\\)"[ \t]*,?[ \t]*$)',
+        re.MULTILINE,
+    )
+
+    def _repl(m: "re.Match[str]") -> str:
+        head, body, tail = m.group(1), m.group(2), m.group(3)
+        fixed_chars: List[str] = []
+        i = 0
+        while i < len(body):
+            ch = body[i]
+            if ch == "\\" and i + 1 < len(body):
+                fixed_chars.append(body[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                fixed_chars.append('\\"')
+                i += 1
+                continue
+            fixed_chars.append(ch)
+            i += 1
+        return head + "".join(fixed_chars) + tail
+
+    return pattern.sub(_repl, text)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -518,42 +588,78 @@ class ExpertAgent(BaseAgent):
         ))
 
     def format_llm_output(self, answer) -> dict:
-        data_dict = None
-    
+        """Parse the planner LLM output into a dict with heavy tolerance.
+
+        See ``orchestrator_agent_semantic_group.PlannerAgent.format_llm_output``
+        for the detailed recovery strategy — this implementation mirrors it.
+        """
+        raw = getattr(answer, "content", "") or ""
+
         try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
 
-            cleaned_content = answer.content.strip()
+        cleaned_content = raw.strip()
+        if cleaned_content.startswith('```json'):
+            cleaned_content = cleaned_content[7:]
+        elif cleaned_content.startswith('```'):
+            cleaned_content = cleaned_content[3:]
+        if cleaned_content.endswith('```'):
+            cleaned_content = cleaned_content[:-3]
+        cleaned_content = cleaned_content.strip()
 
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-            
+        try:
+            return json.loads(cleaned_content)
+        except json.JSONDecodeError as e2:
+            logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
+
+        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
+        if escaped_content != cleaned_content:
             try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-                try:
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
-                    logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-                    try:
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
-                    except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
+                parsed = json.loads(escaped_content)
+                logger.info(" === format_llm_output, recovered via inner-quote field escaping")
+                return parsed
+            except json.JSONDecodeError as e_esc:
+                logger.warning(f" === format_llm_output, field-escape pre-pass still invalid: {e_esc}")
 
-        return data_dict
+        if _json_repair is not None:
+            try:
+                repaired = _json_repair(escaped_content, return_objects=True)
+                if isinstance(repaired, dict):
+                    logger.info(" === format_llm_output, recovered via json_repair")
+                    return repaired
+                if isinstance(repaired, str):
+                    parsed = json.loads(repaired)
+                    if isinstance(parsed, dict):
+                        logger.info(" === format_llm_output, recovered via json_repair (string)")
+                        return parsed
+            except Exception as e_rep:  # noqa: BLE001
+                logger.error(f" === format_llm_output, json_repair failed: {e_rep}")
+        else:
+            logger.warning(
+                " === format_llm_output, json_repair not installed; "
+                "add 'json-repair' to dependencies to improve LLM JSON tolerance"
+            )
+
+        try:
+            import ast
+            parsed = ast.literal_eval(cleaned_content)
+            if isinstance(parsed, dict):
+                return parsed
+        except (ValueError, SyntaxError) as e3:
+            logger.error(f" === format_llm_output, ast parsing fail: {e3}")
+        except Exception as e5:  # noqa: BLE001
+            logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
+
+        try:
+            parsed = json.loads(cleaned_content.replace("'", '"'))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError as e4:
+            logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
+
+        return None
 
 
     async def invoke_common(self, knowledge: str = "") -> LLMResult:

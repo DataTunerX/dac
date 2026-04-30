@@ -486,7 +486,7 @@ class DataServicesClient:
             MemoryResponse: Storage result
         """
         url = f"{self.base_url}/memories"
-        
+
         # Build request data - strictly follows curl example format
         payload = {
             "user_id": user_id,
@@ -495,53 +495,102 @@ class DataServicesClient:
             "messages": messages,
             "metadata": metadata or {}
         }
-        
+
         logger.info(f"Store memory request URL: {url}")
         logger.debug(f"Store memory request parameters: {payload}")
-    
-        try:
-            await self._create_session()
-            
-            async with self.session.post(url, json=payload) as response:
-                response_text = await response.text()
-                
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                        # Parse according to actual API response format
-                        return MemoryResponse(
-                            status=data.get('status', ''),
-                            message=data.get('message', ''),
-                            data=data.get('data', {})
-                        )
-                    except json.JSONDecodeError:
-                        logger.error(f"JSON parsing failed: {response_text}")
-                        return MemoryResponse(
-                            status='error',
-                            message=f'JSON parsing failed: {response_text}'
-                        )
-                else:
-                    error_msg = f"HTTP error: {response.status}, response: {response_text}"
-                    logger.error(error_msg)
-                    return MemoryResponse(
-                        status='error',
-                        message=error_msg
+
+        # Retryable upstream failure modes: the data-services proxy maps
+        # read-timeout to 504 and genuine bad-gateway to 502; 503 also shows
+        # up when the upstream is transiently unhealthy. mem0 write is a
+        # heavy operation (LLM fact extraction + embedding + DB writes) that
+        # occasionally trips the proxy's read-timeout — retrying a few
+        # times with exponential backoff substantially reduces memory loss
+        # without blocking the caller for too long.
+        retryable_statuses = {502, 503, 504}
+        max_attempts = 3
+        backoff_base = 0.5  # seconds: 0.5s, 1.0s
+
+        last_error_msg: Optional[str] = None
+        last_status: Optional[int] = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await self._create_session()
+
+                async with self.session.post(url, json=payload) as response:
+                    response_text = await response.text()
+
+                    if response.status == 200:
+                        if attempt > 1:
+                            logger.info(
+                                "store_memory succeeded after retry | attempt=%d", attempt
+                            )
+                        try:
+                            data = await response.json()
+                            return MemoryResponse(
+                                status=data.get('status', ''),
+                                message=data.get('message', ''),
+                                data=data.get('data', {})
+                            )
+                        except json.JSONDecodeError:
+                            logger.error(f"JSON parsing failed: {response_text}")
+                            return MemoryResponse(
+                                status='error',
+                                message=f'JSON parsing failed: {response_text}'
+                            )
+
+                    last_status = response.status
+                    last_error_msg = (
+                        f"HTTP error: {response.status}, response: {response_text}"
                     )
-                    
-        except aiohttp.ClientError as e:
-            error_msg = f"Network request error: {str(e)}"
-            logger.error(error_msg)
-            return MemoryResponse(
-                status='error',
-                message=error_msg
-            )
-        except asyncio.TimeoutError:
-            error_msg = f"Request timeout: {self.timeout} seconds"
-            logger.error(error_msg)
-            return MemoryResponse(
-                status='error',
-                message=error_msg
-            )
+
+                    if response.status in retryable_statuses and attempt < max_attempts:
+                        delay = backoff_base * (2 ** (attempt - 1))
+                        logger.warning(
+                            "store_memory transient upstream error | "
+                            "status=%s attempt=%d/%d — retrying in %.2fs",
+                            response.status, attempt, max_attempts, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    logger.error(last_error_msg)
+                    return MemoryResponse(status='error', message=last_error_msg)
+
+            except aiohttp.ClientError as e:
+                last_error_msg = f"Network request error: {str(e)}"
+                if attempt < max_attempts:
+                    delay = backoff_base * (2 ** (attempt - 1))
+                    logger.warning(
+                        "store_memory network error | attempt=%d/%d err=%s — retrying in %.2fs",
+                        attempt, max_attempts, e, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error(last_error_msg)
+                return MemoryResponse(status='error', message=last_error_msg)
+            except asyncio.TimeoutError:
+                last_error_msg = f"Request timeout: {self.timeout} seconds"
+                if attempt < max_attempts:
+                    delay = backoff_base * (2 ** (attempt - 1))
+                    logger.warning(
+                        "store_memory client timeout | attempt=%d/%d — retrying in %.2fs",
+                        attempt, max_attempts, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error(last_error_msg)
+                return MemoryResponse(status='error', message=last_error_msg)
+
+        # Retries exhausted on a retryable status — surface the last error
+        logger.error(
+            "store_memory giving up | last_status=%s last_error=%s",
+            last_status, last_error_msg,
+        )
+        return MemoryResponse(
+            status='error',
+            message=last_error_msg or "store_memory: unknown error",
+        )
 
 
     def parse_save_memory_results(self, response: MemoryResponse) -> List[MemoryDataItem]:

@@ -9,7 +9,9 @@ WORKDIR /app
 
 RUN mkdir /app/sdks
 
-COPY sdks/model_sdk-0.1.0-py3-none-any.whl /app/sdks/model_sdk-0.1.0-py3-none-any.whl
+COPY sdks/model_sdk-0.2.0-py3-none-any.whl /app/sdks/model_sdk-0.2.0-py3-none-any.whl
+
+COPY sdks/skill_sdk-0.2.0-py3-none-any.whl /app/sdks/skill_sdk-0.2.0-py3-none-any.whl
 
 # Enable bytecode compilation
 ENV UV_COMPILE_BYTECODE=1
@@ -30,12 +32,18 @@ RUN uv sync --frozen --no-dev --no-editable
 
 FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-alpine-timezone-amd64
 
+RUN apk add --no-cache \
+    fd \
+    ripgrep
+
 COPY --from=uv --chown=app:app /app/.venv /app/.venv
 
 # Place executables in the environment at the front of the path
 ENV PATH="/app/.venv/bin:$PATH"
 
 COPY agent_card /app/agent_card
+
+COPY skills /app/skills
 
 RUN rm -fr /app/.venv/lib/python3.13/site-packages/a2a/utils/telemetry.py
 

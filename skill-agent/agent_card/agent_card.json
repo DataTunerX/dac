@@ -1,0 +1,38 @@
+{
+    "name": "SkillAgent",
+    "description": "本地技能执行器（启动时自动从 LOCAL_SKILLS_DIR 加载 skill 包，真实 description/skills 由运行时根据加载到的 skill 清单动态生成；此为兜底文案）。",
+    "url": "http://192.168.xxx.xxx:20002/",
+    "provider": null,
+    "version": "1.0.0",
+    "documentationUrl": null,
+    "capabilities": {
+        "streaming": "True",
+        "pushNotifications": "True",
+        "stateTransitionHistory": "False"
+    },
+    "authentication": {
+        "credentials": null,
+        "schemes": [
+            "public"
+        ]
+    },
+    "defaultInputModes": [
+        "text",
+        "text/plain"
+    ],
+    "defaultOutputModes": [
+        "text",
+        "text/plain"
+    ],
+    "skills": [
+        {
+            "id": "skill_runner",
+            "name": "skill_runner",
+            "description": "Fallback skill entry used only when the process failed to load any skill packs. Real skills are advertised per-entry at runtime based on the loaded inventory.",
+            "tags": ["skill", "skill runner", "fallback"],
+            "examples": [],
+            "inputModes": ["text", "text/plain"],
+            "outputModes": ["text", "text/plain"]
+        }
+    ]
+}

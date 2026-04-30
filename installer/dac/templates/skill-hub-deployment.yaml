@@ -1,0 +1,53 @@
+{{- if .Values.skillHub.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dac.skillHub.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "skill-hub") | nindent 4 }}
+spec:
+  replicas: {{ .Values.skillHub.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "skill-hub") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "skill-hub") | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: skill-hub
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.skillHub.image.repository "tag" .Values.skillHub.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.skillHub.service.targetPort }}
+          env:
+            # skill_sdk transitively initialises a langfuse client; without a
+            # real key it logs a harmless "client disabled" warning on boot.
+            # Default "false" to silence the noise; override via values if a
+            # real langfuse instance is wired up.
+            - name: LANGFUSE_ENABLED
+              value: {{ .Values.skillHub.config.langfuseEnabled | quote }}
+            {{- with .Values.skillHub.config.skillsDir }}
+            - name: SKILLS_DIR
+              value: {{ . | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.skillHub.service.targetPort }}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.skillHub.service.targetPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.skillHub.resources | nindent 12 }}
+{{- end }}

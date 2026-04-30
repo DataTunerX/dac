@@ -702,6 +702,8 @@ helm status dac -n dac
 | `biz-orchestrator-registry-*` | 业务 Agent 注册中心 |
 | `biz-routing-agent-*` | 路由 Agent |
 | `biz-chart-agent-*` | 图表 Agent |
+| `biz-skill-agent-*` | 技能 Agent |
+| `skill-hub-*` | 技能 zip 包索引 / 下载服务（biz-skill-agent 启动时从这里按 `SKILLS` 拉取 zip） |
 | `mysql-0` | MySQL StatefulSet |
 | `redis-0` | Redis StatefulSet |
 | `pgvector-0` | PGVector StatefulSet |
@@ -843,8 +845,11 @@ kubectl get sc
 │  └──────────────────┘  └─────────────────────────┘  │
 │                                                     │
 │  ┌──────────────────┐  ┌─────────────────────────┐  │
-│  │ biz-routing-agent│  │ biz-chart-agent        │  │
+│  │ biz-routing-agent│  │ biz-chart-agent         │  │
 │  └──────────────────┘  └─────────────────────────┘  │
+│  ┌──────────────────┐                               │
+│  │ biz-skill-agent  │                               │
+│  └──────────────────┘                               │
 │                                                     │
 │  ┌──────────────────────────────────────────────┐   │
 │  │         execution-engine (Operator)          │   │
@@ -868,6 +873,7 @@ kubectl get sc
 | **Operator** | execution-engine | 监听 `DataAgentContainer` / `DataDescriptor` CRD，动态创建 Agent 工作负载 |
 | **语义分组** | semantic-grouper（API + Worker） | Celery 异步语义分组 |
 | **Agent 注册中心** | orchestrator-registry、biz-orchestrator-registry | A2A Agent Card 发现 |
-| **Agent** | biz-routing-agent、biz-chart-agent | 路由 / 图表生成等业务 Agent |
+| **Agent** | biz-routing-agent、biz-chart-agent、biz-skill-agent | 路由 / 图表生成 / 技能执行等业务 Agent |
+| **Skill Hub** | skill-hub | 技能 zip 包索引 / 下载 HTTP 服务，供 biz-skill-agent 启动时按 `SKILLS` 拉取 |
 
 > `orchestrator-agent`、`expert-agent`、`code-agent`、`doc-agent`、`data-sinkers-job` 、`data-sinkers-observer` 等组件**不在 Helm 中静态部署**，由 execution-engine Operator 根据 CR 动态管理。

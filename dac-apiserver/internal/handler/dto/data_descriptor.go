@@ -186,7 +186,7 @@ func toDataSourceResponse(s entity.DataSource) DataSourceResponse {
 		}
 		if path != "" || branch != "" || token != "" {
 			resp.CodeRepo = &CodeRepoConfigResponse{
-				// For git sources, provider is the source type (github/gitee/gitea/gitlab/git).
+				// For git sources, provider is the source type (github/gitee/gitlab/git).
 				CodeRepoType:   s.Type,
 				CodeRepoPath:   path,
 				CodeRepoBranch: branch,

@@ -5,9 +5,9 @@ import {
   siAlibabacloud,
   siAnthropic,
   siGit,
-  siGitea,
   siGitee,
   siGithub,
+  siGitlab,
   siGoogle,
   siMinio,
   siMysql,
@@ -30,7 +30,7 @@ export type BrandSlug =
   | "minio"
   | "git"
   | "github"
-  | "gitea"
+  | "gitlab"
   | "gitee"
   | "redis"
   | "nginx"
@@ -46,7 +46,7 @@ const ICONS: Record<BrandSlug, SimpleIcon> = {
   minio: siMinio,
   git: siGit,
   github: siGithub,
-  gitea: siGitea,
+  gitlab: siGitlab,
   gitee: siGitee,
   redis: siRedis,
   nginx: siNginx,

@@ -19,7 +19,7 @@ WORKDIR /app
 
 ADD . /app
 
-RUN pip3 install /app/sdks/model_sdk-0.1.0-py3-none-any.whl -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install /app/sdks/model_sdk-0.2.0-py3-none-any.whl -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 RUN chmod +x /app/entrypoint-api.sh /app/entrypoint-worker.sh
 

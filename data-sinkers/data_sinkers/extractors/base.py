@@ -16,34 +16,13 @@ from a2a.types import AgentCard, AgentSkill
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 from .code_caller import CodeSplitter
+from ..llm_output_json import parse_llm_output_string
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("base_extractor")
 
 DEFAULT_CODE_DOWNLOAD_DIR = "/app/download_dir"
-
-
-def _extract_single_key_json(text: str) -> dict:
-    """
-    Fallback extractor for simple single-key JSON objects whose string value
-    contains unescaped double quotes (common when LLMs embed markdown in JSON).
-    Works for patterns like: {"summary": "...markdown with unescaped quotes..."}
-    The regex is greedy so (.*) consumes everything up to the LAST `"` before
-    the closing `}`, correctly skipping internal unescaped quotes.
-    """
-    if not text:
-        return None
-    m = re.search(r'\{\s*"(\w+)"\s*:\s*"(.*)"[\s,]*\}', text, re.DOTALL)
-    if m:
-        key = m.group(1)
-        raw_value = m.group(2)
-        logger.info(
-            f" === format_llm_output, fallback extraction succeeded for key "
-            f"'{key}', value length={len(raw_value)}"
-        )
-        return {key: raw_value}
-    return None
 
 manager = ModelManager()
 
@@ -599,54 +578,11 @@ class CodeAnalyzer:
             return self.analyze_files_sequential(file_list)
 
     def format_llm_output(self, answer) -> dict:
-        data_dict = None
-        
         logger.info(f"code -> format_llm_output, answer: {answer}")
-        
-        try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
-
-            cleaned_content = answer.content.strip()
-
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-
-            # Normalize Unicode smart quotes to ASCII quotes (LLM may produce these)
-            cleaned_content = cleaned_content.replace('\u201c', '"').replace('\u201d', '"')
-            cleaned_content = cleaned_content.replace('\u2018', "'").replace('\u2019', "'")
-            
-            try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-                try:
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
-                    logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-                    try:
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
-                    except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
-
-        # Last-resort fallback: if the JSON has a simple single-key structure like
-        # {"summary": "...markdown with unescaped quotes..."}, extract the value by
-        # locating the structural boundaries rather than relying on JSON parsing.
-        if data_dict is None:
-            data_dict = _extract_single_key_json(cleaned_content if 'cleaned_content' in dir() else answer.content)
-
-        return data_dict
+        return parse_llm_output_string(
+            answer.content,
+            use_single_key_fallback=True,
+        )
 
     def format_file_analysis_with_file_summary(self):
         seen_files = {}
@@ -2865,49 +2801,10 @@ class SQLAnalyzer:
         return result
 
     def format_llm_output(self, answer) -> dict:
-        data_dict = None
-    
-        try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
-
-            cleaned_content = answer.content.strip()
-
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-
-            # Normalize Unicode smart quotes to ASCII quotes (LLM may produce these)
-            cleaned_content = cleaned_content.replace('\u201c', '"').replace('\u201d', '"')
-            cleaned_content = cleaned_content.replace('\u2018', "'").replace('\u2019', "'")
-            
-            try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-                try:
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
-                    logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-                    try:
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
-                    except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
-
-        if data_dict is None:
-            data_dict = _extract_single_key_json(cleaned_content if 'cleaned_content' in dir() else answer.content)
-
-        return data_dict
+        return parse_llm_output_string(
+            answer.content,
+            use_single_key_fallback=True,
+        )
     
     def _get_sql_prompt(self, content: str, chunk_notice: str = "") -> str:
         """构建 SQL 分析 prompt，content 为要分析的 SQL 内容。"""
@@ -4279,49 +4176,10 @@ class FileAnalyzer:
         self.batch_size = batch_size
     
     def format_llm_output(self, answer) -> dict:
-        data_dict = None
-    
-        try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
-
-            cleaned_content = answer.content.strip()
-
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-
-            # Normalize Unicode smart quotes to ASCII quotes (LLM may produce these)
-            cleaned_content = cleaned_content.replace('\u201c', '"').replace('\u201d', '"')
-            cleaned_content = cleaned_content.replace('\u2018', "'").replace('\u2019', "'")
-            
-            try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-                try:
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
-                    logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-                    try:
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
-                    except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
-
-        if data_dict is None:
-            data_dict = _extract_single_key_json(cleaned_content if 'cleaned_content' in dir() else answer.content)
-
-        return data_dict
+        return parse_llm_output_string(
+            answer.content,
+            use_single_key_fallback=True,
+        )
 
     def _get_default_result(self) -> dict:
         """获取默认的解析结果结构"""
@@ -6601,37 +6459,11 @@ class LLMBusinessModelIdentifier:
         """解析LLM响应为字典"""
         if not llm_response:
             return {}
-        
-        try:
-            # 尝试直接解析JSON
-            data_dict = json.loads(llm_response)
-        except json.JSONDecodeError:
-            # 清理可能的markdown代码块标记
-            cleaned_content = llm_response.strip()
-            
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-            
-            try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse LLM response as JSON")
-                try:
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e:
-                    logger.error(f"Failed to parse LLM response with ast: {e}")
-                    # 返回空字典作为默认值
-                    data_dict = {}
-        
-        return data_dict
+        out = parse_llm_output_string(
+            llm_response,
+            use_single_key_fallback=False,
+        )
+        return out if out is not None else {}
     
     def _format_concepts_for_prompt(self, concepts):
         """格式化概念数据用于prompt"""
@@ -6671,51 +6503,11 @@ class LLMBusinessModelIdentifier:
         return ""
 
     def format_llm_output(self, answer) -> dict:
-        data_dict = None
-        
         logger.info(f"code -> format_llm_output, answer: {answer}")
-        
-        try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
-
-            cleaned_content = answer.content.strip()
-
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-
-            # Normalize Unicode smart quotes to ASCII quotes (LLM may produce these)
-            cleaned_content = cleaned_content.replace('\u201c', '"').replace('\u201d', '"')
-            cleaned_content = cleaned_content.replace('\u2018', "'").replace('\u2019', "'")
-            
-            try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-                try:
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
-                    logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-                    try:
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
-                    except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
-
-        if data_dict is None:
-            data_dict = _extract_single_key_json(cleaned_content if 'cleaned_content' in dir() else answer.content)
-
-        return data_dict
+        return parse_llm_output_string(
+            answer.content,
+            use_single_key_fallback=True,
+        )
     
     def _enhance_models_with_details(self, llm_analysis: Dict[str, Any]) -> Dict[str, Any]:
         """用聚合器的详细数据增强LLM分析结果"""

@@ -9,5 +9,5 @@ celery-redbeat>=2.2.0
 redis[hiredis]~=6.1.0
 langchain>=1.0.0
 langchain-core>=1.0.0
-a2a-sdk>=0.3.5
+a2a-sdk==0.3.5
 kubernetes>=28.1.0

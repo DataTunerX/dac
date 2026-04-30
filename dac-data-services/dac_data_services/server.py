@@ -41,7 +41,34 @@ BACKEND_SERVICE_URL = os.getenv("DATA_SERVICES", "http://data-services.dac:8000"
 
 data_descriptor = os.getenv("DATA_DESCRIPTOR")
 
-http_client = httpx.AsyncClient(timeout=60.0)
+# Proxy HTTP client timeout configuration.
+#
+# The global ``http_client`` proxies every inbound request to the upstream
+# ``data-services`` backend. A single 60s timeout is too tight for some
+# write operations (notably ``POST /memories``, which triggers mem0's LLM
+# fact extraction + embedding + vector/RDB writes and routinely takes
+# tens of seconds). Split timeouts per category and allow operators to
+# override via environment variables at deploy time.
+PROXY_CONNECT_TIMEOUT = float(os.getenv("PROXY_CONNECT_TIMEOUT", "10"))
+PROXY_READ_TIMEOUT = float(os.getenv("PROXY_READ_TIMEOUT", "300"))
+PROXY_WRITE_TIMEOUT = float(os.getenv("PROXY_WRITE_TIMEOUT", "60"))
+PROXY_POOL_TIMEOUT = float(os.getenv("PROXY_POOL_TIMEOUT", "10"))
+
+http_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(
+        connect=PROXY_CONNECT_TIMEOUT,
+        read=PROXY_READ_TIMEOUT,
+        write=PROXY_WRITE_TIMEOUT,
+        pool=PROXY_POOL_TIMEOUT,
+    )
+)
+logger.info(
+    "proxy http_client timeout configured: connect=%ss read=%ss write=%ss pool=%ss",
+    PROXY_CONNECT_TIMEOUT,
+    PROXY_READ_TIMEOUT,
+    PROXY_WRITE_TIMEOUT,
+    PROXY_POOL_TIMEOUT,
+)
 
 
 def validate_data_descriptor(header_value: Optional[str] = None) -> None:
@@ -182,6 +209,21 @@ async def proxy_request(
                 headers=response_headers,
                 media_type=response.headers.get("content-type", "application/json")
             )
+    except httpx.TimeoutException as e:
+        # Upstream took longer than our configured timeout window. Surface
+        # this as a proper 504 Gateway Timeout so callers can distinguish a
+        # "slow backend" from a genuine "bad gateway" and decide to retry
+        # accordingly. (Write-heavy endpoints like POST /memories are the
+        # most common source of this error — see the PROXY_*_TIMEOUT envs
+        # at the top of this module for tuning.)
+        backend_url_str = backend_url or "unknown"
+        logger.error(
+            f"Timeout proxying request to {backend_url_str}: {str(e)} "
+            f"(connect={PROXY_CONNECT_TIMEOUT}s read={PROXY_READ_TIMEOUT}s "
+            f"write={PROXY_WRITE_TIMEOUT}s pool={PROXY_POOL_TIMEOUT}s)",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=504, detail=f"Upstream timeout: {str(e)}")
     except httpx.HTTPError as e:
         backend_url_str = backend_url or "unknown"
         logger.error(f"Error proxying request to {backend_url_str}: {str(e)}", exc_info=True)

@@ -29,6 +29,7 @@ import atexit
 import signal
 from .orchestrator_agent_semantic_domain import OrchestratorAgentExecutorSemanticDomain
 from .orchestrator_agent_semantic_group import OrchestratorAgentExecutorSemanticGroup
+from .skill_download import download_skills
 
 logging.basicConfig(
     level=logging.INFO,
@@ -249,6 +250,15 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
     )
 
     try:
+        # Pull skill zip packs from skill-hub based on the SKILLS env var
+        # BEFORE any executor is built, so LOCAL_SKILLS_DIR (/app/skills/)
+        # is populated by the time preload_skill_runner() scans it.
+        # No-op when SKILLS is unset or empty.
+        try:
+            download_skills()
+        except Exception:  # noqa: BLE001
+            logger.exception("[SkillDownload] startup download raised — continuing")
+
         if not agent_card:
             raise ValueError('Agent card is required')
         with Path.open(agent_card) as file:
@@ -409,23 +419,34 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
             descriptor_types = descriptor_types_str.split(";")
             logger.info(f"descriptor_types is: {descriptor_types}")
 
+            sd_executor = OrchestratorAgentExecutorSemanticDomain(
+                provider=provider,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                temperature=temperature,
+                data_descriptors=data_descriptors,
+                descriptor_types=descriptor_types,
+                debug=debug,
+                data_services_url=data_services_url,
+                enable_history=enable_history,
+                agent_id=agent_card.name,
+                dd_namespace=dd_namespace,
+                max_loops=max_loops,
+                agent_card=agent_card
+            )
+            # Eagerly initialise the LocalSkill SkillRunner so the full skill
+            # inventory is printed at startup (instead of lazily on the first
+            # request). Safe no-op when ENABLE_LOCAL_SKILLS=false.
+            try:
+                sd_executor.preload_skill_runner()
+            except Exception:  # noqa: BLE001
+                logger.exception("[LocalSkill][Init] preload_skill_runner raised — continuing without LocalSkill")
+            # Release the LocalSkill SkillRunner (including any temp dirs from
+            # SkillLoader) on process exit. Safe no-op when the feature is off.
+            atexit.register(sd_executor.shutdown_skill_runner)
             request_handler = DefaultRequestHandler(
-                agent_executor=OrchestratorAgentExecutorSemanticDomain(
-                    provider=provider,
-                    api_key=api_key,
-                    base_url=base_url,
-                    model=model,
-                    temperature=temperature,
-                    data_descriptors=data_descriptors,
-                    descriptor_types=descriptor_types,
-                    debug=debug,
-                    data_services_url=data_services_url,
-                    enable_history=enable_history,
-                    agent_id=agent_card.name,
-                    dd_namespace=dd_namespace,
-                    max_loops=max_loops,
-                    agent_card=agent_card
-                ),
+                agent_executor=sd_executor,
                 task_store=InMemoryTaskStore(),
                 push_config_store=push_config_store,
                 push_sender= push_sender
@@ -436,8 +457,7 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
             logger.info(f"SemanticGroupID is: {semantic_group_id}")
             logger.info("SemanticGroup max_loops is: %s", max_loops)
 
-            request_handler = DefaultRequestHandler(
-            agent_executor=OrchestratorAgentExecutorSemanticGroup(
+            sg_executor = OrchestratorAgentExecutorSemanticGroup(
                 provider=provider,
                 api_key=api_key,
                 base_url=base_url,
@@ -450,11 +470,23 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
                 agent_id=agent_card.name,
                 max_loops=max_loops,
                 agent_card=agent_card
-            ),
-            task_store=InMemoryTaskStore(),
-            push_config_store=push_config_store,
-            push_sender= push_sender
-        )
+            )
+            # Eagerly initialise the LocalSkill SkillRunner so the full skill
+            # inventory is printed at startup (instead of lazily on the first
+            # request). Safe no-op when ENABLE_LOCAL_SKILLS=false.
+            try:
+                sg_executor.preload_skill_runner()
+            except Exception:  # noqa: BLE001
+                logger.exception("[LocalSkill][Init] preload_skill_runner raised — continuing without LocalSkill")
+            # Release the LocalSkill SkillRunner (including any temp dirs from
+            # SkillLoader) on process exit. Safe no-op when the feature is off.
+            atexit.register(sg_executor.shutdown_skill_runner)
+            request_handler = DefaultRequestHandler(
+                agent_executor=sg_executor,
+                task_store=InMemoryTaskStore(),
+                push_config_store=push_config_store,
+                push_sender= push_sender
+            )
 
         server = A2AStarletteApplication(
             agent_card=agent_card, http_handler=request_handler

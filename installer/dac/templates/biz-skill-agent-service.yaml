@@ -1,0 +1,17 @@
+{{- if .Values.bizSkillAgent.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.bizSkillAgent.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "biz-skill-agent") | nindent 4 }}
+spec:
+  type: {{ .Values.bizSkillAgent.service.type }}
+  ports:
+    - name: grpc
+      port: {{ .Values.bizSkillAgent.service.port }}
+      targetPort: {{ .Values.bizSkillAgent.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "biz-skill-agent") | nindent 4 }}
+{{- end }}

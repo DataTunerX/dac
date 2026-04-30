@@ -1,0 +1,35 @@
+# DAC sandbox demo: 用 code descriptor 扫描 test-code 示例仓库
+#
+# 说明：
+#   - sandbox 内置的 GitLab CE 容器（端口 8929）已通过 gitlab-seed Job
+#     从 https://gitee.com/jamesxiong888/test-code.git clone 出一份代码并
+#     push 到 root/test-code project 中，模拟"在私有 GitLab 上托管代码"的场景。
+#   - data-sinkers 的 GitLabReader 支持自托管 GitLab 实例，因此本 DataDescriptor
+#     直接指向 in-cluster 的 GitLab Service，无需出公网。
+#   - 如果你的环境无法跑 GitLab CE（4Gi+ 内存、3-5 分钟启动），也可以把
+#     codeRepoPath 直接改成 https://gitee.com/jamesxiong888/test-code.git
+#     + codeRepoType=gitee 走外部 Gitee 实例。
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-sandbox-code
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "code"
+  sources:
+    - type: coderepo
+      name: "sandbox-code"
+      metadata:
+        host: "gitlab.dac-sandbox.svc.cluster.local"
+        port: "8929"
+      codeRepo:
+        codeRepoType: "gitlab"
+        codeRepoPath: "http://gitlab.dac-sandbox.svc.cluster.local:8929/root/test-code.git"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""

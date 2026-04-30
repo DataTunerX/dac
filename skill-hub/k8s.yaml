@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: skill-hub
+  name: skill-hub
+  namespace: dac
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skill-hub
+  template:
+    metadata:
+      labels:
+        app: skill-hub
+    spec:
+      containers:
+        - name: skill-hub
+          image: registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-hub:v0.10.0-amd64
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LANGFUSE_ENABLED
+              value: "false"
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            limits:
+              cpu: 500m
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 512Mi
+      restartPolicy: Always
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: skill-hub
+  namespace: dac
+spec:
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+  selector:
+    app: skill-hub
+  type: NodePort

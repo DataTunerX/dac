@@ -1,6 +1,7 @@
 import tempfile
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List
+from urllib.parse import urlparse
 from ..base.base_reader import BaseDataReader
 import logging
 from pathlib import Path
@@ -27,10 +28,28 @@ class GitLabReader(BaseDataReader):
             if not download_dir.parent.exists():
                 raise ValueError(f"The parent directory of the download directory does not exist: {download_dir.parent}")
     
+    def _gitlab_api_base_url(self) -> str:
+        """GitLab HTTP API origin from ``codeRepoPath`` (http/https); default gitlab.com."""
+        repo = (self.config.get("codeRepoPath") or "").strip()
+        if repo:
+            parsed = urlparse(repo)
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        return "https://gitlab.com"
+
+    def _gitlab_netloc_candidates(self) -> List[str]:
+        """Host labels for legacy (non-http) URL shapes; includes host:port from ``codeRepoPath``."""
+        hosts: List[str] = ["gitlab.com"]
+        repo = (self.config.get("codeRepoPath") or "").strip()
+        if repo:
+            pu = urlparse(repo)
+            if pu.scheme in ("http", "https") and pu.netloc and pu.netloc not in hosts:
+                hosts.append(pu.netloc)
+        return hosts
+
     def _connect(self) -> GitLabClient:
         token = self.config.get('token') or os.getenv('GITLAB_TOKEN')
-        base_url = self.config.get('base_url', 'https://gitlab.com')
-        return GitLabClient(token=token, base_url=base_url)
+        return GitLabClient(token=token, base_url=self._gitlab_api_base_url())
     
     def _get_download_dir(self) -> str:
         """
@@ -60,39 +79,32 @@ class GitLabReader(BaseDataReader):
             return temp_dir
     
     def _parse_project_url(self, project_url: str) -> str:
-        parts = project_url.rstrip('/').split('/')
+        raw = (project_url or "").strip()
+        parsed = urlparse(raw)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            path = (parsed.path or "").rstrip("/")
+            if path.endswith(".git"):
+                path = path[:-4]
+            path = path.lstrip("/")
+            if path:
+                return path
+            raise ValueError(f"invalid GitLab URL: {project_url}")
 
-        gitlab_domains = ['gitlab.com']
-        if 'base_url' in self.config:
-            base_url_parts = self.config['base_url'].rstrip('/').split('/')
-            if len(base_url_parts) >= 3:
-                gitlab_domains.append(base_url_parts[2])
-        
-        gitlab_index = -1
-        for domain in gitlab_domains:
+        parts = raw.rstrip("/").split("/")
+        for host in self._gitlab_netloc_candidates():
             try:
-                gitlab_index = parts.index(domain)
-                break
+                idx = parts.index(host)
             except ValueError:
                 continue
-        
-        if gitlab_index == -1 or len(parts) <= gitlab_index + 1:
-            raise ValueError(f"invalid GitLab URL: {project_url}")
-        
-        try:
-            project_path_parts = parts[gitlab_index + 1:]
-            project_path = '/'.join(project_path_parts)
-
-            if project_path.endswith('.git'):
+            if len(parts) <= idx + 1:
+                continue
+            project_path = "/".join(parts[idx + 1 :])
+            if project_path.endswith(".git"):
                 project_path = project_path[:-4]
-                
-            if not project_path:
-                raise ValueError(f"Failed to extract project path from URL: {project_url}")
-                
-            return project_path
-            
-        except Exception as e:
-            raise ValueError(f"Failed to parse project path from URL: {project_url}, error: {e}")
+            if project_path:
+                return project_path
+
+        raise ValueError(f"invalid GitLab URL: {project_url}")
     
     def query(self, project_url: str, **kwargs) -> str:
         branch = kwargs.get('branch', 'main')

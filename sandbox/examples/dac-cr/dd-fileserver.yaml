@@ -1,0 +1,38 @@
+# DAC sandbox demo: 通过 fileserver 扫描 unstructured 文档（PDF/DOCX/XLSX/PPTX/MD/...）
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-sandbox-fileserver
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "unstructured"
+  sources:
+    - type: fileserver
+      name: "sandbox-files"
+      metadata:
+        host: "fileserver.dac-sandbox.svc.cluster.local"
+        port: "8000"
+      extract:
+        files:
+          - "manual.pdf"
+          - "summary.pdf"
+          - "paper.pdf"
+          - "laws.pdf"
+          - "presentation.pptx"
+          - "table.xlsx"
+          - "qa.xlsx"
+          - "naive.csv"
+          - "naive.md"
+          - "测试的问题.md"
+          - "dianshang.docx"
+          - "manual.docx"
+          - "naivepic.docx"
+          - "k8s.txt"
+          - "network.txt"
+          - "picture.png"
+      prompts:
+        prompts:
+          name: ""

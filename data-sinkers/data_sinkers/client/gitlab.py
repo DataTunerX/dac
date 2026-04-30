@@ -56,20 +56,37 @@ class GitLabClient:
                     temp_file.write(chunk)
                 temp_path = temp_file.name
             
-            # Extract to target directory
+            # Extract to target directory (GitLab puts sources under one root folder whose name
+            # varies by version; do not rely only on `{group}-{slug}-*` matching project_path.)
             import zipfile
             with zipfile.ZipFile(temp_path, 'r') as zip_ref:
                 zip_ref.extractall(target_dir)
-            
-            # Rename extracted directory
-            extracted_dirs = list(Path(target_dir).glob(f"{project_path.replace('/', '-')}-*"))
-            if extracted_dirs:
-                extracted_dir = extracted_dirs[0]
-                shutil.move(str(extracted_dir), str(repo_dir))
-            
+
+            target_p = Path(target_dir)
+            if not repo_dir.exists():
+                subdirs = sorted([p for p in target_p.iterdir() if p.is_dir()])
+                legacy = sorted(target_p.glob(f"{project_path.replace('/', '-')}-*"))
+                if len(subdirs) == 1:
+                    shutil.move(str(subdirs[0]), str(repo_dir))
+                elif legacy:
+                    shutil.move(str(legacy[0]), str(repo_dir))
+                elif len(subdirs) > 1:
+                    logger.warning(
+                        "Multiple directories after archive extract for %s; using %s",
+                        project_path,
+                        subdirs[0],
+                    )
+                    shutil.move(str(subdirs[0]), str(repo_dir))
+
             # Clean up temporary file
             os.unlink(temp_path)
-            
+
+            if not repo_dir.exists():
+                raise RuntimeError(
+                    f"Archive extract did not yield repository directory at {repo_dir}; "
+                    f"contents of {target_dir}: {list(target_p.iterdir())}"
+                )
+
             return str(repo_dir)
             
         except requests.exceptions.RequestException as e:

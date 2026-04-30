@@ -6,7 +6,6 @@
 
 import json
 import logging
-import re
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -150,13 +149,6 @@ def clone_code_repository(config: CodeConfig, base_path: str = "/app/code") -> O
             'token': config.code_repo_token,
             'download_dir': base_path,
         }
-        
-        # 如果是 GitLab 且 URL 不是 gitlab.com，设置 base_url
-        if 'gitlab' in config.code_repo_path.lower() and 'gitlab.com' not in config.code_repo_path:
-            # 从 URL 中提取 base_url
-            match = re.match(r'(https?://[^/]+)', config.code_repo_path)
-            if match:
-                reader_config['base_url'] = match.group(1)
         
         logger.info(f"正在使用 {ReaderClass.__name__} clone 代码仓库: {config.code_repo_path}")
         

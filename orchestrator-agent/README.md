@@ -3,8 +3,7 @@
 
 test：
 
-uv run orchestrator-agent --host 192.168.xxx.xxx --port 20001 --agent-card /Users/james/daocloud/code/raytest/dac/OrchestratorAgent/agent_card/orchestrator_agent.json --provider openai_compatible --api-key sk-xxx --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 --model qwen2.5-72b-instruct
-
+uv run orchestrator-agent 
 
 
 DataSourceType=SemanticDomain:

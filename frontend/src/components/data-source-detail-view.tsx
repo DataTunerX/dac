@@ -176,11 +176,11 @@ function getCodeRepoFromSource(
   return { type, path, branch: branch || undefined };
 }
 
-function toRepoBrandSlug(t: string): "github" | "gitee" | "gitea" | "git" {
+function toRepoBrandSlug(t: string): "github" | "gitee" | "gitlab" | "git" {
   const v = String(t || "").trim().toLowerCase()
   if (v === "github") return "github"
   if (v === "gitee") return "gitee"
-  if (v === "gitea") return "gitea"
+  if (v === "gitlab") return "gitlab"
   return "git"
 }
 
