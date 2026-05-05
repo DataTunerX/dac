@@ -1,0 +1,206 @@
+## Kubernetes 网络核心概念
+
+Kubernetes 网络是一个**复杂的主题**，它的核心设计原则是：**每个 Pod 拥有独立的 IP 地址，Pod 之间可以直接通信，无需 NAT**。
+
+---
+
+## 一、K8s 网络要解决的四个问题
+
+| 通信类型 | 说明 | 解决方案 |
+|---------|------|---------|
+| **容器与容器** | 同一 Pod 内的容器 | `localhost` 直接通信 |
+| **Pod 与 Pod** | 同一节点内的 Pod | 通过虚拟网桥（如 `cbr0`）通信 |
+| **Pod 与 Pod** | 不同节点间的 Pod | 需要 **CNI 插件**（Overlay 网络或路由） |
+| **Pod 与 Service** | 通过 Service 访问 Pod | **kube-proxy** + iptables/IPVS |
+| **外部与 Service** | 集群外访问内部服务 | **Ingress / NodePort / LoadBalancer** |
+
+---
+
+## 二、核心组件详解
+
+### 1. CNI（Container Network Interface）
+
+K8s 本身**不实现网络**，而是通过 CNI 插件来配置网络。
+
+**常见 CNI 插件**：
+
+| 插件 | 模式 | 特点 | 适用场景 |
+|------|------|------|---------|
+| **Flannel** | Overlay (VXLAN) | 最简单，性能一般 | 小规模测试 |
+| **Calico** | 路由 + BGP | 性能好，支持网络策略 | 生产环境 |
+| **Cilium** | eBPF | 性能极高，可观测性强 | 高性能场景 |
+| **Weave** | Overlay | 加密通信，易用 | 安全要求高 |
+| **Antrea** | Overlay/路由 | 集成 Open vSwitch | VMware 环境 |
+
+**CNI 工作原理**：
+```
+当创建 Pod 时：
+Kubelet → 调用 CNI 插件 → 分配 IP → 创建 veth pair → 连接到网桥 → 配置路由
+```
+
+---
+
+### 2. kube-proxy（Service 的核心）
+
+**作用**：实现 Service 的虚拟 IP 和负载均衡。
+
+**工作模式对比**：
+
+| 模式 | 原理 | 优点 | 缺点 |
+|------|------|------|------|
+| **iptables** | 内核 netfilter 规则 | 稳定，兼容性好 | 规则量大时性能差（O(n)） |
+| **IPVS** | 内核 IPVS 模块 | 高性能（O(1)），支持多种负载均衡算法 | 需要安装 ipvsadm |
+| **userspace** | 用户空间代理 | 最早实现 | 性能差，已废弃 |
+
+**示例：IPVS 支持的算法**
+```
+rr（轮询）, lc（最少连接）, dh（目标哈希）, sh（源哈希）, sed, nq
+```
+
+---
+
+### 3. Service 类型
+
+```yaml
+# ClusterIP（默认）：集群内部访问
+apiVersion: v1
+kind: Service
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+# NodePort：通过节点端口暴露
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30080  # 节点上监听 30080
+---
+# LoadBalancer：云厂商负载均衡器
+spec:
+  type: LoadBalancer
+---
+# ExternalName：返回 CNAME 记录
+spec:
+  type: ExternalName
+  externalName: my.database.example.com
+```
+
+---
+
+## 三、网络流向示例
+
+### 场景：外部用户访问 Nginx 服务
+
+```
+用户 (1.2.3.4)
+    │
+    ▼
+[云负载均衡器] (公网IP)
+    │
+    ▼
+[Ingress Controller] (内部 IP 10.0.0.5)
+    │  规则：nginx.example.com → nginx-service
+    ▼
+[Service: nginx-service] (ClusterIP 10.96.0.10)
+    │  kube-proxy 规则
+    ▼
+[Pod: nginx] (Pod IP 10.244.1.5)
+    │  经过 CNI 网桥
+    ▼
+[容器] nginx
+```
+
+---
+
+## 四、网络策略（NetworkPolicy）
+
+**默认行为**：所有 Pod 可以互相通信（零信任需要自己限制）
+
+**示例：只允许前端访问数据库**
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: database
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: frontend
+    ports:
+    - protocol: TCP
+      port: 5432
+  policyTypes:
+  - Ingress
+```
+
+**注意**：需要 CNI 支持（Calico、Cilium、Weave 支持，Flannel 不支持）
+
+---
+
+## 五、常见问题与解决方案
+
+| 问题 | 原因 | 解决方案 |
+|------|------|---------|
+| Pod 间无法通信 | CNI 插件未安装/配置错误 | 检查 CNI 配置：`/etc/cni/net.d/` |
+| Service 无法访问 | kube-proxy 未运行 | `kubectl get pods -n kube-system \| grep kube-proxy` |
+| NodePort 访问超时 | 安全组/防火墙未开放端口 | 检查云厂商安全组规则 |
+| 跨节点网络不通 | 节点间路由未配置 | Overlay 网络（VXLAN）或 BGP 路由 |
+| 性能差 | iptables 规则过多 | 切换到 IPVS 模式 |
+
+---
+
+## 六、调试工具
+
+```bash
+# 查看 Pod IP 分配
+kubectl get pods -o wide
+
+# 查看 Service 和 Endpoints
+kubectl get svc,ep
+
+# 查看 kube-proxy 规则
+# iptables 模式
+iptables -t nat -L -n | grep KUBE-SVC
+
+# IPVS 模式
+ipvsadm -Ln
+
+# 进入 Pod 测试网络
+kubectl exec -it <pod-name> -- sh
+# 在 Pod 内执行
+curl <target-pod-ip>:<port>
+nslookup <service-name>
+
+# 查看 CNI 配置
+cat /etc/cni/net.d/10-flannel.conflist
+```
+
+---
+
+## 七、最佳实践建议
+
+1. **生产环境选择 Calico 或 Cilium**（性能 + 网络策略支持）
+2. **使用 IPVS 模式替代 iptables**（大规模集群）
+3. **默认启用 NetworkPolicy**（零信任安全）
+4. **使用 Ingress 暴露 HTTP 服务**，而非 NodePort
+5. **监控网络指标**：Pod 网络延迟、丢包率、kube-proxy 同步时间
+
+---
+
+## 一句话总结
+
+> **K8s 网络 = CNI（让 Pod 互通）+ kube-proxy（让 Service 可达）+ Ingress（让外部能进来）+ NetworkPolicy（控制谁访问谁）**
+
+需要我详细解释某个具体方面吗？比如：
+- Calico 和 Cilium 的深度对比
+- Ingress Controller 的工作原理
+- eBPF 如何提升网络性能

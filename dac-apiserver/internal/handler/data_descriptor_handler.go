@@ -27,11 +27,8 @@ func isValidDescriptorType(t string) bool {
 }
 
 func normalizeDataSourceType(t string) string {
-	v := strings.TrimSpace(strings.ToLower(t))
-	// Align with execution-engine samples: use "gitee" (not "gitea").
-	if v == "gitea" {
-		return "gitee"
-	}
+	// No type aliasing today; kept as a single chokepoint so future
+	// renames (e.g. legacy → canonical) don't have to chase callers.
 	return t
 }
 

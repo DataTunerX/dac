@@ -1,0 +1,73 @@
+# 主 Service：dac-sandbox（一个 ClusterIP 暴露 6 个端口，供 DAC 扫描器一目标多服务）
+# 别名 Service：让 examples/dac-cr/dd-*.yaml 里写死的 host 也能直接 work：
+#   dd-00.yaml          → host: mysql-server.dac
+#   dd-01.yaml          → host: mysql-server
+#   dd-fileserver.yaml  → host: fileserver
+#   dd-gitlab.yaml      → host: gitlab (gitlab-seed Job 也用这个 host)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dac-sandbox
+  namespace: dac-sandbox
+  labels:
+    app.kubernetes.io/name: dac-sandbox
+spec:
+  type: ClusterIP
+  selector:
+    app: dac-sandbox
+  ports:
+    - { name: mysql,       port: 3306, targetPort: 3306 }
+    - { name: postgres,    port: 5432, targetPort: 5432 }
+    - { name: s3,          port: 9000, targetPort: 9000 }
+    - { name: console,     port: 9001, targetPort: 9001 }
+    - { name: files,       port: 8000, targetPort: 8000 }
+    - { name: gitlab-http, port: 8929, targetPort: 8929 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-server
+  namespace: dac-sandbox
+spec:
+  type: ClusterIP
+  selector:
+    app: dac-sandbox
+  ports:
+    - { name: mysql, port: 3306, targetPort: 3306 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-server
+  namespace: dac-sandbox
+spec:
+  type: ClusterIP
+  selector:
+    app: dac-sandbox
+  ports:
+    - { name: postgres, port: 5432, targetPort: 5432 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fileserver
+  namespace: dac-sandbox
+spec:
+  type: ClusterIP
+  selector:
+    app: dac-sandbox
+  ports:
+    - { name: files, port: 8000, targetPort: 8000 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab
+  namespace: dac-sandbox
+spec:
+  type: ClusterIP
+  selector:
+    app: dac-sandbox
+  ports:
+    - { name: gitlab-http, port: 8929, targetPort: 8929 }

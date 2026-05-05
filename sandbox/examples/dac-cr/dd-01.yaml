@@ -1,0 +1,29 @@
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: datadescriptor-00002
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "test1"
+      metadata:
+        host: "mysql-server"
+        port: "3306"
+        user: "dac"
+        password: "dacpass"
+        database: "test1"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+      codeRepo:
+        codeRepoType: "github"
+        codeRepoPath: "https://github.com/James-Dao/test-code"
+        codeRepoBranch: "main"
+        codeRepoToken: ""

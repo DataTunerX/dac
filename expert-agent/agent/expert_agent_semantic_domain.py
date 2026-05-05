@@ -54,6 +54,144 @@ from .executors.postgres.postgres_reader import AsyncPostgresReaderContextManage
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 
+try:
+    # json_repair is a tolerant JSON parser designed specifically for LLM output.
+    # It handles common failure modes such as unescaped inner double quotes,
+    # trailing commas, missing quotes, python-style single quotes, etc.
+    from json_repair import repair_json as _json_repair  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional runtime dep, fail-soft
+    _json_repair = None  # type: ignore[assignment]
+
+
+# Top-level (and same-line) JSON string keys where expert LLM inlines long text
+# or user queries with unescaped ``"`` — next-step (answer/requery), observe
+# (reason), table/dimension (intent_analysis, reasoning), group planner CoT
+# (reasoning), plus planner-shaped keys from upstream.
+_KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
+    "original_query",
+    "description",
+    "thought_process",
+    "reason",
+    "rationale",
+    "final_answer",
+    "answer",
+    "requery",
+    "reasoning",
+    "intent_analysis",
+)
+
+
+def _escape_known_string_field_inner_quotes(text: str) -> str:
+    """Best-effort escape of unescaped inner ``"`` inside known single-line
+    string fields of a planner-style JSON payload.
+
+    We deliberately restrict the pre-pass to a whitelist of known fields where
+    the value is a single JSON string on one line so we can recognize the end
+    of the value by the structural pattern ``"`` followed by an optional
+    comma/whitespace and a newline. Multi-line values and nested structures
+    are left untouched (json_repair handles those as a later fallback).
+    """
+    if not text or '"' not in text:
+        return text
+
+    pattern_fields = "|".join(re.escape(f) for f in _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES)
+    # See the sibling implementation in orchestrator_agent_semantic_group.py
+    # for detailed rationale about the regex anchoring strategy.
+    pattern = re.compile(
+        rf'("(?:{pattern_fields})"\s*:\s*")'
+        r'(.*?)'
+        r'((?<!\\)"[ \t]*,?[ \t]*$)',
+        re.MULTILINE,
+    )
+
+    def _repl(m: "re.Match[str]") -> str:
+        head, body, tail = m.group(1), m.group(2), m.group(3)
+        fixed_chars: List[str] = []
+        i = 0
+        while i < len(body):
+            ch = body[i]
+            if ch == "\\" and i + 1 < len(body):
+                fixed_chars.append(body[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                fixed_chars.append('\\"')
+                i += 1
+                continue
+            fixed_chars.append(ch)
+            i += 1
+        return head + "".join(fixed_chars) + tail
+
+    return pattern.sub(_repl, text)
+
+
+def _llm_output_text_from_message(answer: Any) -> str:
+    """Normalize message ``content`` (``str`` or list of text blocks) to a single string.
+
+    - ``or ""`` on list would wrongly drop non-empty list bodies; list blocks must be joined.
+    - Some callers pass a bare string as ``answer``.
+    """
+    c = getattr(answer, "content", None)
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        parts: List[str] = []
+        for part in c:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and part.get("type") == "text":
+                t = part.get("text", "")
+                parts.append(t if isinstance(t, str) else str(t))
+            else:
+                parts.append(str(part))
+        return "".join(parts)
+    if c is not None:
+        return str(c)
+    if isinstance(answer, str):
+        return answer
+    return str(answer)
+
+
+def _strip_markdown_code_fences(text: str) -> str:
+    """Remove a single GFM `` ```[lang] ... ``` `` wrapper if present.
+
+    LLMs often wrap SQL/JSON in fenced blocks. Stripping only the first three
+    backticks leaves a language line such as ``sql`` and breaks ``json.loads``.
+    """
+    t = text.strip()
+    if not t.startswith("```"):
+        return t
+    line1_end = t.find("\n", 3)
+    if line1_end != -1:
+        t = t[line1_end + 1 :]
+    else:
+        t = t[3:].lstrip()
+    t = t.rstrip()
+    if t.endswith("```"):
+        t = t[:-3].rstrip()
+    return t
+
+
+_STANDALONE_SQL_HEADER = re.compile(
+    r"^\s*(?:with|select|insert|update|delete|show|desc|describe|"
+    r"create|alter|drop|truncate|explain)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _coerce_standalone_sql_to_llm_dict(text: str) -> Optional[Dict[str, Any]]:
+    """When the model returns only SQL (often after a ```sql fence), map to ``LLMResult`` shape."""
+    t = text.strip()
+    if len(t) < 8 or not _STANDALONE_SQL_HEADER.search(t):
+        return None
+    return {
+        "answer": t,
+        "conclusion": "terminate",
+        "requery": "",
+        "reason_code": "",
+    }
+
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -1252,156 +1390,76 @@ class ExpertAgent(BaseAgent):
                 yield {'content': chunk.content, 'is_task_complete': False}
         yield {'content': '', 'is_task_complete': True}
 
-    def _extract_llm_result_from_python_dict_with_nested_quotes(self, content: str) -> Optional[dict]:
-        """
-        Fallback: extract answer/conclusion/requery/reason_code from Python dict format
-        when values contain nested single quotes (e.g. SQL: WHERE x = 'value').
-        Uses regex to handle the '' (escaped quote) boundary before next key.
-        """
-        content = content.strip()
-        if not content.startswith('{') and not content.startswith("'"):
-            return None
-        result = {}
-        # Match 'answer': '...' , 'conclusion' - capture group (.+') includes the SQL closing quote
-        m = re.search(
-            r"'answer'\s*:\s*'(.+')'\s*,\s*'conclusion'\s*:\s*'([^']*)'\s*,\s*'requery'\s*:\s*'(.*?)'\s*(?:,\s*'reason_code'\s*:\s*'([^']*)')?\s*[\)}]",
-            content,
-            re.DOTALL,
-        )
-        if m:
-            result["answer"] = m.group(1)
-            result["conclusion"] = m.group(2)
-            result["requery"] = m.group(3)
-            if m.group(4) is not None:
-                result["reason_code"] = m.group(4)
-            return result
-        # Try double-quote JSON-like with same structure (for consistency)
-        # Use r'...' so inner " do not terminate the string literal
-        json_re = (
-            r'"answer"\s*:\s*"(.*?)"\s*,\s*"conclusion"\s*:\s*"([^"]*)"'
-            r'\s*,\s*"requery"\s*:\s*"(.*?)"\s*(?:,\s*"reason_code"\s*:\s*"([^"]*)")?\s*[\)}]'
-        )
-        m = re.search(json_re, content, re.DOTALL)
-        if m:
-            result["answer"] = m.group(1).replace('\\"', '"').replace('\\\\', '\\')
-            result["conclusion"] = m.group(2)
-            result["requery"] = m.group(3).replace('\\"', '"').replace('\\\\', '\\')
-            if m.group(4) is not None:
-                result["reason_code"] = m.group(4)
-            return result
-        # ObserveResult format: reason + conclusion (observe_sql / observe_common)
-        # Use greedy .+ to capture reason value that may contain internal "
-        m = re.search(
-            r'"reason"\s*:\s*"(.+)"\s*,\s*"conclusion"\s*:\s*"([^"]*)"\s*[\)}]',
-            content,
-            re.DOTALL,
-        )
-        if m:
-            return {"reason": m.group(1).replace('\\"', '"').replace('\\\\', '\\'), "conclusion": m.group(2)}
-        # ObserveResult: single-quoted Python dict (e.g. MiniMax)
-        m = re.search(
-            r"'reason'\s*:\s*'(.+)'\s*,\s*'conclusion'\s*:\s*'([^']*)'\s*[\)}]",
-            content,
-            re.DOTALL,
-        )
-        if m:
-            return {"reason": m.group(1), "conclusion": m.group(2)}
-        # RequeryResult: double quotes
-        m = re.search(
-            r'"requery"\s*:\s*"(.+)"\s*,\s*"conclusion"\s*:\s*"([^"]*)"\s*[\)}]',
-            content,
-            re.DOTALL,
-        )
-        if m:
-            return {
-                "requery": m.group(1).replace('\\"', '"').replace('\\\\', '\\'),
-                "conclusion": m.group(2),
-            }
-        # RequeryResult: single-quoted Python dict
-        m = re.search(
-            r"'requery'\s*:\s*'(.+)'\s*,\s*'conclusion'\s*:\s*'([^']*)'\s*[\)}]",
-            content,
-            re.DOTALL,
-        )
-        if m:
-            return {"requery": m.group(1), "conclusion": m.group(2)}
-        return None
+    def format_llm_output(self, answer) -> dict:
+        """Parse the planner LLM output into a dict with heavy tolerance.
 
-    def format_llm_ouput(self, answer) -> dict:
-        data_dict = None
-        raw_content = getattr(answer, "content", None) or str(answer)
+        See ``orchestrator_agent_semantic_group.PlannerAgent.format_llm_output``
+        for the detailed recovery strategy — this implementation mirrors it.
+        """
+        raw = _llm_output_text_from_message(answer)
 
         try:
-            data_dict = json.loads(raw_content)
-        except (json.JSONDecodeError, TypeError):
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
 
-            fence_stripped = raw_content.strip()
+        cleaned_content = _strip_markdown_code_fences(raw)
 
-            if fence_stripped.startswith("```json"):
-                fence_stripped = fence_stripped[7:]
-            elif fence_stripped.startswith("```"):
-                fence_stripped = fence_stripped[3:]
+        try:
+            return json.loads(cleaned_content)
+        except json.JSONDecodeError as e2:
+            logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
 
-            if fence_stripped.endswith("```"):
-                fence_stripped = fence_stripped[:-3]
-
-            fence_stripped = fence_stripped.strip()
-
-            # Before normalizing Unicode smart quotes to ASCII ': literal_eval accepts
-            # Python dicts with “ ” inside string values; replacing them first breaks parsing.
+        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
+        if escaped_content != cleaned_content:
             try:
-                import ast
+                parsed = json.loads(escaped_content)
+                logger.info(" === format_llm_output, recovered via inner-quote field escaping")
+                return parsed
+            except json.JSONDecodeError as e_esc:
+                logger.warning(f" === format_llm_output, field-escape pre-pass still invalid: {e_esc}")
 
-                _parsed = ast.literal_eval(fence_stripped)
-                if isinstance(_parsed, dict):
-                    return _parsed
-            except (ValueError, SyntaxError, TypeError):
-                pass
-
-            cleaned_content = fence_stripped.replace("\u201c", "'").replace("\u201d", "'")
-            cleaned_content = cleaned_content.replace("\u2018", "'").replace("\u2019", "'")
-
+        if _json_repair is not None:
             try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_ouput, Parsing failed after cleanup.: {e2}")
-                data_dict = None
-                try:
-                    import ast
+                repaired = _json_repair(escaped_content, return_objects=True)
+                if isinstance(repaired, dict):
+                    logger.info(" === format_llm_output, recovered via json_repair")
+                    return repaired
+                if isinstance(repaired, str):
+                    parsed = json.loads(repaired)
+                    if isinstance(parsed, dict):
+                        logger.info(" === format_llm_output, recovered via json_repair (string)")
+                        return parsed
+            except Exception as e_rep:  # noqa: BLE001
+                logger.error(f" === format_llm_output, json_repair failed: {e_rep}")
+        else:
+            logger.warning(
+                " === format_llm_output, json_repair not installed; "
+                "add 'json-repair' to dependencies to improve LLM JSON tolerance"
+            )
 
-                    _p = ast.literal_eval(cleaned_content)
-                    if isinstance(_p, dict):
-                        data_dict = _p
-                except (ValueError, SyntaxError, TypeError) as e3:
-                    logger.error(f" === format_llm_ouput, ast parsing fail: {e3}")
-                if data_dict is None:
-                    try:
-                        # Naive replace breaks when values contain single quotes (e.g. SQL)
-                        cleaned_content_replaced = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content_replaced)
-                        if not isinstance(data_dict, dict):
-                            data_dict = None
-                    except json.JSONDecodeError as e4:
-                        logger.error(
-                            f" === format_llm_output, secondary parsing failed: {e4}, trying regex fallback"
-                        )
-                        data_dict = None
-                        for candidate in (raw_content.strip(), fence_stripped, cleaned_content):
-                            data_dict = self._extract_llm_result_from_python_dict_with_nested_quotes(
-                                candidate
-                            )
-                            if data_dict is not None:
-                                break
-                        if data_dict is None:
-                            logger.error(
-                                " === format_llm_output, regex fallback also failed, using default value"
-                            )
-                    except Exception as e5:
-                        logger.error(
-                            f" === format_llm_output, exception during parsing: {e5}, using default value"
-                        )
+        try:
+            import ast
+            parsed = ast.literal_eval(cleaned_content)
+            if isinstance(parsed, dict):
+                return parsed
+        except (ValueError, SyntaxError) as e3:
+            logger.error(f" === format_llm_output, ast parsing fail: {e3}")
+        except Exception as e5:  # noqa: BLE001
+            logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
 
-        return data_dict
+        try:
+            parsed = json.loads(cleaned_content.replace("'", '"'))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError as e4:
+            logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
+
+        coerced = _coerce_standalone_sql_to_llm_dict(cleaned_content)
+        if coerced is not None:
+            logger.info(" === format_llm_output, recovered standalone SQL (fenced or non-JSON)")
+
+        return coerced
 
     async def invoke_structured_with_table_selector(self, knowledge, db_type) -> (str, str, str):
         system_template = TABLE_SELECTOR_NEXT_STEP_PROMPT_ZH
@@ -1447,7 +1505,7 @@ class ExpertAgent(BaseAgent):
 
         logger.debug(f" === ExpertAgent.invoke_structured_with_table_selector, llm answer = {answer}")
 
-        tables = self._coerce_table_name_list(self.format_llm_ouput(answer))
+        tables = self._coerce_table_name_list(self.format_llm_output(answer))
 
         logger.info(f" === ExpertAgent.invoke_structured_with_table_selector , invoke_structured_with_table_selector, tables = {tables}")
 
@@ -1659,7 +1717,7 @@ class ExpertAgent(BaseAgent):
 
         logger.debug(f" === ExpertAgent.invoke_structured_with_dimension_selector, llm answer = {answer}")
 
-        dimensions = self.format_llm_ouput(answer)
+        dimensions = self.format_llm_output(answer)
 
         dimensions_llm_parsed = Dimensions(**dimensions)
 
@@ -1766,7 +1824,7 @@ class ExpertAgent(BaseAgent):
 
         logger.debug(f" === ExpertAgent.invoke_common, answer = {answer}")
 
-        data_dict = self.format_llm_ouput(answer)
+        data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
             data_dict = {
@@ -1848,7 +1906,7 @@ class ExpertAgent(BaseAgent):
 
         logger.debug(f" === ExpertAgent.invoke_structured_task_analyze, answer = {answer}")
 
-        data_dict = self.format_llm_ouput(answer)
+        data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
             data_dict = {
@@ -1951,7 +2009,7 @@ class ExpertAgent(BaseAgent):
 
         logger.info(f" === ExpertAgent.invoke_structured_dictionary_mode, answer = {answer}")
 
-        data_dict = self.format_llm_ouput(answer)
+        data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
             data_dict = {
@@ -2048,7 +2106,7 @@ class ExpertAgent(BaseAgent):
 
         logger.info(f" === ExpertAgent.invoke_structured, answer = {answer}")
 
-        data_dict = self.format_llm_ouput(answer)
+        data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
             data_dict = {
@@ -2127,7 +2185,7 @@ class ExpertAgent(BaseAgent):
 
         logger.info(f" === ExpertAgent.invoke_requery, answer = {answer}")
 
-        data_dict = self.format_llm_ouput(answer)
+        data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
             data_dict = {
@@ -2201,7 +2259,7 @@ class ExpertAgent(BaseAgent):
 
         logger.info(f" === ExpertAgent.invoke_requery_sql, answer = {answer}")
 
-        data_dict = self.format_llm_ouput(answer)
+        data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
             data_dict = {
@@ -2271,7 +2329,7 @@ class ExpertAgent(BaseAgent):
 
         logger.info(f" === ExpertAgent.observe_sql, answer = {llm_answer}")
 
-        data_dict = self.format_llm_ouput(llm_answer)
+        data_dict = self.format_llm_output(llm_answer)
 
         if data_dict is None:
             data_dict = {
@@ -2350,7 +2408,7 @@ class ExpertAgent(BaseAgent):
             return "other"
 
         logger.info(" === ExpertAgent.invoke_sql_execution_failure_kind, answer = %s", llm_answer)
-        data_dict = self.format_llm_ouput(llm_answer)
+        data_dict = self.format_llm_output(llm_answer)
         if data_dict is None:
             return "other"
         try:
@@ -2419,7 +2477,7 @@ class ExpertAgent(BaseAgent):
 
         logger.info(f" === ExpertAgent.observe_common, answer = {llm_answer}")
 
-        data_dict = self.format_llm_ouput(llm_answer)
+        data_dict = self.format_llm_output(llm_answer)
 
         if data_dict is None:
             data_dict = {
@@ -2522,7 +2580,7 @@ class ExpertAgent(BaseAgent):
 
         logger.info(f" === ExpertAgent.select_relevant_knowledge, answer = {answer}")
 
-        data_dict = self.format_llm_ouput(answer)
+        data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
             logger.error("select_relevant_knowledge: LLM output parsing failed, returning empty result")
@@ -3128,7 +3186,7 @@ class ExpertAgent(BaseAgent):
             f"current={json.dumps(current.model_dump(), ensure_ascii=False)}"
         )
         answer = await self.llm.ainvoke([HumanMessage(content=prompt)])
-        data = self.format_llm_ouput(answer)
+        data = self.format_llm_output(answer)
         if not isinstance(data, dict):
             return FailureSimilarityResult()
         return FailureSimilarityResult(**{

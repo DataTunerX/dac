@@ -1,22 +1,22 @@
 
 # 1. agent-registry
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/agent-registry:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/agent-registry:v0.10.0-amd64
 
 
 # 2. chart-agent
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/chart-agent:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/chart-agent:v0.10.0-amd64
 
 
 # 3. code-agent
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/code-agent:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/code-agent:v0.10.0-amd64
 
 
 # 4. dac-api-server
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/apiserver:v0.9.0
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/dac-apiserver:v0.10.0-amd64
 
 
 # 5. dac-data-services
@@ -46,52 +46,62 @@ nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers-observer:
 
 # 10. doc-agent 
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/doc-agent:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/doc-agent:v0.10.0-amd64
 
 
 # 11. execution-engine
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/execution-engine:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/execution-engine:v0.10.0-amd64
 
 
 # 12. expert-agent 
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/expert-agent:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/expert-agent:v0.10.0-amd64
 
 
 # 13. frontend
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/frontend:v0.9.0
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/frontend:v0.10.0-amd64
 
 
 # 14. orchestrator-agent
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/orchestrator-agent:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/orchestrator-agent:v0.10.0-amd64
 
 
 # 15. routing-agent 
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/routing-agent:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/routing-agent:v0.10.0-amd64
 
 
 # 16. semantic-grouper
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:v0.9.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:v0.10.0-amd64
 
 
-# 17. neo4j
+# 17. skill-agent
+
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:v0.10.0-amd64
+
+
+# 18. skill-hub
+
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-hub:v0.10.0-amd64
+
+
+# 19. neo4j
 
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/neo4j:5.18.0
 
-# 18. mysql
+# 20. mysql
 
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/mysql:8.0
 
-# 19. redis
+# 21. redis
 
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/redis:7.0.4
 
-# 20. pgvector
+# 22. pgvector
 
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/pgvector:pg16-amd64
 

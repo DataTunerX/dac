@@ -1,0 +1,25 @@
+# DAC sandbox demo: 通过 MinIO 扫描对象存储里的种子文件（同样是 unstructured，但走 S3 协议）
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-sandbox-minio
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "unstructured"
+  sources:
+    - type: minio
+      name: "sandbox-minio-files"
+      metadata:
+        host: "dac-sandbox.dac-sandbox.svc.cluster.local:9000"
+        access_key: "dac"
+        secret_key: "dacpassword"
+        bucket: "dac-files"
+        secure: "false"
+      extract:
+        files: []        # 空 = 整个 bucket
+      prompts:
+        prompts:
+          name: ""

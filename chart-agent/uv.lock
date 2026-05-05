@@ -228,6 +228,7 @@ dependencies = [
     { name = "fastmcp" },
     { name = "gevent" },
     { name = "httpx" },
+    { name = "json-repair" },
     { name = "langchain" },
     { name = "langchain-community" },
     { name = "langchain-mcp-adapters" },
@@ -257,7 +258,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "a2a-sdk", specifier = ">=0.3.5" },
+    { name = "a2a-sdk", specifier = "==0.3.5" },
     { name = "aiomysql", specifier = "~=0.2.0" },
     { name = "asyncpg", specifier = "~=0.30.0" },
     { name = "click", specifier = ">=8.1.8" },
@@ -265,6 +266,7 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=1.0" },
     { name = "gevent", specifier = "~=24.11.1" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "json-repair", specifier = ">=0.29.0" },
     { name = "langchain", specifier = ">=0.3.26" },
     { name = "langchain-community", specifier = ">=0.3.26" },
     { name = "langchain-mcp-adapters", specifier = ">=0.0.9" },
@@ -273,7 +275,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=0.4.9" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.5.0" },
     { name = "mem0ai", specifier = "~=0.1.114" },
-    { name = "model-sdk", path = "sdks/model_sdk-0.1.0-py3-none-any.whl" },
+    { name = "model-sdk", path = "sdks/model_sdk-0.2.0-py3-none-any.whl" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "networkx", specifier = ">=3.4.2" },
     { name = "numpy", specifier = ">=2.2.5" },
@@ -1045,8 +1047,8 @@ wheels = [
 
 [[package]]
 name = "model-sdk"
-version = "0.1.0"
-source = { path = "sdks/model_sdk-0.1.0-py3-none-any.whl" }
+version = "0.2.0"
+source = { path = "sdks/model_sdk-0.2.0-py3-none-any.whl" }
 dependencies = [
     { name = "dashscope" },
     { name = "gevent" },
@@ -1065,7 +1067,7 @@ dependencies = [
     { name = "tiktoken" },
 ]
 wheels = [
-    { filename = "model_sdk-0.1.0-py3-none-any.whl", hash = "sha256:0d076fa526afb289971c99d51108a8dbd07c17f920baad11557cba48cff6b6d6" },
+    { filename = "model_sdk-0.2.0-py3-none-any.whl", hash = "sha256:b04f235103b0ada3a608c6e5c53c526e9162e9342e918fcd25ebcbe4a7db68ba" },
 ]
 
 [package.metadata]

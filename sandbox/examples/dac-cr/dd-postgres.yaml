@@ -1,0 +1,25 @@
+# DAC sandbox demo: 通过 PostgreSQL 扫描金融 4 表（与 dd-00 的 MySQL 版本数据等价，演示跨方言）
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-sandbox-postgres
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-postgres"
+  sources:
+    - type: postgres
+      name: "sandbox-postgres-finance"
+      metadata:
+        host: "postgres-server.dac-sandbox.svc.cluster.local"
+        port: "5432"
+        user: "dac"
+        password: "dacpass"
+        database: "dac_sandbox"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""

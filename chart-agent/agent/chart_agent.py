@@ -44,6 +44,70 @@ from .prompts import (
 )
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
+try:
+    # json_repair is a tolerant JSON parser designed specifically for LLM output.
+    # It handles common failure modes such as unescaped inner double quotes,
+    # trailing commas, missing quotes, python-style single quotes, etc.
+    from json_repair import repair_json as _json_repair  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional runtime dep, fail-soft
+    _json_repair = None  # type: ignore[assignment]
+
+# Top-level JSON string fields: chart config / Mermaid / ECharts option JSON
+# in ``answer``, plus reason / data_summary / requery from chart prompts.
+_KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
+    "original_query",
+    "description",
+    "thought_process",
+    "rationale",
+    "final_answer",
+    "answer",
+    "requery",
+    "reason",
+    "data_summary",
+)
+
+def _escape_known_string_field_inner_quotes(text: str) -> str:
+    """Best-effort escape of unescaped inner ``"`` inside known single-line
+    string fields of a planner-style JSON payload.
+
+    We deliberately restrict the pre-pass to a whitelist of known fields where
+    the value is a single JSON string on one line so we can recognize the end
+    of the value by the structural pattern ``"`` followed by an optional
+    comma/whitespace and a newline. Multi-line values and nested structures
+    are left untouched (json_repair handles those as a later fallback).
+    """
+    if not text or '"' not in text:
+        return text
+
+    pattern_fields = "|".join(re.escape(f) for f in _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES)
+    # See the sibling implementation in orchestrator_agent_semantic_group.py
+    # for detailed rationale about the regex anchoring strategy.
+    pattern = re.compile(
+        rf'("(?:{pattern_fields})"\s*:\s*")'
+        r'(.*?)'
+        r'((?<!\\)"[ \t]*,?[ \t]*$)',
+        re.MULTILINE,
+    )
+
+    def _repl(m: "re.Match[str]") -> str:
+        head, body, tail = m.group(1), m.group(2), m.group(3)
+        fixed_chars: List[str] = []
+        i = 0
+        while i < len(body):
+            ch = body[i]
+            if ch == "\\" and i + 1 < len(body):
+                fixed_chars.append(body[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                fixed_chars.append('\\"')
+                i += 1
+                continue
+            fixed_chars.append(ch)
+            i += 1
+        return head + "".join(fixed_chars) + tail
+
+    return pattern.sub(_repl, text)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,6 +150,124 @@ DEFAULT_LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 
 # LLM 在「数据不适合画图」时输出的前缀，下游直接展示说明，不解析为 JSON
 CHART_UNAVAILABLE_PREFIX = "【无法生成图表】"
+
+# ==================== Capability Check Protocol (broadcast routing) ====================
+CAPABILITY_CHECK_MESSAGE_TYPE = "capability_check"
+PROPAGATED_HISTORY_KEY = "propagated_history"
+
+
+def _parse_propagated_history(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _normalize_history_turns(turns: Any) -> List[dict]:
+    normalized: List[dict] = []
+    if not isinstance(turns, list):
+        return normalized
+    for item in turns:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content = str(item.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
+def _history_text_from_metadata(md: dict) -> str:
+    payload = _parse_propagated_history(md.get(PROPAGATED_HISTORY_KEY))
+    turns = _normalize_history_turns(payload.get("turns"))
+    lines: List[str] = []
+    for item in turns:
+        prefix = "human" if item["role"] == "user" else "assistant"
+        lines.append(f"{prefix}：{item['content']}")
+    return "\n".join(lines) if lines else "（无）"
+
+
+def _path_to_alias(path: List[str]) -> str:
+    if not path:
+        return "unknown"
+    leaf = path[-1]
+    base = leaf.split("-sg-")[0] if "-sg-" in leaf else leaf
+    base = base.replace("Group", "").replace("_", "-").strip("-")
+    if not base:
+        base = leaf.split("-sg-")[0][:20] if "-sg-" in leaf else leaf[:20]
+    alias = base.lower()
+    for c in (" ", "_", ".", "/"):
+        alias = alias.replace(c, "-")
+    while "--" in alias:
+        alias = alias.replace("--", "-")
+    return alias.strip("-") or "path"
+
+
+class CapabilityCheckResponse(BaseModel):
+    """与 routing-agent 广播探测约定的结构化响应（model_dump_json 写入 artifact）。"""
+
+    can_handle: bool = Field(description="Whether this agent can handle the given query.")
+    confidence: float = Field(default=0.0, description="Confidence level from 0.0 to 1.0.")
+    reason: str = Field(default="", description="Brief explanation for the capability assessment.")
+    agent_name: str = Field(default="", description="Name of the responding agent.")
+    agent_url: str = Field(default="", description="URL of the responding agent.")
+    route_path: List[str] = Field(default_factory=list, description="Best path (single-node for ChartAgent).")
+    route_paths: List[dict] = Field(
+        default_factory=list,
+        description='Top-K paths: [{"path": [...], "confidence": float, "alias": str}, ...].',
+    )
+    can_contribute: bool = Field(
+        default=False,
+        description="Whether this agent can partially contribute even if cannot fully handle.",
+    )
+    contribution: str = Field(default="", description="Brief description when can_contribute=true.")
+    execution_strategy: str = Field(default="single", description="Capability response strategy.")
+
+
+CHART_CAPABILITY_CHECK_PROMPT = """# Role：图表与可视化需求判定器
+
+请按以下步骤**逐步思考**，将推理过程写入 reason 字段，最后**只输出一个 JSON 对象**（不要用 Markdown 代码块包裹）。
+
+## 思考步骤
+
+**步骤 1 - 用户意图**：用户是否在请求绘制/展示图表、可视化、趋势、占比、对比图、统计图、流程图/架构图（适合 Mermaid）等？还是仅要求纯数值计算、翻译、与作图无关的文本问答？
+
+**步骤 2 - 数据可得性**：问题或历史对话中是否包含可用于作图的结构化或半结构化数据（数字列表、表格、分类与取值、时间序列等）？若完全没有数据且需要编造数据才能画图，应倾向 can_handle=false。
+
+**步骤 3 - 本智能体匹配**：本智能体根据**用户提供的真实数据或描述**生成 ECharts 或 Mermaid。不承担业务库 SQL 查询职责；纯闭式数学计算且无「画图/可视化」诉求时，通常不归本智能体处理。
+
+**步骤 4 - 反思**：① 纯数学/逻辑题且无可视化诉求 → 通常 can_handle=false。② 有可视化诉求但关键数据缺失 → can_handle=false。③ 数据与可视化意图均清晰 → can_handle=true。
+
+**步骤 5 - 结论**：综合判定 can_handle 与 confidence（0.0～1.0）。
+
+**步骤 6 - 可贡献性（仅当 can_handle=false）**：仅当能给出**具体、可验证**的补充要求（例如需要哪些字段或表格）时设 can_contribute=true；禁止「补充相关信息」等空泛表述。
+
+---
+**本智能体信息：**
+- 名称：{agent_name}
+- 描述：{agent_description}
+- 技能参考（仅供参考，不限定能力边界）：
+{agent_skills}
+
+**历史对话：**
+{history}
+
+**用户问题：**
+{query}
+
+---
+## 输出格式
+{{"can_handle": true 或 false, "can_contribute": true 或 false, "contribution": "（仅当 can_contribute=true）", "confidence": 0.0 到 1.0, "reason": "步骤1：... 步骤2：... 步骤3：... 步骤4：... 步骤5：... 步骤6：... 结论：..."}}
+"""
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -388,51 +570,78 @@ class ChartAgent(BaseAgent):
                 self.state = previous_state
 
     def format_llm_output(self, answer) -> dict:
-        data_dict = None
-    
+        """Parse the planner LLM output into a dict with heavy tolerance.
+
+        See ``orchestrator_agent_semantic_group.PlannerAgent.format_llm_output``
+        for the detailed recovery strategy — this implementation mirrors it.
+        """
+        raw = getattr(answer, "content", "") or ""
+
         try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
 
-            cleaned_content = answer.content.strip()
+        cleaned_content = raw.strip()
+        if cleaned_content.startswith('```json'):
+            cleaned_content = cleaned_content[7:]
+        elif cleaned_content.startswith('```'):
+            cleaned_content = cleaned_content[3:]
+        if cleaned_content.endswith('```'):
+            cleaned_content = cleaned_content[:-3]
+        cleaned_content = cleaned_content.strip()
 
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-            
+        try:
+            return json.loads(cleaned_content)
+        except json.JSONDecodeError as e2:
+            logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
+
+        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
+        if escaped_content != cleaned_content:
             try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-                try:
-                    # LLM 可能返回 ECharts 中含 JavaScript（如 "color": function (params) {...}），先剥离再解析
-                    stripped = _strip_js_functions_in_json(cleaned_content)
-                    data_dict = json.loads(stripped)
-                    if data_dict:
-                        logger.info(" === format_llm_output, parsed after stripping JS functions")
-                except json.JSONDecodeError:
-                    pass
-                if data_dict is None:
-                    try:
-                        import ast
-                        data_dict = ast.literal_eval(cleaned_content)
-                    except (ValueError, SyntaxError) as e3:
-                        logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-                        try:
-                            cleaned_content = cleaned_content.replace("'", '"')
-                            data_dict = json.loads(cleaned_content)
-                        except json.JSONDecodeError as e4:
-                            logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                    except Exception as e5:
-                        logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
+                parsed = json.loads(escaped_content)
+                logger.info(" === format_llm_output, recovered via inner-quote field escaping")
+                return parsed
+            except json.JSONDecodeError as e_esc:
+                logger.warning(f" === format_llm_output, field-escape pre-pass still invalid: {e_esc}")
 
-        return data_dict
+        if _json_repair is not None:
+            try:
+                repaired = _json_repair(escaped_content, return_objects=True)
+                if isinstance(repaired, dict):
+                    logger.info(" === format_llm_output, recovered via json_repair")
+                    return repaired
+                if isinstance(repaired, str):
+                    parsed = json.loads(repaired)
+                    if isinstance(parsed, dict):
+                        logger.info(" === format_llm_output, recovered via json_repair (string)")
+                        return parsed
+            except Exception as e_rep:  # noqa: BLE001
+                logger.error(f" === format_llm_output, json_repair failed: {e_rep}")
+        else:
+            logger.warning(
+                " === format_llm_output, json_repair not installed; "
+                "add 'json-repair' to dependencies to improve LLM JSON tolerance"
+            )
+
+        try:
+            import ast
+            parsed = ast.literal_eval(cleaned_content)
+            if isinstance(parsed, dict):
+                return parsed
+        except (ValueError, SyntaxError) as e3:
+            logger.error(f" === format_llm_output, ast parsing fail: {e3}")
+        except Exception as e5:  # noqa: BLE001
+            logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
+
+        try:
+            parsed = json.loads(cleaned_content.replace("'", '"'))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError as e4:
+            logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
+
+        return None
 
     def _get_trace_id(self) -> str:
         """返回 Langfuse 要求的 32 位小写十六进制 trace_id，缺失或非法时生成新 ID。"""
@@ -1199,6 +1408,7 @@ class ChartAgentExecutor(AgentExecutor):
         stream: bool = True,
         temperature: float = 0.01,
         max_steps:int = 5,
+        agent_card: Optional[AgentCard] = None,
     ):
         self.provider=provider
         self.api_key=api_key
@@ -1208,6 +1418,142 @@ class ChartAgentExecutor(AgentExecutor):
         self.temperature=temperature
         self.stream_enabled = stream
         self.max_steps = max_steps
+        self.agent_card = agent_card
+
+    async def handle_capability_check(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        query: str,
+    ) -> None:
+        """routing-agent 广播探测：返回 CapabilityCheckResponse JSON（与 orchestrator_agent_semantic_group 一致）。"""
+        task = context.current_task
+        if not task:
+            task = new_task(context.message)
+            await event_queue.enqueue_event(task)
+
+        updater = TaskUpdater(event_queue, task.id, task.context_id)
+        request_metadata = context.metadata if isinstance(context.metadata, dict) else {}
+        md = request_metadata
+
+        card = self.agent_card
+        agent_name = card.name if card else "ChartAgent"
+        agent_description = (card.description if card else "") or ""
+        agent_url = (card.url if card else "") or ""
+
+        logger.info(
+            "[RoutePlan] ----- %s | capability_check start | query: %s -----",
+            agent_name,
+            (query[:80] + "..." if len(query) > 80 else query),
+        )
+
+        agent_skills_text = "（无）"
+        if card and card.skills:
+            skills_lines = []
+            for skill in card.skills:
+                skill_desc = f"- {skill.name}: {skill.description}"
+                if hasattr(skill, "tags") and skill.tags:
+                    skill_desc += f" (tags: {', '.join(skill.tags)})"
+                if hasattr(skill, "examples") and skill.examples:
+                    skill_desc += f" (examples: {', '.join(skill.examples)})"
+                skills_lines.append(skill_desc)
+            agent_skills_text = "\n".join(skills_lines)
+
+        history_text = _history_text_from_metadata(md)
+
+        try:
+            manager = ModelManager()
+            _extra_body = (
+                {"enable_thinking": False}
+                if os.getenv("ENABLE_THINKING_PARAM", "true").strip().lower() not in ("false", "0", "no")
+                else {}
+            )
+            llm = manager.get_llm(
+                provider=self.provider,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
+                temperature=0.01,
+                stream=False,
+                extra_body=_extra_body,
+            )
+            prompt = CHART_CAPABILITY_CHECK_PROMPT.format(
+                agent_name=agent_name,
+                agent_description=agent_description,
+                agent_skills=agent_skills_text,
+                history=history_text,
+                query=query,
+            )
+            trace_id = md.get("trace_id", "") or ""
+            user_id = md.get("user_id", "") or ""
+            run_id = md.get("run_id", "") or ""
+            with langfuse.start_as_current_span(
+                name="chart-capability-check-llm",
+                trace_context={"trace_id": trace_id} if trace_id else {},
+            ) as span:
+                span.update_trace(
+                    user_id=user_id,
+                    session_id=run_id,
+                    input={"query": query, "agent_name": agent_name},
+                )
+                response = await llm.ainvoke(
+                    [HumanMessage(content=prompt)],
+                    config={"callbacks": [langfuse_handler]},
+                )
+                span.update_trace(output={"agent_name": agent_name})
+
+            response_text = (response.content or "").strip()
+            for p, s in [("```json", "```"), ("```", "```")]:
+                if response_text.startswith(p):
+                    response_text = response_text[len(p) :]
+                if response_text.endswith(s):
+                    response_text = response_text[: -len(s)]
+            response_text = response_text.strip()
+            result_data = json.loads(response_text)
+            conf = float(result_data.get("confidence", 0.0))
+            leaf_path = [agent_name]
+            check_response = CapabilityCheckResponse(
+                can_handle=bool(result_data.get("can_handle", False)),
+                confidence=conf,
+                reason=str(result_data.get("reason", "")),
+                agent_name=agent_name,
+                agent_url=agent_url,
+                route_path=leaf_path,
+                route_paths=[
+                    {"path": leaf_path, "confidence": conf, "alias": _path_to_alias(leaf_path)}
+                ],
+                can_contribute=bool(result_data.get("can_contribute", False)),
+                contribution=str(result_data.get("contribution", "")),
+            )
+        except Exception as e:
+            logger.error("Capability check analysis failed: %s", e, exc_info=True)
+            leaf_path = [agent_name]
+            check_response = CapabilityCheckResponse(
+                can_handle=False,
+                confidence=0.0,
+                reason=f"Analysis failed: {str(e)}",
+                agent_name=agent_name,
+                agent_url=agent_url,
+                route_path=leaf_path,
+                route_paths=[
+                    {"path": leaf_path, "confidence": 0.0, "alias": _path_to_alias(leaf_path)}
+                ],
+            )
+
+        logger.info(
+            "[Capability] ChartAgent result | can_handle=%s | confidence=%.2f | agent=%s",
+            check_response.can_handle,
+            check_response.confidence,
+            agent_name,
+        )
+        response_json = check_response.model_dump_json()
+        await updater.add_artifact(
+            [TextPart(text=response_json)],
+            name="capability-check-response",
+        )
+        await updater.complete(
+            message=new_agent_text_message("", context_id=task.context_id)
+        )
 
     async def execute(
         self,
@@ -1219,6 +1565,11 @@ class ChartAgentExecutor(AgentExecutor):
 
         metadata = context.metadata
         logger.info(f"=====user request metadata is {metadata}.")
+
+        if isinstance(metadata, dict) and metadata.get("message_type") == CAPABILITY_CHECK_MESSAGE_TYPE:
+            logger.info("[Capability] Received capability check request, query: %s...", (query or "")[:100])
+            await self.handle_capability_check(context, event_queue, query)
+            return
 
         current_tasks_status = None
         current_tasks_status_str = metadata.get('current_tasks_status', '')

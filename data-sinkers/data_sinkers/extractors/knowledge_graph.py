@@ -4,6 +4,7 @@ import json
 import logging
 import time
 import os
+from ..llm_output_json import parse_llm_output_string
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,44 +28,11 @@ class Knowledge_Graph:
         self.llm = llm
 
     def format_llm_output(self, answer) -> dict:
-        data_dict = None
-        
         logger.info(f"code -> format_llm_output, answer: {answer}")
-        
-        try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
-
-            cleaned_content = answer.content.strip()
-
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-            
-            try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-                try:
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
-                    logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-                    try:
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
-                    except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
-
-        return data_dict
+        return parse_llm_output_string(
+            answer.content,
+            use_single_key_fallback=True,
+        )
 
     def knowledge_graph(self, data, max_retries: int = 3, retry_delay: float = 1.0, exponential_backoff: bool = True):
         """

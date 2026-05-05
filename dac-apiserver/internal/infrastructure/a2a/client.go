@@ -216,6 +216,7 @@ func (c *client) handleFramePayload(payload string, outputCh chan<- entity.Strea
 
 	switch eventName {
 	case "final_answer_chunk":
+		text = stripSuccessMarker(text)
 		if text == "" {
 			return
 		}
@@ -223,6 +224,7 @@ func (c *client) handleFramePayload(payload string, outputCh chan<- entity.Strea
 		outputCh <- entity.StreamChunk{Content: text}
 		c.logger.Debug("sent answer content chunk", "length", len(text))
 	case "final_answer":
+		text = stripSuccessMarker(text)
 		if text == "" || state.sawChunk {
 			return
 		}
@@ -250,8 +252,12 @@ func (c *client) handleArtifactUpdate(
 		c.handleFramePayload(payload, outputCh, answerState)
 	}
 	for _, line := range contentLines {
-		outputCh <- entity.StreamChunk{Text: line + "\n"}
-		c.logger.Debug("sent content chunk", "length", len(line)+1)
+		cleaned := stripSuccessMarker(line)
+		if cleaned == "" {
+			continue
+		}
+		outputCh <- entity.StreamChunk{Text: cleaned + "\n"}
+		c.logger.Debug("sent content chunk", "length", len(cleaned)+1)
 	}
 }
 

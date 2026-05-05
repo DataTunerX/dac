@@ -1,0 +1,27 @@
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: dac-00
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  dataPolicy:
+    sourceNameSelector: ["datadescriptor-00001"]
+  agentCard:
+    name: "FinancialDataAnalysisAgent"
+    description: "我是一个金融数据分析的专业智能体，可以去数据库查询需要的数据来回答用户提出来的相关的问题。"
+    skills:
+      - id: "Financial"
+        name: "Financial"
+        description: "answer user Financial question"
+        tags:
+          - "贷款总额"
+          - "存款总额"
+        examples:
+          - "2024年某商业银行的存款总额"
+  expertAgentMaxSteps: "3"
+  model:
+    plannerLLM: "llm-deepseek-v3"
+    expertLLM: "llm-qwen3-coder-480b"

@@ -112,6 +112,18 @@ app.kubernetes.io/component: {{ .name }}
 {{- include "dac.componentName" (dict "context" . "name" "biz-chart-agent") -}}
 {{- end }}
 
+{{- define "dac.bizSkillAgent.serviceName" -}}
+{{- include "dac.componentName" (dict "context" . "name" "biz-skill-agent") -}}
+{{- end }}
+
+{{- define "dac.skillHub.serviceName" -}}
+{{- include "dac.componentName" (dict "context" . "name" "skill-hub") -}}
+{{- end }}
+
+{{- define "dac.skillHub.url" -}}
+{{- printf "http://%s.%s.svc.cluster.local:%v" (include "dac.skillHub.serviceName" .) .Release.Namespace (.Values.skillHub.service.port | default 8000) -}}
+{{- end }}
+
 {{/*
 Common Redis CLI args for agent containers
 Usage: {{ include "dac.redisArgs" . }}

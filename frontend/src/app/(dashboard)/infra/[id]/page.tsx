@@ -127,7 +127,7 @@ type ServiceIconKind =
         | "postgresql"
         | "minio"
         | "github"
-        | "gitea"
+        | "gitlab"
         | "gitee"
         | "redis"
         | "nginx"
@@ -160,8 +160,8 @@ function inferServiceIcon(s: DiscoveredService): ServiceIconKind {
     return { kind: "brand", slug: "nginx" }
   }
 
-  // Code repo heuristics: product banner often includes Gitea/Gitee/GitHub.
-  if (product.includes("gitea")) return { kind: "brand", slug: "gitea" }
+  // Code repo heuristics: product banner often includes GitLab/Gitee/GitHub.
+  if (product.includes("gitlab")) return { kind: "brand", slug: "gitlab" }
   if (product.includes("gitee")) return { kind: "brand", slug: "gitee" }
   if (product.includes("github")) return { kind: "brand", slug: "github" }
 
@@ -218,25 +218,40 @@ export default function InfraDiscoveryDetailPage() {
   const fetchExistingDataSources = async () => {
     try {
       const { items } = await listDescriptorsAll({ limit: 1000 })
-      const parsed: DataSourceRef[] = items
-        .map((item: DataDescriptorResponse) => {
-          const sources = item.sources ?? []
-          if (sources.length === 0) return null
-          const s = sources[0] as DataSourceResponse
-          const meta = s.metadata ?? {}
-          const host = meta.host
-          const port = meta.port
-          if (!host || !port) return null
-          return {
-            name: item.name,
-            namespace: item.namespace ?? "default",
-            type: s.type ?? "",
-            host: String(host),
-            port: String(port),
-          }
-        })
-        .filter((r): r is DataSourceRef => r != null)
-      setExistingDataSources(parsed)
+      // A single DataDescriptor can fan out into N DataSources (one per database
+      // for structured-mysql / structured-postgres). For matching against
+      // discovered services we treat each underlying source as an independent
+      // connection identity, otherwise multi-DB descriptors would only match
+      // the first database.
+      const parsed: DataSourceRef[] = items.flatMap((item: DataDescriptorResponse) => {
+        const sources = item.sources ?? []
+        return sources
+          .map((s: DataSourceResponse) => {
+            const meta = s.metadata ?? {}
+            const host = meta.host
+            const port = meta.port
+            if (!host || !port) return null
+            return {
+              name: item.name,
+              namespace: item.namespace ?? "default",
+              type: s.type ?? "",
+              host: String(host),
+              port: String(port),
+            } satisfies DataSourceRef
+          })
+          .filter((r): r is DataSourceRef => r != null)
+      })
+      // De-dup by (namespace, name, identity) so the same descriptor with N
+      // databases on the same host:port doesn't show up N times in match results.
+      const seen = new Set<string>()
+      const unique: DataSourceRef[] = []
+      for (const r of parsed) {
+        const key = `${r.namespace}/${r.name}|${getConnectionIdentity(r.type, r.host, r.port)}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        unique.push(r)
+      }
+      setExistingDataSources(unique)
     } catch (e) {
       console.error("Failed to fetch existing data sources", e)
     }
@@ -264,8 +279,8 @@ export default function InfraDiscoveryDetailPage() {
     if (s.serviceType === "mysql") return "mysql"
     if (s.serviceType === "postgres") return "postgres"
     if ((s.product || "").toLowerCase().includes("minio")) return "minio"
-    // Heuristic: in sandbox, Gitea (code repo) is exposed on 3000 and often detected as generic HTTP.
-    if (normalize(s.serviceType) === "http" && Number(s.port) === 3000) return "coderepo"
+    // Heuristic: in sandbox, GitLab CE (code repo) is exposed on 8929 and often detected as generic HTTP.
+    if (normalize(s.serviceType) === "http" && Number(s.port) === 8929) return "coderepo"
     return null
   }
 
@@ -305,7 +320,7 @@ export default function InfraDiscoveryDetailPage() {
         namespace: "default",
         type: "coderepo",
         // Best-effort defaults; user can refine to /owner/repo(.git)
-        codeRepoType: "gitea",
+        codeRepoType: "gitlab",
         codeRepoPath: baseUrl,
         codeRepoBranch: "main",
         codeRepoToken: "",
@@ -375,20 +390,16 @@ export default function InfraDiscoveryDetailPage() {
     const hasCodeRepo =
       Boolean(data.enableCodeRepo) && Boolean(repoType || repoPath || repoBranch || repoToken)
 
-    const metadata: Record<string, string> = {
+    const baseMetadata: Record<string, string> = {
       host: String(data.host ?? ""),
       port: String(data.port ?? ""),
     }
-    if (t === "mysql" || t === "postgres") {
-      metadata.user = String(data.user ?? "")
-      metadata.password = String(data.password ?? "")
-      metadata.database = String(data.database ?? "")
-    } else if (t === "minio") {
-      metadata.access_key = String(data.accessKey ?? "")
-      metadata.secret_key = String(data.secretKey ?? "")
-      metadata.bucket = String(data.bucket ?? "")
+    if (t === "minio") {
+      baseMetadata.access_key = String(data.accessKey ?? "")
+      baseMetadata.secret_key = String(data.secretKey ?? "")
+      baseMetadata.bucket = String(data.bucket ?? "")
     } else if (t === "fileserver") {
-      if (data.path) metadata.path = String(data.path)
+      if (data.path) baseMetadata.path = String(data.path)
     }
 
     const extractFiles = String(data.extractFiles ?? "")
@@ -396,33 +407,60 @@ export default function InfraDiscoveryDetailPage() {
       .map((s) => s.trim())
       .filter(Boolean)
 
+    const buildSource = (sourceName: string, metadata: Record<string, string>) => ({
+      name: sourceName,
+      type: t,
+      metadata,
+      ...(hasPrompts ? { prompts: { configMapName: promptsName } } : {}),
+      ...(hasCodeRepo
+        ? {
+            codeRepo: {
+              codeRepoType: repoType,
+              codeRepoPath: repoPath,
+              codeRepoBranch: repoBranch,
+              codeRepoToken: repoToken,
+            },
+          }
+        : {}),
+      extract:
+        t === "minio" || t === "fileserver"
+          ? { files: extractFiles }
+          : { tables: [] },
+      processing: { cleaning: [] },
+    })
+
+    // Fan-out for structured DBs: one logical DataSource per selected database,
+    // sharing the same host/port credentials. Other types keep 1:1 mapping.
+    let sources: ReturnType<typeof buildSource>[]
+    if (isStructuredDB) {
+      const dbs = (data.databases ?? []).map((s) => s.trim()).filter(Boolean)
+      if (dbs.length === 0) {
+        toast.error("请至少选择一个数据库")
+        return
+      }
+      sources = dbs.map((db) => {
+        const suffix = db
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 40) || "db"
+        return buildSource(`${name}-${suffix}`, {
+          ...baseMetadata,
+          user: String(data.user ?? ""),
+          password: String(data.password ?? ""),
+          database: db,
+        })
+      })
+    } else {
+      sources = [buildSource(`${name}-source`, baseMetadata)]
+    }
+
     const payload = {
       name,
       namespace,
       descriptorType,
-      sources: [
-        {
-          name: name + "-source",
-          type: t,
-          metadata,
-          ...(hasPrompts ? { prompts: { configMapName: promptsName } } : {}),
-          ...(hasCodeRepo
-            ? {
-                codeRepo: {
-                  codeRepoType: repoType,
-                  codeRepoPath: repoPath,
-                  codeRepoBranch: repoBranch,
-                  codeRepoToken: repoToken,
-                },
-              }
-            : {}),
-          extract:
-            t === "minio" || t === "fileserver"
-              ? { files: extractFiles }
-              : { tables: [] },
-          processing: { cleaning: [] },
-        },
-      ],
+      sources,
     }
 
     await api.post(`/namespaces/${namespace}/descriptors`, payload)

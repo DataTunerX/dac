@@ -1,0 +1,24 @@
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd202601281443
+  namespace: default
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "dac"
+        password: "dacpass"
+        database: "dactest"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""

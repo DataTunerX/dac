@@ -1,0 +1,17 @@
+{{- if .Values.skillHub.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.skillHub.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "skill-hub") | nindent 4 }}
+spec:
+  type: {{ .Values.skillHub.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.skillHub.service.port }}
+      targetPort: {{ .Values.skillHub.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "skill-hub") | nindent 4 }}
+{{- end }}

@@ -1,0 +1,7 @@
+[
+  {"city": "beijing", "amount": 120.5},
+  {"city": "shanghai", "amount": 88.0},
+  {"city": "beijing", "amount": 30.0},
+  {"city": "shenzhen", "amount": 200.0},
+  {"city": "shanghai", "amount": 12.0}
+]

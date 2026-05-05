@@ -1,0 +1,26 @@
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: dac-02
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  dataPolicy:
+    sourceNameSelector: ["datadescriptor-00003"]
+  agentCard:
+    name: "HRManagementAgent"
+    description: "我是一个人力资源关系的智能体。"
+    skills:
+      - id: "HRManagement"
+        name: "HRManagement"
+        description: "answer user Human Resource question"
+        tags:
+          - "人力资源"
+        examples:
+          - "一共有多少员工"
+  expertAgentMaxSteps: "3"
+  model:
+    plannerLLM: "llm-deepseek-v3"
+    expertLLM: "llm-qwen3-coder-480b"

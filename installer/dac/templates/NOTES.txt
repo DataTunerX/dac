@@ -20,6 +20,9 @@ Namespace: {{ .Release.Namespace }}
 {{- if .Values.executionEngine.enabled }}
   Execution Engine (Operator): {{ include "dac.componentName" (dict "context" . "name" "execution-engine") }}
 {{- end }}
+{{- if .Values.skillHub.enabled }}
+  Skill Hub:      {{ include "dac.skillHub.serviceName" . }}:{{ .Values.skillHub.service.port }}
+{{- end }}
 
 ------------------------------------------------------------
   Middleware

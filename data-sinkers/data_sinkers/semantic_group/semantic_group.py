@@ -17,6 +17,7 @@ from ..client.vector_client import VectorClient, Document as VectorDocument
 from ..client.semantic_group_client import SemanticGroupClient, SemanticGroupData, DDGroupRelationData
 from ..client.semantic_domain_client import SemanticDomainClient
 from ..api.base import DocumentModel
+from ..llm_output_json import parse_llm_output_string
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -91,6 +92,7 @@ class SemanticGrouper:
         1. 纯 JSON 字符串
         2. 包含 Markdown 代码块的 JSON（如 ```json {...} ```）
         3. Python 字典格式的字符串（使用单引号）
+        4. 经 json_repair 修复后的 JSON
         
         本方法采用多层容错策略，逐步尝试不同的解析方式。
         
@@ -100,54 +102,11 @@ class SemanticGrouper:
         Returns:
             解析后的字典，如果解析失败则返回 None
         """
-        data_dict = None
-        
         logger.info(f"code -> format_llm_output, answer: {answer}")
-        
-        try:
-            # 策略1：直接尝试 JSON 解析（最常见的情况）
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
-            # 策略2：清理 Markdown 代码块标记后重试
-            cleaned_content = answer.content.strip()
-
-            # 移除开头的代码块标记
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]  # 移除 '```json'
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]  # 移除 '```'
-            
-            # 移除结尾的代码块标记
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]  # 移除 '```'
-            
-            cleaned_content = cleaned_content.strip()
-
-            # Normalize Unicode smart quotes to ASCII quotes (LLM may produce these)
-            cleaned_content = cleaned_content.replace('\u201c', '"').replace('\u201d', '"')
-            cleaned_content = cleaned_content.replace('\u2018', "'").replace('\u2019', "'")
-            
-            try:
-                # 策略3：清理后再次尝试 JSON 解析
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-                try:
-                    # 策略4：尝试使用 ast.literal_eval 解析 Python 字典格式（单引号）
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
-                    logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-                    try:
-                        # 策略5：将单引号替换为双引号后重试 JSON 解析
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
-                    except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
-
-        return data_dict
+        return parse_llm_output_string(
+            answer.content,
+            use_single_key_fallback=True,
+        )
 
     def _extract_description_from_agent_card(self, agent_card: Any) -> str:
         """

@@ -54,6 +54,74 @@ from langfuse.langchain import CallbackHandler
 from .agentregistry_client import AgentRegistryClient
 from .dataservices_client import DataServicesClient, CreateHistoryRequest, HistoryMessage, SearchHistoryRequest
 
+try:
+    # json_repair is a tolerant JSON parser designed specifically for LLM output.
+    # It handles common failure modes such as unescaped inner double quotes,
+    # trailing commas, missing quotes, python-style single quotes, etc.
+    from json_repair import repair_json as _json_repair  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional runtime dep, fail-soft
+    _json_repair = None  # type: ignore[assignment]
+
+
+# Router LLM JSON: split-plan (``reasoning``, task ``description`` / ``why_agent``),
+# possible aggregate ``answer`` / ``requery``, plus planner/orchestrator keys.
+_KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
+    "original_query",
+    "description",
+    "thought_process",
+    "reason",
+    "rationale",
+    "final_answer",
+    "answer",
+    "requery",
+    "reasoning",
+    "why_agent",
+)
+
+
+def _escape_known_string_field_inner_quotes(text: str) -> str:
+    """Best-effort escape of unescaped inner ``"`` inside known single-line
+    string fields of a planner-style JSON payload.
+
+    We deliberately restrict the pre-pass to a whitelist of known fields where
+    the value is a single JSON string on one line so we can recognize the end
+    of the value by the structural pattern ``"`` followed by an optional
+    comma/whitespace and a newline. Multi-line values and nested structures
+    are left untouched (json_repair handles those as a later fallback).
+    """
+    if not text or '"' not in text:
+        return text
+
+    pattern_fields = "|".join(re.escape(f) for f in _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES)
+    # See the sibling implementation in orchestrator_agent_semantic_group.py
+    # for detailed rationale about the regex anchoring strategy.
+    pattern = re.compile(
+        rf'("(?:{pattern_fields})"\s*:\s*")'
+        r'(.*?)'
+        r'((?<!\\)"[ \t]*,?[ \t]*$)',
+        re.MULTILINE,
+    )
+
+    def _repl(m: "re.Match[str]") -> str:
+        head, body, tail = m.group(1), m.group(2), m.group(3)
+        fixed_chars: List[str] = []
+        i = 0
+        while i < len(body):
+            ch = body[i]
+            if ch == "\\" and i + 1 < len(body):
+                fixed_chars.append(body[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                fixed_chars.append('\\"')
+                i += 1
+                continue
+            fixed_chars.append(ch)
+            i += 1
+        return head + "".join(fixed_chars) + tail
+
+    return pattern.sub(_repl, text)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -61,6 +129,30 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _json_repair_to_dict(
+    text: str,
+    log_if_dict: str,
+    log_if_repaired_string: str,
+) -> Optional[dict]:
+    """Run json_repair and return a dict, or None. Used by format_llm_output in two stages."""
+    if _json_repair is None:
+        return None
+    try:
+        repaired = _json_repair(text, return_objects=True)
+        if isinstance(repaired, dict):
+            logger.info(" === format_llm_output, %s", log_if_dict)
+            return repaired
+        if isinstance(repaired, str):
+            parsed = json.loads(repaired)
+            if isinstance(parsed, dict):
+                logger.info(" === format_llm_output, %s", log_if_repaired_string)
+                return parsed
+    except Exception as e:  # noqa: BLE001
+        logger.debug(" === format_llm_output, json_repair step failed: %s | %s", log_if_dict, e)
+    return None
+
 
 PROGRESS_SCHEMA_VERSION = "v1"
 ANSWER_SCHEMA_VERSION = "v1"
@@ -515,6 +607,7 @@ MULTI_ROOT_TASK_PLAN_PROMPT = """# Role：智能任务分析与规划师
 - needs_split=false 时 tasks 中只有 1 条任务
 - needs_split=true 时 tasks 中有 2 条或以上任务
 - 采用最小必要拆分：能由单个专家完整处理时，不要过度拆分
+- **JSON 字符串合法性**：`reasoning`、`description`、`why_agent` 等所有字符串值中，若需出现双引号则必须写为 `\\"`；当用户原话里含 JSON 或引号时，在字符串内请改写为单引号或中文引号「」，**禁止**在字符串里直接粘贴未转义的 `{{` `"` `}}` 片段，否则输出无法解析。
 - 【禁止项】不要规划“最终汇总/跨任务整合/最终报告/最终回答”类任务（例如“整合任务1和任务2输出最终答案”）。
 - 最终面向用户的汇总回答由 Orchestrator 聚合阶段统一完成，tasks 仅规划数据获取/计算/补充任务。
 
@@ -1053,45 +1146,82 @@ class PlannerAgent(BaseAgent):
             lines.append("\n".join(block))
         return "\n\n".join(lines)
 
-    def format_llm_ouput(self, answer) -> dict:
-        data_dict = None
-    
-        logger.info(f"PlannerAgent llm output: {answer}")
+    def format_llm_output(self, answer) -> dict:
+        """Parse the planner LLM output into a dict with heavy tolerance.
+
+        See ``orchestrator_agent_semantic_group.PlannerAgent.format_llm_output``
+        for the detailed recovery strategy — this implementation mirrors it.
+        """
+        raw = getattr(answer, "content", "") or ""
 
         try:
-            data_dict = json.loads(answer.content)
-        except json.JSONDecodeError as e:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
 
-            cleaned_content = answer.content.strip()
+        cleaned_content = raw.strip()
+        if cleaned_content.startswith('```json'):
+            cleaned_content = cleaned_content[7:]
+        elif cleaned_content.startswith('```'):
+            cleaned_content = cleaned_content[3:]
+        if cleaned_content.endswith('```'):
+            cleaned_content = cleaned_content[:-3]
+        cleaned_content = cleaned_content.strip()
 
-            if cleaned_content.startswith('```json'):
-                cleaned_content = cleaned_content[7:]
-            elif cleaned_content.startswith('```'):
-                cleaned_content = cleaned_content[3:]
-            
-            if cleaned_content.endswith('```'):
-                cleaned_content = cleaned_content[:-3]
-            
-            cleaned_content = cleaned_content.strip()
-            
+        try:
+            return json.loads(cleaned_content)
+        except json.JSONDecodeError as e2:
+            logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
+
+        repaired = _json_repair_to_dict(
+            cleaned_content,
+            "recovered via json_repair (pre-inner-escape)",
+            "recovered via json_repair string (pre-inner-escape)",
+        )
+        if repaired is not None:
+            return repaired
+
+        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
+        if escaped_content != cleaned_content:
             try:
-                data_dict = json.loads(cleaned_content)
-            except json.JSONDecodeError as e2:
-                logger.error(f" === format_llm_ouput, Parsing failed after cleanup.: {e2}")
-                try:
-                    import ast
-                    data_dict = ast.literal_eval(cleaned_content)
-                except (ValueError, SyntaxError) as e3:
-                    logger.error(f" === format_llm_ouput, ast parsing fail: {e3}")
-                    try:
-                        cleaned_content = cleaned_content.replace("'", '"')
-                        data_dict = json.loads(cleaned_content)
-                    except json.JSONDecodeError as e4:
-                        logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-                except Exception as e5:
-                    logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
+                parsed = json.loads(escaped_content)
+                logger.info(" === format_llm_output, recovered via inner-quote field escaping")
+                return parsed
+            except json.JSONDecodeError as e_esc:
+                logger.warning(f" === format_llm_output, field-escape pre-pass still invalid: {e_esc}")
 
-        return data_dict
+        repaired = _json_repair_to_dict(
+            escaped_content,
+            "recovered via json_repair",
+            "recovered via json_repair (string)",
+        )
+        if repaired is not None:
+            return repaired
+
+        if _json_repair is None:
+            logger.warning(
+                " === format_llm_output, json_repair not installed; "
+                "add 'json-repair' to dependencies to improve LLM JSON tolerance"
+            )
+
+        try:
+            import ast
+            parsed = ast.literal_eval(cleaned_content)
+            if isinstance(parsed, dict):
+                return parsed
+        except (ValueError, SyntaxError) as e3:
+            logger.error(f" === format_llm_output, ast parsing fail: {e3}")
+        except Exception as e5:  # noqa: BLE001
+            logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
+
+        try:
+            parsed = json.loads(cleaned_content.replace("'", '"'))
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError as e4:
+            logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
+
+        return None
 
     async def get_history_payload(
         self,
@@ -1240,7 +1370,7 @@ class PlannerAgent(BaseAgent):
 
         logger.info(f" === PlannerAgent.make_plan , llm result = {answer.content}")
 
-        data_dict = self.format_llm_ouput(answer)
+        data_dict = self.format_llm_output(answer)
 
         logger.info(f" === PlannerAgent.make_plan , data_dict = {data_dict}")
 
@@ -1744,7 +1874,8 @@ class RoutingAgent(BaseAgent):
     async def find_agent(self, agent_name) -> AgentCard:
         # find agentcard using agent name
 
-        logger.info(f"find_agent, agents= {self.agent_cards}, agent_name:= {agent_name}")
+        agent_names = [c.name for c in (self.agent_cards or [])]
+        logger.info("find_agent, agent_names=%s, agent_name=%s", agent_names, agent_name)
         agent_card = None
 
         for agentcard in self.agent_cards:
@@ -2544,18 +2675,18 @@ class RoutingAgent(BaseAgent):
                         config={"callbacks": [langfuse_handler]},
                     )
                     span.update_trace(output={"attempt": attempt + 1})
-                raw = response.content.strip()
+                # Use the same tolerant JSON path as the planner (inner-quote escape,
+                # optional json_repair) — bare json.loads fails when reasoning/description
+                # echo user text with unescaped " or other LLM JSON slips.
 
-                if raw.startswith("```json"):
-                    raw = raw[7:]
-                elif raw.startswith("```"):
-                    raw = raw[3:]
-                if raw.endswith("```"):
-                    raw = raw[:-3]
-                raw = raw.strip()
+                logger.info(f"Multi-root task plan : llm result={response}")
 
-                plan_data = json.loads(raw)
+                plan_data = self.planner_agent.format_llm_output(response)
+                if not isinstance(plan_data, dict):
+                    raise ValueError("multi-root plan: LLM output was not a parseable JSON object")
+
                 plan = MultiRootTaskPlan(**plan_data)
+
                 valid, reason = self._validate_multi_root_plan(query, plan, candidate_names)
                 if valid:
                     if expected_split is not None and bool(plan.needs_split) != bool(expected_split):
@@ -3511,18 +3642,18 @@ class RoutingAgentExecutor(AgentExecutor):
                     logger.warning(f"===== Empty step or agent, retrying ({attempt + 1}/{self.max_retries})...")
                     await asyncio.sleep(self.retry_delay * (2 ** attempt))
 
-        # if plan step can not find any agent, then use default agent to handle user question.
+        # No routable agent: do not fall back to CommonAgent (not deployed); prompt the user instead.
+        _no_suitable_agent_text = (
+            "当前没有合适的智能体可以处理这个问题。"
+            "你可以尝试换一种问法，或补充更多说明后再试。"
+        )
         if step is None or (step is not None and (step.agent is None or step.agent == "")):
-            logger.info("===== RoutingAgentExecutor, can not find any agent, will use default agentcard.")
-            step = PlannerStep(original_query=query, agent="CommonAgent")
-
-        if step is None or (step is not None and (step.agent is None or step.agent == "")):
-            logger.info("===== RoutingAgentExecutor, step is empty.")
+            logger.info("===== RoutingAgentExecutor, no agent from plan after retries; user prompt instead of fallback.")
             await self._emit_answer(
                 updater,
                 event="final_answer",
                 payload={
-                    "text": "No enough information to handle your question. You can provide more information.",
+                    "text": _no_suitable_agent_text,
                     "presentation": "text",
                 },
             )
@@ -3536,16 +3667,15 @@ class RoutingAgentExecutor(AgentExecutor):
             agent_card = await self.agent.find_agent(step.agent)
 
             if agent_card is None:
-                logger.info("===== RoutingAgentExecutor, Not found agents, will use default agentcard.")
-                agent_card = self.agent.default_agentcard()
-
-            if agent_card is None:
-                logger.info("===== RoutingAgentExecutor, Not found agents.")
+                logger.info(
+                    "===== RoutingAgentExecutor, planned agent not in local registry: %s; user prompt instead of fallback.",
+                    step.agent,
+                )
                 await self._emit_answer(
                     updater,
                     event="final_answer",
                     payload={
-                        "text": "Not found agents. You can provide more information.",
+                        "text": _no_suitable_agent_text,
                         "presentation": "text",
                     },
                 )
@@ -3555,7 +3685,10 @@ class RoutingAgentExecutor(AgentExecutor):
                     )
                 )
             else:
-                logger.info(f"===== RoutingAgentExecutor, found agent: {agent_card}.")
+                logger.info(
+                    "===== RoutingAgentExecutor, found agent: %s.",
+                    getattr(agent_card, "name", None) or step.agent,
+                )
                 rps = route_paths or []
                 path_aliases = [e.get("alias", "?") for e in rps[:5]]
                 logger.info(

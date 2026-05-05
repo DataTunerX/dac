@@ -836,7 +836,7 @@ async def search_documents_with_vector(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in search_documents_with_knowledge_pyramid: {str(e)}", exc_info=True)
+        logger.error(f"Error in search_documents_with_vector: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # vector routes

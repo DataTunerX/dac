@@ -1,4 +1,4 @@
-"""Tests for ExpertAgent.format_llm_ouput (semantic domain parsing)."""
+"""Tests for ExpertAgent.format_llm_output (semantic domain parsing)."""
 
 import unittest
 from types import SimpleNamespace
@@ -16,14 +16,14 @@ class TestFormatLLMOutputDomain(unittest.TestCase):
 
     def test_json_raw_double_quotes(self) -> None:
         msg = SimpleNamespace(content='{"reason":"ok","conclusion":"terminate"}')
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d, {"reason": "ok", "conclusion": "terminate"})
 
     def test_requery_json_double_quotes(self) -> None:
         msg = SimpleNamespace(
             content='{"requery":"改写后的问法","conclusion":"terminate"}'
         )
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["conclusion"], "terminate")
         self.assertEqual(d["requery"], "改写后的问法")
 
@@ -33,7 +33,7 @@ class TestFormatLLMOutputDomain(unittest.TestCase):
                 '{"answer":"SELECT 1","conclusion":"terminate","requery":""}'
             )
         )
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["answer"], "SELECT 1")
         self.assertEqual(d["conclusion"], "terminate")
         self.assertEqual(d["requery"], "")
@@ -44,7 +44,7 @@ class TestFormatLLMOutputDomain(unittest.TestCase):
             "'requery': '请补充条件'}"
         )
         msg = SimpleNamespace(content=s)
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["answer"], "简单说明")
         self.assertEqual(d["conclusion"], "continue")
         self.assertEqual(d["requery"], "请补充条件")
@@ -53,7 +53,7 @@ class TestFormatLLMOutputDomain(unittest.TestCase):
         msg = SimpleNamespace(
             content='{"reason":"line1\\nline2","conclusion":"continue"}'
         )
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["reason"], "line1\nline2")
         self.assertEqual(d["conclusion"], "continue")
 
@@ -61,13 +61,13 @@ class TestFormatLLMOutputDomain(unittest.TestCase):
         msg = SimpleNamespace(
             content='```\n{"reason":"in fence","conclusion":"terminate"}\n```'
         )
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["reason"], "in fence")
         self.assertEqual(d["conclusion"], "terminate")
 
     def test_raw_content_whitespace_around_json(self) -> None:
         msg = SimpleNamespace(content='  \n{"reason":"trim","conclusion":"terminate"}  ')
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["reason"], "trim")
 
     def test_observe_python_dict_unicode_smart_quotes_in_reason(self) -> None:
@@ -75,7 +75,7 @@ class TestFormatLLMOutputDomain(unittest.TestCase):
         inner = "符合上下文中的\u201c年度总额\u201d的规则"
         s = f"{{'reason': '{inner}', 'conclusion': 'terminate'}}"
         msg = SimpleNamespace(content=s)
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["conclusion"], "terminate")
         self.assertIn("年度总额", d["reason"])
 
@@ -85,14 +85,14 @@ class TestFormatLLMOutputDomain(unittest.TestCase):
             "'conclusion': 'terminate'}"
         )
         msg = SimpleNamespace(content=s)
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["conclusion"], "terminate")
         self.assertIn("广州农商银行总行", d["reason"])
 
     def test_requery_python_dict_single_quotes(self) -> None:
         s = "{'requery': '广州农商银行2024年12月31日的公司贷款余额', 'conclusion': 'terminate'}"
         msg = SimpleNamespace(content=s)
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["conclusion"], "terminate")
         self.assertIn("公司贷款余额", d["requery"])
 
@@ -100,15 +100,39 @@ class TestFormatLLMOutputDomain(unittest.TestCase):
         msg = SimpleNamespace(
             content='```json\n{"reason":"x","conclusion":"continue"}\n```'
         )
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertEqual(d["reason"], "x")
         self.assertEqual(d["conclusion"], "continue")
+
+    def test_markdown_fence_sql_only_coerces_to_llm_result(self) -> None:
+        # Regression: must strip ```sql + language line, not only three backticks.
+        sql = (
+            "SELECT DATE_FORMAT(created_at, '%Y-%m') AS m, COUNT(1) AS c "
+            "FROM users GROUP BY 1"
+        )
+        msg = SimpleNamespace(content=f"```sql\n{sql}\n```")
+        d = self.agent.format_llm_output(msg)
+        self.assertIsNotNone(d)
+        self.assertEqual(d.get("conclusion"), "terminate")
+        self.assertEqual(d.get("requery"), "")
+        self.assertEqual(d.get("answer"), sql)
+        self.assertEqual(d.get("reason_code"), "")
+
+    def test_content_as_list_of_text_blocks_sql_fence(self) -> None:
+        sql = "SELECT 1 AS one"
+        msg = SimpleNamespace(
+            content=[{"type": "text", "text": f"```sql\n{sql}\n```"}]
+        )
+        d = self.agent.format_llm_output(msg)
+        self.assertIsNotNone(d)
+        self.assertEqual(d.get("answer"), sql)
+        self.assertEqual(d.get("conclusion"), "terminate")
 
     def test_reason_with_unicode_apostrophe_u2019(self) -> None:
         # U+2019 in value is fine for early literal_eval; normalization would turn it into ASCII '.
         s = "{'reason': 'it\u2019s fine', 'conclusion': 'terminate'}"
         msg = SimpleNamespace(content=s)
-        d = self.agent.format_llm_ouput(msg)
+        d = self.agent.format_llm_output(msg)
         self.assertIsNotNone(d)
         self.assertEqual(d.get("conclusion"), "terminate")
         self.assertIn("fine", d.get("reason", ""))

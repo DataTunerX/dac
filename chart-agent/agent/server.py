@@ -102,7 +102,8 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
                 model=model,
                 stream=stream,
                 temperature=temperature,
-                max_steps=max_steps
+                max_steps=max_steps,
+                agent_card=agent_card,
             ),
             task_store=InMemoryTaskStore(),
             push_config_store=push_config_store,

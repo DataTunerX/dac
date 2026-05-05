@@ -54,7 +54,12 @@ interface CreateDataSourcePayload {
     port?: string;
     user?: string;
     password?: string;
-    database?: string;
+    /**
+     * For mysql/postgres: list of databases the operator selected on this
+     * connection. The DataDescriptor will fan out into one logical
+     * DataSource per database, all sharing the same host/port credentials.
+     */
+    databases?: string[];
     accessKey?: string;
     secretKey?: string;
     bucket?: string;
@@ -66,6 +71,21 @@ interface CreateDataSourcePayload {
     codeRepoPath?: string;
     codeRepoBranch?: string;
     codeRepoToken?: string;
+}
+
+/**
+ * Make a single database name safe to use as a Kubernetes object-name suffix
+ * (lowercase, alphanumeric + '-', no leading/trailing dashes, capped length).
+ * Empty input maps to "db" so callers don't have to guard against it.
+ */
+function sanitizeDBSegment(raw: string): string {
+  const cleaned = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+  return cleaned || "db"
 }
 
 type DependentResource = {
@@ -84,7 +104,7 @@ function normalizeSourceType(descriptorType: string, sourceType: string): "mysql
 
   if (dt === "structured-mysql" || st === "mysql") return "mysql"
   if (dt === "structured-postgres" || st === "postgres") return "postgres"
-  if (dt === "code" || st === "github" || st === "gitee" || st === "gitea" || st === "gitlab" || st === "git") return "git"
+  if (dt === "code" || st === "github" || st === "gitee" || st === "gitlab" || st === "git") return "git"
   if (st === "minio") return "minio"
   return "generic"
 }
@@ -301,20 +321,16 @@ export default function DataSourcesPage() {
         return
       }
 
-      const metadata: Record<string, string> = {
+      const baseMetadata: Record<string, string> = {
         host: String(data.host ?? ""),
         port: String(data.port ?? ""),
       }
-      if (t === "mysql" || t === "postgres") {
-        metadata.user = String(data.user ?? "")
-        metadata.password = String(data.password ?? "")
-        metadata.database = String(data.database ?? "")
-      } else if (t === "minio") {
-        metadata.access_key = String(data.accessKey ?? "")
-        metadata.secret_key = String(data.secretKey ?? "")
-        metadata.bucket = String(data.bucket ?? "")
+      if (t === "minio") {
+        baseMetadata.access_key = String(data.accessKey ?? "")
+        baseMetadata.secret_key = String(data.secretKey ?? "")
+        baseMetadata.bucket = String(data.bucket ?? "")
       } else if (t === "fileserver") {
-        if (data.path) metadata.path = String(data.path)
+        if (data.path) baseMetadata.path = String(data.path)
       }
 
       const extractFiles = String(data.extractFiles ?? "")
@@ -322,35 +338,59 @@ export default function DataSourcesPage() {
         .map((s) => s.trim())
         .filter(Boolean)
 
+      const buildSource = (sourceName: string, metadata: Record<string, string>) => ({
+        name: sourceName,
+        type: t,
+        metadata,
+        ...(hasPrompts ? { prompts: { configMapName: promptsName } } : {}),
+        ...(hasCodeRepo
+          ? {
+              codeRepo: {
+                codeRepoType: repoType,
+                codeRepoPath: repoPath,
+                codeRepoBranch: repoBranch,
+                codeRepoToken: repoToken,
+              },
+            }
+          : {}),
+        extract:
+          t === "minio" || t === "fileserver"
+            ? { files: extractFiles }
+            : { tables: [] },
+        processing: { cleaning: [] },
+      })
+
+      // Fan-out: a structured-DB DataDescriptor expands into one logical
+      // DataSource per selected database, all sharing the same connection.
+      // For non-DB types we keep the historical 1:1 mapping.
+      let sources: ReturnType<typeof buildSource>[]
+      if (isStructuredDB) {
+        const dbs = (data.databases ?? [])
+          .map((s) => s.trim())
+          .filter(Boolean)
+        if (dbs.length === 0) {
+          throw new Error("请至少选择一个数据库")
+        }
+        sources = dbs.map((db) => {
+          const sourceName = `${name}-${sanitizeDBSegment(db)}`
+          return buildSource(sourceName, {
+            ...baseMetadata,
+            user: String(data.user ?? ""),
+            password: String(data.password ?? ""),
+            database: db,
+          })
+        })
+      } else {
+        sources = [buildSource(`${name}-source`, baseMetadata)]
+      }
+
       const payload = {
         name,
         namespace,
         descriptorType,
-        sources: [
-            {
-                name: data.name + "-source",
-                type: t,
-                metadata,
-                ...(hasPrompts ? { prompts: { configMapName: promptsName } } : {}),
-                ...(hasCodeRepo
-                  ? {
-                      codeRepo: {
-                        codeRepoType: repoType,
-                        codeRepoPath: repoPath,
-                        codeRepoBranch: repoBranch,
-                        codeRepoToken: repoToken,
-                      },
-                    }
-                  : {}),
-                extract:
-                  t === "minio" || t === "fileserver"
-                    ? { files: extractFiles }
-                    : { tables: [] },
-                processing: { cleaning: [] }
-            }
-        ]
+        sources,
       }
-      
+
       await api.post(`/namespaces/${namespace}/descriptors`, payload)
       toast.success("数据源创建成功")
       fetchData() 

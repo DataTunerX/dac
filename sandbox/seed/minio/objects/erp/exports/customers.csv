@@ -1,5 +1,0 @@
-customer_id,full_name,email,phone,national_id,address
-11111111-1111-1111-1111-111111111111,Alice Zhang,alice@example.com,+1-415-555-0101,ID-ALICE-0001,"1 Market St, SF"
-22222222-2222-2222-2222-222222222222,Bob Li,bob@example.com,+1-415-555-0202,ID-BOB-0002,"2 Market St, SF"
-33333333-3333-3333-3333-333333333333,Carol Wang,carol@example.com,+1-415-555-0303,ID-CAROL-0003,"3 Market St, SF"
-

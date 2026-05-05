@@ -1,0 +1,26 @@
+apiVersion: dac.dac.io/v1alpha1
+kind: DataAgentContainer
+metadata:
+  name: dac-01
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  dataPolicy:
+    sourceNameSelector: ["datadescriptor-00002"]
+  agentCard:
+    name: "EcommerceAnalysisAgent"
+    description: "我是一个电子商务的系统，可以完成商品的管理，订单的管理，用户的管理。"
+    skills:
+      - id: "Ecommerce"
+        name: "Ecommerce"
+        description: "answer user Ecommerce question"
+        tags:
+          - "商品管理"
+        examples:
+          - "一共有多少种商品"
+  expertAgentMaxSteps: "3"
+  model:
+    plannerLLM: "llm-deepseek-v3"
+    expertLLM: "llm-qwen3-coder-480b"

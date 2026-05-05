@@ -22,6 +22,7 @@ func Setup(
 	descriptorHandler *handler.DataDescriptorHandler,
 	semanticDomainHandler *handler.SemanticDomainHandler,
 	discoveryHandler *handler.DiscoveryHandler,
+	probeHandler *handler.DataSourceProbeHandler,
 	chatHandler *handler.ChatHandler,
 	configMapHandler *handler.ConfigMapHandler,
 	namespaceHandler *handler.NamespaceHandler,
@@ -182,6 +183,13 @@ func Setup(
 				discovery.GET("/scans/:id", discoveryHandler.GetScan)
 				discovery.PATCH("/scans/:id", discoveryHandler.UpdateScan)
 				discovery.DELETE("/scans/:id", discoveryHandler.DeleteScan)
+			}
+
+			// DataSource probe routes (synchronous connectivity test + database listing)
+			datasources := authorized.Group("/datasources")
+			{
+				datasources.POST("/probe", probeHandler.Probe)
+				datasources.GET("/probe/types", probeHandler.SupportedTypes)
 			}
 
 			// Semantic Group routes (data-services integration)

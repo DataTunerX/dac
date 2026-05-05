@@ -22,6 +22,7 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 	discoveryinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/discovery"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/k8s"
+	"github.com/lvyanru/dac-apiserver/internal/infrastructure/probe"
 	"github.com/lvyanru/dac-apiserver/internal/router"
 	"github.com/lvyanru/dac-apiserver/internal/usecase"
 	dbpkg "github.com/lvyanru/dac-apiserver/pkg/database"
@@ -173,6 +174,18 @@ func runServer(cmd *cobra.Command, args []string) {
 	discoveryUsecase := usecase.NewDiscoveryUsecase(discoveryRepo, discoveryScanner, appLogger)
 	discoveryHandler := handler.NewDiscoveryHandler(discoveryUsecase, appLogger)
 
+	// DataSource Probe module (synchronous connectivity test + database listing)
+	// The probe context is intentionally separate from Discovery: discovery
+	// answers "what listens on this IP", probe answers "given a known
+	// endpoint and credentials, what catalogs can we reach".
+	probeTimeout := 5 * time.Second
+	proberRegistry := probe.NewRegistry(
+		probe.NewMySQLProber(probeTimeout),
+		probe.NewPostgresProber(probeTimeout),
+	)
+	probeUsecase := usecase.NewDataSourceProbeUsecase(proberRegistry, appLogger)
+	probeHandler := handler.NewDataSourceProbeHandler(probeUsecase, appLogger)
+
 	// Initialize User components
 	userRepo := infradb.NewUserRepository(dbClient)
 	userUsecase := usecase.NewUserUsecase(userRepo, appLogger)
@@ -224,6 +237,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		descriptorHandler,
 		semanticDomainHandler,
 		discoveryHandler,
+		probeHandler,
 		chatHandler,
 		configMapHandler,
 		namespaceHandler,
