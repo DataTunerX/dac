@@ -4352,16 +4352,20 @@ class FileAnalyzer:
         if not chunk_results:
             return "没有可用的片段分析结果。"
         
+        # ~100k tokens of Chinese text; keeps total prompt safely under the 262144-token model limit.
+        MAX_SUMMARY_INPUT_CHARS = 150_000
+
         summary_parts = []
-        
+        current_chars = 0
+
         for result in chunk_results:
             chunk_idx = result.get("chunk_index", 0) + 1
-            
+
             # 构建每个片段的摘要信息
             chunk_info = f"【片段 {chunk_idx}】\n"
             chunk_info += f"类型: {result.get('segment_type', '未知')}\n"
             chunk_info += f"主题: {result.get('core_topic', '无主题')}\n"
-            
+
             # 关键信息点
             key_points = result.get("key_points", [])
             if key_points:
@@ -4372,7 +4376,7 @@ class FileAnalyzer:
                     chunk_info += f"  还有 {len(key_points) - 5} 个关键点...\n"
             else:
                 chunk_info += "关键点: 无\n"
-            
+
             # # 上下文提示
             # context_hints = result.get("context_hints", {})
             # if context_hints.get("start_with") or context_hints.get("end_with"):
@@ -4382,15 +4386,26 @@ class FileAnalyzer:
             #     if context_hints.get("end_with"):
             #         chunk_info += f" 结尾→{context_hints['end_with'][:50]}..."
             #     chunk_info += "\n"
-            
+
             # # 元数据信息
             # metadata = result.get("metadata", {})
             # if metadata and "source" in metadata:
             #     chunk_info += f"来源: {metadata['source']}\n"
-            
+
             chunk_info += "-" * 60 + "\n"
+
+            if current_chars + len(chunk_info) > MAX_SUMMARY_INPUT_CHARS:
+                remaining = len(chunk_results) - len(summary_parts)
+                summary_parts.append(f"[... 已省略剩余 {remaining} 个片段，超出最大输入长度限制 ...]\n")
+                logger.warning(
+                    "build_summary_input: truncated at chunk %d/%d (%d chars), %d chunks omitted",
+                    len(summary_parts), len(chunk_results), current_chars, remaining,
+                )
+                break
+
             summary_parts.append(chunk_info)
-        
+            current_chars += len(chunk_info)
+
         return "\n".join(summary_parts)
 
     def file_summary(self, documents: List) -> dict:
@@ -4612,16 +4627,23 @@ class FileAnalyzer:
         4. 不要偏离提供的JSON结构
         """
 
+        if not content:
+            logger.warning("agent_card called with empty content, returning empty result")
+            return {}
+
         system_message = SystemMessage(content=prompt)
         human_message = HumanMessage(content=f"{content}")
 
         MAX_RETRIES = 3
-        
+
         for attempt in range(MAX_RETRIES):
             try:
                 response = self.llm.invoke([system_message, human_message])
 
                 llm_result = self.format_llm_output(response)
+
+                if not isinstance(llm_result, dict):
+                    raise ValueError(f"LLM returned unparseable result (type={type(llm_result).__name__})")
 
                 agent_card = AgentCard(**llm_result)
 
@@ -4633,9 +4655,10 @@ class FileAnalyzer:
                 logging.error(f"AgentCard instantiation failed on attempt {attempt + 1}: {e}")
 
                 if attempt + 1 == MAX_RETRIES:
-                    raise RuntimeError(f"Failed to generate valid AgentCard after {MAX_RETRIES} attempts.") from e
+                    logger.error("Failed to generate valid AgentCard after %d attempts, returning empty result", MAX_RETRIES)
+                    return {}
 
-        raise RuntimeError("Unexpected failure in AgentCard generation loop.")
+        return {}
 
 # api endpoint logic
 class SystemEntityAggregator:

@@ -1,5 +1,5 @@
 global:
-  imageRegistry: ""
+  imageRegistry: "192.168.3.123/dac"
   imagePullPolicy: Always
 
   llm:
@@ -23,48 +23,48 @@ global:
 
 apiserver:
   image:
-    repository: "ljtbbt/dac"
-    tag: "apiserver-v0.9.0"
+    repository: "dac-apiserver"
+    tag: "v0.11.0-amd64"
 
 frontend:
   image:
-    repository: "ljtbbt/dac"
-    tag: "frontend-v0.9.0"
+    repository: "frontend"
+    tag: "v0.11.0-amd64"
 
 dataServices:
   image:
-    repository: "ljtbbt/dac"
-    tag: "data-services-v0.9.0-amd64"
+    repository: "data-services"
+    tag: "v0.11.0-amd64"
 
 executionEngine:
   image:
-    repository: "ljtbbt/dac"
-    tag: "execution-engine-v0.9.0-amd64"
+    repository: "execution-engine"
+    tag: "v0.11.0-amd64"
   agentImages:
     orchestratorAgent:
-      repository: "ljtbbt/dac"
-      tag: "orchestrator-agent-v0.9.0-amd64"
+      repository: "orchestrator-agent"
+      tag: "v0.11.0-amd64"
     expertAgent:
-      repository: "ljtbbt/dac"
-      tag: "expert-agent-v0.10.0-amd64"
+      repository: "expert-agent"
+      tag: "v0.11.0-amd64"
     codeAgent:
-      repository: "ljtbbt/dac"
-      tag: "code-agent-v0.9.0-amd64"
+      repository: "code-agent"
+      tag: "v0.11.0-amd64"
     docAgent:
-      repository: "ljtbbt/dac"
-      tag: "doc-agent-v0.9.0-amd64"
+      repository: "doc-agent"
+      tag: "v0.11.0-amd64"
     dacDataServices:
-      repository: "ljtbbt/dac"
-      tag: "dac-data-services-v0.9.0-amd64"
+      repository: "dac-data-services"
+      tag: "v0.11.0-amd64"
     dataSinkerJob:
-      repository: "ljtbbt/dac"
-      tag: "data-sinkers-job-v0.9.0-amd64"
+      repository: "data-sinkers-job"
+      tag: "v0.11.0-amd64"
     dataSinkerStatus:
-      repository: "ljtbbt/dac"
-      tag: "data-sinkers-status-v0.9.0-amd64"
+      repository: "data-sinkers-status"
+      tag: "v0.11.0-amd64"
     dataSinkersObserver:
-      repository: "ljtbbt/dac"
-      tag: "data-sinkers-observer-v0.9.0-amd64"
+      repository: "data-sinkers-observer"
+      tag: "v0.11.0-amd64"
   llmConfigs:
     - name: "llm-default"
       provider: "openai_compatible"
@@ -74,43 +74,62 @@ executionEngine:
 
 semanticGrouper:
   image:
-    repository: "ljtbbt/dac"
-    tag: "semantic-grouper-v0.9.0-amd64"
+    repository: "semantic-grouper"
+    tag: "v0.11.0-amd64"
   config:
     llm:
       model: "google/gemma-4-31B-it"
 
 orchestratorRegistry:
   image:
-    repository: "ljtbbt/dac"
-    tag: "agent-registry-v0.9.0-amd64"
+    repository: "agent-registry"
+    tag: "v0.11.0-amd64"
 
 bizOrchestratorRegistry:
   image:
-    repository: "ljtbbt/dac"
-    tag: "agent-registry-v0.9.0-amd64"
+    repository: "agent-registry"
+    tag: "v0.11.0-amd64"
 
 bizRoutingAgent:
   image:
-    repository: "ljtbbt/dac"
-    tag: "routing-agent-v0.9.0-amd64"
+    repository: "routing-agent"
+    tag: "v0.11.0-amd64"
 
 bizChartAgent:
   image:
-    repository: "ljtbbt/dac"
-    tag: "chart-agent-v0.9.0-amd64"
+    repository: "chart-agent"
+    tag: "v0.11.0-amd64"
+
+bizSkillAgent:
+  image:
+    repository: "skill-agent"
+    tag: "v0.11.0-amd64"
+
+skillHub:
+  image:
+    repository: "skill-hub"
+    tag: "v0.11.0-amd64"
 
 mysql:
+  image:
+    repository: "mysql"
+    tag: "8.0"
   rootPassword: "changeme"
 
 redis:
+  image:
+    repository: "redis"
+    tag: "7.0.4"
   password: "changeme"
 
 pgvector:
   image:
-    repository: "registry.cn-shanghai.aliyuncs.com/jamesxiong/pgvector"
+    repository: "pgvector"
     tag: "pg16-amd64"
   password: "changeme"
 
 neo4j:
+  image:
+    repository: "neo4j"
+    tag: "5.18.0"
   password: "changeme"

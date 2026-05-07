@@ -55,7 +55,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 COPY agent_card /app/agent_card
 
-COPY skills /app/skills
+RUN mkdir -p /app/skills
 
 RUN rm -fr /app/.venv/lib/python3.13/site-packages/a2a/utils/telemetry.py
 

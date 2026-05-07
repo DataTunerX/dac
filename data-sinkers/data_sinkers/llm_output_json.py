@@ -14,23 +14,42 @@ logger = logging.getLogger("llm_output_json")
 
 def _extract_single_key_json(text: str) -> Optional[dict]:
     """
-    Fallback for simple single-key JSON objects whose string value contains
-    unescaped double quotes (common when LLMs embed markdown in JSON).
+    Fallback: extract all simple string-valued keys from the JSON block.
+    Uses non-greedy matching so one key's value doesn't bleed into the next.
     """
     if not text:
         return None
-    m = re.search(r'\{\s*"(\w+)"\s*:\s*"(.*)"[\s,]*\}', text, re.DOTALL)
-    if m:
-        key = m.group(1)
-        raw_value = m.group(2)
+    # Non-greedy match stops at the first unescaped closing quote.
+    pairs = re.findall(r'"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+    if pairs:
+        result = dict(pairs)
         logger.info(
-            " === format_llm_output, fallback extraction succeeded for key "
-            "%r, value length=%s",
-            key,
-            len(raw_value),
+            " === format_llm_output, fallback extraction succeeded for keys "
+            "%s",
+            list(result.keys()),
         )
-        return {key: raw_value}
+        return result
     return None
+
+
+def _extract_json_block(text: str) -> str:
+    """
+    Extract the first balanced {...} block from text that may have Chinese
+    explanation text before or after the JSON.  Returns the original text
+    unchanged when no '{' is found so callers still see a meaningful error.
+    """
+    start = text.find('{')
+    if start == -1:
+        return text
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return text[start:]
 
 
 def _strip_code_fence_and_normalize_quotes(content: str) -> str:
@@ -44,6 +63,14 @@ def _strip_code_fence_and_normalize_quotes(content: str) -> str:
     cleaned = cleaned.strip()
     cleaned = cleaned.replace("\u201c", '"').replace("\u201d", '"')
     cleaned = cleaned.replace("\u2018", "'").replace("\u2019", "'")
+    # Normalize Chinese full-width punctuation that LLMs sometimes use in JSON
+    # structural positions (e.g. \uff08 where , is expected).
+    cleaned = cleaned.replace("\uff08", "(").replace("\uff09", ")")  # \uff08\uff09
+    cleaned = cleaned.replace("\uff0c", ",")                          # \uff0c
+    cleaned = cleaned.replace("\uff1a", ":")                          # \uff1a
+    cleaned = cleaned.replace("\uff3b", "[").replace("\uff3d", "]")  # \uff3b\uff3d
+    cleaned = cleaned.replace("\u3010", "[").replace("\u3011", "]")  # \u3010\u3011
+    cleaned = _extract_json_block(cleaned)
     return cleaned
 
 
