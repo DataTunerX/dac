@@ -1,7 +1,7 @@
-# Build stage — same Ubuntu base so native .so (pydantic-core, PyMuPDF) are glibc-compatible
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-ubuntu-timezone-amd64 AS uv
+# Build stage — Debian/glibc base so native .so (pydantic-core, PyMuPDF) are glibc-compatible
+FROM python:3.13-slim AS uv
 
-# Install uv (pip package, no apk needed)
+# Install uv (pip package)
 RUN pip install uv && \
     uv --version
 
@@ -42,11 +42,27 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /app/.venv/bin/python "pymupdf>=1.24.0"
 RUN /app/.venv/bin/python -c "import fitz; print('PyMuPDF OK')"
 
-# Final stage — Ubuntu base
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-ubuntu-timezone-amd64
+# Final stage — Debian/glibc base
+FROM python:3.13-slim
 
-# Ensure app user exists (Ubuntu base image may not have it)
-RUN id -u app &>/dev/null || (groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app)
+# Timezone (slim base has no TZ baked in)
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata \
+    && ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime \
+    && echo "America/New_York" > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
+ENV TZ="America/New_York"
+
+# Ensure app user exists (slim base may not have it)
+RUN id -u app >/dev/null 2>&1 || (groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app)
+
+# Extra apt repos: GitHub CLI (gh not in Debian repos) + bookworm-backports (openjdk-21 for jdtls-latest)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/backports.list \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install runtimes + LSP servers (single layer, clean up build deps afterwards)
 RUN apt-get update && apt-get install -y --no-install-recommends \

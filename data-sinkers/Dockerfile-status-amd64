@@ -1,8 +1,5 @@
 # Status API service - AMD64
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.12-amd64
-
-# If you are in China, you can use aliyun mirror to speed up
-RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources
+FROM python:3.12
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
@@ -13,7 +10,7 @@ WORKDIR /app
 
 # Install Python dependencies (status service only needs fastapi + uvicorn; use full reqs for consistency)
 COPY requirements.txt /tmp/
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
 # Copy application
 COPY . /app

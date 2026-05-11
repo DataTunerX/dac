@@ -1,7 +1,7 @@
 # 多阶段构建 Dockerfile (amd64)
 
 # 构建阶段
-FROM --platform=linux/amd64 docker.m.daocloud.io/golang:1.25-alpine AS builder
+FROM --platform=linux/amd64 golang:1.25-alpine AS builder
 
 # 设置工作目录
 WORKDIR /app
@@ -20,16 +20,16 @@ COPY . .
 
 # 编译应用（添加编译优化参数）
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -ldflags="-w -s" -o bin/dac-apiserver ./cmd/server
+    go build -p 2 -ldflags="-w -s" -o bin/dac-apiserver ./cmd/server
 
 # 运行阶段
-FROM --platform=linux/amd64 docker.m.daocloud.io/alpine:latest
+FROM --platform=linux/amd64 alpine:latest
 
 # 安装运行时依赖
 RUN apk --no-cache add ca-certificates tzdata
 
 # 设置时区
-ENV TZ=Asia/Shanghai
+ENV TZ=America/New_York
 
 # 创建非 root 用户
 RUN addgroup -g 1000 app && \

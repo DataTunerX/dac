@@ -1,7 +1,5 @@
-# Build stage with explicit platform specification
-#FROM ghcr.io/astral-sh/uv:python3.13-alpine AS uv
-
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/uv:python3.13-alpine-amd64 AS uv
+# Build stage
+FROM ghcr.io/astral-sh/uv:python3.13-alpine AS uv
 
 # Install the project into /app
 WORKDIR /app
@@ -24,10 +22,13 @@ ADD . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
-# Final stage with explicit platform specification
-#FROM docker.m.daocloud.io/python:3.13-alpine
+# Final stage
+FROM python:3.13-alpine
 
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-alpine-timezone-amd64
+RUN apk add --no-cache tzdata && \
+    ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime && \
+    echo "America/New_York" > /etc/timezone
+ENV TZ="America/New_York"
 
 COPY --from=uv --chown=app:app /app/.venv /app/.venv
 
