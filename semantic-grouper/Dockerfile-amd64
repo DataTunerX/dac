@@ -1,25 +1,23 @@
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.12-amd64
-
-RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources
+FROM python:3.12
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends tzdata && \
-    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    echo "Asia/Shanghai" > /etc/timezone && \
+    ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime && \
+    echo "America/New_York" > /etc/timezone && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-ENV TZ="Asia/Shanghai"
+ENV TZ="America/New_York"
 
 COPY requirements.txt /tmp
 
-RUN pip3 install -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install -r /tmp/requirements.txt
 
 WORKDIR /app
 
 ADD . /app
 
-RUN pip3 install /app/sdks/model_sdk-0.2.0-py3-none-any.whl -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install /app/sdks/model_sdk-0.2.0-py3-none-any.whl
 
 RUN chmod +x /app/entrypoint-api.sh /app/entrypoint-worker.sh
 

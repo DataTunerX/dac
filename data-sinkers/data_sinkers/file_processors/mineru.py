@@ -26,7 +26,7 @@ class MinerUContentType(StrEnum):
 
 class MinerULoader(BaseLoader):
 
-    def __init__(self, file_path: Union[str, Path], output_dir: Optional[str] = None ,method: Optional[str] = "auto", lang: Optional[str] = None):
+    def __init__(self, file_path: Union[str, Path], output_dir: Optional[str] = None ,method: Optional[str] = "txt", lang: Optional[str] = None):
     	self.mineru_path = Path("mineru")
     	self.file_path = file_path
     	self.output_dir = output_dir
@@ -102,7 +102,7 @@ class MinerULoader(BaseLoader):
         logger.info("[MinerU] Command completed successfully.")
 
 
-    def read_md_output(self, output_dir: Path, file_stem: str, method: str = "auto") -> list[dict[str, Any]]:
+    def read_md_output(self, output_dir: Path, file_stem: str, method: str = "txt") -> list[dict[str, Any]]:
         subdir = output_dir / file_stem / method
         md_file = subdir / f"{file_stem}.md"
 

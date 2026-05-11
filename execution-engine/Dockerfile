@@ -1,9 +1,7 @@
 # Build the manager binary
-FROM docker.m.daocloud.io/golang:1.24 AS builder
+FROM golang:1.24 AS builder
 ARG TARGETOS
 ARG TARGETARCH
-
-RUN go env -w GOPROXY=https://mirrors.aliyun.com/goproxy/,direct
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -28,19 +26,18 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 
 
 # for timezone
-FROM docker.m.daocloud.io/alpine:latest AS timezone
+FROM alpine:latest AS timezone
 RUN apk add --no-cache tzdata
 
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-#FROM gcr.io/distroless/static:nonroot
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/static:nonroot-amd64
+FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/manager .
 
-COPY --from=timezone /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
-ENV TZ=Asia/Shanghai
+COPY --from=timezone /usr/share/zoneinfo/America/New_York /etc/localtime
+ENV TZ=America/New_York
 
 USER 65532:65532
 
