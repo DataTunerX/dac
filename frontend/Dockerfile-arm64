@@ -12,6 +12,8 @@ RUN npm ci
 # Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
+# Do not inherit host NODE_OPTIONS (e.g. --no-opt from conda); Next.js Turbopack workers reject them.
+ENV NODE_OPTIONS=
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # Ensure `public/` exists for standalone copy (Next serves static files from here when present).
