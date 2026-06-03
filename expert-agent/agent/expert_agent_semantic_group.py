@@ -2,6 +2,7 @@ import json
 import hashlib
 import logging
 import sys
+import copy
 from contextlib import asynccontextmanager
 from pathlib import Path
 import click
@@ -29,7 +30,6 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import Event, EventQueue
 from a2a.client import A2AClient
 from typing_extensions import override
-from langchain_core.prompts.chat import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
 from a2a.types import TaskArtifactUpdateEvent, TaskStatusUpdateEvent, TaskState, TextPart
 from a2a.server.tasks import BasePushNotificationSender, InMemoryPushNotificationConfigStore, InMemoryTaskStore
 from a2a.server.tasks import TaskUpdater
@@ -37,16 +37,11 @@ from a2a.utils import new_agent_text_message, new_task, new_text_artifact
 from .redis_registry import RedisRegistry, HeartbeatService
 from model_sdk import ModelManager
 from langchain_core.messages import SystemMessage, HumanMessage
+from .react import ReActRunner
 from .dataservices_client import DataServicesClient, SemanticDomainInfo, SemanticGroupInfo
 from .agentregistry_client import AgentRegistryClient
 from .schema import ROLE_TYPE, AgentState, Memory, Message
-from .prompts import (  
-    COMMON_NEXT_STEP_PROMPT_GROUP_ZH, 
-    NEXT_STEP_PROMPT_ZH,
-    REQUERY_PROMPT_ZH,
-    OBSERVE_PROMPT_COMMON_ZH,
-    NEXT_STEP_PROMPT_EN
-)
+from .prompts import NEXT_STEP_PROMPT_ZH
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 
@@ -172,8 +167,56 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "agent_count",
         "query_preview",
         "parallel_agents",
+        "react_status",
+        "react_steps",
     },
     "agent_answer": {"target_agent"},
+    "sg_react_step_start": {"step", "max_steps", "message_count"},
+    "sg_react_llm_decision": {
+        "step",
+        "max_steps",
+        "thought_preview",
+        "thought_full",
+        "tool_names",
+        "tool_count",
+    },
+    "sg_react_tool_start": {
+        "step",
+        "tool_index",
+        "tool_total",
+        "tool_name",
+        "agent_name",
+        "descriptor_type",
+        "query_preview",
+        "query_full",
+        "code_ctx_count",
+        "doc_ctx_count",
+    },
+    "sg_react_tool_done": {
+        "step",
+        "tool_index",
+        "tool_total",
+        "tool_name",
+        "agent_name",
+        "result_chars",
+        "result_preview",
+        "repeat_of_previous",
+        "error",
+    },
+    "sg_react_step_analysis": {
+        "step",
+        "trigger",
+        "next_action",
+        "next_tool",
+        "diagnosis_preview",
+    },
+    "sg_react_step_done": {
+        "step",
+        "max_steps",
+        "observation_count",
+        "analysis_ran",
+    },
+    "sg_react_finished": {"status", "steps", "result_chars"},
 }
 
 # System Instructions to Agent
@@ -181,6 +224,7 @@ INSTRUCTIONS = """
 You are an intelligent expert who answers user questions based on relevant knowledge.
 
 """
+
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -215,40 +259,6 @@ class BaseAgent(BaseModel, ABC):
     content_types: list[str] = Field(description='Supported content types.')
 
 
-class LLMResult(BaseModel):
-
-    answer: Optional[str] = Field(
-        description='The answer of llm for user question.'
-    )
-
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
-    )
-
-    requery: Optional[str] = Field(
-        description='The regenerated new user query.'
-    )
-
-class RequeryResult(BaseModel):
-
-    requery: Optional[str] = Field(
-        description='The new query for user question.'
-    )
-
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
-    )
-
-class ObserveResult(BaseModel):
-
-    reason: Optional[str] = Field(
-        description='The reason for answer.'
-    )
-
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
-    )
-
 class TaskStatus(BaseModel):
 
     id: int = Field(description='Sequential ID for the task.')
@@ -273,18 +283,6 @@ class TaskStatusList(BaseModel):
     """Represents a list of tasks."""
     
     tasks: List[TaskStatus] = Field(description='List of tasks')
-
-class StepStatus(BaseModel):
-
-    id: int = Field(description='Sequential ID for the steps.')
-
-    query: str = Field(
-        description='description of subtask'
-    )
-
-    answer: str = Field(
-        description='answer of the step.'
-    )
 
 class AgentState(str, Enum):
     """Agent execution states"""
@@ -375,17 +373,19 @@ class ExpertAgent(BaseAgent):
         self.group_agent_cards: List[Tuple[Union[SemanticDomainInfo, SemanticGroupInfo], AgentCard]] = []
         self.current_step = 0
         self.state: AgentState = AgentState.IDLE
-        self.duplicate_threshold: int = 2
-        self.next_step_prompt = NEXT_STEP_PROMPT_ZH
         self.memory = Memory()
-        self.old_querys = []
         self.metadata = metadata
         self.max_steps=max_steps
         self.current_tasks_status = current_tasks_status
-        self.current_task_id = current_task_id
-        self.step_status_list: List[StepStatus] = []
         # Agent identity should come from DAC instance wiring, not request metadata.
         self.agent_id = (agent_id or semantic_group_id or "").strip()
+
+        self.react_runner = ReActRunner(
+            llm=self.llm,
+            invoke_agent=self._react_invoke_agent_callback,
+            build_tool_description=self._build_react_tool_description,
+            agent_name=self.agent_name,
+        )
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
@@ -466,6 +466,26 @@ class ExpertAgent(BaseAgent):
     @staticmethod
     def is_progress_frame(text: str) -> bool:
         return isinstance(text, str) and text.lstrip().startswith("[[DAC_PROGRESS]] ")
+
+    @staticmethod
+    def is_summary_artifact(text: str) -> bool:
+        """检测 text 是否是 DAC_SUMMARY 协议帧（SD Orchestrator → SG Expert）。"""
+        return isinstance(text, str) and text.lstrip().startswith("[[DAC_SUMMARY]] ")
+
+    @staticmethod
+    def parse_summary_artifact(text: str) -> Optional[str]:
+        """解析 DAC_SUMMARY 帧，返回 summary 文本；若非 summary 帧则返回 None。"""
+        if not isinstance(text, str):
+            return None
+        stripped = text.strip()
+        if not stripped.startswith("[[DAC_SUMMARY]] "):
+            return None
+        json_str = stripped[len("[[DAC_SUMMARY]] "):]
+        try:
+            payload = json.loads(json_str)
+            return payload.get("summary", "")
+        except (json.JSONDecodeError, TypeError):
+            return None
 
     @staticmethod
     def _truncate_progress_message(text: str, limit: int = 320) -> str:
@@ -661,233 +681,6 @@ class ExpertAgent(BaseAgent):
 
         return None
 
-
-    async def invoke_common(self, knowledge: str = "") -> LLMResult:
-        """
-        Invoke LLM for one step. knowledge: 背景知识，来自 get_knowledge()（如 A2A 拉取的领域知识），
-        会填入 prompt 的「背景知识」部分；为空时表示无额外背景知识。
-        """
-        current_task = self.metadata.get('current_task', '')
-
-        system_template = COMMON_NEXT_STEP_PROMPT_GROUP_ZH
-        human_template = "{query}"
-
-        terminate_json_prompt_instructions_zh: dict = {
-            "answer": "基于背景知识，Java是一种高级、面向对象、跨平台的编程语言...",
-            "conclusion": "terminate",
-            "requery": ""
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "answer": "当前背景知识主要涵盖Java和Go语言，无法提供Python相关的详细信息",
-            "conclusion": "continue",
-            "requery": "能否提供Python编程语言的具体介绍和特点？"
-        }
-
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        knowledge_for_prompt = knowledge.strip() if knowledge else "（无）"
-        current_tasks_status_str = self.format_tasks_status(self.current_tasks_status.tasks if self.current_tasks_status else [])
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["current_task", "current_time", "knowledge"],
-            partial_variables={"current_tasks_status": current_tasks_status_str, "terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
-        )
-
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
-
-        answer = None
-
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="biz-expert-common",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "current_task": self.query, "current_time": current_time, "knowledge": knowledge_for_prompt},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.debug(f" === ExpertAgent.invoke_common, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
-            data_dict = {
-                "answer": "System error: Unable to process model response",
-                "conclusion": "error",
-                "requery": ""
-            }
-
-        llm_result = LLMResult(**data_dict)
-
-        logger.info(f" === ExpertAgent.invoke_common , llm_result = {llm_result}")
-
-        # add last step query into old_querys, next loop will use these old querys to regenerate query to avoid generate the same query.
-        self.old_querys.append(self.query)
-
-        return llm_result
-
-
-    async def invoke_requery(self) -> RequeryResult:
-
-        step_history = self.get_step_history_for_requery()
-
-        system_template = REQUERY_PROMPT_ZH
-
-        human_template = "{query}"
-
-        terminate_json_prompt_instructions_zh: dict = {
-            "requery": "新生成的问题...",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "requery": "",
-            "conclusion": "continue"
-        }
-
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["original_query","history_querys","current_time","step_history"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
-        )
-
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-
-        history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
-
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
-
-        answer = None
-
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="biz-expert-requery",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "original_query": self.original_query,"history_querys": history_querys, "current_time":current_time, "step_history":step_history},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.invoke_requery, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
-            data_dict = {
-                "requery": "",
-                "conclusion": "error"
-            }
-
-        llm_result = RequeryResult(**data_dict)
-
-        logger.debug(f" === ExpertAgent.invoke_requery , llm_result = {llm_result}")
-
-        return llm_result
-
-    async def observe_common(self, query, answer, knowledge) -> ObserveResult:
-
-        system_template = OBSERVE_PROMPT_COMMON_ZH
-
-        human_template = "question: {query};\n\nanswer:{answer}"
-
-        terminate_json_prompt_instructions_zh: dict = {
-            "reason": "满足问题的原因",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "reason": "不满足问题的原因",
-            "conclusion": "continue"
-        }
-
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["knowledge","current_time"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
-        )
-
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
-
-        llm_answer = None
-
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="biz-expert-observe_common",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": query}
-            )
-
-            llm_answer = await chain.ainvoke(
-                {"query": query, "answer":answer, "knowledge":knowledge, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": llm_answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.observe_common, answer = {llm_answer}")
-
-        data_dict = self.format_llm_output(llm_answer)
-
-        if data_dict is None:
-            data_dict = {
-                "reason": "System error: Unable to process model response",
-                "conclusion": "error"
-            }
-
-        llm_result = ObserveResult(**data_dict)
-
-        logger.debug(f" === ExpertAgent.observe_common , llm_result = {llm_result}")
-
-        return llm_result
 
     def _agent_url_from_semantic_domain(self, dd_namespace: str, dd_name: str) -> str:
         """
@@ -1185,15 +978,28 @@ class ExpertAgent(BaseAgent):
     ) -> Tuple[SemanticDomainInfo, str]:
         """
         Call one domain agent via A2A and return (sd, aggregated_text). On error returns (sd, "").
+        Per-agent answer_model override: structured and unstructured (doc) → summarized; code/group → original.
         """
         try:
+            # Clone payload per agent so concurrent gather calls don't share the same dict
+            per_agent_payload: Dict[str, Any] = copy.deepcopy(send_message_payload)
+            dt = (getattr(sd, 'descriptor_type', '') or "").strip().lower()
+            meta: Dict[str, Any] = per_agent_payload.setdefault('metadata', {})
+            meta['answer_model'] = self._answer_model_for_descriptor_type(dt)
+            agent_name = getattr(agent_card, "name", "") or "(unknown)"
+            logger.info(
+                "[SGExpert] dispatch to agent=%s descriptor_type=%s answer_model=%s",
+                agent_name, dt, meta['answer_model'],
+            )
+
             client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
             streaming_request = SendStreamingMessageRequest(
                 id=uuid4().hex,
-                params=MessageSendParams(**send_message_payload),
+                params=MessageSendParams(**per_agent_payload),
             )
             stream_response = client.send_message_streaming(streaming_request)
             agent_texts: List[str] = []
+            summary_text: Optional[str] = None
             async for chunk in stream_response:
                 result = self._get_response_text_from_chunk(chunk)
                 if result != "":
@@ -1206,20 +1012,27 @@ class ExpertAgent(BaseAgent):
                         if callback is not None:
                             await callback(result)
                         continue
+                    if self.is_summary_artifact(result):
+                        summary_text = self.parse_summary_artifact(result)
+                        logger.info(
+                            "[DACSummary][SG-Expert] received summary frame from agent=%s (%d chars)",
+                            getattr(agent_card, "name", "") or "(unknown)",
+                            len(summary_text) if summary_text else 0,
+                        )
+                        continue
                     agent_texts.append(result)
-            text = " ".join(agent_texts) if agent_texts else ""
-            # NOTE:
-            # Keep only SG Orchestrator-side final answer presentation in UI.
-            # SG Expert's duplicated "agent_answer" progress frame is intentionally disabled.
-            # if text:
-            #     target_agent_name = getattr(agent_card, "name", "") or "(unknown)"
-            #     await self.emit_progress(
-            #         "agent_answer",
-            #         message=f"Target agent [{target_agent_name}] answer:\n{text}",
-            #         status="running",
-            #         task_id=self.current_task_id,
-            #         extra={"target_agent": target_agent_name},
-            #     )
+            if summary_text is not None:
+                # 优先使用 DAC_SUMMARY 协议携带的 LLM 总结答案，丢弃中间 step 的冗余数据
+                text = summary_text
+                logger.info(
+                    "[DACSummary][SG-Expert] using summary text (%d chars) from agent=%s, "
+                    "discarded %d raw text chunks",
+                    len(text),
+                    getattr(agent_card, "name", "") or "(unknown)",
+                    len(agent_texts),
+                )
+            else:
+                text = " ".join(agent_texts) if agent_texts else ""
             return (sd, text)
         except Exception as e:
             logger.warning("A2A call failed for agent %s: %s", getattr(agent_card, 'url', ''), e)
@@ -1240,17 +1053,103 @@ class ExpertAgent(BaseAgent):
                     pass
         return ""
 
-    # descriptor_type 对应的角色说明：以 semantic domain 的 descriptor_type 为权威来源，
-    # 明确每个 agent 适合干什么。AgentCard.description 通常不会说明这些，因此 planner 必须依赖此映射。
     _DESCRIPTOR_TYPE_ROLE: Dict[str, str] = {
         "code": "Retrieves and analyzes source code from code repositories. Contains business logic, data models, "
-                "field mappings, and table relationships. Provides foundational context for structured agents. Run in earlier phases.",
-        "unstructured": "Retrieves and analyzes unstructured documents (API docs, design docs, manuals). Provides foundational context. Run in earlier phases.",
-        "structured": "Queries structured data (SQL, ChatBI, data analysis, charts). Often benefits from code/document context. Run in later phases.",
+                "field mappings, and table relationships.",
+        "unstructured": "A semantic domain's document knowledge base. Retrieves and analyzes all documents "
+            "within the domain — API specs, design docs, data dictionaries, business rules, "
+            "field descriptions, manuals, etc.",
+        "structured": "Queries structured data (SQL, ChatBI, data analysis, charts). Can use code/doc context when available.",
         "group": "A composite child group agent that encapsulates an entire sub-domain. It has its own internal agents "
-                 "and planning. Treat it as a black-box expert for its domain. Include if the user query overlaps with "
-                 "its domain description. Can run in any phase; no context_from is typically needed.",
+                 "and planning. Treat it as a black-box expert for its domain.",
     }
+
+    _DESCRIPTOR_TYPE_USE_WHEN: Dict[str, str] = {
+        "code": "User needs business logic, field semantics, or implementation rules that may affect accurate SQL/data queries. Call BEFORE structured when rules define filters, valid records, or metric meaning.",
+        "unstructured": "User needs documentation, API specs, data dictionaries, or business口径 that may affect accurate SQL/data queries. Call BEFORE structured when docs define statistics rules or field meaning.",
+        "structured": "User needs live data, statistics, or reports. Receives code/doc context automatically when SG orchestrator gathered foundation first — use for final accurate data retrieval.",
+        "group": "User question overlaps with this sub-domain and a composite expert is the right entry point.",
+    }
+
+    _DESCRIPTOR_TYPE_DO_NOT_USE: Dict[str, str] = {
+        "code": "Never as a substitute for structured when the user only needs final numbers and rules are already known from prior context.",
+        "unstructured": "Never as a substitute for structured when the user only needs final numbers and口径 are already known from prior context.",
+        "structured": "Not as the first and only call when the question depends on unknown business rules/field semantics and no code/doc context exists yet.",
+        "group": "A more specific code, doc, or structured agent in this group already covers the question.",
+    }
+
+    def _get_full_agent_description(
+        self,
+        member: Union[SemanticDomainInfo, SemanticGroupInfo],
+        agent_card: AgentCard,
+    ) -> str:
+        card_desc = (getattr(agent_card, "description", None) or "").strip()
+        if card_desc:
+            return card_desc
+        if isinstance(member, SemanticDomainInfo):
+            return self._get_agent_description(member)
+        agent_card_str = getattr(member, "agent_card", None) or ""
+        if agent_card_str and isinstance(agent_card_str, str):
+            try:
+                data = json.loads(agent_card_str.strip())
+                if isinstance(data, dict):
+                    desc = data.get("description", "")
+                    if desc and isinstance(desc, str):
+                        return desc.strip()
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return (getattr(member, "group_name", "") or "").strip()
+
+    @staticmethod
+    def _answer_model_for_descriptor_type(descriptor_type: str) -> str:
+        """A2A metadata answer_model: structured and unstructured (doc SD) → summarized at SD execute();
+
+        Unstructured SD reads descriptorType from DescriptorTypes env; utility a2a uses original.
+        """
+        dt = (descriptor_type or "").strip().lower()
+        if dt == "structured" or dt.startswith("structured-"):
+            return "summarized"
+        if dt == "unstructured" or "unstructured" in dt:
+            return "summarized"
+        return "original"
+
+    def _build_react_tool_description(
+        self,
+        member: Union[SemanticDomainInfo, SemanticGroupInfo],
+        agent_card: AgentCard,
+        name_to_agent: Dict[str, Tuple[Union[SemanticDomainInfo, SemanticGroupInfo], AgentCard]],
+    ) -> str:
+        dt = (getattr(member, "descriptor_type", "") or "").strip().lower() or "unknown"
+        role_key = dt if dt in self._DESCRIPTOR_TYPE_ROLE else (
+            "structured" if dt.startswith("structured-") else (
+                "unstructured" if "unstructured" in dt else dt
+            )
+        )
+        role = self._get_role_by_descriptor_type(member)
+        use_when = self._DESCRIPTOR_TYPE_USE_WHEN.get(
+            role_key,
+            "When this agent's domain capability matches the current information need.",
+        )
+        do_not_use = self._DESCRIPTOR_TYPE_DO_NOT_USE.get(
+            role_key,
+            "When another agent type is a better fit for the current step.",
+        )
+        full_desc = self._get_full_agent_description(member, agent_card)
+        agent_name = getattr(agent_card, "name", "") or "(unknown)"
+        display = self._agent_display_name(agent_name, name_to_agent)
+
+        lines = [
+            f"Agent: {display}",
+            f"descriptor_type: {dt}",
+            f"Role: {role}",
+            f"Use when: {use_when}",
+            f"Do NOT use when: {do_not_use}",
+            "SG routing: pass the user's question with original semantics; this SD Expert decomposes and executes internally.",
+            "Cooperation: when SQL accuracy depends on rules/口径, SG should route code/doc first, then structured with context attached.",
+        ]
+        if full_desc:
+            lines.append(f"Description: {full_desc}")
+        return "\n".join(lines)
 
     def _get_role_by_descriptor_type(self, member: Union[SemanticDomainInfo, SemanticGroupInfo]) -> str:
         """
@@ -1276,6 +1175,44 @@ class ExpertAgent(BaseAgent):
             if agent_name:
                 name_to_agent[agent_name] = (sd, ac)
         return name_to_agent
+
+    async def _react_invoke_agent_callback(
+        self,
+        sd: Union[SemanticDomainInfo, SemanticGroupInfo],
+        agent_card: AgentCard,
+        query_text: str,
+        httpx_client: Optional[httpx.AsyncClient] = None,
+        invoke_context: Optional[Dict[str, List[str]]] = None,
+    ) -> str:
+        """ReActRunner callback: invoke a single agent via A2A with proper answer_model."""
+        try:
+            dt = (getattr(sd, 'descriptor_type', '') or "").strip().lower()
+            meta_answer_model = self._answer_model_for_descriptor_type(dt)
+            agent_name = getattr(agent_card, "name", "") or "(unknown)"
+            logger.info(
+                "[SGExpert][ReAct] dispatch to agent=%s descriptor_type=%s query_preview=%s code_ctx=%d doc_ctx=%d",
+                agent_name, dt, query_text[:120],
+                len((invoke_context or {}).get("code_contexts", [])),
+                len((invoke_context or {}).get("doc_contexts", [])),
+            )
+            code_contexts = (invoke_context or {}).get("code_contexts") or None
+            doc_contexts = (invoke_context or {}).get("doc_contexts") or None
+            payload = self._build_send_message_payload(
+                query_text,
+                code_contexts=code_contexts,
+                doc_contexts=doc_contexts,
+            )
+            payload.setdefault('metadata', {})['answer_model'] = meta_answer_model
+            if httpx_client is not None:
+                result = await self._fetch_knowledge_from_agent(httpx_client, payload, sd, agent_card)
+            else:
+                async with httpx.AsyncClient(timeout=120.0) as _client:
+                    result = await self._fetch_knowledge_from_agent(_client, payload, sd, agent_card)
+            _, text = result
+            return text or "(agent returned empty result)"
+        except Exception as e:
+            logger.warning("[SGExpert][ReAct] agent call failed: %s", e)
+            return f"(error calling agent: {e})"
 
     @staticmethod
     def _agent_display_name(full_name: str, name_to_agent: Dict[str, Tuple[Union["SemanticDomainInfo", "SemanticGroupInfo"], "AgentCard"]]) -> str:
@@ -1336,8 +1273,12 @@ class ExpertAgent(BaseAgent):
             "validation rules, data models, and table relationships that are NOT in the database schema. "
             "Useful when: (1) user wants to see code/implementation, OR (2) a structured agent also exists and "
             "the code context can help it generate more accurate SQL (business logic lives in code, not in DB).\n"
-            "- unstructured: Retrieves/analyzes documents (API docs, design docs, manuals). "
-            "ONLY useful when the user wants to look up documentation or specifications.\n"
+            "- unstructured: A semantic domain's document knowledge base. "
+            "Retrieves and analyzes all documents within the domain — API specs, design docs, "
+            "data dictionaries, business rules, field descriptions, manuals, etc. "
+            "If this domain is relevant to the user query, the unstructured agent MUST be included "
+            "in Phase 1 as foundational knowledge context. It is NOT limited to documentation lookup; "
+            "it is the domain's knowledge backbone that provides context for ALL downstream agents.\n"
             "- structured (including structured-mysql, structured-postgres, etc.): Queries databases, generates SQL, "
             "data analysis, charts. ONLY useful when the user wants to query actual data, get statistics, or generate reports.\n"
             "- group: A composite child-group agent that encapsulates an entire sub-domain with its own internal agents. "
@@ -1350,17 +1291,29 @@ class ExpertAgent(BaseAgent):
             "the key action (query data? view code? read docs? mixed?).\n\n"
             "Step 2 — Match Capabilities: For each available agent, does its descriptor_type match the intent? "
             "Write out your judgment for EVERY agent (include or exclude, with a brief reason).\n\n"
-            "Step 3 — Apply Co-existence Rule: If BOTH code and structured agents exist:\n"
+            "Step 3 — Apply Co-existence Rule:\n"
+            "  A) unstructured agent is the DOMAIN KNOWLEDGE BASE. If the domain contains an unstructured "
+            "agent and the domain is relevant to the query, ALWAYS include it in Phase 1. "
+            "Do NOT guess what documents it contains — it holds all of the domain's documentation "
+            "(API specs, design docs, field descriptions, business rules, etc.). "
+            "It provides foundational context for ALL other agents in the domain.\n"
+            "  B) If BOTH code and structured agents exist:\n"
             "  - If the query involves data querying (SQL, statistics, reports, data analysis), "
             "INCLUDE BOTH: code agent in Phase 1 (provides business logic context), "
             "structured agent in Phase 2 with context_from code agent (generates more accurate SQL). "
             "Business logic (soft-delete flags, status filters, computed fields, table joins) lives in code, not in DB schema.\n"
             "  - If the query is ONLY about code/implementation with NO data query intent, EXCLUDE structured agent.\n"
-            "  - Only EXCLUDE code agent from a data query if NO structured agent exists in the group.\n\n"
+            "  - Only EXCLUDE code agent from a data query if NO structured agent exists in the group.\n"
+            "  C) When code, unstructured, AND structured all coexist and the domain is relevant: "
+            "INCLUDE all three — code and unstructured in Phase 1 as foundational context providers, "
+            "structured in Phase 2 with context_from both.\n\n"
             "Step 4 — Determine Exclusions:\n"
-            "  - API docs/parameters/error codes → EXCLUDE structured agents\n"
+            "  - API docs/parameters/error codes (no data query intent) → EXCLUDE structured agents\n"
             "  - Deployment/installation manuals → EXCLUDE code and structured agents\n"
             "  - Pure code questions (no data intent) → EXCLUDE structured agents\n"
+            "  - unstructured agents: DO NOT try to guess what documents they contain. "
+            "They are domain knowledge bases. EXCLUDE them ONLY when the entire domain is irrelevant "
+            "to the query — not when you think the docs \"might not be helpful.\"\n"
             "  - The query spans multiple domains (e.g., \"check the code AND query the data\") → INCLUDE all relevant\n"
             "  - The query is genuinely ambiguous → INCLUDE rather than exclude\n\n"
             "Step 5 — Plan Phases: For included agents, determine execution order:\n"
@@ -1489,7 +1442,9 @@ class ExpertAgent(BaseAgent):
             logger.warning("[ExecutionPlanner] LLM 规划失败: %s，使用 fallback (全部 Phase 1 并行)", e)
             return fallback_plan
 
-    def _build_send_message_payload(self, query_text: str, extra_context: str = "") -> Dict[str, Any]:
+    def _build_send_message_payload(self, query_text: str, extra_context: str = "",
+                                     code_contexts: Optional[List[str]] = None,
+                                     doc_contexts: Optional[List[str]] = None) -> Dict[str, Any]:
         """构建 A2A 发送消息的 payload。extra_context 通过 metadata 传递，不污染 query。"""
         upstream_metadata = self.metadata if isinstance(self.metadata, dict) else {}
         metadata: Dict[str, Any] = {
@@ -1502,11 +1457,17 @@ class ExpertAgent(BaseAgent):
             metadata['propagated_history'] = upstream_metadata.get('propagated_history')
         if extra_context:
             metadata['extra_context'] = extra_context
+        if code_contexts:
+            metadata['code_contexts'] = code_contexts
+        if doc_contexts:
+            metadata['doc_contexts'] = doc_contexts
         logger.debug(
-            "[SGExpert] downstream metadata ready: user_id=%s run_id=%s extra_context_len=%d",
+            "[SGExpert] downstream metadata ready: user_id=%s run_id=%s extra_context_len=%d code_contexts=%d doc_contexts=%d",
             metadata.get('user_id', ''),
             metadata.get('run_id', ''),
             len(extra_context or ""),
+            len(code_contexts or []),
+            len(doc_contexts or []),
         )
         return {
             'message': {
@@ -1540,7 +1501,7 @@ class ExpertAgent(BaseAgent):
                 dd = getattr(member, 'dd_name', '') or getattr(member, 'semantic_domain_id', '') or 'sd'
                 member_label = f"{ns}/{dd}"
             char_len = len(text) if text else 0
-            preview = (text[:120] + "..." if len(text) > 120 else text) if text else "(空)"
+            preview = text if text else "(空)"
             preview = preview.replace("\n", " ").strip()
 
             logger.info("[知识块 %s] %s (%s) | %d 字符 | %s", idx, agent_short, member_label, char_len, preview)
@@ -1558,234 +1519,100 @@ class ExpertAgent(BaseAgent):
 
     async def get_knowledge(self) -> str:
         """
-        If this agent is bound to a semantic group, call all resolved domain agents via A2A.
-
-        执行策略（LLM 驱动的动态分阶段执行）：
-        1. 调用 LLM 分析所有 agent 的能力，生成执行计划（哪些 agent 先执行、哪些后执行、
-           后执行的 agent 需要哪些先执行 agent 的结果作为上下文）
-        2. 按阶段顺序执行：同阶段内的 agent 并行执行
-        3. 后续阶段的 agent 根据计划中的 context_from 选择性地接收先前 agent 的结果
-
-        如果 LLM 规划失败，回退到所有 agent 并行执行、不传递上下文的安全默认策略。
+        统一 ReAct 知识获取：所有 member agent（code / doc / structured / group）均为工具，
+        LLM 在循环内按需调用；向上游仅返回 ReAct 综合答案。
         """
         if not self.group_agent_cards:
             return ""
 
         query = self.query
-        self._upstream_prior_block = str(
+        prior_context = str(
             (self.metadata or {}).get("upstream_prior_knowledge", "") or ""
         ).strip()
         name_to_agent = self._build_name_to_agent_map()
+        qp = self._query_preview_for_progress(query)
+        agent_names = [getattr(ac, "name", "") or "(unknown)" for _, ac in self.group_agent_cards]
+        agents_display = ", ".join(
+            self._agent_display_name(n, name_to_agent) for n in agent_names
+        ) or "-"
 
-        logger.info("[SemanticGroup] get_knowledge 开始 | 组内 agent 数: %d", len(self.group_agent_cards))
-
-        # ===== Step 1: LLM 驱动的执行规划 =====
-        execution_plan = await self._plan_execution_order()
-        plan_meta = self._format_progress_plan_bundle(query, execution_plan, name_to_agent)
-        # Spell out "phase N" (not P1); avoid "wave" — use plain execution-phase wording.
-        plan_msg = (
-            f"query: {plan_meta['query_preview']} | "
-            f"{plan_meta['phase_count']} execution phase(s), phase order: {plan_meta['execution_order']} | "
-            f"{plan_meta['plan_outline']} | "
-            f"Note: {plan_meta['phase_order_hint']}"
+        logger.info(
+            "[SemanticGroup] get_knowledge 开始 (unified ReAct) | agents=%d | %s",
+            len(self.group_agent_cards), agents_display,
         )
+
         await self.emit_progress(
-            "execution_plan_ready",
-            message=self._truncate_progress_message(plan_msg, 1200),
-            status="done",
+            "phase_started",
+            message=self._truncate_progress_message(
+                f"ReAct START | query: {qp} | {len(self.group_agent_cards)} agent tool(s): {agents_display}",
+                560,
+            ),
+            status="running",
             extra={
-                "phase_count": plan_meta["phase_count"],
-                "query_preview": plan_meta["query_preview"],
-                "execution_order": plan_meta["execution_order"],
-                "dependency_summary": plan_meta["dependency_summary"],
-                "plan_outline": plan_meta["plan_outline"],
-                "phase_order_hint": plan_meta["phase_order_hint"],
+                "phase": 1,
+                "total_phases": 1,
+                "agent_count": len(self.group_agent_cards),
+                "query_preview": qp,
+                "parallel_agents": self._truncate_progress_message(agents_display, 500),
+                "context_from": "upstream_prior_knowledge" if prior_context else "",
             },
         )
 
-        # ===== Step 2: 按阶段执行 =====
-        logger.info("[SemanticGroup] 按计划执行，共 %d 阶段", len(execution_plan))
-        total_phases = len(execution_plan)
-        all_knowledge_parts: List[str] = []
-        # 存储每个 agent 的格式化结果（与 _format_agent_results 输出的 block 一致），
-        # 供后续阶段的 context_from 选择性传递使用
-        agent_results_by_name: Dict[str, str] = {}
-        global_idx = 1
+        async def _react_progress_emitter(
+            event: str,
+            *,
+            message: str,
+            status: str = "running",
+            extra: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            await self.emit_progress(
+                event,
+                message=message,
+                status=status,
+                extra=extra,
+            )
 
-        # 复用同一个 httpx.AsyncClient，避免每个阶段重复创建/销毁连接
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
         async with httpx.AsyncClient(timeout=120.0) as httpx_client:
-            for phase_info in execution_plan:
-                phase_num = phase_info.get("phase", 1)
-                phase_agent_names = phase_info.get("agents", [])
-                context_from_names = phase_info.get("context_from", [])
-                agents_display = [self._agent_display_name(a, name_to_agent) for a in phase_agent_names]
-                ctx_display = [self._agent_display_name(c, name_to_agent) for c in context_from_names] if context_from_names else []
-                qp = self._query_preview_for_progress(query)
-                agents_joined = ", ".join(agents_display) or "-"
-                ctx_joined = ", ".join(ctx_display) if ctx_display else ""
-                n_parallel = len(phase_agent_names)
-                n_ctx = len(context_from_names) if context_from_names else 0
-                phase_start_msg = (
-                    f"step {phase_num}/{total_phases} START | "
-                    f"query: {qp} | "
-                    f"{n_parallel} parallel agent(s) in this phase"
-                    + (
-                        f" | upstream context from {n_ctx} source(s)"
-                        if n_ctx
-                        else " | no upstream context (user query only)"
-                    )
-                )
-                await self.emit_progress(
-                    "phase_started",
-                    message=self._truncate_progress_message(phase_start_msg, 560),
-                    status="running",
-                    extra={
-                        "phase": phase_num,
-                        "total_phases": total_phases,
-                        "agent_count": len(phase_agent_names),
-                        "query_preview": qp,
-                        "parallel_agents": self._truncate_progress_message(agents_joined, 500),
-                        "context_from": self._truncate_progress_message(ctx_joined, 500) if ctx_joined else "",
-                    },
-                )
-                if ctx_display:
-                    logger.info("[Phase %s] 执行: %s | 上下文来自: %s", phase_num, ", ".join(agents_display), ", ".join(ctx_display))
-                else:
-                    logger.info("[Phase %s] 执行: %s", phase_num, ", ".join(agents_display))
+            react_result = await self.react_runner.run(
+                user_query=query,
+                prior_context=prior_context,
+                agents=self.group_agent_cards,
+                name_to_agent=name_to_agent,
+                user_id=metadata.get("user_id", ""),
+                run_id=metadata.get("run_id", ""),
+                trace_id=metadata.get("trace_id", ""),
+                httpx_client=httpx_client,
+                react_max_steps=20,
+                nudge_retries=2,
+                progress_emitter=_react_progress_emitter,
+            )
 
-                # 解析本阶段需要执行的 agent
-                phase_agents: List[Tuple[SemanticDomainInfo, AgentCard]] = []
-                for name in phase_agent_names:
-                    if name in name_to_agent:
-                        phase_agents.append(name_to_agent[name])
-                    else:
-                        logger.warning("[Phase %s] Agent '%s' from execution plan not found in name_to_agent map, skipping", phase_num, name)
+        react_trace = getattr(self.react_runner, "last_run_trace", None) or {}
+        await self.emit_progress(
+            "phase_finished",
+            message=self._truncate_progress_message(
+                f"ReAct DONE | query: {qp} | result: {len(react_result)} chars",
+                560,
+            ),
+            status="done",
+            extra={
+                "phase": 1,
+                "total_phases": 1,
+                "ok_count": 1,
+                "agent_count": len(self.group_agent_cards),
+                "query_preview": qp,
+                "parallel_agents": self._truncate_progress_message(agents_display, 500),
+                "react_status": react_trace.get("status", ""),
+                "react_steps": react_trace.get("steps", 0),
+            },
+        )
 
-                if not phase_agents:
-                    logger.info("[Phase %s] No valid agents to execute, skipping", phase_num)
-                    continue
-
-                # 构建 extra_context：选择性附加先前 agent 的结果，通过 metadata 传递
-                context_parts: List[str] = []
-                for ctx_name in context_from_names:
-                    if ctx_name in agent_results_by_name and agent_results_by_name[ctx_name]:
-                        context_parts.append(agent_results_by_name[ctx_name])
-                    else:
-                        # fallback: LLM 可能返回简称，按 -dd- 前缀匹配
-                        for k in agent_results_by_name:
-                            if k.startswith(ctx_name + "-dd-"):
-                                context_parts.append(agent_results_by_name[k])
-                                break
-
-                # extra_context 顺序：上游 prior（metadata.upstream_prior_knowledge）固定在最前，
-                # 再衔接本组内 context_from 的前序 phase 结果（若有）。
-                upstream_blk = (getattr(self, "_upstream_prior_block", "") or "").strip()
-                in_group_ctx = "\n\n".join(context_parts) if context_parts else ""
-                extra_context = ""
-                if upstream_blk and in_group_ctx:
-                    extra_context = (
-                        f"{upstream_blk}\n\n"
-                        "---\n"
-                        "组内 context_from（本语义组前序阶段）\n"
-                        "---\n\n"
-                        f"{in_group_ctx}"
-                    ).strip()
-                elif upstream_blk:
-                    extra_context = upstream_blk
-                elif in_group_ctx:
-                    extra_context = in_group_ctx
-
-                if extra_context:
-                    if context_parts:
-                        ctx_summary = ", ".join(
-                            f"{self._agent_display_name(n, name_to_agent)}({len(c)}字)"
-                            for n, c in zip(context_from_names, context_parts)
-                        )
-                        if upstream_blk:
-                            ctx_summary = f"upstream_prior + {ctx_summary}"
-                    else:
-                        ctx_summary = "upstream_prior_knowledge" if upstream_blk else "(context)"
-                    logger.info(
-                        "[Phase %s] extra_context: %d 字 | 来源: %s",
-                        phase_num,
-                        len(extra_context),
-                        ctx_summary,
-                    )
-                    _preview = extra_context[:400].replace("\n", " ").strip() + (
-                        "..." if len(extra_context) > 400 else ""
-                    )
-                    logger.info("[Phase %s] extra_context 预览: %s", phase_num, _preview)
-                    ctx_ready_msg = (
-                        f"step {phase_num}/{total_phases} | "
-                        f"query: {qp} | "
-                        f"context assembled for this phase ({len(ctx_display)} in-group source(s))"
-                    )
-                    await self.emit_progress(
-                        "phase_context_ready",
-                        message=self._truncate_progress_message(ctx_ready_msg, 520),
-                        status="running",
-                        extra={
-                            "phase": phase_num,
-                            "total_phases": total_phases,
-                            "context_count": len(context_parts),
-                            "query_preview": qp,
-                            "context_from": self._truncate_progress_message(", ".join(ctx_display), 500),
-                        },
-                    )
-                elif context_from_names:
-                    logger.info("[Phase %s] context_from 未找到有效结果，不传递 extra_context", phase_num)
-
-                # query 保持原始用户问题，extra_context 通过 metadata 传递
-                payload = self._build_send_message_payload(query, extra_context=extra_context)
-
-                tasks = [
-                    self._fetch_knowledge_from_agent(httpx_client, payload, sd, ac)
-                    for sd, ac in phase_agents
-                ]
-                results: List[Tuple[SemanticDomainInfo, str]] = await asyncio.gather(*tasks, return_exceptions=False)
-
-                # 格式化结果并存储
-                parts = self._format_agent_results(phase_agents, results, start_idx=global_idx)
-                all_knowledge_parts.extend(parts)
-
-                # 将格式化后的知识块存入 agent_results_by_name，供后续阶段 context_from 使用
-                part_idx = 0
-                for (sd, ac), (_, text) in zip(phase_agents, results):
-                    agent_name = getattr(ac, "name", "") or "(unknown)"
-                    if text and part_idx < len(parts):
-                        agent_results_by_name[agent_name] = parts[part_idx]
-                        part_idx += 1
-
-                ok_count = sum(1 for (_, t) in results if t)
-                logger.info("[Phase %s] 完成: %d/%d 有内容", phase_num, ok_count, len(results))
-                phase_done_msg = (
-                    f"step {phase_num}/{total_phases} DONE | "
-                    f"query: {qp} | "
-                    f"results: {ok_count}/{len(results)} agent(s) with content"
-                )
-                await self.emit_progress(
-                    "phase_finished",
-                    message=self._truncate_progress_message(phase_done_msg, 560),
-                    status="done",
-                    extra={
-                        "phase": phase_num,
-                        "total_phases": total_phases,
-                        "ok_count": ok_count,
-                        "agent_count": len(results),
-                        "query_preview": qp,
-                        "parallel_agents": self._truncate_progress_message(agents_joined, 500),
-                    },
-                )
-                global_idx += len(phase_agents)
-
-        logger.info("[SemanticGroup] get_knowledge 完成 | 总知识块数: %d", len(all_knowledge_parts))
-        out = "\n\n".join(all_knowledge_parts) if all_knowledge_parts else ""
-        ## do not append upstream prior task answer in the knowledge which is from sd members of sg expert.
-        # ub = (getattr(self, "_upstream_prior_block", "") or "").strip()
-        # if ub:
-        #     sep = "\n\n================\n\n"
-        #     out = f"{ub}{sep}{out}".strip() if out else ub
-        return out
+        logger.info(
+            "[SemanticGroup] get_knowledge 完成 | 返回 ReAct 综合答案 (%d chars)",
+            len(react_result),
+        )
+        return react_result
 
     def custom_json_serializer(self, obj):
 
@@ -1838,131 +1665,6 @@ class ExpertAgent(BaseAgent):
             logger.error(f"step error : {e}")
             return f"No relevant knowledge available to answer the question: {self.original_query}"
 
-    async def step_old(self) -> str:
-        """Execute a single step with streaming support."""
-
-        try:
-            knowledge = await self.get_knowledge()
-            llm_result = await self.invoke_common(knowledge=knowledge)
-            if llm_result:
-                if hasattr(llm_result, 'conclusion') and llm_result.conclusion == "terminate":
-                    current_tasks_status_str = self.format_tasks_status(self.current_tasks_status.tasks if self.current_tasks_status else [])
-                    observe_result = await self.observe_common(self.query, llm_result.answer, current_tasks_status_str)
-                    observe_message = f"\nquery: {self.query} \n\nreason:{observe_result.reason}"
-                    if observe_result.conclusion == "continue":
-                        llm_result.conclusion = "continue"
-                        self.state = AgentState.IDLE
-                        requery = await self.invoke_requery()
-                        if requery.conclusion == "terminate" and requery.requery:
-                            llm_result.requery = requery.requery
-                        llm_result.answer = f"knowledge can do not meet query, \n\nreason: {observe_result.reason}"
-                    else:
-                        step_status_llm_check_success = "The current answer addresses the question very well."
-                        llm_result.answer = f"{llm_result.answer}, \n\nreason:{step_status_llm_check_success} ,{observe_result.reason}"
-        except Exception as e:
-            # If any issues are encountered during execution, regenerate the question and proceed to the next step loop, including SQL execution errors and re-querying.
-            logger.error(f"step error : {e}")
-            self.state = AgentState.IDLE
-            self.save_step_status(self.query, f"step error : {e}")
-            requery = await self.invoke_requery()
-            if requery.conclusion == "terminate" and requery.requery:
-                self.query = requery.requery
-                self._update_task_description(requery.requery)
-            return f"No relevant knowledge available to answer the question: {self.original_query}, will try a different question!"
-
-        if llm_result:
-            # if llm result to say terminate, this agent will end
-            if hasattr(llm_result, 'conclusion') and llm_result.conclusion == "terminate":
-                self.state = AgentState.FINISHED
-                self.memory.add_message(Message.assistant_message(llm_result.answer))
-                self.save_step_status(self.query, llm_result.answer)
-
-            # if need to re-query, reset query to self.query for next loop
-            if hasattr(llm_result, 'conclusion') and llm_result.conclusion == "continue":
-                self.save_step_status(self.query, llm_result.answer)
-                if hasattr(llm_result, 'requery') and llm_result.requery:
-                    self.query = llm_result.requery
-                    self._update_task_description(llm_result.requery)
-
-            if not llm_result.answer:
-                answer = f"No relevant knowledge available to answer the question: {self.original_query}, will try a different question!"
-                return answer
-            else:
-                return llm_result.answer
-        else:
-            raise ValueError("step can not handle normal!")
-
-    def save_step_status(self, query:str, answer: str):
-        step_status = StepStatus(
-            id=self.current_step,
-            query=query,
-            answer=answer
-        )
-        self.step_status_list.append(step_status)
-        logger.info(f"Saved step {self.current_step} status: query='{query}'")
-
-    def get_step_history_for_requery(self) -> str:
-        if not self.step_status_list:
-            return "No historical step records"
-        
-        history_lines = []
-        for step in self.step_status_list:
-            history_lines.append(f"Step {step.id}:")
-            history_lines.append(f"  Query: {step.query}")
-            history_lines.append(f"  Answer: {step.answer}")
-            history_lines.append("")
-        
-        return "\n".join(history_lines)
-
-    def format_tasks_status(self, tasks):
-        if not tasks:
-            return "No tasks available"
-        
-        lines = []
-        for task in tasks:
-            lines.append(f"Task {task.id}: {task.description}")
-            lines.append(f"  Agent: {task.agent}")
-            lines.append(f"  Status: {task.status}")
-            lines.append(f"  Answer: {task.answer}\n")
-        
-        return "\n".join(lines)
-
-    def _update_task_description(self, new_task_description: str):
-        if self.current_tasks_status and self.current_tasks_status.tasks and self.current_task_id is not None:
-            for task in self.current_tasks_status.tasks:
-                if task.id == self.current_task_id:
-                    task.description = new_task_description
-                    logger.info(f"Updated task {self.current_task_id} description to: {new_task_description}")
-                    break
-
-    def handle_stuck_state(self):
-        """Handle stuck state by adding a prompt to change strategy"""
-        stuck_prompt_en = "\
-        Observed duplicate responses. Consider new strategies and avoid repeating ineffective paths already attempted."
-
-        stuck_prompt_zh = "\
-        观察到重复的响应。请考虑采用新的策略，避免重复已经尝试过的无效路径。"
-
-        self.next_step_prompt = f"{stuck_prompt_zh}\n{self.next_step_prompt}"
-        logger.warning(f"Agent detected stuck state. Added prompt: {stuck_prompt_zh}")
-
-    def is_stuck(self) -> bool:
-        """Check if the agent is stuck in a loop by detecting duplicate content"""
-        if len(self.memory.messages) < 2:
-            return False
-
-        last_message = self.memory.messages[-1]
-        if not last_message.content:
-            return False
-
-        # Count identical content occurrences
-        duplicate_count = sum(
-            1
-            for msg in reversed(self.memory.messages[:-1])
-            if msg.role == "assistant" and msg.content == last_message.content
-        )
-
-        return duplicate_count >= self.duplicate_threshold
 
     def update_memory(
         self,
@@ -2032,21 +1734,11 @@ class ExpertAgent(BaseAgent):
 
                 logger.info(f"******************** {current_task}, current query: {self.query}, Executing step {self.current_step}/{self.max_steps}")
 
-                step_result_str = f"step {self.current_step}/{self.max_steps}: query: {self.query}"
-
                 step_result = await self.step()
 
-                steps_status = self.get_step_history_for_requery()
-
-                logger.debug(f"******************** steps status: \n\n {steps_status}")
-                
-                step_result = f"{step_result_str}\n\nanswer:\n{step_result}\n"
+                step_result = f"step {self.current_step}/{self.max_steps}: query: {self.query}\n\nanswer:\n{step_result}\n"
 
                 yield step_result
-
-                # Check for stuck state
-                if self.is_stuck():
-                    self.handle_stuck_state()
 
             if self.current_step >= self.max_steps:
                 self.current_step = 0

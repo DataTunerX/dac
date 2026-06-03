@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -838,6 +839,9 @@ waitForDeployment:
 	// 删除操作也会通过 status API 检查完成状态
 	taskIDs := make(map[string]string) // 保持签名一致
 	if err := h.handleDDStatus(ctx, dd, taskIDs); err != nil {
+		if errors.Is(err, ErrRequeueNeeded) {
+			return "delete-task", ErrRequeueNeeded
+		}
 		return "", fmt.Errorf("failed to check delete job status: %w", err)
 	}
 
@@ -950,6 +954,9 @@ func (h *DataDescriptorHandler) CheckDeletionJobStatusAndCleanup(ctx context.Con
 		statusLower := strings.ToLower(statusResp.Status)
 		if statusLower == "success" || statusLower == "failure" {
 			logger.Info("Delete job in final state, cleaning up resources", "status", statusResp.Status)
+			if statusLower == "failure" {
+				_ = h.clearSemanticGroupIDsByName(ctx, namespace, name)
+			}
 			h.cleanupCompletedDeployment(ctx, dd)
 		} else {
 			logger.Info("Delete job still in progress", "status", statusResp.Status)
@@ -960,7 +967,7 @@ func (h *DataDescriptorHandler) CheckDeletionJobStatusAndCleanup(ctx context.Con
 		logger.Info("Status API temporarily unavailable, will retry", "error", err.Error())
 		return
 	}
-	// Other error (e.g. service gone): treat as final and cleanup any leftover resources
+	// Other error (e.g. service gone): cleanup leftover resources only.
 	logger.Info("Status API error, cleaning up resources", "error", err.Error())
 	h.cleanupCompletedDeployment(ctx, dd)
 }
@@ -1109,10 +1116,8 @@ func (h *DataDescriptorHandler) handleDDStatus(ctx context.Context, dd *dacv1alp
 				// Non-fatal: log and continue; the DAC can be created manually or on next reconcile
 			}
 
-			// Normal DAC creation is NOT triggered here. It is triggered by the
-			// semantic-grouper patching the DD annotation (dac.dac.io/group-updated-at)
-			// after completing a group update, which causes a DD reconcile that enters
-			// the DoAddOrUpdate Ready early-return path where ensureAutoNormalDAC runs.
+			// Normal DAC for semantic groups is handled on the Ready early-return path
+			// (ensureAutoNormalDAC) after semantic-grouper sets dac.dac.io/group-updated-at.
 		} else {
 			newStatus.OverallPhase = "NotReady"
 			errorMsg := fmt.Sprintf("%d data sources task not completed, %d data sources have issues ", len(aggregatedNotReady), len(aggregatedErrors))
@@ -1187,6 +1192,7 @@ func (h *DataDescriptorHandler) handleDDStatus(ctx context.Context, dd *dacv1alp
 	// 对于删除操作（DeletionTimestamp 被设置），直接检查 status API，不依赖 source statuses
 	// 对于 Add/Update 操作，检查所有数据源是否都是最终状态
 	var shouldCleanup bool
+	var deleteJobSucceeded bool
 	if isDeleteOperation {
 		// 删除操作：直接检查 status API 来判断任务是否完成
 		logger.Info("Delete operation detected, checking status API directly")
@@ -1196,6 +1202,7 @@ func (h *DataDescriptorHandler) handleDDStatus(ctx context.Context, dd *dacv1alp
 			statusLower := strings.ToLower(statusResp.Status)
 			if statusLower == "success" || statusLower == "failure" {
 				shouldCleanup = true
+				deleteJobSucceeded = statusLower == "success"
 				logger.Info("Delete job completed (final state), cleaning up resources", "status", statusResp.Status)
 			} else {
 				logger.Info("Delete job still in progress", "status", statusResp.Status)
@@ -1222,6 +1229,9 @@ func (h *DataDescriptorHandler) handleDDStatus(ctx context.Context, dd *dacv1alp
 	if shouldCleanup {
 		logger.Info("Cleaning up deployment, service, and configmap")
 		h.cleanupCompletedDeployment(ctx, dd)
+		if isDeleteOperation && !deleteJobSucceeded {
+			_ = h.clearSemanticGroupIDsByName(ctx, dd.Namespace, dd.Name)
+		}
 	} else {
 		logger.Info("Keeping deployment and service, waiting for completion")
 	}
@@ -1551,6 +1561,13 @@ const (
 	// Annotation storing the SHA-256 hash of the agent_card JSON used when the
 	// normal (sg) DAC was created. Used to detect semantic-group updates.
 	annotationAgentCardHash = "dac.dac.io/agent-card-hash"
+
+	// JSON array of semantic group IDs this DD belongs to. Written when the DD
+	// joins a group; kept until delete job completes so normal DAC sync does not
+	// depend on live dd_group_relation rows.
+	annotationSemanticGroupIDs = "dac.dac.io/semantic-group-ids"
+
+	featureDeleteNormalDACSync = "delete_normal_dac_sync"
 )
 
 // ErrRequeueNeeded is returned by DoAddOrUpdate when a pending DAC replacement
@@ -1793,7 +1810,7 @@ func ddDeterministicSuffix(namespace, name string) string {
 func resolveAgentLimits(descriptorType string) (maxLoops string, maxSteps string) {
 	dt := strings.ToLower(descriptorType)
 	if strings.HasPrefix(dt, "structured") {
-		return "2", "5"
+		return "0", "1"
 	}
 	// code, unstructured, or anything else
 	return "1", "1"
@@ -1915,31 +1932,44 @@ func (h *DataDescriptorHandler) expandGroupIDsWithAncestors(ctx context.Context,
 // not-yet-healthy replacement DAC exists, signalling the controller to
 // reconcile again after a delay.
 func (h *DataDescriptorHandler) ensureAutoNormalDAC(ctx context.Context, dd *dacv1alpha1.DataDescriptor) (needsRequeue bool, err error) {
-	logger := h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name)
-
 	if dd.Annotations != nil && dd.Annotations[annotationSkipAutoDAC] == "true" {
 		return false, nil
 	}
-
 	if h.HTTPClient == nil {
-		logger.Info("HTTPClient not configured, skipping normal DAC creation")
+		h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name).
+			Info("HTTPClient not configured, skipping normal DAC creation")
 		return false, nil
 	}
 
-	// Step 1: Fetch semantic domains for this DD
+	groupIDs, err := h.collectSemanticGroupIDsForDD(ctx, dd)
+	if err != nil {
+		return false, err
+	}
+	if len(groupIDs) == 0 {
+		return false, nil
+	}
+	if err := h.persistSemanticGroupIDs(ctx, dd.Namespace, dd.Name, groupIDs); err != nil {
+		h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name).
+			Error(err, "Failed to persist semantic-group-ids on DD")
+	}
+	return h.ensureNormalDACForGroups(ctx, dd, groupIDs)
+}
+
+func (h *DataDescriptorHandler) collectSemanticGroupIDsForDD(ctx context.Context, dd *dacv1alpha1.DataDescriptor) (map[string]bool, error) {
+	logger := h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name)
+
 	sdResp, err := h.HTTPClient.SemanticDomainSearchByDD(ctx, &apiclient.SemanticDomainSearchByDDRequest{
 		DdNamespace: dd.Namespace,
 		DdName:      dd.Name,
 	})
 	if err != nil {
-		return false, fmt.Errorf("failed to fetch semantic domains for DD %s/%s: %w", dd.Namespace, dd.Name, err)
+		return nil, fmt.Errorf("failed to fetch semantic domains for DD %s/%s: %w", dd.Namespace, dd.Name, err)
 	}
 	if sdResp == nil || len(sdResp.Data) == 0 {
-		logger.Info("No semantic domains found, skipping normal DAC creation")
-		return false, nil
+		logger.Info("No semantic domains found, skipping normal DAC group collection")
+		return nil, nil
 	}
 
-	// Step 2: For each SD, find which groups it belongs to
 	groupIDs := map[string]bool{}
 	for _, sd := range sdResp.Data {
 		if sd.SemanticDomainID == "" {
@@ -1957,21 +1987,229 @@ func (h *DataDescriptorHandler) ensureAutoNormalDAC(ctx context.Context, dd *dac
 			}
 		}
 	}
-
 	if len(groupIDs) == 0 {
-		logger.Info("Semantic domains have no group memberships, skipping normal DAC creation")
-		return false, nil
+		logger.Info("Semantic domains have no group memberships, skipping normal DAC group collection")
+		return nil, nil
 	}
 
-	// Step 2.5: Include all ancestors of seed groups so parent/middle groups
-	// with agent_card can also get normal DACs without polluting dd_group_relation.
 	groupIDs = h.expandGroupIDsWithAncestors(ctx, groupIDs)
 	if len(groupIDs) == 0 {
-		logger.Info("No semantic groups remain after ancestor expansion, skipping normal DAC creation")
+		logger.Info("No semantic groups remain after ancestor expansion, skipping normal DAC group collection")
+		return nil, nil
+	}
+	return groupIDs, nil
+}
+
+func (h *DataDescriptorHandler) semanticGroupIDsFromAnnotations(dd *dacv1alpha1.DataDescriptor) map[string]bool {
+	groupIDs := map[string]bool{}
+	if dd.Annotations == nil {
+		return groupIDs
+	}
+
+	raw := strings.TrimSpace(dd.Annotations[annotationSemanticGroupIDs])
+	if raw == "" {
+		return groupIDs
+	}
+
+	var groupIDList []string
+	if err := json.Unmarshal([]byte(raw), &groupIDList); err != nil {
+		h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name).
+			Error(err, "Invalid semantic-group-ids annotation",
+				"feature", featureDeleteNormalDACSync,
+				"step", "invalid_semantic_group_ids_annotation",
+				"semanticGroupIDsAnnotation", raw)
+		return groupIDs
+	}
+	for _, id := range groupIDList {
+		if id != "" {
+			groupIDs[id] = true
+		}
+	}
+	return groupIDs
+}
+
+func groupIDMapKeys(groupIDs map[string]bool) []string {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(groupIDs))
+	for id := range groupIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func semanticGroupIDsAnnotationRaw(dd *dacv1alpha1.DataDescriptor) string {
+	if dd.Annotations == nil {
+		return ""
+	}
+	return strings.TrimSpace(dd.Annotations[annotationSemanticGroupIDs])
+}
+
+func (h *DataDescriptorHandler) persistSemanticGroupIDs(ctx context.Context, namespace, name string, groupIDs map[string]bool) error {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+
+	latest := &dacv1alpha1.DataDescriptor{}
+	if err := h.Kubeclient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, latest); err != nil {
+		return fmt.Errorf("get DataDescriptor before persisting semantic-group-ids: %w", err)
+	}
+
+	merged := h.semanticGroupIDsFromAnnotations(latest)
+	for id := range groupIDs {
+		merged[id] = true
+	}
+
+	ids := make([]string, 0, len(merged))
+	for id := range merged {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return fmt.Errorf("marshal semantic-group-ids: %w", err)
+	}
+
+	if latest.Annotations == nil {
+		latest.Annotations = make(map[string]string)
+	}
+	latest.Annotations[annotationSemanticGroupIDs] = string(encoded)
+
+	if err := h.Kubeclient.Update(ctx, latest); err != nil {
+		return fmt.Errorf("set semantic-group-ids annotation: %w", err)
+	}
+
+	h.Logger.WithValues("namespace", namespace, "name", name).
+		Info("Persisted semantic-group-ids on DD", "feature", "dd_semantic_group_ids",
+			"step", "persisted", "groupCount", len(ids), "groupIDs", ids)
+	return nil
+}
+
+func (h *DataDescriptorHandler) clearSemanticGroupIDsByName(ctx context.Context, namespace, name string) error {
+	latest := &dacv1alpha1.DataDescriptor{}
+	if err := h.Kubeclient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, latest); err != nil {
+		return err
+	}
+	if latest.Annotations == nil || latest.Annotations[annotationSemanticGroupIDs] == "" {
+		return nil
+	}
+	delete(latest.Annotations, annotationSemanticGroupIDs)
+	return h.Kubeclient.Update(ctx, latest)
+}
+
+// EnsureNormalDACAfterDelete runs ensureNormalDACForGroups for groups recorded
+// on the deleting DD (dac.dac.io/semantic-group-ids). Call only after delete
+// job success; hash comparison inside ensureNormalDACForGroups decides action.
+func (h *DataDescriptorHandler) EnsureNormalDACAfterDelete(ctx context.Context, namespace, name string) (needsRequeue bool, err error) {
+	logger := h.Logger.WithValues("namespace", namespace, "name", name)
+
+	logger.Info("EnsureNormalDACAfterDelete invoked (reads DD annotation before finalizer removal)",
+		"feature", featureDeleteNormalDACSync,
+		"step", "begin")
+
+	dd := &dacv1alpha1.DataDescriptor{}
+	if err := h.Kubeclient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, dd); err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.Info("DataDescriptor gone before normal DAC sync after delete, skipping",
+				"feature", featureDeleteNormalDACSync,
+				"step", "skip_dd_not_found")
+			return false, nil
+		}
+		return false, fmt.Errorf("get DataDescriptor for normal DAC sync after delete: %w", err)
+	}
+
+	logger = logger.WithValues("ddUID", dd.UID)
+	rawAnnotation := semanticGroupIDsAnnotationRaw(dd)
+	logger.Info("Loaded deleting DD for normal DAC sync after delete",
+		"feature", featureDeleteNormalDACSync,
+		"step", "dd_loaded",
+		"semanticGroupIDsAnnotation", rawAnnotation,
+		"deletionTimestamp", dd.DeletionTimestamp)
+
+	if dd.Annotations != nil && dd.Annotations[annotationSkipAutoDAC] == "true" {
+		logger.Info("Skipping normal DAC sync after delete (dac.dac.io/skip-auto-dac=true)",
+			"feature", featureDeleteNormalDACSync,
+			"step", "skip_auto_dac_opt_out")
+		return false, nil
+	}
+	if h.HTTPClient == nil {
+		logger.Info("Skipping normal DAC sync after delete (HTTPClient not configured)",
+			"feature", featureDeleteNormalDACSync,
+			"step", "skip_no_http_client")
+		return false, nil
+	}
+	if dd.Annotations == nil {
+		logger.Info("Skipping normal DAC sync after delete: DD has no annotations",
+			"feature", featureDeleteNormalDACSync,
+			"step", "skip_no_annotations",
+			"hint", "expected dac.dac.io/semantic-group-ids to be set when DD joined a semantic group")
 		return false, nil
 	}
 
-	// Step 3: List ALL existing DACs in the namespace.
+	groupIDs := h.semanticGroupIDsFromAnnotations(dd)
+	if len(groupIDs) == 0 {
+		logger.Info("Skipping normal DAC sync after delete: dac.dac.io/semantic-group-ids is empty or missing",
+			"feature", featureDeleteNormalDACSync,
+			"step", "skip_no_semantic_group_ids",
+			"semanticGroupIDsAnnotation", rawAnnotation,
+			"hint", "write annotation on group join (semantic-grouper AddOrUpdate) or Ready reconcile (ensureAutoNormalDAC); live dd_group_relation is not used here")
+		return false, nil
+	}
+
+	seedGroupIDs := groupIDMapKeys(groupIDs)
+	groupIDs = h.expandGroupIDsWithAncestors(ctx, groupIDs)
+	if len(groupIDs) == 0 {
+		logger.Info("Skipping normal DAC sync after delete: no semantic groups after ancestor expansion",
+			"feature", featureDeleteNormalDACSync,
+			"step", "skip_empty_after_ancestor_expand",
+			"seedGroupIDs", seedGroupIDs)
+		return false, nil
+	}
+
+	expandedGroupIDs := groupIDMapKeys(groupIDs)
+	logger.Info("Running ensureNormalDACForGroups after DD delete",
+		"feature", featureDeleteNormalDACSync,
+		"step", "ensure_normal_dac",
+		"seedGroupCount", len(seedGroupIDs),
+		"seedGroupIDs", seedGroupIDs,
+		"expandedGroupCount", len(expandedGroupIDs),
+		"expandedGroupIDs", expandedGroupIDs)
+
+	needsRequeue, err = h.ensureNormalDACForGroups(ctx, dd, groupIDs)
+	if err != nil {
+		logger.Error(err, "ensureNormalDACForGroups failed after DD delete",
+			"feature", featureDeleteNormalDACSync,
+			"step", "ensure_normal_dac_error",
+			"needsRequeue", needsRequeue)
+		return needsRequeue, err
+	}
+
+	if needsRequeue {
+		logger.Info("Normal DAC blue-green still in progress after DD delete, will requeue",
+			"feature", featureDeleteNormalDACSync,
+			"step", "needs_requeue")
+	} else {
+		logger.Info("Normal DAC sync after DD delete completed (no requeue)",
+			"feature", featureDeleteNormalDACSync,
+			"step", "done",
+			"groupIDs", expandedGroupIDs)
+	}
+	// Do not clear semantic-group-ids here: the DD is about to lose its finalizer
+	// and be deleted. An extra Update races with finalizer removal in the controller.
+	return needsRequeue, nil
+}
+
+func (h *DataDescriptorHandler) ensureNormalDACForGroups(ctx context.Context, dd *dacv1alpha1.DataDescriptor, groupIDs map[string]bool) (needsRequeue bool, err error) {
+	logger := h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name)
+
+	if len(groupIDs) == 0 {
+		return false, nil
+	}
+
+	// List ALL existing DACs in the namespace.
 	// Build a map: groupID -> []*DAC  (there may be >1 during blue-green)
 	allDACs := &dacv1alpha1.DataAgentContainerList{}
 	if err := h.Kubeclient.List(ctx, allDACs, client.InNamespace(dd.Namespace)); err != nil {
@@ -1993,7 +2231,7 @@ func (h *DataDescriptorHandler) ensureAutoNormalDAC(ctx context.Context, dd *dac
 		}
 	}
 
-	// Step 4: For each group, ensure an up-to-date DAC exists (blue-green).
+	// For each group, ensure an up-to-date DAC exists (blue-green).
 	modelSpec := h.defaultModelSpec(ctx)
 
 	for groupID := range groupIDs {
@@ -2026,6 +2264,10 @@ func (h *DataDescriptorHandler) ensureAutoNormalDAC(ctx context.Context, dd *dac
 		// Case A: A DAC with the current hash already exists.
 		if len(currentDACs) > 0 {
 			currentDAC := currentDACs[0]
+			if len(staleDACs) == 0 {
+				logger.Info("Semantic group agent_card unchanged, skipping normal DAC replacement",
+					"groupID", groupID, "agentCardHash", currentHash)
+			}
 			if isDACHealthy(&currentDAC.dac) {
 				// New DAC is healthy — clean up any stale DACs.
 				for _, stale := range staleDACs {

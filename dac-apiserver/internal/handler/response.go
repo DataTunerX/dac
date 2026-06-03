@@ -40,6 +40,15 @@ func NoContentResponse(c *app.RequestContext) {
 	c.Status(consts.StatusNoContent)
 }
 
+// AcceptedResponse returns an accepted async response (202).
+func AcceptedResponse(c *app.RequestContext, data interface{}) {
+	c.JSON(consts.StatusAccepted, Response{
+		Code:    "ACCEPTED",
+		Message: "operation accepted",
+		Data:    data,
+	})
+}
+
 // ErrorResponse returns an error response based on error type
 func ErrorResponse(c *app.RequestContext, err error) {
 	// getuser友好of错误消息（不暴露内部细节）

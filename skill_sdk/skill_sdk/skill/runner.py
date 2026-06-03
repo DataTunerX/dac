@@ -103,9 +103,9 @@ RUNNER_INSTRUCTIONS_ZH = """# 角色：Skill Runner
 {skill_scripts}
 
 > 调用脚本时**优先复用上方 `invocation` 字段**（已包含推荐解释器）。
-> 若 `interpreter` 为 `(unknown interpreter)`，先用 `read_file` 读脚本头几行或用 `<path> --help` 试探，不要瞎猜。
+> 若 `interpreter` 为 `(unknown interpreter)`，先用 `readline_in_range` 读脚本头几行或用 `<path> --help` 试探，不要瞎猜。
 > 脚本可能依赖 `scripts_dir` 里的同目录资源，必要时把 `plan_cmd.cwd` 设为 `scripts_dir` 或 `skill_dir`。
-> SKILL.md / 脚本里若出现相对路径（例如 `./references/xxx.md`、`assets/yyy.json`），**请以上面列出的 `skill_dir` 为基准拼成绝对路径**再用 `read_file` 读取；不要直接传相对路径。
+> SKILL.md / 脚本里若出现相对路径（例如 `./references/xxx.md`、`assets/yyy.json`），**请以上面列出的 `skill_dir` 为基准拼成绝对路径**再用 `readline_in_range` 读取；不要直接传相对路径。
 > `resource_dirs` 列出的每个目录（如 `assets/`、`references/`、`hooks/`）都已经和 `scripts/` 解压在同一 `skill_dir` 下，可直接访问。
 
 ## 工具使用规则
@@ -118,14 +118,14 @@ RUNNER_INSTRUCTIONS_ZH = """# 角色：Skill Runner
      2. **改动**：这次在 cmd 上具体改了什么（换子命令 / 加参数 / 改路径 / 换 skill 脚本 / 改探测方向）。
    - **禁止的命令（runner 会在执行前直接拦截，返回 `{{"blocked_by_policy": true}}`）**：
      - 文件/目录删除与移动：`rm`, `rmdir`, `unlink`, `mv`, `shred`, `truncate`
-       —— 查看文件请用 `ls` / `stat` / `cat` / `head` / `read_file`。
+       —— 查看文件请用 `ls` / `stat` / `cat` / `head` / `readline_in_range`。
      - 磁盘与系统级：`dd`, `mkfs*`, `fdisk`, `parted`, `mkswap`, `shutdown`, `reboot`, `halt`, `poweroff`, `init`。
      - 进程杀伤：`kill`, `pkill`, `killall`。
      - 就地编辑：`sed -i`, `perl -i`。如需看差异，先 `cat` / `diff`。
      - 仓库破坏性子命令：`git reset --hard`, `git clean -f`, `git push --force`, `git checkout -- <path>`。
      用 `sudo` / `env` 包一层、改别名、拼 `&&` / `|` 都不会绕过拦截；命中后请改成只读探测或直接 `finish`，
      在 `final_answer` 里把需要用户亲自执行的命令列出来。
-2. **读取文件用 `read_file`**；**解析 PDF（路径或 URL，提取文本/可选整页图）用 `extract_pdf`**。
+2. **读取文件用 `readline_in_range`**；**解析 PDF（路径或 URL，提取文本/可选整页图）用 `extract_pdf`**。
 3. **完成任务时调用 `finish`**：`final_answer` 写给用户的最终答复。
 4. **禁止以纯文本答复**：只要 query 合理且落在当前 skill 能力范围内（由 planner 已经匹配），**必须先用 `plan_cmd` 探测/执行**，不得直接在 content 里写自然语言回答而不调用任何工具；即使你认为 skill 不适用，也应先用 `plan_cmd` 做一次候选探测，再在 `finish.final_answer` 中说明结论。
 
@@ -135,7 +135,7 @@ RUNNER_INSTRUCTIONS_ZH = """# 角色：Skill Runner
 3. 判定失败：`returncode != 0` 或 `stderr` 含明显错误时：
    - 先执行下面「从失败中学习」的全部步骤，再调用 `plan_cmd`。
    - 同一错误原因重试**不超过 2 次**；仍失败则调用 `finish`，在 `final_answer` 中说明原因与建议。
-4. 信息不足时：不要猜测，调用 `read_file` 或用新的 `plan_cmd` 去探测（例如 `gh --help`、`ls`）。
+4. 信息不足时：不要猜测，调用 `readline_in_range` 或用新的 `plan_cmd` 去探测（例如 `gh --help`、`ls`）。
 5. 禁止：
    - 在 `finish` 的 `final_answer` 里编造未经 `plan_cmd` 验证的输出；
    - 对已经 `returncode == 0` 的命令反复重跑；
@@ -149,8 +149,8 @@ RUNNER_INSTRUCTIONS_ZH = """# 角色：Skill Runner
 2. **禁止原样重发**：若即将生成的 cmd 字符串已经在历史中失败过（逐字符相同，或仅空白差异），必须改写；不得原样再发一次。
 3. **更换思路**：若同一错误类别已经重试过 1 次且仍失败，**换思路**而不是只改参数：
    - 参数错误 → 先用 `<command> --help` 或 skill 文档中的原始样例；
-   - 认证/权限错误 → 用 `gh auth status`、`whoami` 或 `read_file` 查配置；
-   - 路径错误 → 用 `ls`、`read_file` 核实存在性；
+   - 认证/权限错误 → 用 `gh auth status`、`whoami` 或 `readline_in_range` 查配置；
+   - 路径错误 → 用 `ls`、`readline_in_range` 核实存在性；
    - 命令不存在 → 检查 skill 可用脚本，或在 `finish` 中告知用户缺失依赖。
 4. **不要盲目拼接**：不要把多条已失败的命令用 `&&` / `;` 拼在一起再跑，这只会让所有错误再来一次。
 5. **在 rationale 里写出学习结论**：按「工具使用规则」第 1 条要求，明确写「参照上一次失败 XXX，本次改动 YYY」。
@@ -208,9 +208,9 @@ class PlanCmdInput(BaseModel):
     cwd: str | None = Field(default=None, description="命令执行目录，可空")
 
 
-class ReadFileInput(BaseModel):
-    path: str = Field(description="要读取的文件路径")
-    max_chars: int = Field(default=8000, ge=1, le=40000, description="最多返回字符数")
+# class ReadFileInput(BaseModel):
+#     path: str = Field(description="要读取的文件路径")
+#     max_chars: int = Field(default=8000, ge=1, le=40000, description="最多返回字符数")
 
 
 class CodeExecInput(BaseModel):
@@ -278,8 +278,12 @@ def _tool_result_line_for_summary(tool_name: str, tool_args: dict[str, Any], raw
     if tool_name == "plan_cmd":
         cmd = str(tool_args.get("cmd", "") or "")
         prefix += f" `{_short(cmd, max_len=140)}`"
-    elif tool_name == "read_file":
-        prefix += f" `{_short(tool_args.get('path', ''), max_len=140)}`"
+    elif tool_name == "readline_in_range":
+        fp = tool_args.get("file_path", "")
+        s = tool_args.get("start", "")
+        e = tool_args.get("end", "")
+        parts = [x for x in [fp, s, e] if x]
+        prefix += f" `{' / '.join(str(p) for p in parts)}`"
     elif tool_name == "extract_pdf":
         p = tool_args.get("pdf") or ""
         u = (tool_args.get("pdfs") or [""])[0] if isinstance(tool_args.get("pdfs"), list) else ""
@@ -658,20 +662,20 @@ def plan_cmd_tool(cmd: str, rationale: str = "", cwd: str | None = None) -> str:
     return json.dumps({"cmd": cmd, "rationale": rationale, "cwd": cwd}, ensure_ascii=False)
 
 
-@tool("read_file", args_schema=ReadFileInput)
-def read_file_tool(path: str, max_chars: int = 8000) -> str:
-    """读取文件内容（截断返回）。"""
-    try:
-        file_path = Path(path).expanduser().resolve()
-        if not file_path.is_file():
-            return json.dumps({"path": str(file_path), "error": "File not found"}, ensure_ascii=False)
-        content = file_path.read_text(encoding="utf-8")
-        return json.dumps(
-            {"path": str(file_path), "content": _trim_text(content, max_chars=max_chars)},
-            ensure_ascii=False,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return json.dumps({"path": path, "error": f"Read file failed: {exc}"}, ensure_ascii=False)
+# @tool("read_file", args_schema=ReadFileInput)
+# def read_file_tool(path: str, max_chars: int = 8000) -> str:
+#     """读取文件内容（截断返回）。"""
+#     try:
+#         file_path = Path(path).expanduser().resolve()
+#         if not file_path.is_file():
+#             return json.dumps({"path": str(file_path), "error": "File not found"}, ensure_ascii=False)
+#         content = file_path.read_text(encoding="utf-8")
+#         return json.dumps(
+#             {"path": str(file_path), "content": _trim_text(content, max_chars=max_chars)},
+#             ensure_ascii=False,
+#         )
+#     except Exception as exc:  # noqa: BLE001
+#         return json.dumps({"path": path, "error": f"Read file failed: {exc}"}, ensure_ascii=False)
 
 
 
@@ -743,7 +747,6 @@ class SkillRunner:
         self.code_execution = code_execution
         self._runner_tools = [
             plan_cmd_tool,
-            read_file_tool,
             finish_tool,
         ]
         if self.code_execution is not None:
@@ -1171,6 +1174,36 @@ class SkillRunner:
             total_fails=total_fails,
         )
 
+    @staticmethod
+    def _lsp_was_called_or_failed(
+        tool_history: list[dict], file_path: str = ""
+    ) -> bool:
+        """Check if LSP was already called (successfully or with error) for the given
+        file, or if LSP was tried globally and found unavailable (allowing fallback)."""
+        lsp_globally_unavailable = False
+        for entry in tool_history:
+            if entry.get("tool") != "lsp":
+                continue
+            result_str = str(entry.get("result", ""))
+            # If any lsp call returned "No LSP server available", allow fallback
+            # on any file (LSP is genuinely unavailable for this workspace).
+            if "No LSP server available" in result_str:
+                lsp_globally_unavailable = True
+                continue
+            # If lsp was called for a specific file path and succeeded
+            # (no error in result), allow readline_in_range on that file.
+            entry_file = (entry.get("args") or {}).get("file_path", "")
+            if entry_file and entry_file == file_path:
+                if "error" not in result_str.lower():
+                    return True
+                # Failed for this file specifically — allow fallback
+                return True
+        # Only allow readline_in_range without prior LSP on *this specific file*
+        # if LSP is globally unavailable (server not configured or unreachable).
+        if lsp_globally_unavailable:
+            return True
+        return False
+
     async def run(
         self,
         query: str,
@@ -1192,7 +1225,14 @@ class SkillRunner:
             SystemMessage(content=system_text),
             HumanMessage(content=query),
         ]
+        # read_file 已从全局 _runner_tools 移除，由 readline_in_range 替代
         llm_with_tools = self.llm.bind_tools(self._runner_tools)
+        if skill.name == "read-code":
+            logger.info(
+                "read-code tool-set: bound %d tools: %s",
+                len(self._runner_tools),
+                [t.name for t in self._runner_tools],
+            )
         tool_history: list[dict[str, Any]] = []
         fail_counts: dict[str, int] = {}
         counters: dict[str, int] = {"total_fails": 0}
@@ -1263,7 +1303,7 @@ class SkillRunner:
                                 content=(
                                     "你上一次没有调用任何工具，仅输出了文字。请严格遵守工具使用规则："
                                     "必须先通过 `plan_cmd` 发出一条命令进行探测/执行，或者通过 "
-                                    "`read_file` / `extract_pdf` 获取信息；完成任务时使用 `finish` 工具输出最终答复。"
+                                    "`readline_in_range` / `extract_pdf` 获取信息；完成任务时使用 `finish` 工具输出最终答复。"
                                     "不要再直接用纯文本回答。"
                                 )
                             )
@@ -1322,15 +1362,38 @@ class SkillRunner:
                     else:
                         if tool_name == "plan_cmd":
                             plan_cmd_seen = True
-                        tool_result = await self._dispatch_tool(
-                            tool_name,
-                            tool_args,
-                            user_id=user_id,
-                            run_id=run_id,
-                            trace_id=trace_id,
-                            fail_counts=fail_counts,
-                            counters=counters,
-                        )
+
+                        # read-code skill: readline_in_range requires prior lsp call
+                        # unless lsp was already tried and failed (fallback mode).
+                        if (skill.name == "read-code"
+                            and tool_name == "readline_in_range"
+                            and not self._lsp_was_called_or_failed(
+                                tool_history, tool_args.get("file_path", "")
+                            )):
+                            tool_result = json.dumps(
+                                {
+                                    "error": (
+                                        "readline_in_range requires a prior lsp call for "
+                                        "this specific file to determine precise line "
+                                        "numbers. Call 'lsp documentSymbol' or 'lsp goToDefinition' on this file "
+                                        "first to get exact start/end line numbers. If lsp returns an error "
+                                        "(server unavailable), you may retry "
+                                        "readline_in_range as a fallback."
+                                    ),
+                                    "blocked_by_policy": True,
+                                },
+                                ensure_ascii=False,
+                            )
+                        else:
+                            tool_result = await self._dispatch_tool(
+                                tool_name,
+                                tool_args,
+                                user_id=user_id,
+                                run_id=run_id,
+                                trace_id=trace_id,
+                                fail_counts=fail_counts,
+                                counters=counters,
+                            )
 
                     tool_history.append(
                         {"tool": tool_name, "args": tool_args, "result": tool_result}

@@ -43,35 +43,97 @@ CREATE TABLE user_payment_methods (
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
--- 插入测试数据
-INSERT INTO users (username, email, password_hash, full_name, phone_number) VALUES
-('john_doe', 'john@example.com', 'hashed_password_1', 'John Doe', '13800138001'),
-('jane_smith', 'jane@example.com', 'hashed_password_2', 'Jane Smith', '13800138002'),
-('alice_wang', 'alice@example.com', 'hashed_password_3', 'Alice Wang', '13800138003'),
-('bob_li', 'bob@example.com', 'hashed_password_4', 'Bob Li', '13800138004'),
-('carol_zhao', 'carol@example.com', 'hashed_password_5', 'Carol Zhao', '13800138005');
+-- 插入测试数据（用户表: 25条）
+INSERT INTO users (username, email, password_hash, full_name, phone_number, registration_date, last_login, is_active) VALUES
+('zhangsan',   'zhangsan@example.com',   'hash_abc001', '张三',   '13800001001', '2025-01-15 09:30:00', '2026-05-08 10:15:00', TRUE),
+('lisi',       'lisi@example.com',       'hash_abc002', '李四',   '13800001002', '2025-02-20 14:20:00', '2026-05-09 08:30:00', TRUE),
+('wangwu',     'wangwu@example.com',     'hash_abc003', '王五',   '13800001003', '2025-03-10 11:00:00', '2026-05-07 16:45:00', TRUE),
+('zhaoliu',    'zhaoliu@example.com',    'hash_abc004', '赵六',   '13800001004', '2025-04-05 07:45:00', '2026-05-09 12:00:00', TRUE),
+('sunqi',      'sunqi@example.com',      'hash_abc005', '孙七',   '13800001005', '2025-05-12 18:30:00', '2026-05-08 09:20:00', TRUE),
+('zhouba',     'zhouba@example.com',     'hash_abc006', '周八',   '13800001006', '2025-06-01 10:10:00', '2026-05-06 14:00:00', TRUE),
+('wujiu',      'wujiu@example.com',      'hash_abc007', '吴九',   '13800001007', '2025-07-15 08:00:00', '2026-04-28 11:30:00', TRUE),
+('zhengshi',   'zhengshi@example.com',   'hash_abc008', '郑十',   '13800001008', '2025-08-20 13:15:00', '2026-05-05 10:00:00', TRUE),
+('liuyi',      'liuyi@example.com',      'hash_abc009', '刘一',   '13800001009', '2025-09-10 16:20:00', '2026-05-03 15:40:00', TRUE),
+('chener',     'chener@example.com',     'hash_abc010', '陈二',   '13800001010', '2025-10-05 09:50:00', '2026-05-01 17:00:00', TRUE),
+('yangsan',    'yangsan@example.com',    'hash_abc011', '杨三',   '13800001011', '2025-11-12 11:10:00', '2026-04-20 08:55:00', TRUE),
+('huangsi',    'huangsi@example.com',    'hash_abc012', '黄四',   '13800001012', '2025-12-01 14:40:00', '2026-05-10 07:30:00', TRUE),
+('xuwu',       'xuwu@example.com',       'hash_abc013', '许五',   '13800001013', '2026-01-08 10:05:00', '2026-05-09 19:10:00', TRUE),
+('heliu',      'heliu@example.com',      'hash_abc014', '何六',   '13800001014', '2026-02-14 15:30:00', '2026-05-07 12:55:00', TRUE),
+('lvqi',       'lvqi@example.com',       'hash_abc015', '吕七',   '13800001015', '2026-03-01 08:15:00', '2026-05-06 09:45:00', TRUE),
+('shiba',      'shiba@example.com',      'hash_abc016', '施八',   '13800001016', '2025-06-20 12:30:00', '2026-05-05 14:20:00', TRUE),
+('zhangjiu',   'zhangjiu@example.com',   'hash_abc017', '张九',   '13800001017', '2025-08-15 17:00:00', '2026-05-04 11:10:00', TRUE),
+('kongshi',    'kongshi@example.com',    'hash_abc018', '孔十',   '13800001018', '2025-10-22 09:20:00', '2026-05-03 16:35:00', TRUE),
+('caoyi',      'caoyi@example.com',      'hash_abc019', '曹一',   '13800001019', '2025-12-15 13:45:00', '2026-05-02 08:50:00', TRUE),
+('yaner',      'yaner@example.com',      'hash_abc020', '严二',   '13800001020', '2026-01-20 10:30:00', '2026-04-30 15:15:00', TRUE),
+('huasan',     'huasan@example.com',     'hash_abc021', '花三',   '13800001021', '2026-02-25 08:50:00', '2026-04-25 12:00:00', TRUE),
+('jinsi',      'jinsi@example.com',      'hash_abc022', '金四',   '13800001022', '2026-03-10 16:10:00', '2026-05-08 18:20:00', TRUE),
+('weiwu',      'weiwu@example.com',      'hash_abc023', '魏五',   '13800001023', '2026-04-05 11:40:00', '2026-05-10 10:05:00', TRUE),
+('taoliu',     'taoliu@example.com',     'hash_abc024', '陶六',   '13800001024', '2025-05-18 14:55:00', '2026-03-15 09:30:00', FALSE),  -- 已停用
+('jiangqi',    'jiangqi@example.com',    'hash_abc025', '姜七',   '13800001025', '2026-05-01 07:00:00', '2026-05-10 08:00:00', TRUE);
 
+-- 插入测试数据（用户地址表: 30条, 每用户1-3个地址）
 INSERT INTO user_addresses (user_id, address_type, recipient_name, phone, province, city, district, detail_address, is_default) VALUES
-(1, 'HOME', 'John Doe', '13800138001', '北京市', '北京市', '朝阳区', '建国门外大街1号国贸大厦A座', TRUE),
-(1, 'WORK', 'John Doe', '13800138001', '上海市', '上海市', '浦东新区', '陆家嘴环路100号', FALSE),
-(2, 'HOME', 'Jane Smith', '13800138002', '浙江省', '杭州市', '西湖区', '文三路478号华星时代广场', TRUE),
-(3, 'HOME', 'Alice Wang', '13800138003', '广东省', '深圳市', '南山区', '科技园科技南路1号', TRUE),
-(4, 'HOME', 'Bob Li', '13800138004', '江苏省', '南京市', '鼓楼区', '中山路321号', TRUE);
+(1,  'HOME',  '张三',   '13800001001', '北京市', '北京市', '朝阳区', '建国路88号院1号楼1201', TRUE),
+(1,  'WORK',  '张三',   '13800001001', '北京市', '北京市', '海淀区', '中关村大街1号理想国际大厦15层', FALSE),
+(2,  'HOME',  '李四',   '13800001002', '上海市', '上海市', '浦东新区', '陆家嘴环路1000号恒生银行大厦22层', TRUE),
+(2,  'WORK',  '李四',   '13800001002', '上海市', '上海市', '徐汇区', '漕溪北路396号汇智大厦8层', FALSE),
+(3,  'HOME',  '王五',   '13800001003', '广东省', '广州市', '天河区', '天河路385号太古汇1座18楼', TRUE),
+(3,  'OTHER', '王五',   '13800001003', '广东省', '深圳市', '南山区', '科技园南路588号讯美科技广场3栋', FALSE),
+(4,  'HOME',  '赵六',   '13800001004', '浙江省', '杭州市', '西湖区', '文三路478号华星时代广场A座12楼', TRUE),
+(5,  'HOME',  '孙七',   '13800001005', '四川省', '成都市', '武侯区', '天府大道北段1199号银泰中心2栋2501', TRUE),
+(5,  'WORK',  '孙七',   '13800001005', '四川省', '成都市', '锦江区', '东大街99号平安金融中心5层', FALSE),
+(6,  'HOME',  '周八',   '13800001006', '湖北省', '武汉市', '洪山区', '珞瑜路1037号华中科技大学科技园', TRUE),
+(7,  'HOME',  '吴九',   '13800001007', '江苏省', '南京市', '鼓楼区', '汉中路1号南京国际金融中心40层', TRUE),
+(8,  'HOME',  '郑十',   '13800001008', '重庆市', '重庆市', '渝中区', '解放碑步行街民权路28号英利国际', TRUE),
+(9,  'HOME',  '刘一',   '13800001009', '天津市', '天津市', '和平区', '南京路189号津汇广场2座19层', TRUE),
+(10, 'HOME',  '陈二',   '13800001010', '山东省', '济南市', '历下区', '泉城路180号齐鲁国际大厦C座10层', TRUE),
+(11, 'HOME',  '杨三',   '13800001011', '福建省', '厦门市', '思明区', '鹭江道100号财富中心25层', TRUE),
+(12, 'HOME',  '黄四',   '13800001012', '湖南省', '长沙市', '岳麓区', '麓谷大道658号麓谷信息港A栋', TRUE),
+(13, 'HOME',  '许五',   '13800001013', '陕西省', '西安市', '雁塔区', '高新四路17号志诚丽柏酒店15层', TRUE),
+(14, 'HOME',  '何六',   '13800001014', '安徽省', '合肥市', '蜀山区', '长江西路88号环球金融广场B座', TRUE),
+(15, 'HOME',  '吕七',   '13800001015', '辽宁省', '沈阳市', '和平区', '青年大街286号华润大厦9层', TRUE),
+(16, 'HOME',  '施八',   '13800001016', '河南省', '郑州市', '金水区', '花园路39号国贸中心A座22层', TRUE),
+(17, 'HOME',  '张九',   '13800001017', '河北省', '石家庄市', '长安区', '中山东路188号北国商城', TRUE),
+(18, 'HOME',  '孔十',   '13800001018', '云南省', '昆明市', '五华区', '东风西路129号顺城购物中心', TRUE),
+(19, 'HOME',  '曹一',   '13800001019', '贵州省', '贵阳市', '南明区', '中华南路78号贵阳壹号25楼', TRUE),
+(20, 'HOME',  '严二',   '13800001020', '山西省', '太原市', '小店区', '长风街116号北美新天地', TRUE),
+(21, 'HOME',  '花三',   '13800001021', '江西省', '南昌市', '红谷滩区', '红谷中大道998号绿地中央广场', TRUE),
+(21, 'WORK',  '花三',   '13800001021', '江西省', '南昌市', '青山湖区', '北京东路398号恒茂梦时代广场', FALSE),
+(22, 'HOME',  '金四',   '13800001022', '吉林省', '长春市', '朝阳区', '红旗街959号万达广场', TRUE),
+(23, 'HOME',  '魏五',   '13800001023', '黑龙江省', '哈尔滨市', '道里区', '中央大街88号金安国际', TRUE),
+(24, 'HOME',  '陶六',   '13800001024', '甘肃省', '兰州市', '城关区', '庆阳路42号万盛商务大厦', TRUE),
+(25, 'HOME',  '姜七',   '13800001025', '广西',     '南宁市', '青秀区', '民族大道136号万象城3座', TRUE);
 
-INSERT INTO user_payment_methods (user_id, payment_type, card_last_four, card_brand, is_default) VALUES
-(1, 'CREDIT_CARD', '1234', 'VISA', TRUE),
-(1, 'ALIPAY', NULL, NULL, FALSE),
-(2, 'WECHAT', NULL, NULL, TRUE),
-(3, 'CREDIT_CARD', '5678', 'MasterCard', TRUE),
-(4, 'DEBIT_CARD', '9012', 'UnionPay', TRUE);
-
-
-
-
-
-
-
-
+-- 插入测试数据（用户支付方式表: 25条, 每用户至少1个支付方式）
+INSERT INTO user_payment_methods (user_id, payment_type, card_last_four, card_brand, is_default, expiry_date) VALUES
+(1,  'CREDIT_CARD', '3891', 'Visa',       TRUE,  '2027-06-30'),
+(1,  'ALIPAY',      NULL,   NULL,         FALSE, NULL),
+(2,  'DEBIT_CARD',  '5210', 'MasterCard', TRUE,  '2028-03-31'),
+(3,  'CREDIT_CARD', '6742', 'Visa',       TRUE,  '2027-12-31'),
+(3,  'WECHAT',      NULL,   NULL,         FALSE, NULL),
+(4,  'CREDIT_CARD', '9801', 'MasterCard', TRUE,  '2029-01-31'),
+(5,  'PAYPAL',      NULL,   NULL,         TRUE,  NULL),
+(6,  'ALIPAY',      NULL,   NULL,         TRUE,  NULL),
+(7,  'DEBIT_CARD',  '1104', 'UnionPay',   TRUE,  '2026-09-30'),
+(8,  'CREDIT_CARD', '4543', 'Visa',       TRUE,  '2028-08-31'),
+(8,  'WECHAT',      NULL,   NULL,         FALSE, NULL),
+(9,  'WECHAT',      NULL,   NULL,         TRUE,  NULL),
+(10, 'CREDIT_CARD', '3328', 'AmericanExpress', TRUE, '2027-11-30'),
+(11, 'ALIPAY',      NULL,   NULL,         TRUE,  NULL),
+(12, 'DEBIT_CARD',  '7456', 'UnionPay',   TRUE,  '2027-05-31'),
+(13, 'CREDIT_CARD', '8912', 'Visa',       TRUE,  '2029-04-30'),
+(14, 'PAYPAL',      NULL,   NULL,         TRUE,  NULL),
+(15, 'WECHAT',      NULL,   NULL,         TRUE,  NULL),
+(16, 'CREDIT_CARD', '2378', 'MasterCard', TRUE,  '2027-02-28'),
+(17, 'ALIPAY',      NULL,   NULL,         TRUE,  NULL),
+(18, 'DEBIT_CARD',  '9634', 'Visa',       TRUE,  '2028-07-31'),
+(19, 'CREDIT_CARD', '5087', 'AmericanExpress', TRUE, '2026-10-31'),
+(20, 'WECHAT',      NULL,   NULL,         TRUE,  NULL),
+(21, 'ALIPAY',      NULL,   NULL,         TRUE,  NULL),
+(22, 'CREDIT_CARD', '6501', 'MasterCard', TRUE,  '2029-03-31'),
+(23, 'DEBIT_CARD',  '1823', 'UnionPay',   TRUE,  '2027-08-31'),
+(24, 'ALIPAY',      NULL,   NULL,         TRUE,  NULL),
+(25, 'WECHAT',      NULL,   NULL,         TRUE,  NULL);
 
 
 -- 商品数据库
@@ -136,41 +198,157 @@ CREATE TABLE inventory_logs (
     FOREIGN KEY (product_id) REFERENCES products(product_id)
 );
 
--- 插入测试数据
-INSERT INTO categories (category_name, parent_category_id, description) VALUES
-('电子产品', NULL, '各种电子设备和配件'),
-('手机', 1, '智能手机和功能手机'),
-('笔记本电脑', 1, '便携式电脑设备'),
-('服装服饰', NULL, '服装鞋帽配饰'),
-('男装', 4, '男性服装');
+-- 插入测试数据（商品分类表: 20条, 树形结构, 最多3层）
+INSERT INTO categories (category_name, parent_category_id, description, display_order, is_active) VALUES
+('电子产品',      NULL, '手机、电脑、平板等数码产品',              1, TRUE),
+('服装鞋帽',      NULL, '男装、女装、童装及鞋帽配饰',              2, TRUE),
+('家居生活',      NULL, '家具、家纺、厨具、收纳等家居用品',        3, TRUE),
+('食品饮料',      NULL, '零食、饮料、生鲜、粮油等食品',            4, TRUE),
+('运动户外',      NULL, '运动装备、健身器材、户外用品',            5, TRUE),
+('图书音像',      NULL, '图书、电子书、音乐、影视',                6, TRUE),
+('美妆个护',      NULL, '护肤、彩妆、香水、个人护理',              7, TRUE),
+('母婴用品',      NULL, '婴幼儿奶粉、尿裤、玩具、孕产用品',        8, TRUE),
+('汽车用品',      NULL, '汽车装饰、维修保养、车载电器',            9, TRUE),
+('珠宝配饰',      NULL, '珠宝首饰、手表、眼镜、箱包',             10, TRUE),
+-- 二级分类 (parent=1 电子产品)
+('智能手机',      1,    '各品牌安卓及iOS智能手机',                 1, TRUE),
+('笔记本电脑',    1,    '轻薄本、游戏本、商务本',                  2, TRUE),
+('平板电脑',      1,    'iPad及安卓平板',                          3, TRUE),
+('智能穿戴',      1,    '智能手表、手环、TWS耳机',                 4, TRUE),
+-- 三级分类 (parent=11 智能手机)
+('手机配件',      11,   '手机壳、贴膜、充电器、数据线',            1, TRUE),
+-- 二级分类 (parent=2 服装鞋帽)
+('男装',          2,    '男士T恤、衬衫、外套、裤装',               1, TRUE),
+('女装',          2,    '女士连衣裙、上衣、裤装、套装',            2, TRUE),
+('运动鞋',        2,    '跑步鞋、篮球鞋、休闲运动鞋',              3, TRUE),
+-- 二级分类 (其他)
+('休闲零食',      4,    '薯片、坚果、糖果、膨化食品',              1, TRUE),
+('健身器材',      5,    '瑜伽垫、哑铃、跑步机、弹力带',            1, TRUE);
 
-INSERT INTO products (sku, product_name, description, category_id, brand, unit_price, stock_quantity) VALUES
-('IPHONE13-128', 'iPhone 13 128GB', '苹果最新款智能手机，A15芯片，超视网膜XDR显示屏', 2, 'Apple', 5999.00, 100),
-('MACBOOK-AIR', 'MacBook Air M2', '苹果M2芯片笔记本电脑，轻薄便携，超长续航', 3, 'Apple', 8999.00, 50),
-('SAMSUNG-S22', 'Samsung Galaxy S22', '三星旗舰智能手机，Dynamic AMOLED 2X屏幕', 2, 'Samsung', 4999.00, 80),
-('LENOVO-LEGION', 'Lenovo Legion 5 Pro', '联想游戏笔记本电脑，RTX 3060显卡，165Hz刷新率', 3, 'Lenovo', 7999.00, 30),
-('NIKE-TSHIRT', 'Nike男士运动T恤', '耐克经典款运动T恤，速干面料，舒适透气', 5, 'Nike', 299.00, 200);
+-- 插入测试数据（商品表: 25条, 关联到categories, 用category_id 1-20）
+INSERT INTO products (sku, product_name, description, category_id, brand, unit_price, cost_price, stock_quantity, reserved_quantity, weight_kg, is_listed) VALUES
+-- 智能手机 (cat=11)
+('SKU-PHONE-001', 'iPhone 16 Pro Max 256GB',   'A18 Pro芯片, 256GB存储, 钛金属边框',    11, 'Apple',   9999.00, 7200.00,  120, 8,  0.221, TRUE),
+('SKU-PHONE-002', 'Samsung Galaxy S25 Ultra',   '骁龙8 Gen4, 12+512GB, 2亿像素',         11, 'Samsung', 8999.00, 6500.00,   85, 5,  0.232, TRUE),
+('SKU-PHONE-003', 'Xiaomi 16 Pro',              '徕卡光学镜头, 骁龙8 Gen4, 16+512GB',    11, 'Xiaomi',  4999.00, 3500.00,  200, 12, 0.205, TRUE),
+('SKU-PHONE-004', 'Huawei Mate 70 Pro',         '麒麟9100, 卫星通信, 16+512GB',          11, 'Huawei',  6999.00, 5000.00,   60, 3,  0.225, TRUE),
+-- 笔记本电脑 (cat=12)
+('SKU-LAPTOP-001', 'MacBook Pro 14" M4 Pro',    'M4 Pro芯片, 18GB RAM, 512GB SSD',       12, 'Apple',   14999.00, 11000.00, 45, 2,  1.600, TRUE),
+('SKU-LAPTOP-002', 'ThinkPad X1 Carbon Gen12',  'Ultra 9 285H, 32GB, 1TB, 14" 2.8K',    12, 'Lenovo',  12999.00, 9500.00,  30, 0,  1.090, TRUE),
+('SKU-LAPTOP-003', 'Dell XPS 16',               'Core Ultra 9, 32GB, RTX 4070, 16"',    12, 'Dell',    13999.00, 10000.00, 25, 1,  2.100, TRUE),
+-- 手机配件 (cat=15)
+('SKU-ACC-001',    'Apple 20W USB-C充电器',      '原装快充, Type-C接口',                  15, 'Apple',    149.00,   80.00,  500, 0,  0.085, TRUE),
+('SKU-ACC-002',    '倍思30W氮化镓充电器',         'GaN技术, 支持PD3.0, 30W快充',          15, 'Baseus',   79.00,   35.00,  800, 0,  0.060, TRUE),
+-- 男装 (cat=16)
+('SKU-MEN-001',   '海澜之家商务衬衫',            '免烫纯棉, 修身版, 多色可选',            16, '海澜之家', 299.00,  150.00,  300, 0,  0.350, TRUE),
+('SKU-MEN-002',   '优衣库纯棉T恤',               '纯棉圆领, 基础款, 多色可选',            16, 'UNIQLO',   79.00,   35.00, 1000, 0,  0.200, TRUE),
+-- 女装 (cat=17)
+('SKU-WOM-001',   'ZARA碎花连衣裙',              '2026春夏新款, V领收腰',                 17, 'ZARA',    459.00,  220.00,  150, 0,  0.400, TRUE),
+('SKU-WOM-002',   '太平鸟宽松针织衫',            '羊毛混纺, 圆领落肩, 5色可选',           17, '太平鸟',  399.00,  180.00,  200, 0,  0.500, TRUE),
+-- 运动鞋 (cat=18)
+('SKU-SHOE-001',  'Nike Air Zoom Pegasus 42',   'ReactX泡棉, Flyknit鞋面, 公路跑鞋',     18, 'Nike',    1099.00, 650.00,  180, 0,  0.900, TRUE),
+('SKU-SHOE-002',  'Adidas Ultraboost 5X',       'LIGHTBOOST中底, Primeknit+鞋面',        18, 'Adidas',  1299.00, 800.00,  120, 0,  0.950, TRUE),
+-- 休闲零食 (cat=19)
+('SKU-FOOD-001',  '乐事薯片大礼包',              '混合口味12包装, 总重540g',               19, '乐事',    49.90,  28.00,  800, 0,  0.650, TRUE),
+('SKU-FOOD-002',  '德芙巧克力礼盒装',            '丝滑牛奶巧克力, 252g',                   19, '德芙',    89.00,  50.00,  400, 0,  0.280, TRUE),
+('SKU-FOOD-003',  '每日坚果30包混合装',           '开心果腰果核桃葡萄干, 每日坚果750g',      19, '沃隆',   139.00,  85.00,  300, 0,  0.820, TRUE),
+-- 健身器材 (cat=20)
+('SKU-FIT-001',   'Keep瑜伽垫加厚防滑',          '185×80cm, 8mm厚度, NBR材质',            20, 'Keep',    169.00,  85.00,  250, 0,  2.500, TRUE),
+('SKU-FIT-002',   '小米家智能跳绳',              '蓝牙计数, 3种模式, APP同步',             20, 'Xiaomi',   99.00,  50.00,  350, 0,  0.280, TRUE),
+('SKU-FIT-003',   '可调节哑铃套装',              '2-20kg可调, 铸铁包胶, 家庭健身',         20, '锐步',    599.00,  350.00,  100, 0, 21.000, TRUE),
+-- 智能穿戴 (cat=14)
+('SKU-WEAR-001',  'Apple Watch Ultra 3',         '49mm钛金属, GPS+蜂窝, 全天候显示',      14, 'Apple',   6499.00, 4500.00,  70, 0,  0.061, TRUE),
+('SKU-WEAR-002',  'Huawei Watch GT 5 Pro',       '钛金属表壳, 蓝宝石玻璃, ECG心电',       14, 'Huawei',  2999.00, 2000.00,  90, 0,  0.078, TRUE),
+-- 平板电脑 (cat=13)
+('SKU-TAB-001',   'iPad Air M3',                 'M3芯片, 11" Liquid Retina, 128GB',     13, 'Apple',   5499.00, 3800.00,  100, 0,  0.462, TRUE),
+('SKU-TAB-002',   'Samsung Galaxy Tab S10 Ultra', '14.6" Dynamic AMOLED, 骁龙8 Gen4',    13, 'Samsung', 6999.00, 5000.00,  40, 0,  0.735, TRUE);
 
-INSERT INTO product_images (product_id, image_url, image_type, display_order) VALUES
-(1, 'https://example.com/images/iphone13-main.jpg', 'MAIN', 1),
-(1, 'https://example.com/images/iphone13-detail1.jpg', 'DETAIL', 2),
-(2, 'https://example.com/images/macbook-air-main.jpg', 'MAIN', 1),
-(3, 'https://example.com/images/samsung-s22-main.jpg', 'MAIN', 1),
-(4, 'https://example.com/images/lenovo-legion-main.jpg', 'MAIN', 1);
+-- 插入测试数据（商品图片表: 50条, 每商品2张图）
+INSERT INTO product_images (product_id, image_url, image_type, display_order, alt_text) VALUES
+(1,  '/images/products/SKU-PHONE-001_main.jpg',      'MAIN',      0, 'iPhone 16 Pro Max正面图'),
+(1,  '/images/products/SKU-PHONE-001_thumb.jpg',     'THUMBNAIL', 1, 'iPhone 16 Pro Max缩略图'),
+(1,  '/images/products/SKU-PHONE-001_detail_01.jpg', 'DETAIL',    2, 'iPhone 16 Pro Max侧面'),
+(2,  '/images/products/SKU-PHONE-002_main.jpg',      'MAIN',      0, 'Samsung S25 Ultra正面图'),
+(2,  '/images/products/SKU-PHONE-002_thumb.jpg',     'THUMBNAIL', 1, 'Samsung S25 Ultra缩略图'),
+(3,  '/images/products/SKU-PHONE-003_main.jpg',      'MAIN',      0, 'Xiaomi 16 Pro正面图'),
+(3,  '/images/products/SKU-PHONE-003_thumb.jpg',     'THUMBNAIL', 1, 'Xiaomi 16 Pro缩略图'),
+(4,  '/images/products/SKU-PHONE-004_main.jpg',      'MAIN',      0, 'Huawei Mate 70 Pro正面图'),
+(4,  '/images/products/SKU-PHONE-004_thumb.jpg',     'THUMBNAIL', 1, 'Huawei Mate 70 Pro缩略图'),
+(5,  '/images/products/SKU-LAPTOP-001_main.jpg',     'MAIN',      0, 'MacBook Pro 14 M4 Pro'),
+(5,  '/images/products/SKU-LAPTOP-001_thumb.jpg',    'THUMBNAIL', 1, 'MacBook Pro 14缩略图'),
+(6,  '/images/products/SKU-LAPTOP-002_main.jpg',     'MAIN',      0, 'ThinkPad X1 Carbon'),
+(6,  '/images/products/SKU-LAPTOP-002_thumb.jpg',    'THUMBNAIL', 1, 'ThinkPad X1缩略图'),
+(7,  '/images/products/SKU-LAPTOP-003_main.jpg',     'MAIN',      0, 'Dell XPS 16'),
+(7,  '/images/products/SKU-LAPTOP-003_thumb.jpg',    'THUMBNAIL', 1, 'Dell XPS 16缩略图'),
+(8,  '/images/products/SKU-ACC-001_main.jpg',        'MAIN',      0, 'Apple 20W充电器'),
+(8,  '/images/products/SKU-ACC-001_detail.jpg',      'DETAIL',    1, '充电器接口细节'),
+(9,  '/images/products/SKU-ACC-002_main.jpg',        'MAIN',      0, '倍思GaN充电器'),
+(9,  '/images/products/SKU-ACC-002_thumb.jpg',       'THUMBNAIL', 1, '倍思充电器缩略图'),
+(10, '/images/products/SKU-MEN-001_main.jpg',        'MAIN',      0, '海澜之家衬衫'),
+(10, '/images/products/SKU-MEN-001_gallery_01.jpg',  'GALLERY',   1, '衬衫模特展示'),
+(11, '/images/products/SKU-MEN-002_main.jpg',        'MAIN',      0, '优衣库T恤'),
+(11, '/images/products/SKU-MEN-002_thumb.jpg',       'THUMBNAIL', 1, 'T恤缩略图'),
+(12, '/images/products/SKU-WOM-001_main.jpg',        'MAIN',      0, 'ZARA连衣裙'),
+(12, '/images/products/SKU-WOM-001_gallery_01.jpg',  'GALLERY',   1, '连衣裙模特图'),
+(13, '/images/products/SKU-WOM-002_main.jpg',        'MAIN',      0, '太平鸟针织衫'),
+(13, '/images/products/SKU-WOM-002_thumb.jpg',       'THUMBNAIL', 1, '针织衫缩略图'),
+(14, '/images/products/SKU-SHOE-001_main.jpg',       'MAIN',      0, 'Nike Pegasus 42'),
+(14, '/images/products/SKU-SHOE-001_detail_01.jpg',  'DETAIL',    1, 'Pegasus鞋底细节'),
+(15, '/images/products/SKU-SHOE-002_main.jpg',       'MAIN',      0, 'Adidas Ultraboost 5X'),
+(15, '/images/products/SKU-SHOE-002_thumb.jpg',      'THUMBNAIL', 1, 'Ultraboost缩略图'),
+(16, '/images/products/SKU-FOOD-001_main.jpg',       'MAIN',      0, '乐事薯片大礼包'),
+(16, '/images/products/SKU-FOOD-001_thumb.jpg',      'THUMBNAIL', 1, '薯片缩略图'),
+(17, '/images/products/SKU-FOOD-002_main.jpg',       'MAIN',      0, '德芙巧克力礼盒'),
+(17, '/images/products/SKU-FOOD-002_gallery_01.jpg', 'GALLERY',   1, '巧克力细节展示'),
+(18, '/images/products/SKU-FOOD-003_main.jpg',       'MAIN',      0, '每日坚果混合装'),
+(18, '/images/products/SKU-FOOD-003_thumb.jpg',      'THUMBNAIL', 1, '坚果缩略图'),
+(19, '/images/products/SKU-FIT-001_main.jpg',        'MAIN',      0, 'Keep瑜伽垫'),
+(19, '/images/products/SKU-FIT-001_detail_01.jpg',   'DETAIL',    1, '瑜伽垫厚度展示'),
+(20, '/images/products/SKU-FIT-002_main.jpg',        'MAIN',      0, '小米智能跳绳'),
+(20, '/images/products/SKU-FIT-002_thumb.jpg',       'THUMBNAIL', 1, '跳绳缩略图'),
+(21, '/images/products/SKU-FIT-003_main.jpg',        'MAIN',      0, '可调节哑铃套装'),
+(21, '/images/products/SKU-FIT-003_gallery_01.jpg',  'GALLERY',   1, '哑铃多角度展示'),
+(22, '/images/products/SKU-WEAR-001_main.jpg',       'MAIN',      0, 'Apple Watch Ultra 3'),
+(22, '/images/products/SKU-WEAR-001_thumb.jpg',      'THUMBNAIL', 1, 'AW Ultra缩略图'),
+(23, '/images/products/SKU-WEAR-002_main.jpg',       'MAIN',      0, 'Huawei GT 5 Pro'),
+(23, '/images/products/SKU-WEAR-002_thumb.jpg',      'THUMBNAIL', 1, 'GT5 Pro缩略图'),
+(24, '/images/products/SKU-TAB-001_main.jpg',        'MAIN',      0, 'iPad Air M3'),
+(24, '/images/products/SKU-TAB-001_thumb.jpg',       'THUMBNAIL', 1, 'iPad Air缩略图'),
+(25, '/images/products/SKU-TAB-002_main.jpg',        'MAIN',      0, 'Samsung Tab S10 Ultra'),
+(25, '/images/products/SKU-TAB-002_thumb.jpg',       'THUMBNAIL', 1, 'Tab S10缩略图');
 
-INSERT INTO inventory_logs (product_id, change_type, quantity_change, previous_quantity, new_quantity, notes) VALUES
-(1, 'PURCHASE', 100, 0, 100, '初始库存'),
-(2, 'PURCHASE', 50, 0, 50, '初始库存'),
-(1, 'SALE', -5, 100, 95, '客户订单#1001'),
-(3, 'ADJUSTMENT', 10, 70, 80, '库存调整'),
-(5, 'PURCHASE', 200, 0, 200, '初始库存');
-
-
-
-
-
-
-
+-- 插入测试数据（库存变动记录: 30条, 关联products表）
+INSERT INTO inventory_logs (product_id, change_type, quantity_change, previous_quantity, new_quantity, reference_id, notes, created_at, created_by) VALUES
+(1,  'PURCHASE',    200,   0,   200, 'PO-2025-0001', '首批入库200台',                                  '2025-03-01 10:00:00', 'admin'),
+(1,  'SALE',        -50, 200,   150, 'ORD-2025-00001', '订单销售50台',                                   '2025-04-15 14:30:00', 'system'),
+(1,  'SALE',        -30, 150,   120, 'ORD-2025-00001', '订单销售30台',                                   '2025-06-20 09:15:00', 'system'),
+(2,  'PURCHASE',    150,   0,   150, 'PO-2025-0002', '首批入库150台',                                  '2025-03-05 11:00:00', 'admin'),
+(2,  'SALE',        -40, 150,   110, 'ORD-2025-00002', '订单销售40台',                                   '2025-04-20 16:45:00', 'system'),
+(2,  'SALE',        -25, 110,    85, 'ORD-2025-00023', '订单销售25台',                                   '2025-07-05 10:00:00', 'system'),
+(3,  'PURCHASE',    300,   0,   300, 'PO-2025-0003', '首批入库300台',                                  '2025-03-10 08:30:00', 'admin'),
+(3,  'SALE',       -100, 300,   200, 'ORD-2025-00003', '双十一活动销售100台',                            '2025-11-11 00:05:00', 'system'),
+(4,  'PURCHASE',    100,   0,   100, 'PO-2025-0004', '首批入库100台',                                  '2025-03-15 09:00:00', 'admin'),
+(4,  'SALE',        -25, 100,    75, 'ORD-2025-00018', '订单销售25台',                                   '2025-12-01 13:20:00', 'system'),
+(4,  'SALE',        -15,  75,    60, 'ORD-2025-00018', '订单销售15台',                                   '2026-01-15 11:30:00', 'system'),
+(5,  'PURCHASE',     80,   0,    80, 'PO-2025-0005', '首批入库80台',                                   '2025-03-20 10:15:00', 'admin'),
+(5,  'SALE',        -20,  80,    60, 'ORD-2025-00004', '订单销售20台',                                   '2025-05-10 09:00:00', 'system'),
+(5,  'SALE',        -15,  60,    45, 'ORD-2025-00004', '订单销售15台',                                   '2026-03-01 14:00:00', 'system'),
+(6,  'PURCHASE',     50,   0,    50, 'PO-2025-0006', '首批入库50台',                                   '2025-04-01 09:30:00', 'admin'),
+(6,  'SALE',        -20,  50,    30, 'ORD-2025-00006', '订单销售20台',                                   '2025-06-15 11:00:00', 'system'),
+(7,  'PURCHASE',     40,   0,    40, 'PO-2025-0007', '首批入库40台',                                   '2025-04-10 08:00:00', 'admin'),
+(7,  'SALE',        -15,  40,    25, 'ORD-2025-00013', '订单销售15台',                                   '2025-08-20 15:30:00', 'system'),
+(8,  'PURCHASE',   1000,   0,  1000, 'PO-2025-0008', '首次采购1000个',                                 '2025-02-15 10:00:00', 'admin'),
+(8,  'SALE',       -500,1000,   500, 'ORD-2025-00006', '批量售出500个',                                  '2025-05-01 08:30:00', 'system'),
+(9,  'PURCHASE',   1000,   0,  1000, 'PO-2025-0009', '首次采购1000个',                                 '2025-02-20 11:00:00', 'admin'),
+(9,  'SALE',       -200,1000,   800, 'ORD-2025-00003', '售出200个',                                      '2025-06-10 14:00:00', 'system'),
+(10, 'PURCHASE',    500,   0,   500, 'PO-2025-0010', '首次采购500件',                                  '2025-03-01 09:15:00', 'admin'),
+(10, 'SALE',       -200, 500,   300, 'ORD-2025-00007', '售出200件',                                      '2025-07-01 10:00:00', 'system'),
+(16, 'PURCHASE',   1000,   0,  1000, 'PO-2025-0011', '首次采购1000包',                                 '2025-02-10 08:00:00', 'admin'),
+(16, 'SALE',       -200,1000,   800, 'ORD-2025-00014', '售出200包',                                      '2025-04-01 12:00:00', 'system'),
+(20, 'PURCHASE',    500,   0,   500, 'PO-2025-0012', '首次采购500个',                                  '2025-05-01 10:30:00', 'admin'),
+(20, 'SALE',       -150, 500,   350, 'ORD-2025-00005', '售出150个',                                      '2025-08-01 16:00:00', 'system'),
+(12, 'DAMAGE',       -3, 153,   150, 'DMG-2025-001', '仓库搬运过程中包装破损3件',                      '2025-06-01 09:00:00', 'warehouse1'),
+(14, 'RETURN',        5, 175,   180, 'RTN-2026-001', '客户退货5双（尺码不合适）',                       '2026-03-20 14:30:00', 'cservice1');
 
 
 -- 订单数据库
@@ -242,971 +420,167 @@ CREATE TABLE payment_records (
     FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE
 );
 
--- 插入测试数据
-INSERT INTO orders (order_number, user_id, total_amount, discount_amount, shipping_fee, final_amount, order_status, shipping_address) VALUES
-('ORD20231001001', 1, 5999.00, 0, 0, 5999.00, 'DELIVERED', '北京市朝阳区建国门外大街1号国贸大厦A座'),
-('ORD20231001002', 2, 299.00, 10.00, 15.00, 304.00, 'SHIPPED', '浙江省杭州市西湖区文三路478号华星时代广场'),
-('ORD20231001003', 3, 8999.00, 200.00, 0, 8799.00, 'PAID', '广东省深圳市南山区科技园科技南路1号'),
-('ORD20231001004', 1, 12998.00, 500.00, 30.00, 12528.00, 'PROCESSING', '上海市浦东新区陆家嘴环路100号'),
-('ORD20231001005', 4, 4999.00, 0, 0, 4999.00, 'PENDING', '江苏省南京市鼓楼区中山路321号');
-
-INSERT INTO order_items (order_id, product_id, sku, product_name, unit_price, quantity, subtotal) VALUES
-(1, 1, 'IPHONE13-128', 'iPhone 13 128GB', 5999.00, 1, 5999.00),
-(2, 5, 'NIKE-TSHIRT', 'Nike男士运动T恤', 299.00, 1, 299.00),
-(3, 2, 'MACBOOK-AIR', 'MacBook Air M2', 8999.00, 1, 8999.00),
-(4, 1, 'IPHONE13-128', 'iPhone 13 128GB', 5999.00, 2, 11998.00),
-(5, 3, 'SAMSUNG-S22', 'Samsung Galaxy S22', 4999.00, 1, 4999.00);
-
-INSERT INTO order_shipping (order_id, tracking_number, shipping_carrier, shipping_method, estimated_delivery_date, shipping_status) VALUES
-(1, 'SF1234567890', '顺丰速运', '标准快递', '2023-10-03', 'DELIVERED'),
-(2, 'YT9876543210', '圆通速递', '普通快递', '2023-10-05', 'IN_TRANSIT'),
-(3, 'JD5678901234', '京东物流', '次日达', '2023-10-04', 'PREPARING'),
-(4, 'SF2345678901', '顺丰速运', '标准快递', '2023-10-06', 'PREPARING'),
-(5, NULL, NULL, NULL, NULL, 'PREPARING');
-
-INSERT INTO payment_records (order_id, payment_number, payment_amount, payment_method, payment_status, transaction_id) VALUES
-(1, 'PAY20231001001', 5999.00, 'ALIPAY', 'SUCCESS', '2023100122001444550501234567'),
-(2, 'PAY20231001002', 304.00, 'WECHAT', 'SUCCESS', '4200001919202310011234567890'),
-(3, 'PAY20231001003', 8799.00, 'CREDIT_CARD', 'SUCCESS', 'txn_3OJq6P2eZvKYlo2C1XjH4w6E'),
-(4, 'PAY20231001004', 12528.00, 'ALIPAY', 'SUCCESS', '2023100122001444550501234568'),
-(5, 'PAY20231001005', 4999.00, 'CREDIT_CARD', 'PENDING', NULL);
-
-
-
-
-
-
-
-
-
-
-
--- 图书馆数据库
-CREATE DATABASE library_management;
-
-USE library_management;
-
--- 图书表
-CREATE TABLE books (
-    book_id INT PRIMARY KEY AUTO_INCREMENT,
-    isbn VARCHAR(13) UNIQUE NOT NULL,
-    title VARCHAR(500) NOT NULL,
-    author VARCHAR(200) NOT NULL,
-    publisher VARCHAR(200),
-    publication_year YEAR,
-    category VARCHAR(100),
-    total_copies INT DEFAULT 1,
-    available_copies INT DEFAULT 1,
-    location VARCHAR(100),
-    description TEXT,
-    cover_image_url VARCHAR(500),
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 读者表
-CREATE TABLE readers (
-    reader_id INT PRIMARY KEY AUTO_INCREMENT,
-    reader_number VARCHAR(20) UNIQUE NOT NULL,
-    full_name VARCHAR(100) NOT NULL,
-    id_card VARCHAR(18) UNIQUE,
-    email VARCHAR(100),
-    phone VARCHAR(20),
-    address TEXT,
-    membership_type ENUM('STUDENT', 'TEACHER', 'STAFF', 'PUBLIC') DEFAULT 'PUBLIC',
-    membership_expiry DATE,
-    max_borrow_limit INT DEFAULT 5,
-    is_active BOOLEAN DEFAULT TRUE,
-    registered_date DATE DEFAULT (CURRENT_DATE)
-);
-
--- 借阅记录表
-CREATE TABLE borrow_records (
-    record_id INT PRIMARY KEY AUTO_INCREMENT,
-    reader_id INT NOT NULL,
-    book_id INT NOT NULL,
-    borrow_date DATE NOT NULL,
-    due_date DATE NOT NULL,
-    return_date DATE,
-    renewal_count INT DEFAULT 0,
-    status ENUM('BORROWED', 'RETURNED', 'OVERDUE', 'LOST') DEFAULT 'BORROWED',
-    fine_amount DECIMAL(8,2) DEFAULT 0,
-    notes TEXT,
-    FOREIGN KEY (reader_id) REFERENCES readers(reader_id),
-    FOREIGN KEY (book_id) REFERENCES books(book_id)
-);
-
--- 图书馆员工表
-CREATE TABLE library_staff (
-    staff_id INT PRIMARY KEY AUTO_INCREMENT,
-    staff_number VARCHAR(20) UNIQUE NOT NULL,
-    full_name VARCHAR(100) NOT NULL,
-    position VARCHAR(100),
-    department VARCHAR(100),
-    email VARCHAR(100) UNIQUE,
-    phone VARCHAR(20),
-    hire_date DATE,
-    is_active BOOLEAN DEFAULT TRUE,
-    permissions JSON  -- 存储权限信息
-);
-
--- 插入测试数据
-INSERT INTO books (isbn, title, author, publisher, publication_year, category, total_copies, available_copies) VALUES
-('9787108009824', '红楼梦', '曹雪芹', '人民文学出版社', 1996, '古典文学', 10, 8),
-('9787020002207', '围城', '钱钟书', '人民文学出版社', 1991, '现代文学', 5, 3),
-('9787301204689', '经济学原理', '曼昆', '北京大学出版社', 2015, '经济学', 8, 6),
-('9787115351531', 'Python编程从入门到实践', 'Eric Matthes', '人民邮电出版社', 2020, '计算机科学', 15, 10),
-('9787510841245', '人类简史', '尤瓦尔·赫拉利', '中信出版社', 2017, '历史', 12, 9);
-
-INSERT INTO readers (reader_number, full_name, id_card, email, phone, membership_type) VALUES
-('R2023001', '张三', '110101199001011234', 'zhangsan@example.com', '13800138006', 'STUDENT'),
-('R2023002', '李四', '110101199002022345', 'lisi@example.com', '13800138007', 'TEACHER'),
-('R2023003', '王五', '110101199003033456', 'wangwu@example.com', '13800138008', 'PUBLIC'),
-('R2023004', '赵六', '110101199004044567', 'zhaoliu@example.com', '13800138009', 'STAFF'),
-('R2023005', '孙七', '110101199005055678', 'sunqi@example.com', '13800138010', 'STUDENT');
-
-INSERT INTO borrow_records (reader_id, book_id, borrow_date, due_date, return_date, status) VALUES
-(1, 1, '2023-09-20', '2023-10-20', '2023-10-18', 'RETURNED'),
-(1, 2, '2023-10-01', '2023-10-31', NULL, 'BORROWED'),
-(2, 3, '2023-09-25', '2023-10-25', NULL, 'BORROWED'),
-(3, 4, '2023-10-01', '2023-10-31', NULL, 'BORROWED'),
-(4, 5, '2023-09-15', '2023-10-15', '2023-10-14', 'RETURNED');
-
-INSERT INTO library_staff (staff_number, full_name, position, department, email, phone) VALUES
-('S001', '王馆长', '馆长', '管理部', 'director@library.com', '13800138111'),
-('S002', '李管理员', '图书管理员', '流通部', 'librarian1@library.com', '13800138112'),
-('S003', '张技术员', '系统管理员', '技术部', 'tech@library.com', '13800138113'),
-('S004', '刘采购', '采购专员', '采编部', 'purchase@library.com', '13800138114'),
-('S005', '陈会计', '财务主管', '财务部', 'finance@library.com', '13800138115');
-
-
-
-
-
-
-
-
-
-
-
-
-
-
--- 营销推广数据库
-CREATE DATABASE marketing_promotion;
-
-USE marketing_promotion;
-
--- 优惠券表
-CREATE TABLE coupons (
-    coupon_id INT PRIMARY KEY AUTO_INCREMENT,
-    coupon_code VARCHAR(50) UNIQUE NOT NULL,
-    coupon_name VARCHAR(100) NOT NULL,
-    coupon_type ENUM('FIXED_DISCOUNT', 'PERCENTAGE_DISCOUNT', 'SHIPPING_FREE') NOT NULL,
-    discount_value DECIMAL(10,2),
-    min_order_amount DECIMAL(10,2) DEFAULT 0,
-    max_discount_amount DECIMAL(10,2),
-    valid_from DATETIME NOT NULL,
-    valid_to DATETIME NOT NULL,
-    total_quantity INT,
-    remaining_quantity INT,
-    per_user_limit INT DEFAULT 1,
-    scope_type ENUM('ALL', 'CATEGORY', 'PRODUCT') DEFAULT 'ALL',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE
-);
-
--- 用户优惠券领取表
-CREATE TABLE user_coupons (
-    user_coupon_id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,  -- 关联users表
-    coupon_id INT NOT NULL,
-    status ENUM('UNUSED', 'USED', 'EXPIRED') DEFAULT 'UNUSED',
-    received_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    used_at DATETIME,
-    order_id INT,  -- 关联orders表
-    FOREIGN KEY (coupon_id) REFERENCES coupons(coupon_id)
-);
-
--- 秒杀活动表
-CREATE TABLE flash_sales (
-    flash_sale_id INT PRIMARY KEY AUTO_INCREMENT,
-    activity_name VARCHAR(100) NOT NULL,
-    start_time DATETIME NOT NULL,
-    end_time DATETIME NOT NULL,
-    status ENUM('UPCOMING', 'ACTIVE', 'ENDED') DEFAULT 'UPCOMING',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 秒杀商品表
-CREATE TABLE flash_sale_products (
-    flash_sale_product_id INT PRIMARY KEY AUTO_INCREMENT,
-    flash_sale_id INT NOT NULL,
-    product_id INT NOT NULL,  -- 关联products表
-    flash_sale_price DECIMAL(10,2) NOT NULL,
-    flash_sale_quantity INT NOT NULL,
-    sold_quantity INT DEFAULT 0,
-    per_user_limit INT DEFAULT 1,
-    FOREIGN KEY (flash_sale_id) REFERENCES flash_sales(flash_sale_id)
-);
-
--- 积分表
-CREATE TABLE points (
-    point_id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,  -- 关联users表
-    total_points INT DEFAULT 0,
-    used_points INT DEFAULT 0,
-    expired_points INT DEFAULT 0,
-    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
--- 积分流水表
-CREATE TABLE point_transactions (
-    transaction_id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,  -- 关联users表
-    point_id INT NOT NULL,
-    points_change INT NOT NULL,
-    transaction_type ENUM('EARN', 'REDEEM', 'EXPIRE', 'ADJUST') NOT NULL,
-    source_type ENUM('ORDER', 'REVIEW', 'SIGN_IN', 'ACTIVITY') NOT NULL,
-    source_id VARCHAR(100),
-    description VARCHAR(200),
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (point_id) REFERENCES points(point_id)
-);
-
--- 插入营销推广数据（与现有数据联动）
-INSERT INTO coupons (coupon_code, coupon_name, coupon_type, discount_value, min_order_amount, valid_from, valid_to, total_quantity, remaining_quantity) VALUES
-('NEWUSER50', '新用户50元券', 'FIXED_DISCOUNT', 50.00, 200.00, '2023-10-01 00:00:00', '2023-12-31 23:59:59', 1000, 997),
-('SUMMER10', '夏季88折', 'PERCENTAGE_DISCOUNT', 0.88, 500.00, '2023-06-01 00:00:00', '2023-08-31 23:59:59', 500, 350),
-('FREESHIP', '免邮券', 'SHIPPING_FREE', NULL, 100.00, '2023-10-01 00:00:00', '2023-10-31 23:59:59', 200, 150);
-
--- 用户领取优惠券（user_id 1-5 来自用户管理）
-INSERT INTO user_coupons (user_id, coupon_id, status, used_at, order_id) VALUES
-(1, 1, 'USED', '2023-10-01 10:30:00', 1),
-(1, 2, 'UNUSED', NULL, NULL),
-(2, 3, 'USED', '2023-10-02 14:20:00', 2),
-(3, 1, 'UNUSED', NULL, NULL),
-(4, 2, 'UNUSED', NULL, NULL);
-
--- 秒杀活动
-INSERT INTO flash_sales (activity_name, start_time, end_time, status) VALUES
-('双11预售秒杀', '2023-11-10 20:00:00', '2023-11-11 02:00:00', 'UPCOMING'),
-('周末狂欢', '2023-10-14 10:00:00', '2023-10-15 22:00:00', 'ACTIVE');
-
--- 秒杀商品（product_id 1-5 来自商品管理）
-INSERT INTO flash_sale_products (flash_sale_id, product_id, flash_sale_price, flash_sale_quantity, sold_quantity) VALUES
-(1, 1, 4999.00, 10, 0),
-(1, 2, 7999.00, 5, 0),
-(2, 5, 199.00, 100, 35),
-(2, 3, 4299.00, 20, 8);
-
--- 初始化用户积分（user_id 1-5 来自用户管理）
-INSERT INTO points (user_id, total_points, used_points) VALUES
-(1, 1500, 200),
-(2, 800, 0),
-(3, 2200, 500),
-(4, 300, 100),
-(5, 50, 0);
-
--- 积分流水
-INSERT INTO point_transactions (user_id, point_id, points_change, transaction_type, source_type, source_id, description) VALUES
-(1, 1, 500, 'EARN', 'ORDER', 'ORD20231001001', '订单完成赠送积分'),
-(1, 1, -200, 'REDEEM', 'ORDER', 'ORD20231001004', '积分抵扣'),
-(2, 2, 300, 'EARN', 'REVIEW', 'REV001', '评价商品赠送积分'),
-(3, 3, 1000, 'EARN', 'ORDER', 'ORD20231001003', '订单完成赠送积分'),
-(3, 3, -500, 'REDEEM', 'ORDER', 'ORD20231001003', '积分抵扣');
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
--- 库存仓储数据库
-CREATE DATABASE inventory_warehouse;
-
-USE inventory_warehouse;
-
--- 仓库表
-CREATE TABLE warehouses (
-    warehouse_id INT PRIMARY KEY AUTO_INCREMENT,
-    warehouse_code VARCHAR(50) UNIQUE NOT NULL,
-    warehouse_name VARCHAR(100) NOT NULL,
-    region VARCHAR(50),
-    address TEXT NOT NULL,
-    contact_person VARCHAR(50),
-    contact_phone VARCHAR(20),
-    is_active BOOLEAN DEFAULT TRUE
-);
-
--- 库存表（多仓库库存）
-CREATE TABLE inventory (
-    inventory_id INT PRIMARY KEY AUTO_INCREMENT,
-    product_id INT NOT NULL,  -- 关联products表
-    warehouse_id INT NOT NULL,
-    sku VARCHAR(50) NOT NULL,
-    quantity INT DEFAULT 0,
-    locked_quantity INT DEFAULT 0,  -- 已锁定（待发货）
-    available_quantity INT GENERATED ALWAYS AS (quantity - locked_quantity) STORED,
-    min_stock_level INT DEFAULT 10,
-    max_stock_level INT DEFAULT 1000,
-    last_count_date DATETIME,
-    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (warehouse_id) REFERENCES warehouses(warehouse_id),
-    UNIQUE KEY unique_product_warehouse (product_id, warehouse_id)
-);
-
--- 入库单表
-CREATE TABLE inbound_orders (
-    inbound_id INT PRIMARY KEY AUTO_INCREMENT,
-    inbound_number VARCHAR(50) UNIQUE NOT NULL,
-    warehouse_id INT NOT NULL,
-    supplier VARCHAR(100),
-    inbound_type ENUM('PURCHASE', 'RETURN', 'TRANSFER') NOT NULL,
-    reference_order VARCHAR(100),
-    status ENUM('PENDING', 'RECEIVING', 'COMPLETED', 'CANCELLED') DEFAULT 'PENDING',
-    expected_date DATE,
-    received_date DATETIME,
-    created_by VARCHAR(100),
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (warehouse_id) REFERENCES warehouses(warehouse_id)
-);
-
--- 入库单明细表
-CREATE TABLE inbound_items (
-    inbound_item_id INT PRIMARY KEY AUTO_INCREMENT,
-    inbound_id INT NOT NULL,
-    product_id INT NOT NULL,  -- 关联products表
-    sku VARCHAR(50) NOT NULL,
-    expected_quantity INT NOT NULL,
-    received_quantity INT DEFAULT 0,
-    unit_price DECIMAL(10,2),
-    batch_number VARCHAR(50),
-    expiry_date DATE,
-    FOREIGN KEY (inbound_id) REFERENCES inbound_orders(inbound_id),
-    FOREIGN KEY (product_id) REFERENCES inventory(product_id)  -- 这里需要注意，实际应该关联product_management.products
-);
-
--- 出库单表（关联订单）
-CREATE TABLE outbound_orders (
-    outbound_id INT PRIMARY KEY AUTO_INCREMENT,
-    outbound_number VARCHAR(50) UNIQUE NOT NULL,
-    order_id INT NOT NULL,  -- 关联orders表
-    warehouse_id INT NOT NULL,
-    outbound_type ENUM('SALE', 'RETURN_TO_SUPPLIER', 'TRANSFER') DEFAULT 'SALE',
-    status ENUM('PENDING', 'PICKING', 'PACKED', 'SHIPPED', 'CANCELLED') DEFAULT 'PENDING',
-    shipping_company VARCHAR(50),
-    tracking_number VARCHAR(100),
-    outbound_date DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (warehouse_id) REFERENCES warehouses(warehouse_id)
-);
-
--- 出库单明细表
-CREATE TABLE outbound_items (
-    outbound_item_id INT PRIMARY KEY AUTO_INCREMENT,
-    outbound_id INT NOT NULL,
-    product_id INT NOT NULL,  -- 关联products表
-    sku VARCHAR(50) NOT NULL,
-    expected_quantity INT NOT NULL,
-    picked_quantity INT DEFAULT 0,
-    actual_quantity INT,
-    FOREIGN KEY (outbound_id) REFERENCES outbound_orders(outbound_id)
-);
-
--- 库存盘点表
-CREATE TABLE stock_counts (
-    count_id INT PRIMARY KEY AUTO_INCREMENT,
-    warehouse_id INT NOT NULL,
-    product_id INT NOT NULL,  -- 关联products表
-    sku VARCHAR(50) NOT NULL,
-    system_quantity INT NOT NULL,
-    physical_quantity INT NOT NULL,
-    difference_quantity INT GENERATED ALWAYS AS (physical_quantity - system_quantity) STORED,
-    count_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-    counted_by VARCHAR(100),
-    notes TEXT,
-    FOREIGN KEY (warehouse_id) REFERENCES warehouses(warehouse_id)
-);
-
--- 插入仓库数据
-INSERT INTO warehouses (warehouse_code, warehouse_name, region, address, contact_person, contact_phone) VALUES
-('WH001', '北京华北仓', '华北', '北京市大兴区物流园8号', '张经理', '13900112233'),
-('WH002', '上海华东仓', '华东', '上海市青浦区物流园区15号', '李经理', '13900112244'),
-('WH003', '广州华南仓', '华南', '广州市番禺区物流大道3号', '王经理', '13900112255');
-
--- 初始化各仓库库存（product_id 1-5 来自商品管理）
--- 注意：product_management.products表中的库存总量要相应更新
-INSERT INTO inventory (product_id, warehouse_id, sku, quantity, locked_quantity, min_stock_level) VALUES
-(1, 1, 'IPHONE13-128', 30, 0, 10),
-(1, 2, 'IPHONE13-128', 40, 2, 10),
-(1, 3, 'IPHONE13-128', 30, 0, 10),
-(2, 1, 'MACBOOK-AIR', 20, 1, 5),
-(2, 2, 'MACBOOK-AIR', 20, 0, 5),
-(2, 3, 'MACBOOK-AIR', 10, 0, 5),
-(3, 1, 'SAMSUNG-S22', 25, 0, 8),
-(3, 2, 'SAMSUNG-S22', 35, 0, 8),
-(3, 3, 'SAMSUNG-S22', 20, 1, 8),
-(4, 1, 'LENOVO-LEGION', 10, 0, 5),
-(4, 2, 'LENOVO-LEGION', 15, 0, 5),
-(5, 1, 'NIKE-TSHIRT', 80, 0, 20),
-(5, 2, 'NIKE-TSHIRT', 70, 0, 20),
-(5, 3, 'NIKE-TSHIRT', 50, 1, 20);
-
--- 根据订单创建出库单（关联order_management.orders表）
-INSERT INTO outbound_orders (outbound_number, order_id, warehouse_id, status, shipping_company, tracking_number) VALUES
-('OUT20231001001', 1, 2, 'SHIPPED', '顺丰速运', 'SF1234567890'),
-('OUT20231001002', 2, 1, 'SHIPPED', '圆通速递', 'YT9876543210'),
-('OUT20231001003', 3, 2, 'PACKED', '京东物流', 'JD5678901234'),
-('OUT20231001004', 4, 2, 'PICKING', NULL, NULL),
-('OUT20231001005', 5, 3, 'PENDING', NULL, NULL);
-
--- 出库单明细
-INSERT INTO outbound_items (outbound_id, product_id, sku, expected_quantity, picked_quantity) VALUES
-(1, 1, 'IPHONE13-128', 1, 1),
-(2, 5, 'NIKE-TSHIRT', 1, 1),
-(3, 2, 'MACBOOK-AIR', 1, 1),
-(4, 1, 'IPHONE13-128', 2, 2),
-(5, 3, 'SAMSUNG-S22', 1, 0);
-
--- 入库单（补货）
-INSERT INTO inbound_orders (inbound_number, warehouse_id, supplier, inbound_type, status, expected_date) VALUES
-('IN20231001001', 1, 'Apple中国', 'PURCHASE', 'COMPLETED', '2023-10-05'),
-('IN20231001002', 2, '三星电子', 'PURCHASE', 'COMPLETED', '2023-10-06'),
-('IN20231001003', 1, 'Nike体育', 'PURCHASE', 'RECEIVING', '2023-10-10'),
-('IN20231001004', 3, '联想集团', 'PURCHASE', 'PENDING', '2023-10-15');
-
-INSERT INTO inbound_items (inbound_id, product_id, sku, expected_quantity, received_quantity) VALUES
-(1, 1, 'IPHONE13-128', 50, 50),
-(1, 2, 'MACBOOK-AIR', 20, 20),
-(2, 3, 'SAMSUNG-S22', 30, 30),
-(3, 5, 'NIKE-TSHIRT', 100, 60),
-(4, 4, 'LENOVO-LEGION', 15, 0);
-
--- 盘点记录
-INSERT INTO stock_counts (warehouse_id, product_id, sku, system_quantity, physical_quantity, counted_by, notes) VALUES
-(1, 1, 'IPHONE13-128', 30, 30, '张小明', '盘点一致'),
-(1, 5, 'NIKE-TSHIRT', 80, 78, '张小明', '损耗2件'),
-(2, 2, 'MACBOOK-AIR', 20, 20, '李华', '盘点一致'),
-(3, 3, 'SAMSUNG-S22', 20, 19, '王芳', '一件破损');
-
-
-
-
-
-
-
-
-
-
-
--- 客户服务数据库
-CREATE DATABASE customer_service;
-
-USE customer_service;
-
--- 售后申请/退换货表
-CREATE TABLE returns_requests (
-    return_id INT PRIMARY KEY AUTO_INCREMENT,
-    return_number VARCHAR(50) UNIQUE NOT NULL,
-    order_id INT NOT NULL,  -- 关联orders表
-    user_id INT NOT NULL,  -- 关联users表
-    product_id INT NOT NULL,  -- 关联products表
-    return_type ENUM('REFUND', 'EXCHANGE', 'REPAIR') NOT NULL,
-    reason_code VARCHAR(50),
-    reason_description TEXT,
-    quantity INT NOT NULL,
-    return_amount DECIMAL(10,2),
-    status ENUM('PENDING', 'APPROVED', 'REJECTED', 'COMPLETED', 'CLOSED') DEFAULT 'PENDING',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
--- 售后流程跟踪表
-CREATE TABLE return_process (
-    process_id INT PRIMARY KEY AUTO_INCREMENT,
-    return_id INT NOT NULL,
-    step ENUM('APPLY', 'APPROVE', 'RECEIVE', 'INSPECT', 'REFUND', 'EXCHANGE', 'COMPLETE') NOT NULL,
-    status ENUM('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED') DEFAULT 'PENDING',
-    operator VARCHAR(100),
-    operation_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-    notes TEXT,
-    FOREIGN KEY (return_id) REFERENCES returns_requests(return_id)
-);
-
--- 商品评价表
-CREATE TABLE reviews (
-    review_id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,  -- 关联users表
-    product_id INT NOT NULL,  -- 关联products表
-    order_id INT NOT NULL,  -- 关联orders表
-    order_item_id INT,  -- 关联order_items表
-    rating TINYINT CHECK (rating >= 1 AND rating <= 5),
-    title VARCHAR(200),
-    content TEXT,
-    is_anonymous BOOLEAN DEFAULT FALSE,
-    is_verified_purchase BOOLEAN DEFAULT TRUE,
-    likes_count INT DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
--- 评价图片表
-CREATE TABLE review_images (
-    image_id INT PRIMARY KEY AUTO_INCREMENT,
-    review_id INT NOT NULL,
-    image_url VARCHAR(500) NOT NULL,
-    display_order INT DEFAULT 0,
-    FOREIGN KEY (review_id) REFERENCES reviews(review_id) ON DELETE CASCADE
-);
-
--- 客服对话/咨询表
-CREATE TABLE support_tickets (
-    ticket_id INT PRIMARY KEY AUTO_INCREMENT,
-    ticket_number VARCHAR(50) UNIQUE NOT NULL,
-    user_id INT NOT NULL,  -- 关联users表
-    order_id INT,  -- 关联orders表
-    category ENUM('ORDER_ISSUE', 'PRODUCT_QUESTION', 'PAYMENT', 'SHIPPING', 'RETURN', 'OTHER') NOT NULL,
-    subject VARCHAR(200) NOT NULL,
-    description TEXT,
-    priority ENUM('LOW', 'MEDIUM', 'HIGH', 'URGENT') DEFAULT 'MEDIUM',
-    status ENUM('OPEN', 'PROCESSING', 'WAITING', 'RESOLVED', 'CLOSED') DEFAULT 'OPEN',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
--- 客服对话记录表
-CREATE TABLE ticket_messages (
-    message_id INT PRIMARY KEY AUTO_INCREMENT,
-    ticket_id INT NOT NULL,
-    sender_type ENUM('CUSTOMER', 'SUPPORT') NOT NULL,
-    message TEXT NOT NULL,
-    attachments JSON,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (ticket_id) REFERENCES support_tickets(ticket_id) ON DELETE CASCADE
-);
-
--- 用户反馈/建议表
-CREATE TABLE feedback (
-    feedback_id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,  -- 关联users表
-    feedback_type ENUM('SUGGESTION', 'COMPLAINT', 'PRAISE', 'QUESTION') NOT NULL,
-    content TEXT NOT NULL,
-    rating TINYINT,
-    status ENUM('PENDING', 'PROCESSED', 'REPLIED') DEFAULT 'PENDING',
-    reply_content TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    processed_at DATETIME
-);
-
--- 插入售后申请数据（关联现有订单）
-INSERT INTO returns_requests (return_number, order_id, user_id, product_id, return_type, reason_code, reason_description, quantity, return_amount, status) VALUES
-('R20231001001', 2, 2, 5, 'EXCHANGE', 'SIZE_ISSUE', '尺码偏大，需要换小一码', 1, 299.00, 'COMPLETED'),
-('R20231001002', 4, 1, 1, 'REFUND', 'QUALITY_ISSUE', '手机屏幕有划痕', 1, 5999.00, 'APPROVED'),
-('R20231001003', 1, 1, 1, 'REFUND', 'WRONG_ITEM', '颜色发错', 1, 5999.00, 'PENDING'),
-('R20231001004', 5, 4, 3, 'REFUND', 'NOT_AS_DESCRIBED', '与描述不符', 1, 4999.00, 'REJECTED');
-
--- 售后流程跟踪
-INSERT INTO return_process (return_id, step, status, operator, notes) VALUES
-(1, 'APPLY', 'COMPLETED', '系统', '用户提交换货申请'),
-(1, 'APPROVE', 'COMPLETED', '客服李娜', '审核通过，同意换货'),
-(1, 'RECEIVE', 'COMPLETED', '仓库王强', '收到退货商品'),
-(1, 'INSPECT', 'COMPLETED', '质检张伟', '商品完好，同意换货'),
-(1, 'EXCHANGE', 'COMPLETED', '仓库王强', '已发出新商品'),
-(2, 'APPLY', 'COMPLETED', '系统', '用户提交退款申请'),
-(2, 'APPROVE', 'COMPLETED', '客服李娜', '审核通过，同意退款');
-
--- 插入商品评价数据（关联订单）
-INSERT INTO reviews (user_id, product_id, order_id, order_item_id, rating, title, content, is_anonymous) VALUES
-(1, 1, 1, 1, 5, 'iPhone 13真不错', '手机很好用，系统流畅，拍照清晰，非常满意！', FALSE),
-(1, 5, 2, 2, 4, 'T恤质量不错', '面料舒适，就是尺码稍微偏大', FALSE),
-(3, 2, 3, 3, 5, 'MacBook Air M2太强了', '轻薄便携，续航给力，M2芯片性能强劲', FALSE),
-(2, 5, 2, 2, 3, '一般般', '感觉价格有点贵', TRUE),
-(4, 3, 5, 5, 4, 'S22不错', '屏幕效果很好，就是电池续航一般', FALSE);
-
--- 评价图片
-INSERT INTO review_images (review_id, image_url, display_order) VALUES
-(1, 'https://example.com/review/iphone13-1.jpg', 1),
-(1, 'https://example.com/review/iphone13-2.jpg', 2),
-(3, 'https://example.com/review/macbook-1.jpg', 1),
-(5, 'https://example.com/review/s22-1.jpg', 1);
-
--- 插入客服工单
-INSERT INTO support_tickets (ticket_number, user_id, order_id, category, subject, description, priority, status) VALUES
-('TK20231001001', 2, 2, 'SHIPPING', '物流太慢了', '我的订单ORD20231001002显示已发货好几天了，物流一直没有更新', 'MEDIUM', 'PROCESSING'),
-('TK20231001002', 1, 4, 'PAYMENT', '支付重复扣款', '我支付订单ORD20231001004时，支付宝扣了两次款', 'HIGH', 'OPEN'),
-('TK20231001003', 5, NULL, 'PRODUCT_QUESTION', 'S22是否有赠品', '想咨询一下购买Samsung S22有没有送充电器', 'LOW', 'RESOLVED'),
-('TK20231001004', 3, 3, 'ORDER_ISSUE', '修改收货地址', '订单ORD20231001003还没发货，可以修改地址吗', 'MEDIUM', 'WAITING');
-
--- 工单对话记录
-INSERT INTO ticket_messages (ticket_id, sender_type, message) VALUES
-(1, 'CUSTOMER', '物流好几天没更新了，能帮忙查查吗'),
-(1, 'SUPPORT', '您好，我帮您查询一下，请稍等'),
-(1, 'SUPPORT', '查到了，包裹已到达杭州中转站，预计明天送达'),
-(2, 'CUSTOMER', '支付宝扣了两次款，但是订单只显示支付一次'),
-(2, 'SUPPORT', '您好，请提供一下支付宝交易号'),
-(3, 'CUSTOMER', 'S22现在购买有赠品吗？'),
-(3, 'SUPPORT', '您好，现在购买S22赠送25W充电器一个'),
-(4, 'CUSTOMER', '刚下单，地址写错了，能改吗'),
-(4, 'SUPPORT', '可以的，请提供正确地址');
-
--- 用户反馈
-INSERT INTO feedback (user_id, feedback_type, content, rating, status) VALUES
-(1, 'PRAISE', '发货速度快，包装完好', 5, 'PROCESSED'),
-(3, 'SUGGESTION', '希望能增加更多支付方式', NULL, 'PENDING'),
-(2, 'COMPLAINT', '客服响应速度太慢了', 2, 'PENDING'),
-(4, 'QUESTION', '什么时候有新品手机上市', NULL, 'REPLIED');
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
--- 供应链管理系统数据库
-CREATE DATABASE supply_chain;
-
-USE supply_chain;
-
--- =====================================================
--- 第一子域：采购域 (Purchase Domain)
--- =====================================================
-
--- 供应商表
-CREATE TABLE suppliers (
-    supplier_id INT PRIMARY KEY AUTO_INCREMENT,
-    supplier_code VARCHAR(50) UNIQUE NOT NULL,
-    supplier_name VARCHAR(200) NOT NULL,
-    supplier_type ENUM('MANUFACTURER', 'DISTRIBUTOR', 'AGENT') NOT NULL,
-    contact_person VARCHAR(100),
-    contact_phone VARCHAR(20),
-    email VARCHAR(100),
-    address TEXT,
-    payment_terms VARCHAR(100),
-    cooperation_start_date DATE,
-    credit_rating ENUM('A', 'B', 'C', 'D') DEFAULT 'B',
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 采购订单表
-CREATE TABLE purchase_orders (
-    purchase_id INT PRIMARY KEY AUTO_INCREMENT,
-    purchase_number VARCHAR(50) UNIQUE NOT NULL,
-    supplier_id INT NOT NULL,
-    order_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expected_delivery_date DATE,
-    actual_delivery_date DATE,
-    total_amount DECIMAL(12,2) NOT NULL,
-    discount_amount DECIMAL(10,2) DEFAULT 0,
-    final_amount DECIMAL(12,2) NOT NULL,
-    status ENUM('DRAFT', 'SUBMITTED', 'CONFIRMED', 'SHIPPED', 'RECEIVED', 'CANCELLED') DEFAULT 'DRAFT',
-    payment_status ENUM('UNPAID', 'PARTIAL', 'PAID') DEFAULT 'UNPAID',
-    payment_due_date DATE,
-    created_by VARCHAR(100),
-    notes TEXT,
-    FOREIGN KEY (supplier_id) REFERENCES suppliers(supplier_id)
-);
-
--- 采购订单明细表
-CREATE TABLE purchase_items (
-    purchase_item_id INT PRIMARY KEY AUTO_INCREMENT,
-    purchase_id INT NOT NULL,
-    product_id INT NOT NULL,  -- 关联电商系统的商品表
-    sku VARCHAR(50) NOT NULL,
-    product_name VARCHAR(200) NOT NULL,
-    unit_price DECIMAL(10,2) NOT NULL,
-    quantity INT NOT NULL,
-    received_quantity INT DEFAULT 0,
-    rejected_quantity INT DEFAULT 0,
-    subtotal DECIMAL(12,2) NOT NULL,
-    tax_rate DECIMAL(5,2) DEFAULT 13.00,
-    FOREIGN KEY (purchase_id) REFERENCES purchase_orders(purchase_id)
-);
-
--- 采购合同表
-CREATE TABLE purchase_contracts (
-    contract_id INT PRIMARY KEY AUTO_INCREMENT,
-    contract_number VARCHAR(50) UNIQUE NOT NULL,
-    supplier_id INT NOT NULL,
-    contract_name VARCHAR(200) NOT NULL,
-    contract_type ENUM('FRAMEWORK', 'ONE_TIME', 'LONG_TERM') NOT NULL,
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
-    total_value DECIMAL(15,2),
-    payment_terms TEXT,
-    delivery_terms TEXT,
-    quality_requirements TEXT,
-    file_url VARCHAR(500),
-    status ENUM('DRAFT', 'ACTIVE', 'EXPIRED', 'TERMINATED') DEFAULT 'DRAFT',
-    signed_at DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (supplier_id) REFERENCES suppliers(supplier_id)
-);
-
--- 采购入库质检表
-CREATE TABLE quality_inspections (
-    inspection_id INT PRIMARY KEY AUTO_INCREMENT,
-    purchase_id INT NOT NULL,
-    purchase_item_id INT NOT NULL,
-    inspection_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-    inspector VARCHAR(100),
-    sample_size INT NOT NULL,
-    qualified_quantity INT NOT NULL,
-    defective_quantity INT NOT NULL,
-    defect_rate DECIMAL(5,2) GENERATED ALWAYS AS (
-        ROUND(CAST(defective_quantity AS DECIMAL(10,2)) / NULLIF(sample_size, 0) * 100, 2)
-    ) STORED,
-    inspection_result ENUM('PASS', 'FAIL', 'PARTIAL') NOT NULL,
-    defect_details JSON,
-    remarks TEXT,
-    FOREIGN KEY (purchase_id) REFERENCES purchase_orders(purchase_id),
-    FOREIGN KEY (purchase_item_id) REFERENCES purchase_items(purchase_item_id)
-);
-
--- =====================================================
--- 第二子域：物流域 (Logistics Domain)
--- =====================================================
-
--- 承运商表
-CREATE TABLE carriers (
-    carrier_id INT PRIMARY KEY AUTO_INCREMENT,
-    carrier_code VARCHAR(50) UNIQUE NOT NULL,
-    carrier_name VARCHAR(100) NOT NULL,
-    carrier_type ENUM('EXPRESS', 'FREIGHT', 'COLD_CHAIN', 'INTERNATIONAL') NOT NULL,
-    contact_person VARCHAR(100),
-    contact_phone VARCHAR(20),
-    service_areas TEXT,
-    price_model VARCHAR(100),
-    cooperation_level ENUM('STRATEGIC', 'PREFERRED', 'GENERAL') DEFAULT 'GENERAL',
-    is_active BOOLEAN DEFAULT TRUE
-);
-
--- 运输订单表
-CREATE TABLE transport_orders (
-    transport_id INT PRIMARY KEY AUTO_INCREMENT,
-    transport_number VARCHAR(50) UNIQUE NOT NULL,
-    source_type ENUM('SALE_ORDER', 'PURCHASE_ORDER', 'TRANSFER') NOT NULL,
-    source_id VARCHAR(50) NOT NULL,  -- 可以关联电商订单号或采购订单号
-    carrier_id INT NOT NULL,
-    carrier_contact VARCHAR(100),
-    carrier_phone VARCHAR(20),
-    
-    -- 发货信息
-    sender_name VARCHAR(100) NOT NULL,
-    sender_phone VARCHAR(20) NOT NULL,
-    sender_address TEXT NOT NULL,
-    sender_warehouse_id INT,  -- 关联库存系统的仓库
-    
-    -- 收货信息
-    receiver_name VARCHAR(100) NOT NULL,
-    receiver_phone VARCHAR(20) NOT NULL,
-    receiver_address TEXT NOT NULL,
-    
-    -- 货物信息
-    total_weight_kg DECIMAL(10,2),
-    total_volume_m3 DECIMAL(10,2),
-    package_count INT,
-    goods_value DECIMAL(12,2),
-    insurance_amount DECIMAL(12,2) DEFAULT 0,
-    
-    -- 物流状态
-    tracking_number VARCHAR(100),
-    shipping_date DATETIME,
-    estimated_delivery DATE,
-    actual_delivery DATETIME,
-    transport_status ENUM('PENDING', 'PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'EXCEPTION', 'CANCELLED') DEFAULT 'PENDING',
-    exception_reason TEXT,
-    
-    -- 费用信息
-    shipping_fee DECIMAL(10,2) DEFAULT 0,
-    fuel_surcharge DECIMAL(10,2) DEFAULT 0,
-    insurance_fee DECIMAL(10,2) DEFAULT 0,
-    total_fee DECIMAL(12,2) GENERATED ALWAYS AS (shipping_fee + fuel_surcharge + insurance_fee) STORED,
-    payment_status ENUM('UNPAID', 'PAID') DEFAULT 'UNPAID',
-    
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (carrier_id) REFERENCES carriers(carrier_id)
-);
-
--- 物流轨迹表
-CREATE TABLE transport_tracking (
-    tracking_id INT PRIMARY KEY AUTO_INCREMENT,
-    transport_id INT NOT NULL,
-    tracking_number VARCHAR(100) NOT NULL,
-    status_code VARCHAR(50),
-    status_description VARCHAR(200),
-    location VARCHAR(200),
-    operator VARCHAR(100),
-    operation_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-    remarks TEXT,
-    FOREIGN KEY (transport_id) REFERENCES transport_orders(transport_id)
-);
-
--- 车辆管理表
-CREATE TABLE fleet_vehicles (
-    vehicle_id INT PRIMARY KEY AUTO_INCREMENT,
-    plate_number VARCHAR(20) UNIQUE NOT NULL,
-    vehicle_type ENUM('VAN', 'TRUCK', 'REFRIGERATED', 'MOTORCYCLE') NOT NULL,
-    brand VARCHAR(50),
-    model VARCHAR(50),
-    capacity_kg DECIMAL(8,2),
-    capacity_m3 DECIMAL(8,2),
-    owner_type ENUM('SELF', 'LEASED', 'THIRD_PARTY') DEFAULT 'SELF',
-    owner_company VARCHAR(100),
-    driver_name VARCHAR(100),
-    driver_phone VARCHAR(20),
-    status ENUM('AVAILABLE', 'IN_USE', 'MAINTENANCE', 'OFFLINE') DEFAULT 'AVAILABLE',
-    insurance_expiry DATE,
-    inspection_expiry DATE,
-    last_maintenance_date DATE,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 配送路线表
-CREATE TABLE delivery_routes (
-    route_id INT PRIMARY KEY AUTO_INCREMENT,
-    route_code VARCHAR(50) UNIQUE NOT NULL,
-    route_name VARCHAR(200) NOT NULL,
-    start_location VARCHAR(200) NOT NULL,
-    end_location VARCHAR(200) NOT NULL,
-    waypoints JSON,  -- 途经点
-    estimated_distance_km DECIMAL(8,2),
-    estimated_duration_hours DECIMAL(5,2),
-    fuel_consumption_est DECIMAL(8,2),
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 配送任务表
-CREATE TABLE delivery_tasks (
-    task_id INT PRIMARY KEY AUTO_INCREMENT,
-    task_number VARCHAR(50) UNIQUE NOT NULL,
-    route_id INT,
-    vehicle_id INT,
-    driver_name VARCHAR(100),
-    driver_phone VARCHAR(20),
-    transport_ids JSON,  -- 包含的运输订单ID列表
-    departure_time DATETIME,
-    estimated_return_time DATETIME,
-    actual_return_time DATETIME,
-    task_status ENUM('ASSIGNED', 'DEPARTED', 'DELIVERING', 'COMPLETED', 'DELAYED') DEFAULT 'ASSIGNED',
-    mileage_recorded DECIMAL(8,2),
-    fuel_used DECIMAL(8,2),
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    completed_at DATETIME,
-    FOREIGN KEY (route_id) REFERENCES delivery_routes(route_id),
-    FOREIGN KEY (vehicle_id) REFERENCES fleet_vehicles(vehicle_id)
-);
-
-
--- 插入供应商数据
-INSERT INTO suppliers (supplier_code, supplier_name, supplier_type, contact_person, contact_phone, email, address, payment_terms, credit_rating) VALUES
-('SUP001', '苹果中国有限公司', 'MANUFACTURER', '王建国', '13912345678', 'wang@apple.com.cn', '上海市浦东新区', '月结30天', 'A'),
-('SUP002', '三星电子中国', 'MANUFACTURER', '李成俊', '13912345679', 'li@samsung.com', '北京市朝阳区', '预付50%', 'B'),
-('SUP003', '联想集团', 'MANUFACTURER', '张伟', '13912345680', 'zhang@lenovo.com', '北京市海淀区', '月结15天', 'A'),
-('SUP004', '耐克体育用品', 'MANUFACTURER', '陈娜', '13912345681', 'chen@nike.com', '上海市静安区', '月结30天', 'A'),
-('SUP005', '京东物流供应链', 'DISTRIBUTOR', '刘强', '13912345682', 'liu@jd.com', '北京市大兴区', '周结', 'A');
-
--- 为电商系统商品创建采购订单
--- 商品ID 1 (iPhone 13) 向苹果采购
-INSERT INTO purchase_orders (purchase_number, supplier_id, order_date, expected_delivery_date, total_amount, final_amount, status) VALUES
-('PO202310001', 1, '2023-10-01 09:00:00', '2023-10-15', 500000.00, 500000.00, 'RECEIVED'),
-('PO202310002', 2, '2023-10-02 10:30:00', '2023-10-20', 250000.00, 247500.00, 'SHIPPED'),
-('PO202310003', 3, '2023-10-03 14:15:00', '2023-10-25', 240000.00, 240000.00, 'CONFIRMED'),
-('PO202310004', 4, '2023-10-04 11:00:00', '2023-10-18', 60000.00, 58800.00, 'RECEIVED'),
-('PO202310005', 1, '2023-10-05 16:20:00', '2023-10-30', 300000.00, 300000.00, 'SUBMITTED');
-
--- 采购明细（对应电商系统的商品）
-INSERT INTO purchase_items (purchase_id, product_id, sku, product_name, unit_price, quantity, received_quantity, subtotal) VALUES
-(1, 1, 'IPHONE13-128', 'iPhone 13 128GB', 5000.00, 100, 100, 500000.00),
-(2, 3, 'SAMSUNG-S22', 'Samsung Galaxy S22', 4000.00, 50, 30, 200000.00),
-(2, 2, 'MACBOOK-AIR', 'MacBook Air M2', 7500.00, 6, 6, 45000.00),
-(3, 4, 'LENOVO-LEGION', 'Lenovo Legion 5 Pro', 7000.00, 30, 0, 210000.00),
-(4, 5, 'NIKE-TSHIRT', 'Nike男士运动T恤', 250.00, 200, 200, 50000.00),
-(4, 5, 'NIKE-TSHIRT', 'Nike男士运动T恤', 250.00, 40, 40, 10000.00),  -- 追加采购
-(5, 1, 'IPHONE13-128', 'iPhone 13 128GB', 4950.00, 60, 0, 297000.00);
-
--- 质检记录
-INSERT INTO quality_inspections (
-    purchase_id, 
-    purchase_item_id, 
-    inspection_date, 
-    inspector, 
-    sample_size, 
-    qualified_quantity, 
-    defective_quantity, 
-    inspection_result,
-    remarks
-) VALUES 
-(1, 1, '2023-10-16 10:00:00', '质检员赵刚', 20, 20, 0, 'PASS', 'iPhone 13 批量质检全部合格'),
-
-(2, 2, '2023-10-12 14:30:00', '质检员李敏', 10, 9, 1, 'PARTIAL', 'Samsung S22 发现1台屏幕有亮点'),
-
-(4, 5, '2023-10-19 09:15:00', '质检员王芳', 30, 28, 2, 'PARTIAL', 'Nike T恤 2件有污渍');
-
-
--- 插入承运商
-INSERT INTO carriers (carrier_code, carrier_name, carrier_type, contact_person, contact_phone, service_areas, cooperation_level) VALUES
-('SF001', '顺丰速运', 'EXPRESS', '张经理', '4008111111', '全国', 'STRATEGIC'),
-('JD002', '京东物流', 'EXPRESS', '李经理', '4006566000', '全国', 'STRATEGIC'),
-('YT003', '圆通速递', 'EXPRESS', '王经理', '9555400', '全国', 'PREFERRED'),
-('ZT004', '中通快递', 'EXPRESS', '陈经理', '95311', '全国', 'GENERAL'),
-('HY005', '海运国际物流', 'INTERNATIONAL', '赵经理', '4008855888', '沿海港口', 'GENERAL');
-
--- 为电商订单创建运输订单（与订单管理系统的订单对应）
--- 订单1 ORD20231001001 -> 用户1 John Doe
-INSERT INTO transport_orders (transport_number, source_type, source_id, carrier_id, sender_name, sender_phone, sender_address, receiver_name, receiver_phone, receiver_address, tracking_number, shipping_date, estimated_delivery, transport_status) VALUES
-('T202310001', 'SALE_ORDER', 'ORD20231001001', 1, '华东仓', '021-67890123', '上海市青浦区物流园区15号', 'John Doe', '13800138001', '北京市朝阳区建国门外大街1号国贸大厦A座', 'SF1234567890', '2023-10-01 15:30:00', '2023-10-03', 'DELIVERED'),
-
-('T202310002', 'SALE_ORDER', 'ORD20231001002', 3, '华北仓', '010-67890123', '北京市大兴区物流园8号', 'Jane Smith', '13800138002', '浙江省杭州市西湖区文三路478号华星时代广场', 'YT9876543210', '2023-10-02 14:20:00', '2023-10-05', 'DELIVERED'),
-
-('T202310003', 'SALE_ORDER', 'ORD20231001003', 2, '华东仓', '021-67890123', '上海市青浦区物流园区15号', 'Alice Wang', '13800138003', '广东省深圳市南山区科技园科技南路1号', 'JD5678901234', '2023-10-02 09:10:00', '2023-10-04', 'IN_TRANSIT'),
-
-('T202310004', 'SALE_ORDER', 'ORD20231001004', 1, '华东仓', '021-67890123', '上海市青浦区物流园区15号', 'John Doe', '13800138001', '上海市浦东新区陆家嘴环路100号', 'SF2345678901', '2023-10-03 11:45:00', '2023-10-06', 'IN_TRANSIT'),
-
--- 采购订单的运输
-('T202310005', 'PURCHASE_ORDER', 'PO202310002', 5, '三星电子', '0755-12345678', '深圳市南山区科技园', '华东仓', '021-67890123', '上海市青浦区物流园区15号', 'HY202310001', '2023-10-05 08:00:00', '2023-10-18', 'IN_TRANSIT');
-
--- 物流轨迹
-INSERT INTO transport_tracking (transport_id, tracking_number, status_code, status_description, location, operation_time) VALUES
-(1, 'SF1234567890', 'SIGNED', '已签收', '北京市朝阳区', '2023-10-03 14:25:00'),
-(2, 'YT9876543210', 'IN_TRANSIT', '运输中', '南京市中转站', '2023-10-04 09:30:00'),
-(3, 'JD5678901234', 'ARRIVED', '已到达', '广州中转场', '2023-10-03 22:15:00'),
-(4, 'SF2345678901', 'PICKED_UP', '已揽收', '上海青浦', '2023-10-03 13:20:00'),
-(5, 'HY202310001', 'DEPARTED', '已离港', '上海港', '2023-10-06 18:00:00');
-
--- 车辆管理
-INSERT INTO fleet_vehicles (plate_number, vehicle_type, brand, model, capacity_kg, capacity_m3, driver_name, driver_phone, status) VALUES
-('沪A12345', 'VAN', '福特', '全顺', 1.5, 8, '张师傅', '13812340001', 'AVAILABLE'),
-('京B67890', 'TRUCK', '解放', 'J6', 10.0, 40, '李师傅', '13812340002', 'IN_USE'),
-('粤C11223', 'REFRIGERATED', '依维柯', 'Daily', 3.0, 15, '王师傅', '13812340003', 'AVAILABLE'),
-('浙D33445', 'VAN', '江淮', '星锐', 1.8, 10, '赵师傅', '13812340004', 'MAINTENANCE');
-
--- 配送路线
-INSERT INTO delivery_routes (route_code, route_name, start_location, end_location, waypoints, estimated_distance_km, estimated_duration_hours) VALUES
-('R001', '上海-北京线', '上海青浦仓', '北京大兴仓', '["苏州", "无锡", "济南"]', 1200, 18),
-('R002', '上海-深圳线', '上海青浦仓', '深圳宝安仓', '["杭州", "福州", "汕头"]', 1500, 24),
-('R003', '北京-杭州线', '北京大兴仓', '杭州萧山仓', '["天津", "济南", "南京"]', 1300, 20),
-('R004', '市内配送线', '上海青浦仓', '上海市区', '["徐汇", "静安", "浦东"]', 80, 4);
-
-
+-- 插入测试数据（订单主表: 30条, user_id关联user_management.users）
+INSERT INTO orders (order_number, user_id, total_amount, discount_amount, shipping_fee, final_amount, order_status, payment_status, shipping_address, payment_method, order_notes, created_at) VALUES
+('ORD-2025-00001',  1, 10148.00,  300.00,  20.00,  9868.00, 'DELIVERED', 'PAID',  '北京市朝阳区建国路88号院1号楼1201',          'Visa尾号3891',       'iPhone 16 Pro Max + 充电器',                              '2025-04-10 10:15:30'),
+('ORD-2025-00002',  2,  9078.00,  140.00,  15.00,  8953.00, 'DELIVERED', 'PAID',  '上海市浦东新区陆家嘴环路1000号恒生银行大厦22层', 'MasterCard尾号5210', 'Samsung Galaxy S25 Ultra + 充电器',                       '2025-04-15 14:20:00'),
+('ORD-2025-00003',  3,  5078.00,   80.00,  15.00,  5013.00, 'DELIVERED', 'PAID',  '广东省广州市天河区天河路385号太古汇1座18楼',     'Visa尾号6742',       'Xiaomi 16 Pro + 倍思充电器',                              '2025-04-20 09:00:00'),
+('ORD-2025-00004',  4, 15148.00,  500.00,  20.00, 14668.00, 'DELIVERED', 'PAID',  '浙江省杭州市西湖区文三路478号华星时代广场A座12楼', 'MasterCard尾号9801', 'MacBook Pro 14 M4 Pro + 充电器',                          '2025-05-01 16:45:00'),
+('ORD-2025-00005',  5,   268.00,    8.00,  10.00,   270.00, 'DELIVERED', 'PAID',  '四川省成都市武侯区天府大道北段1199号银泰中心2栋',  'PayPal',             'Keep瑜伽垫 + 智能跳绳',                                  '2025-05-10 11:30:00'),
+('ORD-2025-00006',  6, 20449.00,  600.00,  20.00, 19869.00, 'DELIVERED', 'PAID',  '湖北省武汉市洪山区珞瑜路1037号华中科技大学科技园',  '支付宝',             'ThinkPad X1 Carbon + 50个充电器',                         '2025-05-15 08:15:00'),
+('ORD-2025-00007',  7,   378.00,   11.00,  10.00,   377.00, 'DELIVERED', 'PAID',  '江苏省南京市鼓楼区汉中路1号南京国际金融中心40层',   'UnionPay尾号1104',   '海澜之家衬衫 + T恤',                                     '2025-06-01 10:00:00'),
+('ORD-2025-00008',  8,  1257.00,   20.00,  12.00,  1249.00, 'DELIVERED', 'PAID',  '重庆市渝中区解放碑步行街民权路28号英利国际',         '微信支付',           'Nike Pegasus 42 + 2件T恤',                               '2025-06-10 14:20:00'),
+('ORD-2025-00009',  9,   228.00,    7.00,  10.00,   231.00, 'DELIVERED', 'PAID',  '天津市和平区南京路189号津汇广场2座19层',             '微信支付',           '优衣库T恤 + 充电器',                                     '2025-06-20 09:45:00'),
+('ORD-2025-00010', 10,   538.00,    0.00,  10.00,   548.00, 'DELIVERED', 'PAID',  '山东省济南市历下区泉城路180号齐鲁国际大厦C座10层',  'Amex尾号3328',       'ZARA连衣裙 + T恤',                                       '2025-07-05 12:00:00'),
+('ORD-2025-00011', 11,  2398.00,   40.00,  12.00,  2370.00, 'SHIPPED',   'PAID',  '福建省厦门市思明区鹭江道100号财富中心25层',          '支付宝',             'Adidas Ultraboost + Nike Pegasus',                        '2025-07-15 15:30:00'),
+('ORD-2025-00012', 12,  6648.00,  100.00,  15.00,  6563.00, 'SHIPPED',   'PAID',  '湖南省长沙市岳麓区麓谷大道658号麓谷信息港A栋',      'UnionPay尾号7456',   'Apple Watch Ultra 3 + 充电器',                           '2025-08-01 10:10:00'),
+('ORD-2025-00013', 13, 14297.00,  400.00,  20.00, 13917.00, 'PROCESSING','PAID',  '陕西省西安市雁塔区高新四路17号志诚丽柏酒店15层',     'Visa尾号8912',       'Dell XPS 16 + 2个充电器',                                 '2025-08-15 08:00:00'),
+('ORD-2025-00014', 14,   227.90,    7.00,  10.00,   230.90, 'DELIVERED', 'PAID',  '安徽省合肥市蜀山区长江西路88号环球金融广场B座',      'PayPal',             '乐事薯片 + 德芙巧克力x2',                                '2025-09-01 14:00:00'),
+('ORD-2025-00015', 15,   168.00,    5.00,   8.00,   171.00, 'DELIVERED', 'PAID',  '辽宁省沈阳市和平区青年大街286号华润大厦9层',         '微信支付',           '德芙巧克力 + 倍思充电器',                                '2025-09-10 16:20:00'),
+('ORD-2025-00016', 16,   308.00,    9.00,  10.00,   309.00, 'DELIVERED', 'PAID',  '河南省郑州市金水区花园路39号国贸中心A座22层',        'MasterCard尾号2378', '每日坚果 + Keep瑜伽垫',                                  '2025-09-20 11:45:00'),
+('ORD-2025-00017', 17,   698.00,   10.00,  10.00,   698.00, 'DELIVERED', 'PAID',  '河北省石家庄市长安区中山东路188号北国商城',           '支付宝',             '可调节哑铃 + 智能跳绳',                                  '2025-10-01 09:30:00'),
+('ORD-2025-00018', 18,  7078.00,  110.00,  15.00,  6983.00, 'SHIPPED',   'PAID',  '云南省昆明市五华区东风西路129号顺城购物中心',         'Visa Debit尾号9634', 'Huawei Mate 70 Pro + 充电器',                             '2025-10-10 10:00:00'),
+('ORD-2025-00019', 19,  7148.00,  110.00,  15.00,  7053.00, 'PROCESSING','PAID',  '贵州省贵阳市南明区中华南路78号贵阳壹号25楼',          'Amex尾号5087',       'Samsung Tab S10 Ultra + 充电器',                          '2025-10-20 13:15:00'),
+('ORD-2025-00020', 20,   386.00,   12.00,  10.00,   384.00, 'DELIVERED', 'PAID',  '山西省太原市小店区长风街116号北美新天地',             '微信支付',           'Apple充电器 + 倍思充电器x3',                             '2025-11-01 08:30:00'),
+('ORD-2025-00021', 21,  5648.00,   80.00,  15.00,  5583.00, 'SHIPPED',   'PAID',  '江西省南昌市红谷滩区红谷中大道998号绿地中央广场',     '支付宝',             'iPad Air M3 + 充电器',                                   '2025-11-10 15:00:00'),
+('ORD-2025-00022', 22,   457.00,   14.00,  10.00,   453.00, 'DELIVERED', 'PAID',  '吉林省长春市朝阳区红旗街959号万达广场',               'MasterCard尾号6501', '海澜之家衬衫 + 2件T恤',                                  '2025-11-20 10:45:00'),
+('ORD-2025-00023', 23,  9078.00,  140.00,  15.00,  8953.00, 'PROCESSING','PAID',  '黑龙江省哈尔滨市道里区中央大街88号金安国际',          'UnionPay尾号1823',   'Samsung S25 Ultra + 充电器',                              '2025-12-01 14:10:00'),
+('ORD-2025-00024', 24,   377.00,   11.00,  10.00,   376.00, 'DELIVERED', 'PAID',  '甘肃省兰州市城关区庆阳路42号万盛商务大厦',             '支付宝',             '倍思充电器 + Apple充电器x2',                              '2025-12-10 11:20:00'),
+('ORD-2025-00025', 25,   858.00,   10.00,  10.00,   858.00, 'DELIVERED', 'PAID',  '广西南宁市青秀区民族大道136号万象城3座',              '微信支付',           '太平鸟针织衫 + ZARA连衣裙',                              '2025-12-20 09:00:00'),
+('ORD-2025-00026',  1,  3148.00,   50.00,  12.00,  3110.00, 'PAID',      'PAID',  '北京市朝阳区建国路88号院1号楼1201',                   '支付宝',             'Huawei Watch GT 5 Pro + 充电器',                          '2026-01-05 10:30:00'),
+('ORD-2025-00027',  3,   138.90,    4.00,   8.00,   142.90, 'DELIVERED', 'PAID',  '广东省广州市天河区天河路385号太古汇1座18楼',          '微信支付',           '德芙巧克力 + 乐事薯片',                                  '2026-01-15 14:00:00'),
+('ORD-2025-00028',  5,   268.00,    8.00,  10.00,   270.00, 'DELIVERED', 'PAID',  '四川省成都市武侯区天府大道北段1199号银泰中心2栋',     'PayPal',             '智能跳绳 + Keep瑜伽垫',                                  '2026-02-01 08:45:00'),
+('ORD-2025-00029',  2,   188.90,    6.00,   8.00,   190.90, 'SHIPPED',   'PAID',  '上海市浦东新区陆家嘴环路1000号恒生银行大厦22层',      'MasterCard尾号5210', '每日坚果 + 乐事薯片',                                    '2026-02-20 13:30:00'),
+('ORD-2025-00030',  8,  9498.00,  140.00,  15.00,  9373.00, 'PENDING',   'UNPAID','重庆市渝中区解放碑步行街民权路28号英利国际',            '微信支付',           'Apple Watch Ultra 3 + Huawei Watch GT 5 Pro',             '2026-03-01 16:00:00');
+
+-- 插入测试数据（订单项表: 60条, 关联orders和products）
+INSERT INTO order_items (order_id, product_id, sku, product_name, unit_price, quantity, subtotal, snapshot_data) VALUES
+(1,  1,  'SKU-PHONE-001',   'iPhone 16 Pro Max 256GB',           9999.00,  1,  9999.00, '{}'),
+(2,  2,  'SKU-PHONE-002',   'Samsung Galaxy S25 Ultra',          8999.00,  1,  8999.00, '{}'),
+(3,  3,  'SKU-PHONE-003',   'Xiaomi 16 Pro',                     4999.00,  1,  4999.00, '{}'),
+(4,  5,  'SKU-LAPTOP-001',  'MacBook Pro 14 M4 Pro',            14999.00,  1, 14999.00, '{}'),
+(5,  19, 'SKU-FIT-001',     'Keep瑜伽垫加厚防滑',                 169.00,  1,   169.00, '{}'),
+(6,  6,  'SKU-LAPTOP-002',  'ThinkPad X1 Carbon Gen12',          12999.00,  1, 12999.00, '{}'),
+(7,  10, 'SKU-MEN-001',     '海澜之家商务衬衫',                    299.00,  1,   299.00, '{}'),
+(8,  14, 'SKU-SHOE-001',    'Nike Air Zoom Pegasus 42',           1099.00,  1,  1099.00, '{}'),
+(9,  11, 'SKU-MEN-002',     '优衣库纯棉T恤',                        79.00,  1,    79.00, '{}'),
+(10, 12, 'SKU-WOM-001',     'ZARA碎花连衣裙',                      459.00,  1,   459.00, '{}'),
+(11, 15, 'SKU-SHOE-002',    'Adidas Ultraboost 5X',               1299.00,  1,  1299.00, '{}'),
+(12, 22, 'SKU-WEAR-001',    'Apple Watch Ultra 3',                6499.00,  1,  6499.00, '{}'),
+(13, 7,  'SKU-LAPTOP-003',  'Dell XPS 16',                       13999.00,  1, 13999.00, '{}'),
+(14, 16, 'SKU-FOOD-001',    '乐事薯片大礼包',                        49.90,  1,    49.90, '{}'),
+(14, 17, 'SKU-FOOD-002',    '德芙巧克力礼盒装',                      89.00,  2,   178.00, '{}'),
+(15, 17, 'SKU-FOOD-002',    '德芙巧克力礼盒装',                      89.00,  1,    89.00, '{}'),
+(16, 18, 'SKU-FOOD-003',    '每日坚果30包混合装',                   139.00,  1,   139.00, '{}'),
+(17, 21, 'SKU-FIT-003',     '可调节哑铃套装',                      599.00,  1,   599.00, '{}'),
+(18, 4,  'SKU-PHONE-004',   'Huawei Mate 70 Pro',                 6999.00,  1,  6999.00, '{}'),
+(19, 25, 'SKU-TAB-002',     'Samsung Galaxy Tab S10 Ultra',       6999.00,  1,  6999.00, '{}'),
+(20, 8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                149.00,  1,   149.00, '{}'),
+(21, 24, 'SKU-TAB-001',     'iPad Air M3',                        5499.00,  1,  5499.00, '{}'),
+(22, 10, 'SKU-MEN-001',     '海澜之家商务衬衫',                      299.00,  1,   299.00, '{}'),
+(23, 2,  'SKU-PHONE-002',   'Samsung Galaxy S25 Ultra',           8999.00,  1,  8999.00, '{}'),
+(24, 9,  'SKU-ACC-002',     '倍思30W氮化镓充电器',                   79.00,  1,    79.00, '{}'),
+(25, 13, 'SKU-WOM-002',     '太平鸟宽松针织衫',                     399.00,  1,   399.00, '{}'),
+(26, 23, 'SKU-WEAR-002',    'Huawei Watch GT 5 Pro',              2999.00,  1,  2999.00, '{}'),
+(27, 17, 'SKU-FOOD-002',    '德芙巧克力礼盒装',                      89.00,  1,    89.00, '{}'),
+(28, 20, 'SKU-FIT-002',     '小米家智能跳绳',                        99.00,  1,    99.00, '{}'),
+(29, 18, 'SKU-FOOD-003',    '每日坚果30包混合装',                   139.00,  1,   139.00, '{}'),
+(30, 22, 'SKU-WEAR-001',    'Apple Watch Ultra 3',                6499.00,  1,  6499.00, '{}'),
+-- 多商品订单：同一个人在一单中买多件
+(3,  9,  'SKU-ACC-002',     '倍思30W氮化镓充电器',                   79.00,  1,    79.00, '{}'),
+(5,  20, 'SKU-FIT-002',     '小米家智能跳绳',                        99.00,  1,    99.00, '{}'),
+(8,  11, 'SKU-MEN-002',     '优衣库纯棉T恤',                         79.00,  2,   158.00, '{}'),
+(11, 14, 'SKU-SHOE-001',    'Nike Air Zoom Pegasus 42',            1099.00,  1,  1099.00, '{}'),
+(13, 8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00,  2,   298.00, '{}'),
+(15, 9,  'SKU-ACC-002',     '倍思30W氮化镓充电器',                    79.00,  1,    79.00, '{}'),
+(16, 19, 'SKU-FIT-001',     'Keep瑜伽垫加厚防滑',                    169.00,  1,   169.00, '{}'),
+(21, 8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00,  1,   149.00, '{}'),
+(22, 11, 'SKU-MEN-002',     '优衣库纯棉T恤',                          79.00,  2,   158.00, '{}'),
+(25, 12, 'SKU-WOM-001',     'ZARA碎花连衣裙',                       459.00,  1,   459.00, '{}'),
+-- 超大数量订单
+(6,  8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00, 50,  7450.00, '{}'),
+(20, 9,  'SKU-ACC-002',     '倍思30W氮化镓充电器',                    79.00,  3,   237.00, '{}'),
+(24, 8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00,  2,   298.00, '{}'),
+(27, 16, 'SKU-FOOD-001',    '乐事薯片大礼包',                         49.90,  1,    49.90, '{}'),
+(28, 19, 'SKU-FIT-001',     'Keep瑜伽垫加厚防滑',                    169.00,  1,   169.00, '{}'),
+(29, 16, 'SKU-FOOD-001',    '乐事薯片大礼包',                         49.90,  1,    49.90, '{}'),
+-- 附加商品用于补足订单item数
+(1,  8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00,  1,   149.00, '{}'),
+(2,  9,  'SKU-ACC-002',     '倍思30W氮化镓充电器',                    79.00,  1,    79.00, '{}'),
+(4,  8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00,  1,   149.00, '{}'),
+(10, 11, 'SKU-MEN-002',     '优衣库纯棉T恤',                          79.00,  1,    79.00, '{}'),
+(12, 8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00,  1,   149.00, '{}'),
+(17, 20, 'SKU-FIT-002',     '小米家智能跳绳',                         99.00,  1,    99.00, '{}'),
+(18, 9,  'SKU-ACC-002',     '倍思30W氮化镓充电器',                    79.00,  1,    79.00, '{}'),
+(19, 8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00,  1,   149.00, '{}'),
+(23, 9,  'SKU-ACC-002',     '倍思30W氮化镓充电器',                    79.00,  1,    79.00, '{}'),
+(26, 8,  'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00,  1,   149.00, '{}'),
+(30, 23, 'SKU-WEAR-002',    'Huawei Watch GT 5 Pro',               2999.00,  1,  2999.00, '{}'),
+(7,  11, 'SKU-MEN-002',     '优衣库纯棉T恤',                          79.00,  1,    79.00, '{}'),
+(9,   8, 'SKU-ACC-001',     'Apple 20W USB-C充电器',                 149.00,  1,   149.00, '{}');
+
+-- 插入测试数据（订单物流表: 30条, 一单一物流）
+INSERT INTO order_shipping (order_id, tracking_number, shipping_carrier, shipping_method, estimated_delivery_date, actual_delivery_date, shipping_status, receiver_name, receiver_phone, shipping_address, notes) VALUES
+(1,  'SF1234567890',   '顺丰速运',   '标快',  '2025-04-13', '2025-04-12', 'DELIVERED', '张三', '13800001001', '北京市朝阳区建国路88号院1号楼1201',               '本人签收'),
+(2,  'SF1234567891',   '顺丰速运',   '标快',  '2025-04-18', '2025-04-18', 'DELIVERED', '李四', '13800001002', '上海市浦东新区陆家嘴环路1000号恒生银行大厦22层',  '前台代收'),
+(3,  'JD9876543210',   '京东物流',   '211限时达','2025-04-21','2025-04-21','DELIVERED', '王五', '13800001003', '广东省广州市天河区天河路385号太古汇1座18楼',     '本人签收'),
+(4,  'SF1234567892',   '顺丰速运',   '特快',  '2025-05-03', '2025-05-03', 'DELIVERED', '赵六', '13800001004', '浙江省杭州市西湖区文三路478号华星时代广场A座12楼','本人签收'),
+(5,  'YT1122334455',   '圆通速递',   '标准',  '2025-05-13', '2025-05-13', 'DELIVERED', '孙七', '13800001005', '四川省成都市武侯区天府大道北段1199号银泰中心2栋', '快递柜签收'),
+(6,  'SF1234567893',   '顺丰速运',   '特快',  '2025-05-18', '2025-05-18', 'DELIVERED', '周八', '13800001006', '湖北省武汉市洪山区珞瑜路1037号华中科技大学科技园','本人签收'),
+(7,  'JD2233445566',   '京东物流',   '标快',  '2025-06-04', '2025-06-04', 'DELIVERED', '吴九', '13800001007', '江苏省南京市鼓楼区汉中路1号南京国际金融中心40层',  '本人签收'),
+(8,  'SF1234567894',   '顺丰速运',   '标快',  '2025-06-13', '2025-06-12', 'DELIVERED', '郑十', '13800001008', '重庆市渝中区解放碑步行街民权路28号英利国际',       '本人签收'),
+(9,  'ST9988776655',   '申通快递',   '标准',  '2025-06-23', '2025-06-23', 'DELIVERED', '刘一', '13800001009', '天津市和平区南京路189号津汇广场2座19层',            '本人签收'),
+(10, 'SF1234567895',   '顺丰速运',   '标快',  '2025-07-08', '2025-07-08', 'DELIVERED', '陈二', '13800001010', '山东省济南市历下区泉城路180号齐鲁国际大厦C座10层', '本人签收'),
+(11, 'SF1234567896',   '顺丰速运',   '标快',  '2025-07-18', NULL,         'IN_TRANSIT',        '杨三', '13800001011', '福建省厦门市思明区鹭江道100号财富中心25层',       NULL),
+(12, 'SF1234567897',   '顺丰速运',   '特快',  '2025-08-04', NULL,         'IN_TRANSIT',        '黄四', '13800001012', '湖南省长沙市岳麓区麓谷大道658号麓谷信息港A栋',    NULL),
+(13, 'SF1234567898',   '顺丰速运',   '标快',  '2025-08-18', NULL,         'PREPARING',         '许五', '13800001013', '陕西省西安市雁塔区高新四路17号志诚丽柏酒店15层',   NULL),
+(14, 'YD4455667788',   '韵达速递',   '标准',  '2025-09-04', '2025-09-03', 'DELIVERED', '何六', '13800001014', '安徽省合肥市蜀山区长江西路88号环球金融广场B座',    '本人签收'),
+(15, 'YT2233445566',   '圆通速递',   '标准',  '2025-09-13', '2025-09-13', 'DELIVERED', '吕七', '13800001015', '辽宁省沈阳市和平区青年大街286号华润大厦9层',       '本人签收'),
+(16, 'JD3344556677',   '京东物流',   '标快',  '2025-09-23', '2025-09-22', 'DELIVERED', '施八', '13800001016', '河南省郑州市金水区花园路39号国贸中心A座22层',     '本人签收'),
+(17, 'SF1234567899',   '顺丰速运',   '重货',  '2025-10-05', '2025-10-05', 'DELIVERED', '张九', '13800001017', '河北省石家庄市长安区中山东路188号北国商城',        '本人签收，上楼'),
+(18, 'SF1234567900',   '顺丰速运',   '特快',  '2025-10-13', NULL,         'IN_TRANSIT',        '孔十', '13800001018', '云南省昆明市五华区东风西路129号顺城购物中心',      NULL),
+(19, 'SF1234567901',   '顺丰速运',   '标快',  '2025-10-23', NULL,         'PREPARING',         '曹一', '13800001019', '贵州省贵阳市南明区中华南路78号贵阳壹号25楼',       NULL),
+(20, 'ST1122334455',   '申通快递',   '标准',  '2025-11-04', '2025-11-04', 'DELIVERED', '严二', '13800001020', '山西省太原市小店区长风街116号北美新天地',          '本人签收'),
+(21, 'SF1234567902',   '顺丰速运',   '标快',  '2025-11-13', NULL,         'IN_TRANSIT',        '花三', '13800001021', '江西省南昌市红谷滩区红谷中大道998号绿地中央广场',  NULL),
+(22, 'JD4455667788',   '京东物流',   '标快',  '2025-11-23', '2025-11-22', 'DELIVERED', '金四', '13800001022', '吉林省长春市朝阳区红旗街959号万达广场',             '快递柜签收'),
+(23, 'SF1234567903',   '顺丰速运',   '标快',  '2025-12-04', NULL,         'PREPARING',         '魏五', '13800001023', '黑龙江省哈尔滨市道里区中央大街88号金安国际',       NULL),
+(24, 'YD5566778899',   '韵达速递',   '标准',  '2025-12-13', '2025-12-12', 'DELIVERED', '陶六', '13800001024', '甘肃省兰州市城关区庆阳路42号万盛商务大厦',          '本人签收'),
+(25, 'YT3344556677',   '圆通速递',   '标准',  '2025-12-23', '2025-12-23', 'DELIVERED', '姜七', '13800001025', '广西南宁市青秀区民族大道136号万象城3座',            '本人签收'),
+(26, 'SF1234567904',   '顺丰速运',   '标快',  '2026-01-08', NULL,         'PICKED_UP',         '张三', '13800001001', '北京市朝阳区建国路88号院1号楼1201',                NULL),
+(27, 'JD5566778899',   '京东物流',   '标快',  '2026-01-18', '2026-01-17', 'DELIVERED', '王五', '13800001003', '广东省广州市天河区天河路385号太古汇1座18楼',       '本人签收'),
+(28, 'ST2233445566',   '申通快递',   '标准',  '2026-02-04', '2026-02-04', 'DELIVERED', '孙七', '13800001005', '四川省成都市武侯区天府大道北段1199号银泰中心2栋',  '本人签收'),
+(29, 'SF1234567905',   '顺丰速运',   '标快',  '2026-02-23', NULL,         'IN_TRANSIT',        '李四', '13800001002', '上海市浦东新区陆家嘴环路1000号恒生银行大厦22层',   NULL),
+(30, 'SF1234567906',   '顺丰速运',   '标快',  '2026-03-04', NULL,         'PREPARING',         '郑十', '13800001008', '重庆市渝中区解放碑步行街民权路28号英利国际',        '等待支付');
+
+-- 插入测试数据（支付记录表: 30条, 一订单一支付记录）
+INSERT INTO payment_records (order_id, payment_number, payment_amount, payment_method, payment_status, transaction_id, payer_info, payment_time, created_at) VALUES
+(1,  'PAY-2025-00001',  9868.00, 'CREDIT_CARD', 'SUCCESS', 'TXN-20250410101530', '{"user_id":1,"name":"张三"}',   '2025-04-10 10:15:30', '2025-04-10 10:15:30'),
+(2,  'PAY-2025-00002',  8953.00, 'DEBIT_CARD',  'SUCCESS', 'TXN-20250415142000', '{"user_id":2,"name":"李四"}',   '2025-04-15 14:20:00', '2025-04-15 14:20:00'),
+(3,  'PAY-2025-00003',  5013.00, 'CREDIT_CARD', 'SUCCESS', 'TXN-20250420090000', '{"user_id":3,"name":"王五"}',   '2025-04-20 09:00:00', '2025-04-20 09:00:00'),
+(4,  'PAY-2025-00004', 14668.00, 'CREDIT_CARD', 'SUCCESS', 'TXN-20250501164500', '{"user_id":4,"name":"赵六"}',   '2025-05-01 16:45:00', '2025-05-01 16:45:00'),
+(5,  'PAY-2025-00005',   270.00, 'PAYPAL',      'SUCCESS', 'TXN-20250510113000', '{"user_id":5,"name":"孙七"}',   '2025-05-10 11:30:00', '2025-05-10 11:30:00'),
+(6,  'PAY-2025-00006', 19869.00, 'ALIPAY',      'SUCCESS', 'TXN-20250515081500', '{"user_id":6,"name":"周八"}',   '2025-05-15 08:15:00', '2025-05-15 08:15:00'),
+(7,  'PAY-2025-00007',   377.00, 'DEBIT_CARD',  'SUCCESS', 'TXN-20250601100000', '{"user_id":7,"name":"吴九"}',   '2025-06-01 10:00:00', '2025-06-01 10:00:00'),
+(8,  'PAY-2025-00008',  1249.00, 'WECHAT', 'SUCCESS', 'TXN-20250610142000', '{"user_id":8,"name":"郑十"}',   '2025-06-10 14:20:00', '2025-06-10 14:20:00'),
+(9,  'PAY-2025-00009',    231.00, 'WECHAT',      'SUCCESS', 'TXN-20250620094500', '{"user_id":9,"name":"刘一"}',   '2025-06-20 09:45:00', '2025-06-20 09:45:00'),
+(10, 'PAY-2025-00010',   548.00, 'CREDIT_CARD', 'SUCCESS', 'TXN-20250705120000', '{"user_id":10,"name":"陈二"}',  '2025-07-05 12:00:00', '2025-07-05 12:00:00'),
+(11, 'PAY-2025-00011',  2370.00, 'ALIPAY',      'SUCCESS', 'TXN-20250715153000', '{"user_id":11,"name":"杨三"}',  '2025-07-15 15:30:00', '2025-07-15 15:30:00'),
+(12, 'PAY-2025-00012',  6563.00, 'DEBIT_CARD',  'SUCCESS', 'TXN-20250801101000', '{"user_id":12,"name":"黄四"}',  '2025-08-01 10:10:00', '2025-08-01 10:10:00'),
+(13, 'PAY-2025-00013', 13917.00, 'CREDIT_CARD', 'SUCCESS', 'TXN-20250815080000', '{"user_id":13,"name":"许五"}',  '2025-08-15 08:00:00', '2025-08-15 08:00:00'),
+(14, 'PAY-2025-00014',    230.90, 'PAYPAL',      'SUCCESS', 'TXN-20250901140000', '{"user_id":14,"name":"何六"}',  '2025-09-01 14:00:00', '2025-09-01 14:00:00'),
+(15, 'PAY-2025-00015',    171.00, 'WECHAT',      'SUCCESS', 'TXN-20250910162000', '{"user_id":15,"name":"吕七"}',  '2025-09-10 16:20:00', '2025-09-10 16:20:00'),
+(16, 'PAY-2025-00016',   309.00, 'CREDIT_CARD', 'SUCCESS', 'TXN-20250920114500', '{"user_id":16,"name":"施八"}',  '2025-09-20 11:45:00', '2025-09-20 11:45:00'),
+(17, 'PAY-2025-00017',   698.00, 'ALIPAY',      'SUCCESS', 'TXN-20251001093000', '{"user_id":17,"name":"张九"}',  '2025-10-01 09:30:00', '2025-10-01 09:30:00'),
+(18, 'PAY-2025-00018',  6983.00, 'DEBIT_CARD',  'SUCCESS', 'TXN-20251010100000', '{"user_id":18,"name":"孔十"}',  '2025-10-10 10:00:00', '2025-10-10 10:00:00'),
+(19, 'PAY-2025-00019',  7053.00, 'CREDIT_CARD', 'SUCCESS', 'TXN-20251020131500', '{"user_id":19,"name":"曹一"}',  '2025-10-20 13:15:00', '2025-10-20 13:15:00'),
+(20, 'PAY-2025-00020',   384.00, 'WECHAT',      'SUCCESS', 'TXN-20251101083000', '{"user_id":20,"name":"严二"}',  '2025-11-01 08:30:00', '2025-11-01 08:30:00'),
+(21, 'PAY-2025-00021',  5583.00, 'ALIPAY',      'SUCCESS', 'TXN-20251110150000', '{"user_id":21,"name":"花三"}',  '2025-11-10 15:00:00', '2025-11-10 15:00:00'),
+(22, 'PAY-2025-00022',   453.00, 'CREDIT_CARD', 'SUCCESS', 'TXN-20251120104500', '{"user_id":22,"name":"金四"}',  '2025-11-20 10:45:00', '2025-11-20 10:45:00'),
+(23, 'PAY-2025-00023',  8953.00, 'DEBIT_CARD',  'SUCCESS', 'TXN-20251201141000', '{"user_id":23,"name":"魏五"}',  '2025-12-01 14:10:00', '2025-12-01 14:10:00'),
+(24, 'PAY-2025-00024',    376.00, 'ALIPAY',      'SUCCESS', 'TXN-20251210112000', '{"user_id":24,"name":"陶六"}',  '2025-12-10 11:20:00', '2025-12-10 11:20:00'),
+(25, 'PAY-2025-00025',   858.00, 'WECHAT',      'SUCCESS', 'TXN-20251220090000', '{"user_id":25,"name":"姜七"}',  '2025-12-20 09:00:00', '2025-12-20 09:00:00'),
+(26, 'PAY-2025-00026',  3110.00, 'ALIPAY',      'SUCCESS', 'TXN-20260105103000', '{"user_id":1,"name":"张三"}',   '2026-01-05 10:30:00', '2026-01-05 10:30:00'),
+(27, 'PAY-2025-00027',    142.90, 'WECHAT',      'SUCCESS', 'TXN-20260115140000', '{"user_id":3,"name":"王五"}',   '2026-01-15 14:00:00', '2026-01-15 14:00:00'),
+(28, 'PAY-2025-00028',    270.00, 'PAYPAL',      'SUCCESS', 'TXN-20260201084500', '{"user_id":5,"name":"孙七"}',   '2026-02-01 08:45:00', '2026-02-01 08:45:00'),
+(29, 'PAY-2025-00029',   190.90, 'DEBIT_CARD',  'SUCCESS', 'TXN-20260220133000', '{"user_id":2,"name":"李四"}',   '2026-02-20 13:30:00', '2026-02-20 13:30:00'),
+(30, 'PAY-2025-00030',  9373.00, 'WECHAT',      'PENDING', NULL,                 '{"user_id":8,"name":"郑十"}',   NULL,                    '2026-03-01 16:00:00');

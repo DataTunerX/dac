@@ -68,6 +68,7 @@ type FormValues = z.infer<typeof formSchema>
 export type CreateAgentPayload = FormValues & {
   skills: Skill[]
   expertAgentMaxSteps?: string
+  orchestratorAgentMaxLoops?: string
 }
 
 type Skill = {

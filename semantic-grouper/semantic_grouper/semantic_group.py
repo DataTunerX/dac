@@ -354,6 +354,31 @@ class SemanticGrouper:
                 card_norm = card_str
         return gn, desc, card_norm
 
+    @staticmethod
+    def _fingerprint_canonical_tuple(
+        canonical: Tuple[str, str, str],
+    ) -> Dict[str, Any]:
+        """Stable short hashes for logs / offline replay of version decisions."""
+        gn, desc, card_norm = canonical
+        canonical_payload = f"{gn}\0{desc}\0{card_norm}".encode("utf-8")
+        return {
+            "group_name": gn,
+            "description_len": len(desc),
+            "description_sha256": hashlib.sha256(desc.encode("utf-8")).hexdigest()[:16],
+            "agent_card_len": len(card_norm),
+            "agent_card_sha256": hashlib.sha256(card_norm.encode("utf-8")).hexdigest()[
+                :16
+            ],
+            "canonical_sha256": hashlib.sha256(canonical_payload).hexdigest()[:16],
+        }
+
+    @staticmethod
+    def _canonical_field_diff(
+        old: Tuple[str, str, str], new: Tuple[str, str, str]
+    ) -> List[str]:
+        labels = ("group_name", "description", "agent_card")
+        return [label for label, o, n in zip(labels, old, new) if o != n]
+
     def _version_for_semantic_group_update(
         self,
         group_data_before: Dict[str, Any],
@@ -365,6 +390,18 @@ class SemanticGrouper:
         """
         When group_name/description/agent_card semantically change, bump version; else keep stored value.
         """
+        group_id = (
+            group_data_before.get("id")
+            or group_data_before.get("group_id")
+            or ""
+        )
+        stored_version_raw = group_data_before.get("version")
+        stored_version = (
+            str(stored_version_raw).strip()
+            if stored_version_raw is not None
+            else ""
+        ) or "1"
+
         old = self._canonical_semantic_group_fields(
             group_data_before.get("group_name"),
             group_data_before.get("description"),
@@ -373,11 +410,41 @@ class SemanticGrouper:
         new = self._canonical_semantic_group_fields(
             new_group_name, new_description, new_agent_card
         )
+        old_fp = self._fingerprint_canonical_tuple(old)
+        new_fp = self._fingerprint_canonical_tuple(new)
+        changed_fields = self._canonical_field_diff(old, new)
+
         if old == new:
-            v = group_data_before.get("version")
-            vs = str(v).strip() if v is not None else ""
-            return vs or "1"
-        return self._bump_semantic_group_version(group_data_before.get("version"))
+            logger.info(
+                "[VersionDecision] group_id=%s action=keep stored_version=%s "
+                "next_version=%s canonical_unchanged=True changed_fields=[] "
+                "canonical_sha256=%s "
+                "before=%s after=%s",
+                group_id,
+                stored_version,
+                stored_version,
+                old_fp["canonical_sha256"],
+                old_fp,
+                new_fp,
+            )
+            return stored_version
+
+        next_version = self._bump_semantic_group_version(stored_version_raw)
+        logger.info(
+            "[VersionDecision] group_id=%s action=bump stored_version=%s "
+            "next_version=%s canonical_unchanged=False changed_fields=%s "
+            "before_canonical_sha256=%s after_canonical_sha256=%s "
+            "before=%s after=%s",
+            group_id,
+            stored_version,
+            next_version,
+            changed_fields,
+            old_fp["canonical_sha256"],
+            new_fp["canonical_sha256"],
+            old_fp,
+            new_fp,
+        )
+        return next_version
 
 
     def format_llm_output(self, answer) -> dict:
@@ -3102,11 +3169,16 @@ class SemanticGrouper:
         max_retries: int = 3,
         retry_delay: float = 1.0,
         exponential_backoff: bool = True,
+        mode: str = "incremental",
     ) -> Dict[str, Any]:
         """
         多语义域与同一语义组合并（例如某成员 SD 更新后重算整组）：将全部成员域一并交给 LLM，
         在联合语义上重做归纳，而不是仅把「变更域」与「当前组 agent_card 快照」做一步二元合并。
         列表顺序须为：第一项为本次变更域的最新快照，随后为其它成员的当前快照。
+
+        mode:
+            incremental — Add/Update 路径（新成员加入或成员更新）
+            decremental — Delete/离组后基于剩余成员重算（复用同一 system prompt）
         """
         if not isinstance(semantic_domains, list) or not semantic_domains:
             raise ValueError("semantic_domains must be a non-empty list")
@@ -3126,10 +3198,11 @@ class SemanticGrouper:
         old_group_card = self._parse_agent_card(semantic_group.get("agent_card", ""))
         preservation_contract = self._build_preservation_contract(old_group_card)
 
+        is_decremental = mode == "decremental"
         domain_blocks: List[str] = []
         for i, d in enumerate(semantic_domains, 1):
             label = f"第 {i} 个语义域成员"
-            if i == 1:
+            if i == 1 and not is_decremental:
                 label += (
                     "（【本次触发更新的成员】：必须以本块中的 semantic_domain_text 与 "
                     "semantic_domain_agent_card 为当前最新内容）"
@@ -3144,10 +3217,25 @@ class SemanticGrouper:
                 f"semantic_domain_agent_card:\n{d.get('agent_card', '')}\n"
             )
 
+        if is_decremental:
+            intro = (
+                "【操作模式：decremental】某成员已从组中移除。"
+                "以下列出的是移除后组内仍保留的全部成员 semantic domain，"
+                "请仅基于这些成员与当前 semantic group 信息重新归纳 agent_card。\n"
+                "description 必须使用与 incremental 相同的三层结构"
+                "（语义域声明、子领域展开、协作声明），"
+                "禁止「第一部分/第二部分」四段运营管家体；"
+                "须去除已离组/已删除成员的能力描述。\n\n"
+            )
+        else:
+            intro = (
+                "将以下多个 semantic domain 与 semantic group 做语义合并。它们属于同一语义组，"
+                "必须视为一个联合系统的全部子域一并重新归纳；须综合所有成员域的信息，"
+                "输出候选完整 agent_card；禁止只依据其中一个域忽略其它域。\n\n"
+            )
+
         content = (
-            "将以下多个 semantic domain 与 semantic group 做语义合并。它们属于同一语义组，"
-            "必须视为一个联合系统的全部子域一并重新归纳；须综合所有成员域的信息，"
-            "输出候选完整 agent_card；禁止只依据其中一个域忽略其它域。\n\n"
+            intro
             + "\n".join(domain_blocks)
             + "\n"
             f"semantic_group_description:\n{semantic_group.get('description', '')}\n\n"
@@ -3167,10 +3255,11 @@ class SemanticGrouper:
         for attempt in range(max_retries):
             try:
                 logger.info(
-                    "Attempting multi-domain LLM consolidation (attempt %s/%s, n_members=%s)",
+                    "Attempting multi-domain LLM consolidation (attempt %s/%s, n_members=%s, mode=%s)",
                     attempt + 1,
                     max_retries,
                     len(semantic_domains),
+                    mode,
                 )
                 response = self.llm.invoke([system_message, human_message])
                 llm_result = self.format_llm_output(response)
@@ -3362,220 +3451,315 @@ class SemanticGrouper:
         raise RuntimeError("Unexpected failure in AgentCard generation loop.")
 
 
-    def consolidate_for_decremental_semantic_group(
-        self, 
-        semantic_domains: List[Dict[str, Any]],
-        max_retries: int = 3,
-        retry_delay: float = 1.0,
-        exponential_backoff: bool = True
-    ) -> Dict[str, Any]:
-        """
-        Consolidate multiple semantic domains using LLM with retry support
-        
-        This function uses LLM to consolidate multiple semantic domains.
-        It includes retry logic to handle transient failures.
-        
-        Args:
-            semantic_domains: List of dictionaries containing semantic domain information
-                Each dictionary should have keys: semantic_domain_id, semantic_domain, agent_card, dd_name, dd_namespace
-            max_retries: Maximum number of retry attempts (default: 3)
-            retry_delay: Initial delay between retries in seconds (default: 1.0)
-            exponential_backoff: Whether to use exponential backoff for retries (default: True)
-            
-        Returns:
-            Dictionary containing consolidated result with 'summary' key
-            
-        Raises:
-            ValueError: If semantic_domains is invalid
-            RuntimeError: If all retry attempts fail
-        """
-        # Validate input
-        if not isinstance(semantic_domains, list):
-            raise ValueError("semantic_domains must be a list")
-        
-        if len(semantic_domains) == 0:
-            raise ValueError("semantic_domains list cannot be empty")
-        
-        for i, domain in enumerate(semantic_domains):
-            if not isinstance(domain, dict):
-                raise ValueError(f"semantic_domains[{i}] must be a dictionary")
-            if 'semantic_domain' not in domain:
-                raise ValueError(f"semantic_domains[{i}] must contain 'semantic_domain' key")
+    def _fetch_member_domain_snapshots(
+        self, relations_data: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Load full semantic domain snapshots for group members from data-services."""
+        snapshots: List[Dict[str, Any]] = []
+        if not self.semantic_domain_client:
+            logger.warning("semantic_domain_client 未配置，无法拉取成员语义域")
+            return snapshots
 
-        prompt = """
-        你是一个精通领域驱动设计（DDD）和业务建模的资深架构师，特别擅长用业务语言描述技术能力。你的核心任务是根据业务描述，生成一个高质量、健壮的 Agent-to-Agent (A2A) 协议 JSON。
-
-        ### 核心理念（请严格遵循）：
-        1. **业务服务导向**：Agent描述应该像“专业服务专家介绍”，而不是技术实现文档。
-        2. **价值清晰**：说明“我能为其他Agent解决什么业务问题”, 要完整的包含所有的业务范围，特别是要完整包括所有的业务名称/名词。
-        3. **边界明确**：让其他Agent清楚知道什么时候该找你，什么不该找你。
-        4. **可操作性**：提供的skills必须真实可调用，示例必须具体可行。
-
-        ### 输出规则：
-        1. **只输出JSON**：不要任何额外文本、解释、Markdown代码块标记。
-        2. **严格遵循结构**：必须使用下方提供的完整JSON结构模板。
-        3. **确保可解析**：输出的JSON必须能被 `json.loads()` 直接解析。
-
-        ### 字段填充指南：
-
-        **1. name 字段**：
-        - 格式：驼峰命名法，如 `InvoiceProcessingAgent`
-        - 要求：代表核心业务能力，如“支付”、“订单”、“库存”
-
-        **2. description 字段（核心，约1000字）**：
-        【请严格按照以下四部分结构书写】
-
-        **第一部分：我的业务身份**
-        用1-2句话定义你的专业角色。示例：
-        > "我是财务结算流程的『合规专家』，专注于确保所有交易记录准确、完整且符合会计准则。"
-
-        **第二部分：我能为你解决的问题（列出全部的能力）**
-        这是最重要的部分！使用这种格式：
-        1. **[核心能力1]**：[具体解决什么业务痛点]。例如："**多币种结算处理**：帮你处理跨境交易中的货币转换、汇率锁定和本地化税务计算。"
-        2. **[核心能力2]**：[具体解决什么业务痛点]。例如："**复杂折扣计算**：处理组合促销、阶梯折扣、优惠券叠加等复杂定价逻辑。"
-        
-        **第三部分：何时找我 & 我的服务承诺**
-        - **找我时机**：当需要...[具体业务场景]时
-        - **我能保证**：我确保...[提供的价值保证]
-        - **协作方式**：通过调用我的...技能
-
-        **第四部分：典型业务场景演示**
-        用1-2个具体例子展示你的价值。示例：
-        > "当企业客户需要进行月度统一结算时，我会：1) 汇总所有待结算订单，2) 验证每笔交易的合规性，3) 计算应返佣金和税费，4) 生成标准化的结算单。"
-
-        **3. skills 数组**：
-        每个skill必须是真实可调用的业务能力，包含：
-        - `id`: 如 `validate-invoice`
-        - `name`: 如 `Validate Invoice`
-        - `description`: **必须包含四个要素**：
-          1. **业务目的**：这个技能解决什么具体问题？
-          2. **典型输入**：需要提供什么业务信息？
-          3. **预期输出**：会返回什么业务结果？
-          4. **主要调用者**：哪些Agent最常用这个技能？
-        - `tags`: 至少一个业务标签，如 `billing`, `compliance`
-        - `examples`: 具体的调用示例，如 `{"customer_id": "C001", "invoice_no": "INV-2023-001"}`
-        -  一定不能替换的字段包括**: url, provider, version, documentationUrl, capabilities部分, authentication部分, defaultInputModes部分, defaultOutputModes部分, skill的inputModes, skill的outputModes。
-
-
-        ### 完整JSON模板（必须严格使用此结构）：
-        {
-            "name": "根据业务领域填写，如InvoiceAgent",
-            "description": "【请严格按照四部分结构填充】",
-            "url": "http://192.168.xxx.xxx:20002/",
-            "provider": null,
-            "version": "1.0.0",
-            "documentationUrl": null,
-            "capabilities": {
-                "streaming": "True",
-                "pushNotifications": "True",
-                "stateTransitionHistory": "False"
-            },
-            "authentication": {
-                "credentials": null,
-                "schemes": ["public"]
-            },
-            "defaultInputModes": ["text", "text/plain"],
-            "defaultOutputModes": ["text", "text/plain"],
-            "skills": [
-                {
-                    "id": "具体技能标识，如validate-invoice",
-                    "name": "技能名称，如Validate Invoice",
-                    "description": "必须包含：业务目的、输入、输出、调用者",
-                    "tags": ["业务标签"],
-                    "examples": ["具体调用示例"],
-                    "inputModes": null,
-                    "outputModes": null
-                }
-            ]
-        }
-
-        ### 业务示例（供参考理解）：
-        如果业务领域是"发票处理"，那么：
-
-        **描述示例**：
-        "我是企业财务系统的『发票合规专家』，专注于确保所有进项和销项发票的合法性、完整性和可抵扣性..."
-        
-        **技能示例**：
-        {
-            "id": "validate-vat-invoice",
-            "name": "Validate VAT Invoice",
-            "description": "验证增值税专用发票的合规性。业务目的：确保发票可正常抵扣，避免税务风险。输入：发票基础信息、交易明细、买卖双方税号。输出：验证结果（通过/拒绝）、拒绝原因、建议修正项。主要被财务审核Agent和报销Agent调用。",
-            "tags": ["invoice", "tax", "compliance"],
-            "examples": ["请验证这张金额为￥10,000的增值税专用发票，购买方税号：91310000100012345X，销售方税号：91320000200067890Y"]
-        }
-
-        ### 最终要求：
-        1. 基于用户提供的业务描述，生成完整的JSON
-        2. 保持专业性和业务价值导向
-        3. 确保skills真实、具体、可调用
-        4. 不要偏离提供的JSON结构
-        """
-
-        # 循环遍历所有语义域，拼接成字符串
-        semantic_domain_parts = []
-        for i, domain in enumerate(semantic_domains, 1):
-            semantic_domain_text = domain.get('semantic_domain', '')
-            dd_name = domain.get('dd_name', '')
-            dd_namespace = domain.get('dd_namespace', '')
-            
-            # 构建每个语义域的标识
-            domain_identifier = f"{dd_namespace}.{dd_name}" if dd_namespace and dd_name else f"语义域 {i}"
-            
-            # 拼接语义域内容
-            domain_content = f"## 语义域 {i}: {domain_identifier}\n\n{semantic_domain_text}"
-            semantic_domain_parts.append(domain_content)
-        
-        # 将所有语义域内容拼接在一起
-        all_semantic_domains = "\n\n---\n\n".join(semantic_domain_parts)
-        
-        content = f"以下是需要合并的 {len(semantic_domains)} 个语义域：\n\n{all_semantic_domains}"
-
-        system_message = SystemMessage(content=prompt)
-        human_message = HumanMessage(content=content)
-        
-        last_exception = None
-        
-        for attempt in range(max_retries):
+        for rel in relations_data:
+            sd_id = rel.get("sd_id")
+            if not sd_id:
+                logger.warning("关系记录缺少 sd_id: %s", rel)
+                continue
             try:
-                logger.info(f"Attempting LLM consolidation (attempt {attempt + 1}/{max_retries})")
-                
-                # Call LLM
-                response = self.llm.invoke([system_message, human_message])
-                
-                # Format output
-                llm_result = self.format_llm_output(response)
-                
-                if llm_result is not None:
-                    logger.info(f"LLM consolidation successful on attempt {attempt + 1}")
-                    return llm_result
+                domain_response = self.semantic_domain_client.get_semantic_domain_by_id(sd_id)
+                domain_data = None
+                if isinstance(domain_response, dict):
+                    domain_data = domain_response.get("data", domain_response)
+                if domain_data:
+                    snapshots.append(
+                        {
+                            "semantic_domain_id": domain_data.get(
+                                "semantic_domain_id", sd_id
+                            ),
+                            "semantic_domain": domain_data.get("semantic_domain", ""),
+                            "agent_card": domain_data.get("agent_card", ""),
+                            "dd_name": domain_data.get("dd_name", ""),
+                            "dd_namespace": domain_data.get("dd_namespace", ""),
+                        }
+                    )
                 else:
-                    logger.warning(f"LLM returned None result on attempt {attempt + 1}")
-                    # Treat None result as a failure and retry
-                    last_exception = ValueError("LLM returned None result")
-                    
+                    logger.warning(
+                        "get_semantic_domain_by_id 返回空数据: sd_id=%s", sd_id
+                    )
             except Exception as e:
-                last_exception = e
-                logger.warning(f"LLM consolidation failed on attempt {attempt + 1}/{max_retries}: {e}")
+                logger.error(
+                    "get_semantic_domain_by_id 失败: sd_id=%s, error=%s",
+                    sd_id,
+                    e,
+                    exc_info=True,
+                )
+        return snapshots
+
+    def _apply_consolidation_to_group(
+        self,
+        group_id: str,
+        group_data: Dict[str, Any],
+        consolidated_result: Dict[str, Any],
+        member_domains: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Merge LLM candidate with existing group agent_card (MergeGuard) and persist.
+        Same post-processing as the Add/Update JOIN merge path.
+        """
+        fallback_group_name = group_data.get("group_name", "") or f"group-{group_id}"
+        try:
+            logger.info(
+                "使用合并后的 agent_card 更新组 %s (decremental re-induct)",
+                group_id,
+            )
+            old_card = self._parse_agent_card(group_data.get("agent_card", ""))
+            candidate_card = (
+                consolidated_result
+                if isinstance(consolidated_result, dict)
+                else self._parse_agent_card(consolidated_result)
+            )
+            merged_card = self.merge_consolidated_agent_card(old_card, candidate_card)
+            coverage_check = self.validate_semantic_coverage(old_card, merged_card)
+            logger.info(
+                "[MergeGuard] group_id=%s pass=%s coverage_score=%s missing_requirements=%s",
+                group_id,
+                coverage_check.get("pass"),
+                coverage_check.get("coverage_score"),
+                coverage_check.get("missing_requirements", [])[:10],
+            )
+            if not coverage_check.get("pass", False):
+                logger.warning(
+                    "[MergeGuard] 拒绝覆盖更新，保留旧 agent_card: group_id=%s",
+                    group_id,
+                )
+                new_agent_card_result = old_card
+            else:
+                new_agent_card_result = merged_card
+
+            new_agent_card = (
+                json.dumps(new_agent_card_result, ensure_ascii=False)
+                if isinstance(new_agent_card_result, dict)
+                else str(new_agent_card_result)
+            )
+
+            if isinstance(new_agent_card_result, dict):
+                new_group_name = group_data.get("group_name", "")
+            else:
+                try:
+                    agent_card_dict = (
+                        json.loads(new_agent_card)
+                        if isinstance(new_agent_card, str)
+                        else {}
+                    )
+                    new_group_name = group_data.get("group_name", "") or agent_card_dict.get(
+                        "name", ""
+                    )
+                except Exception:
+                    new_group_name = group_data.get("group_name", "")
+
+            logger.info(
+                "[MergeGuard] 使用安全合并结果更新组: group_id=%s group_name=%s",
+                group_id,
+                new_group_name,
+            )
+            new_group_name = self._normalize_group_name(
+                new_group_name,
+                fallback=fallback_group_name,
+            )
+            new_description = self._extract_description_from_agent_card(
+                new_agent_card_result
+            )
+        except Exception as e:
+            logger.warning(
+                "处理合并后的 agent_card 失败: %s，使用原组的 agent_card 和 group_name",
+                str(e),
+                exc_info=True,
+            )
+            new_agent_card = group_data.get("agent_card", "")
+            new_group_name = fallback_group_name
+            new_description = self._extract_description_from_agent_card(new_agent_card)
+            new_agent_card_result = self._parse_agent_card(new_agent_card)
+
+        next_version = self._version_for_semantic_group_update(
+            group_data,
+            new_group_name=new_group_name,
+            new_description=new_description,
+            new_agent_card=new_agent_card,
+        )
+        updated_group_data = SemanticGroupData(
+            id=group_id,
+            group_name=new_group_name,
+            description=new_description,
+            agent_card=new_agent_card,
+            version=next_version,
+        )
+        self.semantic_group_client.update_semantic_group(
+            group_id=group_id,
+            semantic_group=updated_group_data,
+        )
+        logger.info(
+            "已更新组 %s 的描述、group_name 和 agent_card（decremental 合并） version=%s",
+            group_id,
+            next_version,
+        )
+
+        if self.vector_client and member_domains:
+            try:
+                group_text = self._build_semantic_group_text(
+                    group_name=new_group_name,
+                    description=new_description,
+                    member_domains=member_domains,
+                )
+                self._delete_group_from_pgvector(group_id)
+                document = VectorDocument(
+                    page_content=group_text,
+                    metadata={"group_id": group_id, "group_name": new_group_name},
+                )
+                self.vector_client.add_documents(
+                    collection_name=self.collection_name,
+                    documents=[document],
+                )
+                logger.info(
+                    "已更新组 %s 在 pgvector 中的向量数据（decremental 合并后）",
+                    group_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "decremental 合并后更新向量数据失败: %s", e, exc_info=True
+                )
+
+        return {
+            "group_name": new_group_name,
+            "description": new_description,
+            "version": next_version,
+            "agent_card_result": new_agent_card_result,
+        }
+
+    def reconcile_group_metadata(self, group_id: str) -> Dict[str, Any]:
+        """
+        Re-induct semantic group metadata from remaining members via data-services.
+
+        Used after unbinding a member (normal decremental) or when dd_group_relation
+        was already removed before DD delete (K8s annotation fallback).
+        """
+        if not group_id:
+            logger.warning("reconcile_group_metadata: group_id is empty")
+            return {
+                "status": "error",
+                "action": "REMOVED",
+                "message": "group_id is empty",
+            }
+
+        if not self.semantic_group_client:
+            logger.warning("SemanticGroupClient 未配置，无法 reconcile group metadata")
+            return {
+                "status": "error",
+                "action": "REMOVED",
+                "message": "SemanticGroupClient 未配置",
+            }
+
+        try:
+            group_response = self.semantic_group_client.get_semantic_group_by_id(group_id)
+            group_data = group_response.get("data", {})
+            group_name = group_data.get("group_name", "")
+            logger.info(
+                "reconcile_group_metadata: group %s (%s)",
+                group_name or group_id,
+                group_id,
+            )
+        except Exception as e:
+            logger.error("reconcile_group_metadata: failed to load group %s: %s", group_id, e, exc_info=True)
+            return {
+                "status": "error",
+                "action": "REMOVED",
+                "group_id": group_id,
+                "message": f"获取组信息失败: {e}",
+            }
+
+        try:
+            # Step 2: Check Empty - 检查组是否为空
+            # 注意：组不会被自动删除，只能在页面上手动删除，因为组可能被agent使用
+            remaining_relations_response = self.semantic_group_client.get_relations_by_group_id(group_id)
+            remaining_relations_data = remaining_relations_response.get('data', [])
+            if not isinstance(remaining_relations_data, list):
+                remaining_relations_data = []
+            remaining_member_count = len(remaining_relations_data)
+            
+            if remaining_member_count == 0:
+                # 组为空，但不会自动删除（组可能被agent使用，只能在页面上手动删除）
+                logger.info(f"组 {group_name} (group_id: {group_id}) 已为空，但不会自动删除（组可能被agent使用，只能在页面上手动删除）")
                 
-                # Don't retry on the last attempt
-                if attempt < max_retries - 1:
-                    # Calculate delay
-                    if exponential_backoff:
-                        delay = retry_delay * (2 ** attempt)
+                return {
+                    "status": "success",
+                    "action": "REMOVED",
+                    "group_id": group_id,
+                    "group_name": group_name,
+                    "remaining_member_count": 0,
+                    "message": "组已为空，但未自动删除（组可能被agent使用，请在页面上手动删除）"
+                }
+            
+            logger.info(
+                "组 %s (group_id: %s) 剩余 %s 个成员，使用 Add 路径 consolidation prompt 重新聚合",
+                group_name,
+                group_id,
+                remaining_member_count,
+            )
+            member_domains = self._fetch_member_domain_snapshots(remaining_relations_data)
+            updated_group_name = group_name
+            if member_domains and all(d.get("semantic_domain") for d in member_domains):
+                try:
+                    consolidated_result = self.consolidate_semantic_domains_into_semantic_group(
+                        semantic_domains=member_domains,
+                        semantic_group=group_data,
+                        mode="decremental",
+                        max_retries=3,
+                        retry_delay=1.0,
+                    )
+                    if consolidated_result:
+                        apply_result = self._apply_consolidation_to_group(
+                            group_id,
+                            group_data,
+                            consolidated_result,
+                            member_domains,
+                        )
+                        if apply_result:
+                            updated_group_name = apply_result.get("group_name", group_name)
                     else:
-                        delay = retry_delay
-                    
-                    logger.info(f"Retrying in {delay} seconds...")
-                    time.sleep(delay)
-                else:
-                    logger.error(f"All {max_retries} attempts failed. Last error: {e}")
-        
-        # All retries failed
-        logger.error(f"Failed to consolidate semantic domain after {max_retries} attempts")
-        if last_exception:
-            raise RuntimeError(f"Failed to consolidate semantic domain after {max_retries} attempts: {last_exception}") from last_exception
-        else:
-            raise RuntimeError(f"Failed to consolidate semantic domain after {max_retries} attempts")
+                        logger.warning(
+                            "decremental consolidation 返回空结果，跳过 group metadata 更新: group_id=%s",
+                            group_id,
+                        )
+                except Exception as e:
+                    logger.error(
+                        "decremental 重新聚合语义失败: group_id=%s, error=%s",
+                        group_id,
+                        e,
+                        exc_info=True,
+                    )
+            else:
+                logger.warning(
+                    "无法获取剩余成员的完整语义域数据，跳过重新聚合（已获取 %s 个成员快照）",
+                    len(member_domains),
+                )
+
+            return {
+                "status": "success",
+                "action": "REINDUCT_SCHEDULED",
+                "group_id": group_id,
+                "group_name": updated_group_name,
+                "remaining_member_count": remaining_member_count,
+                "message": f"语义域已移除，组剩余 {remaining_member_count} 个成员，Re-Induct 和 Vector Update 已同步执行",
+            }
+
+        except Exception as e:
+            logger.error(f"reconcile_group_metadata 组 {group_id} 时出错: {str(e)}", exc_info=True)
+            return {
+                "status": "error",
+                "action": "REMOVED",
+                "group_id": group_id,
+                "message": f"处理失败: {str(e)}",
+            }
+
 
 
     def decremental_semantic_group_analyse(
@@ -3634,12 +3818,17 @@ class SemanticGrouper:
             relations_data = relations_response.get('data', [])
             
             if not isinstance(relations_data, list) or len(relations_data) == 0:
-                logger.warning(f"语义域 {semantic_domain_id} 没有关联的语义组")
+                logger.info(
+                    "语义域 %s 在 data-services 中无 dd_group_relation；"
+                    "Delete 任务将尝试从 DD annotation 读取 group id 并 reconcile",
+                    semantic_domain_id,
+                )
                 return {
                     "status": "success",
                     "action": "REMOVED",
                     "message": "语义域没有关联的语义组",
-                    "remaining_member_count": 0
+                    "remaining_member_count": 0,
+                    "semantic_domain_id": semantic_domain_id,
                 }
             
             # 检查：如果该 semantic domain 所属的任何一个组中只有它这一个 semantic domain，不允许删除
@@ -3673,7 +3862,7 @@ class SemanticGrouper:
                         "remaining_member_count": current_member_count,
                         "message": f"不允许删除：该语义域（dd）所属的组 '{group_name}' 中只有它这一个语义域，不允许删除"
                     }
-            
+
             # 获取第一个关系用于后续删除操作（通常一个语义域只属于一个组）
             relation = relations_data[0]
             group_id = relation.get('group_id')
@@ -3729,454 +3918,7 @@ class SemanticGrouper:
                         "message": f"删除关系记录失败: {str(e)}"
                     }
             
-            # Step 2: Check Empty - 检查组是否为空
-            # 注意：组不会被自动删除，只能在页面上手动删除，因为组可能被agent使用
-            remaining_relations_response = self.semantic_group_client.get_relations_by_group_id(group_id)
-            remaining_relations_data = remaining_relations_response.get('data', [])
-            if not isinstance(remaining_relations_data, list):
-                remaining_relations_data = []
-            remaining_member_count = len(remaining_relations_data)
-            
-            if remaining_member_count == 0:
-                # 组为空，但不会自动删除（组可能被agent使用，只能在页面上手动删除）
-                logger.info(f"组 {group_name} (group_id: {group_id}) 已为空，但不会自动删除（组可能被agent使用，只能在页面上手动删除）")
-                
-                return {
-                    "status": "success",
-                    "action": "REMOVED",
-                    "group_id": group_id,
-                    "group_name": group_name,
-                    "remaining_member_count": 0,
-                    "message": "组已为空，但未自动删除（组可能被agent使用，请在页面上手动删除）"
-                }
-            
-            # 优化：如果只剩1个成员，直接将该成员的语义作为组语义，不需要LLM重新Induct
-            if remaining_member_count == 1:
-                logger.info(f"组 {group_name} (group_id: {group_id}) 只剩1个成员，执行优化处理：直接使用该成员的语义作为组语义")
-                
-                # 获取剩余成员的信息
-                remaining_relation = remaining_relations_data[0]
-                remaining_sd_id = remaining_relation.get('sd_id')
-                
-                if not remaining_sd_id:
-                    logger.warning(f"剩余成员缺少 sd_id，无法获取语义域信息")
-                    return {
-                        "status": "error",
-                        "action": "REMOVED",
-                        "group_id": group_id,
-                        "group_name": group_name,
-                        "remaining_member_count": 1,
-                        "message": "只剩1个成员但无法获取成员信息（缺少 sd_id）"
-                    }
-                
-                # 尝试获取剩余成员的完整语义域数据
-                remaining_domain = None
-                if self.semantic_domain_client:
-                    try:
-                        logger.info(f"尝试获取剩余成员 {remaining_sd_id} 的完整语义域数据，使用 base_url: {self.semantic_domain_client.base_url}")
-                        # 直接通过 semantic_domain_id 获取语义域数据
-                        domain_response = self.semantic_domain_client.get_semantic_domain_by_id(remaining_sd_id)
-                        logger.debug(f"get_semantic_domain_by_id 返回响应类型: {type(domain_response)}, 内容: {domain_response}")
-                        
-                        if isinstance(domain_response, dict):
-                            if 'data' in domain_response:
-                                remaining_domain = domain_response.get('data')
-                                logger.debug(f"从响应中提取 data 字段: {remaining_domain is not None}")
-                            else:
-                                remaining_domain = domain_response
-                                logger.debug(f"直接使用响应作为 remaining_domain")
-                            
-                            if remaining_domain:
-                                logger.info(f"成功通过 get_semantic_domain_by_id 获取剩余成员的语义域数据: sd_id={remaining_sd_id}, 包含字段: {list(remaining_domain.keys()) if isinstance(remaining_domain, dict) else 'N/A'}")
-                            else:
-                                logger.warning(f"get_semantic_domain_by_id 返回的数据为空: domain_response={domain_response}")
-                        else:
-                            logger.warning(f"get_semantic_domain_by_id 返回格式异常: 期望 dict，实际 {type(domain_response)}, 值: {domain_response}")
-                    except Exception as e:
-                        logger.error(f"通过 get_semantic_domain_by_id 获取语义域数据失败: sd_id={remaining_sd_id}, base_url={self.semantic_domain_client.base_url}, 错误: {str(e)}", exc_info=True)
-                else:
-                    logger.warning(f"semantic_domain_client 未配置，无法获取剩余成员 {remaining_sd_id} 的完整语义域数据")
-                
-                if remaining_domain:
-                    # 使用该成员的语义域数据更新组
-                    try:
-                        # 提取语义域信息
-                        new_agent_card = remaining_domain.get('agent_card', '')
-                        # 从 agent_card 中提取 description
-                        new_description = self._extract_description_from_agent_card(new_agent_card)
-                        
-                        # 从 agent_card 提取 name 作为新的 group_name
-                        new_group_name = group_name  # 默认使用原组名
-                        if new_agent_card:
-                            if isinstance(new_agent_card, dict):
-                                new_group_name = new_agent_card.get('name', group_name)
-                            elif isinstance(new_agent_card, str):
-                                try:
-                                    agent_card_dict = json.loads(new_agent_card)
-                                    new_group_name = agent_card_dict.get('name', group_name)
-                                except:
-                                    # 如果解析失败，保持原组名
-                                    pass
-                        new_group_name = self._normalize_group_name(new_group_name, fallback=group_name)
-                        
-                        # 确保 agent_card 是字符串格式
-                        if isinstance(new_agent_card, dict):
-                            new_agent_card = json.dumps(new_agent_card, ensure_ascii=False)
-                        elif not isinstance(new_agent_card, str):
-                            new_agent_card = str(new_agent_card) if new_agent_card else ''
-                        
-                        # 更新组数据
-                        next_version = self._version_for_semantic_group_update(
-                            group_data,
-                            new_group_name=new_group_name,
-                            new_description=new_description,
-                            new_agent_card=new_agent_card,
-                        )
-                        updated_group_data = SemanticGroupData(
-                            id=group_id,
-                            group_name=new_group_name,
-                            description=new_description,
-                            agent_card=new_agent_card,
-                            version=next_version,
-                        )
-                        self.semantic_group_client.update_semantic_group(
-                            group_id=group_id,
-                            semantic_group=updated_group_data
-                        )
-                        logger.info(
-                            "已使用剩余成员的语义更新组 %s，group_name: %s version=%s",
-                            group_id,
-                            new_group_name,
-                            next_version,
-                        )
-                        
-                        # 更新向量数据
-                        if self.vector_client:
-                            # 构建成员域列表（只包含 agent_card，_build_semantic_group_text 只使用 agent_card）
-                            member_domain = {
-                                "semantic_domain_id": remaining_sd_id,
-                                "agent_card": remaining_domain.get('agent_card', '')
-                            }
-                            member_domains = [member_domain]
-                            
-                            # 构建新的组文本
-                            group_text = self._build_semantic_group_text(
-                                group_name=new_group_name,
-                                description=new_description,
-                                member_domains=member_domains
-                            )
-                            
-                            # 删除旧的向量数据
-                            self._delete_group_from_pgvector(group_id)
-                            
-                            # 添加新的向量数据
-                            metadata = {
-                                "group_id": group_id,
-                                "group_name": new_group_name
-                            }
-                            
-                            document = VectorDocument(
-                                page_content=group_text,
-                                metadata=metadata
-                            )
-                            self.vector_client.add_documents(
-                                collection_name=self.collection_name,
-                                documents=[document]
-                            )
-                            logger.info(f"已更新组 {group_id} 在 pgvector 中的向量数据")
-                        
-                        return {
-                            "status": "success",
-                            "action": "REMOVED",
-                            "group_id": group_id,
-                            "group_name": new_group_name,
-                            "remaining_member_count": 1,
-                            "message": f"只剩1个成员，已直接使用该成员的语义作为组语义（无需LLM重新Induct）"
-                        }
-                        
-                    except Exception as e:
-                        logger.error(f"使用剩余成员语义更新组失败: {str(e)}", exc_info=True)
-                        return {
-                            "status": "error",
-                            "action": "REMOVED",
-                            "group_id": group_id,
-                            "group_name": group_name,
-                            "remaining_member_count": 1,
-                            "message": f"使用剩余成员语义更新组失败: {str(e)}"
-                        }
-                else:
-                    # 无法获取语义域数据，记录警告但继续执行后续流程（让 Re-Induct 处理）
-                    logger.warning(f"无法获取剩余成员 {remaining_sd_id} 的完整语义域数据（semantic_domain_client 未配置或获取失败），将执行正常的 Re-Induct 流程")
-                    # 继续执行后续的 Step 3-4 流程
-
-            logger.info(f"组 {group_name} (group_id: {group_id}) 仍有 {remaining_member_count} 个成员，需要重新聚合")
-            
-            # Step 3 & 4: Re-Induct 和 Vector Update
-            # 同步执行 Re-Induct
-            try:
-                # 获取剩余成员的所有语义域数据
-                    remaining_member_domains = []
-                    if not self.semantic_domain_client:
-                        logger.warning(f"semantic_domain_client 未配置，无法获取剩余成员的完整语义域数据，跳过重新聚合")
-                    else:
-                        logger.info(f"开始获取剩余成员的完整语义域数据，剩余成员数: {len(remaining_relations_data)}, base_url: {self.semantic_domain_client.base_url}")
-                        for rel in remaining_relations_data:
-                            sd_id = rel.get('sd_id')
-                            if not sd_id:
-                                logger.warning(f"关系记录缺少 sd_id: {rel}")
-                                continue
-                            
-                            domain_data = None
-                            
-                            # 直接通过 semantic_domain_id 获取语义域数据
-                            try:
-                                logger.debug(f"尝试获取语义域数据: sd_id={sd_id}")
-                                domain_response = self.semantic_domain_client.get_semantic_domain_by_id(sd_id)
-                                logger.debug(f"get_semantic_domain_by_id 返回响应类型: {type(domain_response)}, 内容: {domain_response}")
-                                
-                                if isinstance(domain_response, dict):
-                                    if 'data' in domain_response:
-                                        domain_data = domain_response.get('data')
-                                        logger.debug(f"从响应中提取 data 字段: {domain_data is not None}")
-                                    else:
-                                        domain_data = domain_response
-                                        logger.debug(f"直接使用响应作为 domain_data")
-                                    
-                                    if domain_data:
-                                        logger.info(f"通过 get_semantic_domain_by_id 成功获取语义域数据: sd_id={sd_id}, 包含字段: {list(domain_data.keys()) if isinstance(domain_data, dict) else 'N/A'}")
-                                    else:
-                                        logger.warning(f"get_semantic_domain_by_id 返回的数据为空: sd_id={sd_id}, domain_response={domain_response}")
-                                else:
-                                    logger.warning(f"get_semantic_domain_by_id 返回格式异常: 期望 dict，实际 {type(domain_response)}, sd_id={sd_id}")
-                            except Exception as e:
-                                logger.error(f"get_semantic_domain_by_id 失败: sd_id={sd_id}, base_url={self.semantic_domain_client.base_url}, 错误: {str(e)}", exc_info=True)
-                            
-                            # 如果成功获取到语义域数据，添加到列表中
-                            if domain_data:
-                                remaining_member_domains.append({
-                                    "semantic_domain_id": domain_data.get('semantic_domain_id', sd_id),
-                                    "semantic_domain": domain_data.get('semantic_domain', ''),
-                                    "agent_card": domain_data.get('agent_card', ''),
-                                    "dd_name": domain_data.get('dd_name', ''),
-                                    "dd_namespace": domain_data.get('dd_namespace', '')
-                                })
-                                logger.debug(f"已添加语义域到列表: sd_id={sd_id}, 当前列表长度: {len(remaining_member_domains)}")
-                            else:
-                                logger.warning(f"无法获取语义域 {sd_id} 的完整数据，跳过该成员")
-                    
-                    # 如果能够获取到剩余成员的完整数据，执行重新聚合
-                    if remaining_member_domains and all(d.get('semantic_domain') for d in remaining_member_domains):
-                        # 重新聚合剩余成员的语义
-                        logger.info(f"开始重新聚合组 {group_name} 的剩余成员语义，成员数: {len(remaining_member_domains)}")
-                        try:
-                            consolidated_result = self.consolidate_for_decremental_semantic_group(
-                                semantic_domains=remaining_member_domains,
-                                max_retries=3,
-                                retry_delay=1.0
-                            )
-                            
-                            # consolidate_for_decremental_semantic_group 返回的是完整的 agent_card
-                            if consolidated_result:
-                                # 直接使用返回的 agent_card，不需要再生成
-                                try:
-                                    logger.info(f"使用重新聚合后的 agent_card 更新组 {group_id}")
-                                    # consolidated_result 就是 agent_card（字典格式）
-                                    new_agent_card_result = consolidated_result
-                                    # agent_card 转换为 JSON 字符串
-                                    new_agent_card = json.dumps(new_agent_card_result, ensure_ascii=False) if isinstance(new_agent_card_result, dict) else str(new_agent_card_result)
-                                    
-                                    # 从 agent_card 中提取 name 作为新的 group_name
-                                    if isinstance(new_agent_card_result, dict):
-                                        new_group_name = new_agent_card_result.get('name', group_name)
-                                    else:
-                                        # 如果 agent_card_result 不是字典，尝试解析 JSON
-                                        try:
-                                            agent_card_dict = json.loads(new_agent_card) if isinstance(new_agent_card, str) else {}
-                                            new_group_name = agent_card_dict.get('name', group_name)
-                                        except:
-                                            new_group_name = group_name
-                                    
-                                    logger.info(f"使用重新聚合后的 agent_card，group_name 更新为 agent_card.name: {new_group_name}")
-                                    new_group_name = self._normalize_group_name(new_group_name, fallback=group_name)
-                                    # 从 agent_card 中提取 description
-                                    new_description = self._extract_description_from_agent_card(new_agent_card_result)
-                                except Exception as e:
-                                    logger.warning(f"处理重新聚合后的 agent_card 失败: {str(e)}，使用原组的 agent_card 和 group_name", exc_info=True)
-                                    # 如果处理失败，使用原组的 agent_card 和 group_name
-                                    new_agent_card = group_data.get('agent_card', '')
-                                    new_group_name = group_name
-                                    # 从原组的 agent_card 中提取 description
-                                    new_description = self._extract_description_from_agent_card(new_agent_card)
-                                
-                                # 更新组的描述、group_name 和 agent_card
-                                next_version = self._version_for_semantic_group_update(
-                                    group_data,
-                                    new_group_name=new_group_name,
-                                    new_description=new_description,
-                                    new_agent_card=new_agent_card,
-                                )
-                                updated_group_data = SemanticGroupData(
-                                    id=group_id,
-                                    group_name=new_group_name,
-                                    description=new_description,
-                                    agent_card=new_agent_card,
-                                    version=next_version,
-                                )
-                                self.semantic_group_client.update_semantic_group(
-                                    group_id=group_id,
-                                    semantic_group=updated_group_data
-                                )
-                                logger.info(
-                                    "已更新组 %s 的描述、group_name 和 agent_card（重新聚合后的语义） version=%s",
-                                    group_id,
-                                    next_version,
-                                )
-                                
-                                # 更新向量数据（如果 vector_client 可用，会在 Vector Update 步骤处理）
-                                # 但这里已经获取了 remaining_member_domains，可以直接更新
-                                if self.vector_client:
-                                    try:
-                                        # 构建新的组文本
-                                        group_text = self._build_semantic_group_text(
-                                            group_name=new_group_name,
-                                            description=new_description,
-                                            member_domains=remaining_member_domains
-                                        )
-                                        
-                                        # 删除旧的向量数据
-                                        self._delete_group_from_pgvector(group_id)
-                                        
-                                        # 添加新的向量数据
-                                        metadata = {
-                                            "group_id": group_id,
-                                            "group_name": new_group_name
-                                        }
-                                        
-                                        document = VectorDocument(
-                                            page_content=group_text,
-                                            metadata=metadata
-                                        )
-                                        self.vector_client.add_documents(
-                                            collection_name=self.collection_name,
-                                            documents=[document]
-                                        )
-                                        logger.info(f"已更新组 {group_id} 在 pgvector 中的向量数据（重新聚合后）")
-                                    except Exception as e:
-                                        logger.warning(f"更新向量数据失败: {str(e)}", exc_info=True)
-                            else:
-                                logger.warning(f"consolidate_for_decremental_semantic_group 返回的 summary 为空，跳过更新描述")
-                        except Exception as e:
-                            logger.error(f"重新聚合语义失败: {str(e)}", exc_info=True)
-                    else:
-                        logger.warning(f"无法获取剩余成员的完整语义域数据，跳过重新聚合（已获取 {len(remaining_member_domains)} 个成员的完整数据）")
-                        
-            except Exception as e:
-                logger.error(f"重新聚合语义失败: {str(e)}", exc_info=True)
-            
-            # 同步执行 Vector Update
-            if self.vector_client:
-                try:
-                    # 获取更新后的组信息
-                    updated_group_response = self.semantic_group_client.get_semantic_group_by_id(group_id)
-                    updated_group_data = updated_group_response.get('data', {})
-                    updated_description = updated_group_data.get('description', '')
-                    updated_group_name = updated_group_data.get('group_name', group_name)
-                    
-                    # 获取剩余成员信息用于构建向量文本
-                    member_domains_for_vector = []
-                    if self.semantic_domain_client:
-                        logger.info(f"Vector Update: 开始获取剩余成员的完整语义域数据，剩余成员数: {len(remaining_relations_data)}, base_url: {self.semantic_domain_client.base_url}")
-                        for rel in remaining_relations_data:
-                            sd_id = rel.get('sd_id')
-                            if not sd_id:
-                                logger.warning(f"Vector Update: 关系记录缺少 sd_id: {rel}")
-                                continue
-                            
-                            domain_data = None
-                            
-                            # 直接通过 semantic_domain_id 获取语义域数据
-                            try:
-                                logger.debug(f"Vector Update: 尝试获取语义域数据: sd_id={sd_id}")
-                                domain_response = self.semantic_domain_client.get_semantic_domain_by_id(sd_id)
-                                logger.debug(f"Vector Update: get_semantic_domain_by_id 返回响应类型: {type(domain_response)}, 内容: {domain_response}")
-                                
-                                if isinstance(domain_response, dict):
-                                    if 'data' in domain_response:
-                                        domain_data = domain_response.get('data')
-                                        logger.debug(f"Vector Update: 从响应中提取 data 字段: {domain_data is not None}")
-                                    else:
-                                        domain_data = domain_response
-                                        logger.debug(f"Vector Update: 直接使用响应作为 domain_data")
-                                    
-                                    if domain_data:
-                                        logger.info(f"Vector Update: 通过 get_semantic_domain_by_id 成功获取语义域数据: sd_id={sd_id}, 包含字段: {list(domain_data.keys()) if isinstance(domain_data, dict) else 'N/A'}")
-                                    else:
-                                        logger.warning(f"Vector Update: get_semantic_domain_by_id 返回的数据为空: sd_id={sd_id}, domain_response={domain_response}")
-                                else:
-                                    logger.warning(f"Vector Update: get_semantic_domain_by_id 返回格式异常: 期望 dict，实际 {type(domain_response)}, sd_id={sd_id}")
-                            except Exception as e:
-                                logger.error(f"Vector Update: get_semantic_domain_by_id 失败: sd_id={sd_id}, base_url={self.semantic_domain_client.base_url}, 错误: {str(e)}", exc_info=True)
-                            
-                            # 如果成功获取到语义域数据，添加到列表中
-                            if domain_data:
-                                member_domains_for_vector.append({
-                                    "semantic_domain_id": domain_data.get('semantic_domain_id', sd_id),
-                                    "semantic_domain": domain_data.get('semantic_domain', ''),
-                                    "agent_card": domain_data.get('agent_card', ''),
-                                    "dd_name": domain_data.get('dd_name', ''),
-                                    "dd_namespace": domain_data.get('dd_namespace', '')
-                                })
-                                logger.debug(f"Vector Update: 已添加语义域到列表: sd_id={sd_id}, 当前列表长度: {len(member_domains_for_vector)}")
-                            else:
-                                logger.warning(f"Vector Update: 无法获取语义域 {sd_id} 的完整数据，跳过该成员")
-                    else:
-                        logger.warning(f"semantic_domain_client 未配置，无法获取成员数据，跳过向量更新（使用空的 member_domains 构建向量文本没有意义）")
-                        # 跳过向量更新，因为无法获取成员数据
-                        # 即使有 description，没有成员数据的向量文本也是不完整的
-                        # 等待 semantic_domain_client 配置后，可以通过 Re-Induct 重新生成向量
-                    
-                    # 只有当成功获取到成员数据时才更新向量
-                    # 如果无法获取成员数据，跳过向量更新，避免生成无意义的 embedding
-                    if member_domains_for_vector:
-                        # 使用获取到的成员数据构建向量文本
-                        group_text = self._build_semantic_group_text(
-                            group_name=updated_group_name,
-                            description=updated_description,
-                            member_domains=member_domains_for_vector
-                        )
-                        
-                        # 删除旧的向量数据
-                        self._delete_group_from_pgvector(group_id)
-                        
-                        # 添加新的向量数据
-                        metadata = {
-                            "group_id": group_id,
-                            "group_name": updated_group_name
-                        }
-                        
-                        document = VectorDocument(
-                            page_content=group_text,
-                            metadata=metadata
-                        )
-                        self.vector_client.add_documents(
-                            collection_name=self.collection_name,
-                            documents=[document]
-                        )
-                        logger.info(f"已更新组 {group_id} 在 pgvector 中的向量数据，包含 {len(member_domains_for_vector)} 个成员的信息")
-                    else:
-                        logger.warning(f"无法获取剩余成员的完整语义域数据，跳过向量更新（已获取 {len(member_domains_for_vector)} 个成员的完整数据）。请配置 semantic_domain_client 后重新执行 Re-Induct 以更新向量数据")
-                    
-                except Exception as e:
-                    logger.error(f"更新向量数据失败: {str(e)}", exc_info=True)
-            
-            return {
-                "status": "success",
-                "action": "REINDUCT_SCHEDULED",
-                "group_id": group_id,
-                "group_name": group_name,
-                "remaining_member_count": remaining_member_count,
-                "message": f"语义域已移除，组剩余 {remaining_member_count} 个成员，Re-Induct 和 Vector Update 已同步执行"
-            }
+            return self.reconcile_group_metadata(group_id)
             
         except Exception as e:
             logger.error(f"移除语义域 {semantic_domain_id} 时出错: {str(e)}", exc_info=True)

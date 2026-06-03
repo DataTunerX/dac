@@ -154,6 +154,7 @@ func (r *dataDescriptorRepository) toUnstructured(descriptor *entity.DataDescrip
 		},
 		"spec": map[string]interface{}{
 			"descriptorType": descriptor.DescriptorType,
+			"gpuEnabled":     entity.NormalizeGPUEnabled(descriptor.GPUEnabled),
 			"sources":        r.sourcesToMap(descriptor.Sources),
 		},
 	}
@@ -213,6 +214,7 @@ func k8sDataDescriptorToEntity(k8sDesc *K8sDataDescriptor) *entity.DataDescripto
 		Namespace:      k8sDesc.Metadata.Namespace,
 		Labels:         k8sDesc.Metadata.Labels,
 		DescriptorType: k8sDesc.Spec.DescriptorType,
+		GPUEnabled:     entity.NormalizeGPUEnabled(k8sDesc.Spec.GPUEnabled),
 		Sources:        mapK8sSourcesToEntity(k8sDesc.Spec.Sources),
 		SourceStatuses: k8sDesc.Status.SourceStatuses,
 		ConsumedBy:     k8sDesc.Status.ConsumedBy,

@@ -8,14 +8,13 @@ from datetime import datetime
 import json
 import re
 import time
-import concurrent.futures
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import ast
 import logging
 from a2a.types import AgentCard, AgentSkill
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 from ..llm_output_json import parse_llm_output_string
+from .code_analysis_runtime import CodeAnalysisRuntime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -1049,11 +1048,21 @@ def _json_repair_candidates(json_str: str):
 
 
 class CodebaseIndexer:
-    def __init__(self, llm, max_workers: int = 5, batch_size: int = 10):
+    def __init__(
+        self,
+        llm,
+        max_workers: int = 5,
+        batch_size: int = 10,
+        runtime: CodeAnalysisRuntime | None = None,
+    ):
         self.llm = llm
         self.analysis_results = []
-        self.max_workers = max_workers
-        self.batch_size = batch_size
+        self.runtime = runtime or CodeAnalysisRuntime.from_env(
+            default_max_workers=max_workers,
+            default_batch_size=batch_size,
+        )
+        self.max_workers = self.runtime.max_workers
+        self.batch_size = self.runtime.batch_size
         
     def _get_system_prompt(self, file_type: str) -> str:
         base_prompt = f"""请你扮演一名资深的开发工程师、擅长所有的开发语言。你的任务是深度分析代码仓库中的代码，构建一个代码的索引能力。
@@ -1194,7 +1203,9 @@ class CodebaseIndexer:
 
         chunks = CodeSplitter.split_file(original_content, file_path)
         num_chunks = len(chunks)
-        logger.info(f"文件 {file_path} 分割为 {num_chunks} 块，将并行分析")
+        logger.info(
+            f"文件 {file_path} 分割为 {num_chunks} 块，将按文件内顺序分析"
+        )
 
         # 准备每块的分析参数
         chunk_tasks = []
@@ -1210,42 +1221,33 @@ class CodebaseIndexer:
                 'total_chunks': chunk.get('total_chunks', 1),
             })
 
-        # 并行分析所有分块
         chunk_results = [None] * num_chunks  # 保持顺序
         total_time = 0
 
-        with ThreadPoolExecutor(max_workers=min(num_chunks, 10)) as executor:
-            future_to_idx = {}
-            for idx, task in enumerate(chunk_tasks):
-                future = executor.submit(
-                    self._analyze_single_chunk,
+        for idx, task in enumerate(chunk_tasks):
+            try:
+                result = self._analyze_single_chunk(
                     file_info, original_content, task['numbered_content'],
                     is_chunked=task['is_chunked'],
                     chunk_index=task['chunk_index'],
                     total_chunks=task['total_chunks'],
                 )
-                future_to_idx[future] = idx
-
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    result = future.result()
-                    if result.get('status') == 'success':
-                        ar = result['analysis_result']
-                        if 'raw_response' in ar:
-                            logger.warning(
-                                f"块 {idx + 1}/{num_chunks} 返回 raw_response "
-                                f"(JSON 解析失败)，将重试: {file_path}")
-                            chunk_results[idx] = None  # 标记为需要重试
-                        else:
-                            chunk_results[idx] = ar
-                        total_time += result.get('analysis_time', 0)
-                    else:
+                if result.get('status') == 'success':
+                    ar = result['analysis_result']
+                    if 'raw_response' in ar:
                         logger.warning(
-                            f"块 {idx + 1}/{num_chunks} 分析失败: {file_path}")
-                except Exception as e:
+                            f"块 {idx + 1}/{num_chunks} 返回 raw_response "
+                            f"(JSON 解析失败)，将重试: {file_path}")
+                        chunk_results[idx] = None  # 标记为需要重试
+                    else:
+                        chunk_results[idx] = ar
+                    total_time += result.get('analysis_time', 0)
+                else:
                     logger.warning(
-                        f"块 {idx + 1}/{num_chunks} 分析异常: {file_path} - {e}")
+                        f"块 {idx + 1}/{num_chunks} 分析失败: {file_path}")
+            except Exception as e:
+                logger.warning(
+                    f"块 {idx + 1}/{num_chunks} 分析异常: {file_path} - {e}")
 
         # 对 raw_response 的块进行单独重试（最多 2 次）
         for retry_round in range(1, 3):
@@ -1344,7 +1346,11 @@ class CodebaseIndexer:
                 )
 
                 start_time = time.time()
-                response = self.llm.invoke([system_message, human_message])
+                response = self.runtime.invoke_llm(
+                    self.llm,
+                    [system_message, human_message],
+                    label=f"code-index:{file_path}",
+                )
                 analysis_time = time.time() - start_time
 
                 analysis_result = self._parse_llm_response(response.content)
@@ -1541,10 +1547,14 @@ class CodebaseIndexer:
 
         for attempt in range(1, max_retries + 1):
             try:
-                response = self.llm.invoke([
-                    SystemMessage(content="你是一名资深开发工程师，擅长从业务角度总结代码文件的职责。"),
-                    HumanMessage(content=prompt),
-                ])
+                response = self.runtime.invoke_llm(
+                    self.llm,
+                    [
+                        SystemMessage(content="你是一名资深开发工程师，擅长从业务角度总结代码文件的职责。"),
+                        HumanMessage(content=prompt),
+                    ],
+                    label="code-index-summary-consolidate",
+                )
                 consolidated = response.content.strip()
                 if consolidated and len(consolidated) > 10:
                     logger.info(f"LLM 摘要合并成功: {len(summaries)} 块 → {len(consolidated)} 字符")
@@ -2028,32 +2038,29 @@ class CodebaseIndexer:
     
     def _process_batch(self, batch: List[Dict]) -> List[Dict]:
         batch_results = []
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_file = {
-                executor.submit(self.analyze_file, file_info): file_info 
-                for file_info in batch
+
+        completed_count = 0
+        for file_info, result, exc in self.runtime.map_unordered(
+            batch,
+            self.analyze_file,
+            label="code-index-files",
+        ):
+            if exc is None and result is not None:
+                batch_results.append(result)
+                completed_count += 1
+                logger.info(f"批次进度: {completed_count}/{len(batch)}")
+                continue
+
+            error_result = {
+                'file_path': file_info['file_path'],
+                'file_type': file_info['file_type'],
+                'analysis_time': 0,
+                'analysis_result': {'error': str(exc)},
+                'status': 'error'
             }
-            
-            completed_count = 0
-            for future in as_completed(future_to_file):
-                file_info = future_to_file[future]
-                try:
-                    result = future.result()
-                    batch_results.append(result)
-                    completed_count += 1
-                    logger.info(f"批次进度: {completed_count}/{len(batch)}")
-                except Exception as e:
-                    error_result = {
-                        'file_path': file_info['file_path'],
-                        'file_type': file_info['file_type'],
-                        'analysis_time': 0,
-                        'analysis_result': {'error': str(e)},
-                        'status': 'error'
-                    }
-                    batch_results.append(error_result)
-                    completed_count += 1
-                    logger.info(f"批次进度: {completed_count}/{len(batch)} - 分析失败: {file_info['file_path']}")
+            batch_results.append(error_result)
+            completed_count += 1
+            logger.info(f"批次进度: {completed_count}/{len(batch)} - 分析失败: {file_info['file_path']}")
         
         return batch_results
     

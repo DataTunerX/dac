@@ -13,6 +13,7 @@ type CreateDataDescriptorRequest struct {
 	Name           string              `json:"name" validate:"required"`
 	Labels         map[string]string   `json:"labels"`
 	DescriptorType string              `json:"descriptorType" validate:"required"`
+	GPUEnabled     string              `json:"gpuEnabled"`
 	Sources        []entity.DataSource `json:"sources" validate:"required"`
 }
 
@@ -21,6 +22,7 @@ type CreateDataDescriptorRequest struct {
 type UpdateDataDescriptorRequest struct {
 	Labels         map[string]string   `json:"labels"`
 	DescriptorType string              `json:"descriptorType"`
+	GPUEnabled     string              `json:"gpuEnabled"`
 	Sources        []entity.DataSource `json:"sources"`
 }
 
@@ -28,27 +30,28 @@ type UpdateDataDescriptorRequest struct {
 
 // DataDescriptorResponse defines the response for data descriptor
 type DataDescriptorResponse struct {
-	Name           string                  `json:"name"`
-	Namespace      string                  `json:"namespace"`
-	Labels         map[string]string       `json:"labels,omitempty"`
-	DescriptorType string                  `json:"descriptor_type"`
-	Sources        []DataSourceResponse    `json:"sources"`
-	OverallPhase   string                  `json:"overall_phase"`
-	SourceStatuses []SourceStatusResponse  `json:"source_statuses,omitempty"`
-	ConsumedBy     []ObjectReferenceResponse `json:"consumed_by,omitempty"`
-	CreatedAt      time.Time               `json:"created_at"`
-	UpdatedAt      time.Time               `json:"updated_at"`
-	Deleting       bool                    `json:"deleting,omitempty"`
-	DeletionTimestamp *time.Time           `json:"deletion_timestamp,omitempty"`
+	Name              string                    `json:"name"`
+	Namespace         string                    `json:"namespace"`
+	Labels            map[string]string         `json:"labels,omitempty"`
+	DescriptorType    string                    `json:"descriptor_type"`
+	GPUEnabled        string                    `json:"gpuEnabled"`
+	Sources           []DataSourceResponse      `json:"sources"`
+	OverallPhase      string                    `json:"overall_phase"`
+	SourceStatuses    []SourceStatusResponse    `json:"source_statuses,omitempty"`
+	ConsumedBy        []ObjectReferenceResponse `json:"consumed_by,omitempty"`
+	CreatedAt         time.Time                 `json:"created_at"`
+	UpdatedAt         time.Time                 `json:"updated_at"`
+	Deleting          bool                      `json:"deleting,omitempty"`
+	DeletionTimestamp *time.Time                `json:"deletion_timestamp,omitempty"`
 }
 
 type DataSourceResponse struct {
-	Type           string                  `json:"type"`
-	Name           string                  `json:"name"`
-	Metadata       map[string]string       `json:"metadata"`
-	Extract        *ExtractConfigResponse  `json:"extract,omitempty"`
-	Prompts        *PromptsConfigResponse  `json:"prompts,omitempty"`
-	CodeRepo       *CodeRepoConfigResponse `json:"codeRepo,omitempty"`
+	Type           string                   `json:"type"`
+	Name           string                   `json:"name"`
+	Metadata       map[string]string        `json:"metadata"`
+	Extract        *ExtractConfigResponse   `json:"extract,omitempty"`
+	Prompts        *PromptsConfigResponse   `json:"prompts,omitempty"`
+	CodeRepo       *CodeRepoConfigResponse  `json:"codeRepo,omitempty"`
 	Processing     ProcessingConfigResponse `json:"processing,omitempty"`
 	Classification []ClassificationResponse `json:"classification,omitempty"`
 }
@@ -80,9 +83,9 @@ type CleaningRuleResponse struct {
 }
 
 type ClassificationResponse struct {
-	Domain      string              `json:"domain"`
-	Category    string              `json:"category"`
-	Subcategory string              `json:"subcategory"`
+	Domain      string                `json:"domain"`
+	Category    string                `json:"category"`
+	Subcategory string                `json:"subcategory"`
 	Tags        []map[string][]string `json:"tags"`
 }
 
@@ -126,17 +129,18 @@ func ToDataDescriptorResponse(d *entity.DataDescriptor) DataDescriptorResponse {
 	}
 
 	return DataDescriptorResponse{
-		Name:           d.Name,
-		Namespace:      d.Namespace,
-		Labels:         d.Labels,
-		DescriptorType: d.DescriptorType,
-		Sources:        sources,
-		OverallPhase:   d.OverallPhase,
-		SourceStatuses: statuses,
-		ConsumedBy:     consumedBy,
-		CreatedAt:      d.CreatedAt,
-		UpdatedAt:      d.UpdatedAt,
-		Deleting:       d.Deleting,
+		Name:              d.Name,
+		Namespace:         d.Namespace,
+		Labels:            d.Labels,
+		DescriptorType:    d.DescriptorType,
+		GPUEnabled:        d.GPUEnabled,
+		Sources:           sources,
+		OverallPhase:      d.OverallPhase,
+		SourceStatuses:    statuses,
+		ConsumedBy:        consumedBy,
+		CreatedAt:         d.CreatedAt,
+		UpdatedAt:         d.UpdatedAt,
+		Deleting:          d.Deleting,
 		DeletionTimestamp: d.DeletionTimestamp,
 	}
 }

@@ -197,7 +197,7 @@ class RedisRegistry:
             # channel is :   __keyspace@0__:expert_agents:http://192.168.xxx.xxx:20002/
             # logger.info(f'channel === {channel}')
             if f":{self.registry_key}:" in channel:
-                prefix = "__keyspace@0__:expert_agents:"
+                prefix = f"__keyspace@{self.db}__:{self.registry_key}:"
                 url = channel[len(prefix):]
                 return url
             return None

@@ -12,7 +12,7 @@ import time as _time
 from typing import Any
 from uuid import uuid4
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterable, Dict, Literal, List, Optional, Union
+from typing import Any, AsyncIterable, ClassVar, Dict, Literal, List, Optional, Union
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 from abc import ABC
@@ -60,6 +60,7 @@ from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 from .agentregistry_client import AgentRegistryClient
 from .agent_card_resolve import resolve_agent_card_by_planner_name
+from langchain_core.tools import tool
 
 try:
     from skill_sdk.skill.runner import SkillRunner  # noqa: F401  (used when local skills enabled)
@@ -147,6 +148,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 PROGRESS_FRAME_PREFIX = "[[DAC_PROGRESS]] "
+SUMMARY_FRAME_PREFIX = "[[DAC_SUMMARY]] "
 
 # Planner: upstream orchestration outcomes (metadata.extra_context), not RAG knowledge.
 PRIOR_EXECUTION_CONTEXT_EMPTY_HINT = (
@@ -173,18 +175,18 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 # 角色：首席战略规划师（多智能体编排专家）
 
 ## 核心使命
-根据业务领域将用户查询分解为可执行任务。你必须通过 **[前置任务执行情况]**、**[执行上下文]** 与 **[上一轮的执行结果]** 建立反馈闭环，确保规划路径既能避免重复失败、又能复用已有数据。
+根据业务领域将用户查询分解为可执行任务。你必须通过 **[前置任务执行情况]**、**[执行上下文]** 与 **[上一轮的执行结果]** 建立反馈闭环，确保规划路径既能解决指代关系，又能避免重复失败、复用已有数据。
 
 ## 战略思考过程（思维链）
 在生成 JSON 之前，请严格执行以下 **业务领域决策流**：
 
 1. **业务领域提取**：识别查询中的核心业务实体（如“订单”、“财务”、“天气”），锁定其所属的业务边界。
-2. *[反馈闭环] 分析**：
-   - 结合 **[前置任务执行情况]**、**[执行上下文]** 与 **[上一轮的执行结果]**：若上一轮失败，必须根据 `replan_context` 中的报错信息进行“避坑”设计。
+2. **反馈闭环分析**：
+   - 结合 **[前置任务执行情况]**、**[执行上下文]** 与 **[上一轮的执行结果]**：若上一轮失败，必须根据 `replan_context` 中的报错信息进行“避坑”设计。但避坑是指调整任务拆分方式、更换 Agent 或补充必要约束，**绝非**把上一轮返回的具体数值（如某个订单ID、用户ID、姓名）直接写进任务描述，除非该数值本就是用户原始问题中明确给定的。
 3. **领域主权映射**：
    - **主权优先**：将任务分配给负责该领域的 Agent。若某 Agent 是该领域的唯一代表，将其视为**通用入口**，无视其“不执行查询”等技术性免责声明。
    - **隐含能力**：假定领域专家拥有该业务范畴内的全量知识（如“交易专家”天然能“分析订单分布”）。
-4. **依赖编排**：若当前任务依赖 **[前置任务执行情况]** 或 **[上一轮的执行结果]** 中的具体产出，须在 `description` 中写入**具体取值**（如已解析的字段值、ID），禁止使用仅依赖上下文的模糊指代（如单独使用「上一步」「前述」而不给出值）。
+4. **依赖编排**：若当前任务**绝对依赖于**上一步产出的某个确切值（例如用户追问“把它删掉”中的“它”必须从历史中解析出具体 ID），才可将该值写入 `description`。写入时只取完成任务所必需的最小信息，并保留原始问题中的表达形式（如订单编号保持字符串 `'ORD-2025-00001'`，绝不替换为内部数字 ID）。**严禁**将执行过程中返回的冗余数据（如用户姓名、邮箱、其他无关字段）混入描述。
 
 ## 智能体选择与任务规则（必须严格遵守）
 1. **主权优先**：根据哪个智能体的领域覆盖了主题事项来分配任务。
@@ -192,15 +194,23 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 3. **"无对应"协议**：仅当任务的议题完全超出所有可用智能体的领域范围时，才使用"NONE"。
 4. **名称准确性**：`agent` 字段必须与智能体列表中的“名称”完全一致。
 
+
 ## ⚠ 任务描述 (Description) 关键规则（必须严格遵守）
 
-**核心原则：你是规划师，不是执行者。忠实传递用户意图，禁止替用户细化或改写问题。**
+**核心原则：你是规划师，不是执行者。忠实传递用户意图，禁止替用户细化、修改或缩水问题。**
 
-1. **忠实转述与结果注入**：忠实反映意图，并主动注入 **[前置任务执行情况]** 与 **[上一轮的执行结果]** 中的关键结果（如已解析字段值、已获 ID、特定报错原因）。**不得**在 `description` 中声称「上下文缺失某依赖值」若 **[前置任务执行情况]** 中已给出该值。
+1. **忠实转述与最小必要依赖注入**：
+   - 任务描述必须**原样反映用户问题中所有明确要求**（如具体订单编号、时间范围、统计指标）。
+   - 若任务**确实依赖**上一步解析出的某个值（且该值在用户原话中以指代形式出现），才可将该值以用户原始表述的形式补入描述。补入时只添加该必要值，**不附带任何额外解释、历史执行细节或中间结果**。
+   - **绝对禁止**将 `replan_context`、`prior_execution_context` 中返回的具体 id、姓名、数量等作为“背景知识”直接描述给下游 Agent。
+   - **绝对禁止**在描述中添加对系统能力、表结构缺失的判断（如“系统无支付表”“请按可用数据返回”），此类判断应由下游 Agent 自行处理，规划器不得越权。
+
 2. **严禁捏造条件（重点）**：绝对不允许在描述中添加用户未提及的任何限制。
    - **正确示例**：用户“查订单” → `description`：“查询订单情况” ✅
    - **错误示例**：用户“查订单” → `description`：“查询2024年Q4电子产品订单及同比增长” ❌（捏造了时间、类别、指标）
-3. **宁简勿繁**：问题宽泛时，描述也保持宽泛，由领域专家自行解读。
+   - **错误示例（新增强调）**：用户“查询订单ORD-2025-00001的支付记录” → 描述中写：“查询订单ORD-2025-00001的支付记录。注意：上一轮已确认该订单对应order_id=1，且无支付表，请按可用数据返回。” ❌（注入了内部 id 和自行判断）
+
+3. **宁简勿繁**：问题宽泛时，描述也保持宽泛，由领域专家自行解读。即使在重规划时，也要克制补充细节的冲动，只调整任务结构或 Agent 指定，不堆砌历史数据。
 
 ---
 
@@ -210,7 +220,7 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 
 **[前置任务执行情况] (Prior task outcomes — not RAG knowledge):**
 {prior_execution_context}
-*注：来自上层编排已完成的子任务产出（例如 Semantic Group 通过请求 metadata 传入的 `extra_context`）。**此块不是知识库检索结果，不得与下方 [执行上下文] 混淆。** 若用户问题依赖其中的字段，必须在 `description` 中写入具体值。*
+*注：来自上层编排已完成的子任务产出（例如 Semantic Group 通过请求 metadata 传入的 `extra_context`）。**此块不是知识库检索结果，不得与下方 [执行上下文] 混淆。** 若用户问题依赖其中的字段，必须在 `description` 中写入具体值，但仅限用户原问题中已明确提及的字段值，且保持原格式，不添加内部 id 或冗余数据。*
 
 
 **[执行上下文] (Information):**
@@ -234,7 +244,7 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
    - `original_query`：原始用户输入。
    - `tasks`：包含以下字段的对象列表：
      - `id`：整数（从1开始）。
-     - `description`：转述给智能体的子任务或问题（忠实于用户原始表述，禁止添加额外条件；对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含）。
+     - `description`：转述给智能体的子任务或问题。必须忠实于用户原始表述，禁止添加额外条件，禁止注入历史执行中的具体数值或对系统能力的判断。对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含，但仅限于补全指代对象本身。
      - `agent`：确切的智能体名称或"NONE"。
 3. **JSON 转义（必须严格遵守）**：
    - 当字符串值（如 `original_query`、`description`、`thought_process`）内部出现双引号 `"` 时，**必须写成 `\\"`** 以避免非法 JSON。
@@ -262,12 +272,12 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 在生成 JSON 之前，请严格执行以下 **业务领域决策流**：
 
 1. **业务领域提取**：识别查询中的核心业务实体（如“订单”、“财务”、“天气”），锁定其所属的业务边界。
-2. *[反馈闭环] 分析**：
-   - 结合 **[前置任务执行情况]**、**[执行上下文]** 与 **[上一轮的执行结果]**：若上一轮失败，必须根据 `replan_context` 中的报错信息进行“避坑”设计。
+2. **反馈闭环分析**：
+   - 结合 **[前置任务执行情况]**、**[执行上下文]** 与 **[上一轮的执行结果]**：若上一轮失败，必须根据 `replan_context` 中的报错信息进行“避坑”设计。但避坑是指调整任务拆分方式、更换 Agent 或补充必要约束，**绝非**把上一轮返回的具体数值（如某个订单ID、用户ID、姓名）直接写进任务描述，除非该数值本就是用户原始问题中明确给定的。
 3. **领域主权映射**：
    - **主权优先**：将任务分配给负责该领域的 Agent。若某 Agent 是该领域的唯一代表，将其视为**通用入口**，无视其“不执行查询”等技术性免责声明。
    - **隐含能力**：假定领域专家拥有该业务范畴内的全量知识（如“交易专家”天然能“分析订单分布”）。
-4. **依赖编排**：若当前任务依赖 **[前置任务执行情况]** 或 **[上一轮的执行结果]** 中的具体产出，须在 `description` 中写入**具体取值**（如已解析的字段值、ID），禁止使用仅依赖上下文的模糊指代（如单独使用「上一步」「前述」而不给出值）。
+4. **依赖编排**：若当前任务**绝对依赖于**上一步产出的某个确切值（例如用户追问“把它删掉”中的“它”必须从历史中解析出具体 ID），才可将该值写入 `description`。写入时只取完成任务所必需的最小信息，并保留原始问题中的表达形式（如订单编号保持字符串 `'ORD-2025-00001'`，绝不替换为内部数字 ID）。**严禁**将执行过程中返回的冗余数据（如用户姓名、邮箱、其他无关字段）混入描述。
 
 ## 智能体选择与任务规则（必须严格遵守）
 1. **主权优先**：根据哪个智能体的领域覆盖了主题事项来分配任务。
@@ -283,13 +293,20 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 
 ## ⚠ 任务描述 (Description) 关键规则（必须严格遵守）
 
-**核心原则：你是规划师，不是执行者。忠实传递用户意图，禁止替用户细化或改写问题。**
+**核心原则：你是规划师，不是执行者。忠实传递用户意图，禁止替用户细化、修改或缩水问题。**
 
-1. **忠实转述与结果注入**：忠实反映意图，并主动注入 **[前置任务执行情况]** 与 **[上一轮的执行结果]** 中的关键结果（如已解析字段值、已获 ID、特定报错原因）。**不得**在 `description` 中声称「上下文缺失某依赖值」若 **[前置任务执行情况]** 中已给出该值。
+1. **忠实转述与最小必要依赖注入**：
+   - 任务描述必须**原样反映用户问题中所有明确要求**（如具体订单编号、时间范围、统计指标）。
+   - 若任务**确实依赖**上一步解析出的某个值（且该值在用户原话中以指代形式出现），才可将该值以用户原始表述的形式补入描述。补入时只添加该必要值，**不附带任何额外解释、历史执行细节或中间结果**。
+   - **绝对禁止**将 `replan_context`、`prior_execution_context` 中返回的具体 id、姓名、数量等作为“背景知识”直接描述给下游 Agent。
+   - **绝对禁止**在描述中添加对系统能力、表结构缺失的判断（如“系统无支付表”“请按可用数据返回”），此类判断应由下游 Agent 自行处理，规划器不得越权。
+
 2. **严禁捏造条件（重点）**：绝对不允许在描述中添加用户未提及的任何限制。
    - **正确示例**：用户“查订单” → `description`：“查询订单情况” ✅
    - **错误示例**：用户“查订单” → `description`：“查询2024年Q4电子产品订单及同比增长” ❌（捏造了时间、类别、指标）
-3. **宁简勿繁**：问题宽泛时，描述也保持宽泛，由领域专家自行解读。
+   - **错误示例（新增强调）**：用户“查询订单ORD-2025-00001的支付记录” → 描述中写：“查询订单ORD-2025-00001的支付记录。注意：上一轮已确认该订单对应order_id=1，且无支付表，请按可用数据返回。” ❌（注入了内部 id 和自行判断）
+
+3. **宁简勿繁**：问题宽泛时，描述也保持宽泛，由领域专家自行解读。即使在重规划时，也要克制补充细节的冲动，只调整任务结构或 Agent 指定，不堆砌历史数据。
 
 ---
 
@@ -304,7 +321,7 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 
 **[前置任务执行情况] (Prior task outcomes — not RAG knowledge):**
 {prior_execution_context}
-*注：来自上层编排已完成的子任务产出（例如 Semantic Group 通过请求 metadata 传入的 `extra_context`）。**此块不是知识库检索结果，不得与下方 [执行上下文] 混淆。** 若用户问题依赖其中的字段，必须在 `description` 中写入具体值。*
+*注：来自上层编排已完成的子任务产出（例如 Semantic Group 通过请求 metadata 传入的 `extra_context`）。**此块不是知识库检索结果，不得与下方 [执行上下文] 混淆。** 若用户问题依赖其中的字段，必须在 `description` 中写入具体值，但仅限用户原问题中已明确提及的字段值，且保持原格式，不添加内部 id 或冗余数据。*
 
 
 **[执行上下文] (Information):**
@@ -328,7 +345,7 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
    - `original_query`：原始用户输入。
    - `tasks`：包含以下字段的对象列表：
      - `id`：整数（从1开始）。
-     - `description`：转述给智能体的子任务或问题（忠实于用户原始表述，禁止添加额外条件；对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含）。
+     - `description`：转述给智能体的子任务或问题。必须忠实于用户原始表述，禁止添加额外条件，禁止注入历史执行中的具体数值或对系统能力的判断。对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含，但仅限于补全指代对象本身。
      - `agent`：确切的智能体名称或"NONE"。
 3. **JSON 转义（必须严格遵守）**：
    - 当字符串值（如 `original_query`、`description`、`thought_process`）内部出现双引号 `"` 时，**必须写成 `\\"`** 以避免非法 JSON。
@@ -345,7 +362,6 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 
 """
 
-
 Orchestrator_INSTRUCTIONS_ZH = """
 你是一位知识分析与总结专家。你的任务是基于提供的子问题答案（`knowledge`）和对话上下文（`history`），通过逻辑严密的分析，回答用户的原始问题。
 
@@ -354,33 +370,68 @@ Orchestrator_INSTRUCTIONS_ZH = """
 1. **答案来源的唯一性**
    * 你的所有事实性结论必须源于 `knowledge`。`history` 仅用于理解当前问题的指代（如“他”指代谁）或语境。
    * **严禁幻觉**：禁止编造 `knowledge` 中不存在的数字、日期或具体事实。
+   * **不确定不猜测**：凡是上下文证据不足、字段缺失、口径冲突或无法确认的内容，不要自行补全或猜测，不要把推测当成事实输出。
 
-2. **信息处理与灵活匹配（核心优化）**
+2. **信息处理**
    * **精确匹配**：若 `knowledge` 包含原始问题所需的全部精确信息，请直接进行整合归纳，给出直接答案。
-   * **退守匹配（重要）**：若 `knowledge` 中缺乏原始问题要求的“精确时间点”或“精确维度”的数据，但包含**高度相关**的信息（例如：没有11月数据但有三季度数据；没有公司客户数但有总客户数），你应当：
-     1. 告知用户当前缺乏精确到 [具体维度] 的数据。
-     2. 主动提供 `knowledge` 中现有的、最接近的参考数据作为替代。
-     3. 严禁直接回答“没有数据”，除非 `knowledge` 与问题完全无关。
+   * **证据不足**：若 `knowledge` 缺少回答所必需的精确维度，应明确说明无法确认或仅部分可答；不要用弱相关、近似或过程性数据冒充精确答案。
+   * **退守参考（可选）**：仅当任务状态为成功且 expert 未否定结论时，才可补充最接近的参考数据，并明确标注其口径或时间范围与问题的差异。
 
 3. **回答表现形式**
    * **逻辑性**：使用分点、表格或对比等方式让答案易于阅读。
    * **默认结构**：先用 1-2 句给出结论；当答案里包含多个数字、属性、对象信息或对比关系时，优先补一个简短的“关键依据”或“补充信息”小节，不要只输出一整段纯文本。
-   * **轻量结构化表达优先**：默认使用短标题、项目符号或简短表格提升可读性；保持结构轻量，不要堆砌大段背景说明。
+   * **轻量格式优先**：默认使用短标题、项目符号或简短表格提升可读性；保持结构轻量，不要堆砌大段背景说明。
    * **标题自然**：不要机械使用“直接答案”“补充说明”这类模板化标题；若需要标题，优先使用更自然的标题，如“结论”“核心结论”“关键信息”“关键依据”，并允许根据内容自适应命名。
-   * **图表建议**：若用户要求“画图”且 `knowledge` 中包含chart包装的多维度或趋势性数据，你应该原封不动的保留chart包装好的结构化的数据，浏览器的ui自己会负责渲染的。
+   * **图表建议**：若用户要求“画图”且 `knowledge` 中包含 chart 包装的多维度或趋势性数据，你应该原封不动地保留 chart 包装好的结构化数据，浏览器的 UI 会负责渲染。
 
 4. **判定“无法回答”的标准**
-   * 只有当 `knowledge` 内容与问题**毫无关联**，或信息量极度匮乏（如仅有零碎词汇）无法构成逻辑链条时，才触发该规则。
-   * **此时回复**：「抱歉，目前的知识库中暂无与 [原始问题关键点] 直接或间接相关的信息，无法为您提供有效的分析。」
+   * 触发条件：`knowledge` 与问题毫无关联、信息量极度匮乏，或相关任务块标注为失败/不可确认且无可信结论。
+   * **此时回复**：明确说明无法确认或暂未找到用户所问对象/指标；不要用失败任务中的过程数据暗示已找到答案。
 
 5. **多轮对话处理**
    * 始终以最新的 `knowledge` 为最高准则。若 `history` 中之前的结论与当前 `knowledge` 不符，请以 `knowledge` 为准，并可在回答中顺带说明数据已更新。
 
-6. **收敛但可读（强制）**
-   * 必须先给结论，不要先铺垫过程。
+6. **证据约束（强制）**
+   * 只输出可被 `knowledge` 直接支持的结论。
+   * 每个任务块若标注「任务状态」为 fail，或结果中声明执行失败/不可作为事实引用，则该块内的具体数据（记录、数字、字段值）**不得**写入最终结论，只能用于说明“该子任务未成功完成”。
+   * 若同一问题存在成功与失败任务块，优先采信成功块；失败块不能 override 成功结论，也不能单独拼出实体级答案。
+
+7. **收敛输出（强制）**
+   * 必须先给结论，首段 1-2 句内明确回答用户问题核心结论（不要先讲过程）。
+   * 默认使用轻量结构化表达提升可读性，例如短标题、项目符号或简短表格；不要输出成没有层次的一大段纯文本。
    * 若用户未明确要求“方法对比/扩展建议/治理建议/补充分析”，默认不要主动展开这些内容。
-   * 补充内容只保留与问题直接相关的 2-4 个要点；既不要发散，也不要压缩成毫无层次的一小段话。
+   * 补充内容只保留与用户问题直接相关的 2-4 个要点；保持表达简洁，但不要为了简短牺牲可读性（图表原始结构化数据透传场景除外）。
 """
+
+SUMMARY_HUMAN_TEMPLATE_ZH = (
+    "background knowledge: {knowledge}。\n\n"
+    "user question:{query}\n\n"
+    "【重要提示】background knowledge 中每个任务块都标注了「任务状态」。"
+    "状态为「fail」的任务，其返回的数据可能是局部/不完整/不正确的，"
+    "严禁将其中的具体数据（如查询到的记录、数字、字段值）当作事实引用。"
+    "状态为「fail」的任务数据仅能说明「该任务未成功完成」，不能证明任何事实性结论。"
+)
+
+DOC_ORCHESTRATOR_INSTRUCTIONS_ZH = Orchestrator_INSTRUCTIONS_ZH + """
+8. **文档域专用：参考材料，非实体查询结果（强制）**
+   * 你总结的是**文档/RAG 检索结果**，不是数据库 live query。职责是提供字段含义、接口说明、表结构描述、业务口径——**不是**替 structured 回答「某订单/某用户是谁」。
+   * **禁止**把文档/API 示例里的占位数据说成用户所问实体的答案，例如：
+     - 用户问订单编号 `ORD-2025-00001`，文档示例里只有 `order_id: 1001` 或示例用户「张三」→ **不得**写「ORD-2025-00001 的购买用户是张三」；
+     - 不得把示例 JSON、Swagger 样例、教程里的记录当作该业务键在系统中的真实映射。
+   * 仅当 `knowledge` 中**明确出现与用户问题相同的业务标识**（如完全一致的订单号字符串、用户名）且任务状态为成功时，才可作实体结论；否则必须写 **无法根据文档确认** 该实体。
+   * 可以说明：文档中订单编号字段类型（如整数 order_id）、是否存在支付相关表/接口、示例数据的格式——但必须标注为**文档描述/示例**，与用户所问实体是否匹配要单独说明。
+   * 若 `knowledge` 仅有示例、无与用户问题精确匹配的条目，结论必须是「文档未记载该订单/用户，无法确认」，**不要**用最近似的示例用户或订单顶替。
+"""
+
+DOC_SUMMARY_HUMAN_TEMPLATE_ZH = (
+    "background knowledge: {knowledge}。\n\n"
+    "user question:{query}\n\n"
+    "【文档域总结 · 必读】"
+    "你输出的是**参考材料总结**，供下游理解字段/接口/口径，不是 structured 数据库查询的最终实体答案。"
+    "禁止把 API/文档示例中的 order_id、user_id、示例姓名邮箱等写成用户所问业务编号（如 ORD-*）的真实查询结果。"
+    "若 knowledge 中没有与用户问题完全一致的业务标识，结论必须是无法确认，不得用示例数据凑答案。"
+    "同时遵守任务状态规则：fail 任务中的数据不可作为事实引用。"
+)
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -752,6 +803,10 @@ class PlannerAgent(BaseAgent):
             stream=stream,
             extra_body=_extra_body,
         )
+
+        self.llm = self.llm.bind_tools([self.make_plan_tool])
+        self.make_plan_max_attempts = int(os.getenv("MAKE_PLAN_MAX_ATTEMPTS", "3"))
+
         self.data_services_client = DataServicesClient(
             base_url=data_services_url,
             timeout=600,
@@ -920,6 +975,35 @@ class PlannerAgent(BaseAgent):
         logger.debug(f"get knowledge: {knowledge_str}")
         return knowledge_str
 
+    make_plan_tool: ClassVar[Any]
+
+    @tool("make_plan_cmd", args_schema=TaskList)
+    def make_plan_tool(
+        thought_process: Optional[str] = None,
+        original_query: Optional[str] = None,
+        tasks: List[PlannerTask] = None
+    ) -> str:
+        """Create and return a structured plan with tasks to be executed sequentially.
+        
+        This tool takes a thought process, original query, and a list of tasks,
+        and returns them as a structured JSON plan. The tasks will be executed
+        by the runner in sequence.
+        
+        Args:
+            thought_process: The internal reasoning steps of the planner
+            original_query: The original user query for context
+            tasks: A list of PlannerTask objects to be executed sequentially
+        
+        Returns:
+            JSON string containing the structured plan
+        """
+        plan_data = {
+            "thought_process": thought_process,
+            "original_query": original_query,
+            "tasks": [task.dict() if isinstance(task, PlannerTask) else task for task in (tasks or [])]
+        }
+        return json.dumps(plan_data, ensure_ascii=False)
+
     def format_llm_output(self, answer) -> dict:
         """Parse the planner LLM output into a dict with heavy tolerance.
 
@@ -929,7 +1013,7 @@ class PlannerAgent(BaseAgent):
         raw = getattr(answer, "content", "") or ""
 
         try:
-            return json.loads(raw)
+            return json.loads(raw, strict=False)
         except json.JSONDecodeError:
             pass
 
@@ -943,14 +1027,14 @@ class PlannerAgent(BaseAgent):
         cleaned_content = cleaned_content.strip()
 
         try:
-            return json.loads(cleaned_content)
+            return json.loads(cleaned_content, strict=False)
         except json.JSONDecodeError as e2:
             logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
 
         escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
         if escaped_content != cleaned_content:
             try:
-                parsed = json.loads(escaped_content)
+                parsed = json.loads(escaped_content, strict=False)
                 logger.info(" === format_llm_output, recovered via inner-quote field escaping")
                 return parsed
             except json.JSONDecodeError as e_esc:
@@ -963,7 +1047,7 @@ class PlannerAgent(BaseAgent):
                     logger.info(" === format_llm_output, recovered via json_repair")
                     return repaired
                 if isinstance(repaired, str):
-                    parsed = json.loads(repaired)
+                    parsed = json.loads(repaired, strict=False)
                     if isinstance(parsed, dict):
                         logger.info(" === format_llm_output, recovered via json_repair (string)")
                         return parsed
@@ -986,7 +1070,7 @@ class PlannerAgent(BaseAgent):
             logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
 
         try:
-            parsed = json.loads(cleaned_content.replace("'", '"'))
+            parsed = json.loads(cleaned_content.replace("'", '"'), strict=False)
             if isinstance(parsed, dict):
                 return parsed
         except json.JSONDecodeError as e4:
@@ -1122,8 +1206,6 @@ class PlannerAgent(BaseAgent):
 
         system_prompt_agents = self.generate_system_prompt_agents(agent_cards)
 
-        chain = chat_prompt | self.llm
-
         user_id = self.metadata['user_id']
         run_id = self.metadata['run_id']
         trace_id = self.metadata['trace_id']
@@ -1138,7 +1220,37 @@ class PlannerAgent(BaseAgent):
             + len(str(replan_guidance_text or ""))
         )
 
-        answer = None
+        if self.enable_history == "enable":
+            history = await self.get_history()
+            planner_prompt_chars += len(str(history or ""))
+
+        log_size_trace(
+            "planner-input",
+            query_chars=len(str(query or "")),
+            agents_chars=len(str(system_prompt_agents or "")),
+            prior_execution_context_chars=len(str(prior_execution_context or "")),
+            information_chars=len(str(information or "")),
+            history_chars=len(str(history or "")),
+            replan_context_chars=len(str(replan_context_text or "")),
+            replan_guidance_chars=len(str(replan_guidance_text or "")),
+            planner_prompt_chars=planner_prompt_chars,
+            planner_prompt_tokens_est=int(planner_prompt_chars / 4),
+        )
+
+        # Build initial messages (system + human) for tool-calling loop
+        format_kwargs = {
+            "query": query,
+            "agents": system_prompt_agents,
+            "prior_execution_context": prior_execution_context,
+            "information": information,
+            "replan_context": replan_context_text,
+            "replan_guidance": replan_guidance_text,
+        }
+        if self.enable_history == "enable":
+            format_kwargs["history"] = history
+        messages = chat_prompt.format_messages(**format_kwargs)
+
+        tasks = None
 
         with langfuse.start_as_current_span(
             name="orchestrator-make_plan",
@@ -1153,62 +1265,157 @@ class PlannerAgent(BaseAgent):
                     "prior_execution_context_non_empty": bool(_pec_raw),
                 },
             )
-            
-            if self.enable_history == "enable":
-                history = await self.get_history()
-                planner_prompt_chars += len(str(history or ""))
-            log_size_trace(
-                "planner-input",
-                query_chars=len(str(query or "")),
-                agents_chars=len(str(system_prompt_agents or "")),
-                prior_execution_context_chars=len(str(prior_execution_context or "")),
-                information_chars=len(str(information or "")),
-                history_chars=len(str(history or "")),
-                replan_context_chars=len(str(replan_context_text or "")),
-                replan_guidance_chars=len(str(replan_guidance_text or "")),
-                planner_prompt_chars=planner_prompt_chars,
-                planner_prompt_tokens_est=int(planner_prompt_chars / 4),
-            )
-            if self.enable_history == "enable":
-                answer = chain.invoke(
-                    {
-                        "query": query,
-                        "history": history,
-                        "agents": system_prompt_agents,
-                        "prior_execution_context": prior_execution_context,
-                        "information": information,
-                        "replan_context": replan_context_text,
-                        "replan_guidance": replan_guidance_text,
-                    },
-                    config={"callbacks": [langfuse_handler]}
+
+            for attempt in range(1, self.make_plan_max_attempts + 1):
+                logger.info(
+                    "make_plan llm_invoke attempt=%d/%d messages=%d",
+                    attempt,
+                    self.make_plan_max_attempts,
+                    len(messages),
                 )
-            else:
-                answer = chain.invoke(
-                    {
-                        "query": query,
-                        "agents": system_prompt_agents,
-                        "prior_execution_context": prior_execution_context,
-                        "information": information,
-                        "replan_context": replan_context_text,
-                        "replan_guidance": replan_guidance_text,
-                    },
-                    config={"callbacks": [langfuse_handler]}
+                answer = await self.llm.ainvoke(
+                    messages,
+                    config={"callbacks": [langfuse_handler]},
+                )
+                messages.append(answer)
+                tool_calls = getattr(answer, "tool_calls", None) or []
+                logger.info(
+                    "make_plan llm_reply attempt=%d tool_calls=%s content=%r",
+                    attempt,
+                    [c.get("name") for c in tool_calls],
+                    str(getattr(answer, "content", ""))[:200],
                 )
 
-            span.update_trace(output={"answer": answer})
+                if not tool_calls:
+                    logger.warning(
+                        "make_plan attempt %s/%s: no tool call, nudging.",
+                        attempt,
+                        self.make_plan_max_attempts,
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "你上一次没有调用工具。请**必须**调用 `make_plan_cmd` 工具来输出规划结果。"
+                                "不要直接输出文本或 JSON。"
+                            )
+                        )
+                    )
+                    continue
+
+                call = next(
+                    (c for c in tool_calls if c.get("name") == "make_plan_cmd"),
+                    None,
+                )
+                if call is None:
+                    logger.warning(
+                        "make_plan attempt %s/%s: unknown tool=%r, nudging.",
+                        attempt,
+                        self.make_plan_max_attempts,
+                        [c.get("name") for c in tool_calls],
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "你调用了未知工具。请只使用 `make_plan_cmd` 工具来输出规划结果。"
+                            )
+                        )
+                    )
+                    continue
+
+                args = call.get("args", {}) or {}
+                logger.info(
+                    "make_plan attempt=%d args keys=%s",
+                    attempt,
+                    list(args.keys()),
+                )
+
+                try:
+                    tasks = TaskList(
+                        thought_process=args.get("thought_process"),
+                        original_query=args.get("original_query"),
+                        tasks=args.get("tasks") or [],
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "make_plan attempt %s/%s: failed to parse TaskList from args: %s, nudging.",
+                        attempt,
+                        self.make_plan_max_attempts,
+                        e,
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                f"工具调用参数解析失败: {e}。"
+                                "请检查 `tasks` 字段格式是否正确（需要 id, description, agent 三个字段），"
+                                "并重新调用 `make_plan_cmd`。"
+                            )
+                        )
+                    )
+                    continue
+
+                if not tasks.tasks:
+                    logger.warning(
+                        "make_plan attempt %s/%s: empty tasks list, nudging.",
+                        attempt,
+                        self.make_plan_max_attempts,
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "你返回的 `tasks` 列表为空。必须至少包含一个任务。"
+                                "如果确实没有合适的智能体，请使用 agent='NONE' 和 "
+                                f"description='{NONE_TASK_DESCRIPTION}'。"
+                            )
+                        )
+                    )
+                    continue
+
+                logger.info(
+                    "make_plan SELECTED attempt=%d tasks_count=%d",
+                    attempt,
+                    len(tasks.tasks),
+                )
+                for t in tasks.tasks:
+                    logger.info(
+                        "  task id=%s agent=%s description=%s",
+                        t.id,
+                        t.agent,
+                        str(t.description)[:120],
+                    )
+                break
+
+            span.update_trace(
+                output={
+                    "tasks": tasks.model_dump() if tasks else None,
+                }
+            )
 
         langfuse.flush()
 
+        if tasks is None:
+            logger.warning(
+                "make_plan EXIT no_valid_selection after %s attempts.",
+                self.make_plan_max_attempts,
+            )
+            tasks = TaskList(
+                thought_process=(
+                    f"Planner failed to produce a valid plan "
+                    f"after {self.make_plan_max_attempts} attempts."
+                ),
+                original_query=str(query),
+                tasks=[
+                    PlannerTask(
+                        id=1,
+                        description=NONE_TASK_DESCRIPTION,
+                        agent="NONE",
+                    )
+                ],
+            )
+
         log_size_trace(
             "planner-output",
-            llm_output_chars=len(str(getattr(answer, "content", "") or "")),
+            llm_output_chars=len(str(tasks.model_dump_json())),
         )
-
-        logger.info(f" === PlannerAgent.make_plan , llm result = {answer.content}")
-
-        data_dict = self.format_llm_output(answer)
-
-        tasks = TaskList(**data_dict)
 
         logger.info(f" === PlannerAgent.make_plan , tasks = {tasks}")
 
@@ -1826,6 +2033,7 @@ class OrchestratorAgent(BaseAgent):
                 task.description,
                 self.local_skill_agent_name,
                 display_answer,
+                status_code,
             )
         )
 
@@ -1888,9 +2096,18 @@ class OrchestratorAgent(BaseAgent):
             retry_count,
             desc_preview,
         )
+        metadata = self.metadata or {}
+        trace_id = metadata.get("trace_id") if isinstance(metadata, dict) else None
+        user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
+        run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
         t0 = _time.perf_counter()
         try:
-            result = await self.skill_runner.plan_and_run(query=task.description)
+            result = await self.skill_runner.plan_and_run(
+                query=task.description,
+                user_id=user_id,
+                run_id=run_id,
+                trace_id=trace_id,
+            )
         except asyncio.CancelledError:
             logger.warning("[LocalSkill][NoneFallback] task_id=%s cancelled during fallback", task.id)
             raise
@@ -1941,7 +2158,11 @@ class OrchestratorAgent(BaseAgent):
         self._update_task_status(task.id, "complete", final_answer)
         current_agents_knowledge.append(
             self._format_task_knowledge(
-                task.id, task.description, self.local_skill_agent_name, final_answer
+                task.id,
+                task.description,
+                self.local_skill_agent_name,
+                final_answer,
+                "complete",
             )
         )
         if self.debug == 1:
@@ -2282,6 +2503,16 @@ class OrchestratorAgent(BaseAgent):
             payload["extra"] = extra
         return f"{PROGRESS_FRAME_PREFIX}{json.dumps(payload, ensure_ascii=False)}\n"
 
+    @staticmethod
+    def build_summary_artifact(*, summary_text: str) -> str:
+        """构造 DAC_SUMMARY 协议帧，携带 LLM 总结后的最终答案，SG Expert 解析后作为最终知识。"""
+        payload: Dict[str, Any] = {
+            "schema_version": "v1",
+            "layer": "sd_orchestrator",
+            "summary": summary_text or "",
+        }
+        return f"{SUMMARY_FRAME_PREFIX}{json.dumps(payload, ensure_ascii=False)}\n"
+
     async def emit_progress(
         self,
         updater: TaskUpdater,
@@ -2312,6 +2543,31 @@ class OrchestratorAgent(BaseAgent):
     async def find_agent(self, agent_name) -> AgentCard:
         return resolve_agent_card_by_planner_name(self.agent_cards, agent_name)
 
+    def _utility_answer_model_for_a2a(self) -> str:
+        """answer_model for utility a2a calls, derived from DescriptorTypes env (analyze_descriptor_types).
+
+        Unstructured SD (doc domain): utilities are DocAgent → always ``original`` (RAG fast path).
+        SG may still send ``summarized`` in request metadata; ``execute()`` uses that for DAC_SUMMARY.
+        Structured/code SD: pass through request metadata unchanged.
+        """
+        upstream = str((self.metadata or {}).get("answer_model") or "").strip()
+        _, agent_type, _ = self.planner_agent.analyze_descriptor_types()
+        if agent_type == "unstructured":
+            if upstream and upstream != "original":
+                logger.info(
+                    ">>>>>> [answer_model] SD Orchestrator a2a: utility=original "
+                    "(descriptorType=unstructured; upstream=%s for execute summary) <<<<<<",
+                    upstream,
+                )
+            return "original"
+        return upstream
+
+    def _summary_prompt_templates(self) -> tuple[str, str]:
+        """Return (system_template, human_template) for execute() summary LLM."""
+        _, agent_type, _ = self.planner_agent.analyze_descriptor_types()
+        if agent_type == "unstructured":
+            return DOC_ORCHESTRATOR_INSTRUCTIONS_ZH, DOC_SUMMARY_HUMAN_TEMPLATE_ZH
+        return Orchestrator_INSTRUCTIONS_ZH, SUMMARY_HUMAN_TEMPLATE_ZH
 
     # call agent with a2a according to agent name which is from plan task (stream mode)
     async def a2a_stream(self, task_id, query, agent_name, current_tasks_status) -> AsyncIterable[str]:
@@ -2342,10 +2598,16 @@ class OrchestratorAgent(BaseAgent):
             'current_task_id': f"{task_id}",
         }
 
-        # 透传 answer_model，让下游 expert agent 也能感知到 original 模式
-        if self.metadata.get('answer_model'):
-            a2a_metadata['answer_model'] = self.metadata['answer_model']
-            logger.info(f">>>>>> [answer_model=original] OrchestratorAgent.a2a_stream() 透传 answer_model={self.metadata['answer_model']} 给 agent={agent_name} <<<<<<")
+        # answer_model: unstructured SD → utility original; execute() still uses request metadata
+        am = self._utility_answer_model_for_a2a()
+        if am:
+            a2a_metadata['answer_model'] = am
+            logger.info(
+                ">>>>>> [answer_model=%s] OrchestratorAgent.a2a_stream() a2a answer_model=%s → agent=%s <<<<<<",
+                self.metadata.get('answer_model', ''),
+                am,
+                agent_name,
+            )
 
         # 透传 extra_context（来自 semantic group 的其他 agent 结果），让下游 expert agent 能获取代码等上下文
         extra_context = self.metadata.get('extra_context', '')
@@ -2365,7 +2627,8 @@ class OrchestratorAgent(BaseAgent):
         }
 
         # build a2a client with agent_card
-        async with httpx.AsyncClient() as httpx_client:
+        _a2a_timeout = float(os.getenv("A2A_REQUEST_TIMEOUT", "3600"))
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_a2a_timeout, connect=10.0)) as httpx_client:
             client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
             try:
                 streaming_request = SendStreamingMessageRequest(
@@ -2406,10 +2669,16 @@ class OrchestratorAgent(BaseAgent):
             'memory': memory,
         }
 
-        # 透传 answer_model，让下游 expert agent 也能感知到 original 模式
-        if self.metadata.get('answer_model'):
-            a2a_metadata['answer_model'] = self.metadata['answer_model']
-            logger.info(f">>>>>> [answer_model=original] OrchestratorAgent.a2a_non_stream() 透传 answer_model={self.metadata['answer_model']} 给 agent={agent_name} <<<<<<")
+        # answer_model: unstructured SD → utility original; execute() still uses request metadata
+        am = self._utility_answer_model_for_a2a()
+        if am:
+            a2a_metadata['answer_model'] = am
+            logger.info(
+                ">>>>>> [answer_model=%s] OrchestratorAgent.a2a_non_stream() a2a answer_model=%s → agent=%s <<<<<<",
+                self.metadata.get('answer_model', ''),
+                am,
+                agent_name,
+            )
 
         # 透传 extra_context（来自 semantic group 的其他 agent 结果），让下游 expert agent 能获取代码等上下文
         extra_context = self.metadata.get('extra_context', '')
@@ -2429,7 +2698,8 @@ class OrchestratorAgent(BaseAgent):
         }
 
         # build a2a client with agent_card
-        async with httpx.AsyncClient() as httpx_client:
+        _a2a_timeout = float(os.getenv("A2A_REQUEST_TIMEOUT", "3600"))
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_a2a_timeout, connect=10.0)) as httpx_client:
             client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
             try:
                 streaming_request = SendStreamingMessageRequest(
@@ -2466,10 +2736,26 @@ class OrchestratorAgent(BaseAgent):
         
         return last_step_last_status
 
-    def _format_task_knowledge(self, task_id: int, description: str, agent: str, result: str) -> str:
+    def _format_task_knowledge(
+        self,
+        task_id: int,
+        description: str,
+        agent: str,
+        result: str,
+        status: str = "",
+    ) -> str:
         """将单条任务结果格式化为大模型易读的块，便于总结时区分任务与结果。"""
         agent_label = (agent or "").strip() or "（未分配）"
-        return f"【任务 {task_id}】\n{description}\n\n【执行 Agent】\n{agent_label}\n\n【结果】\n{(result or '').strip()}"
+        status_line = f"\n【任务状态】\n{status}\n" if status else ""
+        if status == "fail":
+            result = (
+                "【此任务执行失败，以下内容为多步尝试过程摘要，其中的具体数据不可作为事实引用】\n"
+                + (result or "").strip()
+            )
+        return (
+            f"【任务 {task_id}】\n{description}\n\n"
+            f"【执行 Agent】\n{agent_label}{status_line}\n【结果】\n{(result or '').strip()}"
+        )
 
     def _update_task_status(self, task_id: int, status: str, answer: str):
         for task_status in self.tasks_status:
@@ -2484,7 +2770,10 @@ class OrchestratorAgent(BaseAgent):
                 task_status.status = status_final
                 task_status.answer = raw_answer
                 task_status.answer_final = answer_final
-                task_status.marker_present = NON_RETRYABLE_MARKER in raw_answer
+                task_status.marker_present = (
+                    NON_RETRYABLE_MARKER in raw_answer
+                    or NON_RETRYABLE_REPEAT_MARKER in raw_answer
+                )
                 task_status.reported_reason_code = reported_reason_code
                 task_status.reported_non_retryable = reported_non_retryable
                 task_status.failure_reason_code = (
@@ -2888,7 +3177,7 @@ class OrchestratorAgent(BaseAgent):
                     )
                     current_agents_knowledge.append(
                         self._format_task_knowledge(
-                            task.id, task.description, task.agent, block_msg
+                            task.id, task.description, task.agent, block_msg, "fail"
                         )
                     )
                     if self.debug == 1:
@@ -2960,7 +3249,11 @@ class OrchestratorAgent(BaseAgent):
                             "task_status": "skipped_no_agent",
                         },
                     )
-                    current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, "", none_description))
+                    current_agents_knowledge.append(
+                        self._format_task_knowledge(
+                            task.id, task.description, "", none_description, "complete"
+                        )
+                    )
                     if self.debug == 1:
                         await updater.add_artifact(
                             [TextPart(text=f"Task [{task.id}]: {none_description}\n")],
@@ -3032,8 +3325,9 @@ class OrchestratorAgent(BaseAgent):
                             current_task_status = await self.get_last_step_status(agent_steps_knowledge_str)
                             if self.metadata.get('answer_model') == 'original':
                                 logger.info(
-                                    f">>>>>> [answer_model=original] OrchestratorAgent.a2a_tasks() "
-                                    f"Task {task.id} 按 step_status_llm_check_success 判定状态: {current_task_status} <<<<<<"
+                                    ">>>>>> [answer_model=original] OrchestratorAgent.a2a_tasks() "
+                                    "Task %s 按 step_status_llm_check_success 判定状态: %s <<<<<<",
+                                    task.id, current_task_status,
                                 )
 
                         self._update_task_status(task.id, current_task_status, agent_steps_knowledge_str)
@@ -3047,7 +3341,15 @@ class OrchestratorAgent(BaseAgent):
                             task_id=task.id,
                             extra=self._build_task_progress_extra(task.id, task.agent, current_task_status),
                         )
-                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, agent_steps_knowledge_str))
+                        current_agents_knowledge.append(
+                            self._format_task_knowledge(
+                                task.id,
+                                task.description,
+                                task.agent,
+                                agent_steps_knowledge_str,
+                                current_task_status,
+                            )
+                        )
                         if current_task_status == "fail":
                             break
 
@@ -3063,7 +3365,15 @@ class OrchestratorAgent(BaseAgent):
                             task_id=task.id,
                             extra=self._build_task_progress_extra(task.id, task.agent, "fail"),
                         )
-                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, f"Execution error: {str(e)}"))
+                        current_agents_knowledge.append(
+                            self._format_task_knowledge(
+                                task.id,
+                                task.description,
+                                task.agent,
+                                f"Execution error: {str(e)}",
+                                "fail",
+                            )
+                        )
 
                 else:
                     try:
@@ -3095,7 +3405,15 @@ class OrchestratorAgent(BaseAgent):
                             )
                             think.append(agent_knowledge_step)
                         
-                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, agent_result or ""))
+                        current_agents_knowledge.append(
+                            self._format_task_knowledge(
+                                task.id,
+                                task.description,
+                                task.agent,
+                                agent_result or "",
+                                current_task_status,
+                            )
+                        )
                         
                     except Exception as e:
                         logger.error(f"Error during non-streaming execution of task {task.id}: {e}")
@@ -3109,7 +3427,15 @@ class OrchestratorAgent(BaseAgent):
                             task_id=task.id,
                             extra=self._build_task_progress_extra(task.id, task.agent, "fail"),
                         )
-                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, f"Execution error: {str(e)}"))
+                        current_agents_knowledge.append(
+                            self._format_task_knowledge(
+                                task.id,
+                                task.description,
+                                task.agent,
+                                f"Execution error: {str(e)}",
+                                "fail",
+                            )
+                        )
 
             # 用本轮结果覆盖，保证交给总结 LLM 的始终是「最后一轮」
             last_round_knowledge = list(current_agents_knowledge)
@@ -3520,11 +3846,19 @@ class OrchestratorAgent(BaseAgent):
             knowledge_chars=len(str(knowledge or "")),
             knowledge_tokens_est=int(len(str(knowledge or "")) / 4),
         )
+        logger.info(
+            "[SummaryInput] query=%s | knowledge (%d chars):\n%s",
+            query, len(knowledge or ""), knowledge,
+        )
 
-        system_template = Orchestrator_INSTRUCTIONS_ZH
-
-        # human_template = "background knowledge: {knowledge}。\n\n{memory}\n\nuser question:{query}"
-        human_template = "background knowledge: {knowledge}。\n\nuser question:{query}"
+        system_template, human_template = self._summary_prompt_templates()
+        _, agent_type, _ = self.planner_agent.analyze_descriptor_types()
+        logger.info(
+            "[SummaryPrompt] agent_type=%s system_chars=%d human_chars=%d",
+            agent_type,
+            len(system_template or ""),
+            len(human_template or ""),
+        )
 
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
@@ -3583,6 +3917,10 @@ class OrchestratorAgent(BaseAgent):
             "summary-output",
             final_answer_chars=len("".join(final_answer)),
             final_answer_tokens_est=int(len("".join(final_answer)) / 4),
+        )
+        logger.info(
+            "[SummaryOutput] final_answer (%d chars): %s",
+            len("".join(final_answer)), "".join(final_answer),
         )
 
         yield {'content': '', 'is_task_complete': True}
@@ -3878,6 +4216,160 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
         elif already_initialised:
             logger.debug("[LocalSkill][Shutdown] no active SkillRunner to close")
 
+    async def _check_feasibility_before_plan(
+        self,
+        agent: "OrchestratorAgent",
+        query: str,
+        updater: TaskUpdater,
+        task,
+    ) -> bool:
+        """Pre-plan feasibility self-check for the SD agent.
+
+        Only effective for ``structured`` type SD agents.  For code / unstructured
+        / unknown types this is a no-op (returns False).
+
+        Returns ``True`` when the task was blocked and a structured_failure was
+        already reported via ``updater``, so the caller should return immediately.
+        """
+        ddname, agent_type, db_type = agent.planner_agent.analyze_descriptor_types()
+
+        if agent_type != "structured":
+            logger.info(
+                "[SDFeasibility] agent_type=%s — 跳过可行性检查（非 structured 类型，无需表级校验）",
+                agent_type,
+            )
+            return False
+
+        # Extract the inventory tables from this SD agent's own agent_card
+        try:
+            from .data_inventory import extract_inventory_tables
+        except Exception:  # noqa: BLE001
+            logger.info("[SDFeasibility] data_inventory module not available — 跳过检查")
+            return False
+
+        own_card = getattr(self, "agent_card", None) or getattr(agent, "agent_card", None)
+        if own_card is None:
+            logger.info("[SDFeasibility] 无 agent_card — 跳过检查")
+            return False
+
+        inventory = sorted(extract_inventory_tables(own_card))
+        if not inventory:
+            logger.info(
+                "[SDFeasibility] agent_card 中未声明 data_inventory — 跳过检查"
+            )
+            return False
+
+        logger.info(
+            "[SDFeasibility] structured agent inventory 表: %s",
+            inventory[:30] if len(inventory) > 30 else inventory,
+        )
+
+        # 用 LLM 判断这条 query 是否能用本 SD 的 inventory 完成
+        from langchain_core.messages import HumanMessage
+
+        prompt = (
+            "你是一个 SQL 路由可行性判定器。给定一条用户问题和一个 SD agent 的"
+            "**可访问数据资产**（data_inventory），判断该 agent 能否独立完成该问题。\n\n"
+            "判定准则：\n"
+            "1) 只看数据归属。若问题必须读取的表 / 实体在 inventory 中存在或可由其字段推断，则 feasible=true。\n"
+            "2) 若问题必须读取的关键表名/概念在 inventory 中完全找不到对应项，feasible=false，"
+            "并把缺失的表名或最贴近的业务概念写到 missing。\n"
+            "3) 不要臆造表，不要给出与问题无关的概念。不确定时返回 feasible=true（保守起见）。\n"
+            "4) missing 中的项尽量使用小写下划线英文表名；如确实无法判断英文名，"
+            "可写中文业务概念。\n\n"
+            f"用户问题: {query}\n"
+            f"agent data_inventory 表: {', '.join(inventory)}\n\n"
+            "请只输出 JSON 对象，不要 Markdown：\n"
+            '{"feasible": true|false, "missing": ["<table_or_concept>"], "reason": "<一句话>"}'
+        )
+
+        try:
+            response = await asyncio.wait_for(
+                agent.llm.ainvoke([HumanMessage(content=prompt)]),
+                timeout=8.0,
+            )
+            parsed = agent.planner_agent.format_llm_output(response)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[SDFeasibility] LLM 判定超时 — 保守放行（feasible=true）"
+            )
+            return False
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "[SDFeasibility] LLM 判定失败: %s — 保守放行（feasible=true）",
+                e,
+            )
+            return False
+
+        reason_ok = str(parsed.get("reason") or "").strip()
+        if not isinstance(parsed, dict) or parsed.get("feasible", True):
+            logger.info(
+                "[SDFeasibility] 判定结果: feasible=true — 该 SD 可独立完成此任务，原因: %s | inventory 表: %s",
+                reason_ok or "(未说明)",
+                inventory[:20] if len(inventory) > 20 else inventory,
+            )
+            return False
+
+        missing = parsed.get("missing") or []
+        reason = str(parsed.get("reason") or "").strip()
+        logger.info(
+            "[SDFeasibility] 判定结果: feasible=false — 该 SD 无法完成此任务，缺失表: %s，原因: %s | inventory 仅有: %s",
+            missing, reason or "(未说明)",
+            inventory[:20] if len(inventory) > 20 else inventory,
+        )
+
+        # 构建 structured_failure 并返回给上游 SG
+        unfulfilled_needs = [
+            {"missing_table": m, "reason": reason}
+            for m in missing
+        ] if missing else []
+        structured_control = json.dumps(
+            {
+                "reason_code": "data_sovereignty_gap",
+                "non_retryable": False,
+                "retryable": True,
+                "unfulfilled_needs": unfulfilled_needs,
+            },
+            ensure_ascii=False,
+        )
+        fail_msg = (
+            f"该 SD agent 无法独立完成此任务：用户问题涉及的表不在当前 data_inventory 中。\n"
+            f"缺失表: {', '.join(missing) if missing else '(未知)'}\n"
+            f"原因: {reason}\n"
+            f"structured_control: {structured_control}"
+        )
+
+        await agent.emit_progress(
+            updater,
+            f"{agent.agent_name}-result",
+            event="sd_feasibility_blocked",
+            message=(
+                f"判定结果: feasible=false — 该 SD 无法完成此任务，"
+                f"缺失表: {missing}，"
+                f"原因: {reason} | "
+                f"inventory 仅有: {inventory[:20] if len(inventory) > 20 else inventory}。"
+                f"任务被 feasibility 检查拦截"
+            ),
+            status="fail",
+            extra={
+                "agent_type": agent_type,
+                "db_type": db_type,
+                "ddname": ddname,
+                "missing_tables": missing,
+                "reason": reason,
+            },
+        )
+        await updater.add_artifact(
+            [TextPart(text=fail_msg)],
+            name=f"{agent.agent_name}-result",
+        )
+        await updater.complete(
+            message=new_agent_text_message(
+                fail_msg, context_id=task.context_id,
+            ),
+        )
+        return True
+
     @override
     async def execute(
         self,
@@ -3889,6 +4381,12 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
         
         metadata = context.metadata
         logger.info(f"===== OrchestratorAgentExecutor, user request metadata is {metadata}.")
+        _md = metadata if isinstance(metadata, dict) else {}
+        _am = _md.get('answer_model', '(not in metadata)')
+        logger.info(
+            "[Execute][SDOrchestrator] answer_model=%s",
+            _am,
+        )
         _md = metadata if isinstance(metadata, dict) else {}
         _xc = _md.get("extra_context")
         _xc_s = str(_xc or "").strip()
@@ -3936,6 +4434,17 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
             await event_queue.enqueue_event(task)
 
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+
+        # ---- 快速可行性自检（仅 structured 类型）----
+        # 在 SD 内部获得 plan 之前，先判断当前 task 是否在本 SD 的
+        # data_inventory 范围内。不可行时直接返回 structured_failure，
+        # 让上游 SG Orchestrator 的 retry loop 通过 SovereigntyIndex
+        # 重新路由，避免浪费 SD 内部的 step 预算。
+        feasibility_blocked = await self._check_feasibility_before_plan(
+            agent, query, updater, task,
+        )
+        if feasibility_blocked:
+            return
 
         # make plans for user question, each plan is the name of agent card
         tasks = await agent.get_plan(query)
@@ -3994,7 +4503,11 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
             # answer_model=original: 跳过 LLM 总结，直接返回 expert agent 的原始知识
             answer_model = metadata.get('answer_model', '')
             if answer_model == "original":
-                logger.info(">>>>>> [answer_model=original] OrchestratorAgent.execute() 跳过 LLM 总结，直接返回 expert agent 原始知识 <<<<<<")
+                logger.info(
+                    ">>>>>> [answer_model=original] OrchestratorAgent.execute() answer_model=%s, "
+                    "跳过 LLM 总结，直接返回 expert agent 原始知识 <<<<<<",
+                    answer_model,
+                )
                 await agent.emit_progress(
                     updater,
                     task_name,
@@ -4016,6 +4529,10 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
                     # must not block the answer_model=original fast path.
                     agent.schedule_add_memory(query, final_answer)
             else:
+                logger.info(
+                    ">>>>>> [answer_model=%s] OrchestratorAgent.execute() 执行 LLM 总结 (非 original 路径) <<<<<<",
+                    answer_model,
+                )
                 await agent.emit_progress(
                     updater,
                     task_name,
@@ -4037,6 +4554,18 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
                             await asyncio.sleep(0.01)
                             conversition.append(event['content'])
                     else:
+                        # 发送 DAC_SUMMARY 帧，携带 LLM 总结后的最终答案，供 SG Expert 解析作为最终知识
+                        final_summary = "".join(conversition).strip()
+                        if final_summary:
+                            summary_frame = OrchestratorAgent.build_summary_artifact(summary_text=final_summary)
+                            await updater.add_artifact(
+                                [TextPart(text=summary_frame)],
+                                name=task_name,
+                            )
+                            logger.info(
+                                "[DACSummary][SD-Orchestrator] sent summary frame (%d chars)",
+                                len(final_summary),
+                            )
                         await agent.emit_progress(
                             updater,
                             task_name,

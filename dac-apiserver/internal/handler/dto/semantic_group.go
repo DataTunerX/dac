@@ -16,6 +16,39 @@ type UpdateSemanticGroupRequest struct {
 	Version     *string `json:"version"`
 }
 
+type AddSemanticGroupMemberRequest struct {
+	DDNamespace       string `json:"dd_namespace" validate:"required"`
+	DDName            string `json:"dd_name" validate:"required"`
+	AssociationReason string `json:"association_reason"`
+}
+
+type RemoveSemanticGroupMemberRequest struct {
+	SemanticDomainID string `json:"sd_id" validate:"required"`
+}
+
+type SemanticGroupMemberTaskSubmitResponse struct {
+	TaskID string `json:"task_id"`
+}
+
+type SemanticGroupMemberTaskStatusResponse struct {
+	TaskID string         `json:"task_id"`
+	Status string         `json:"status"`
+	Result map[string]any `json:"result,omitempty"`
+	Error  string         `json:"error,omitempty"`
+}
+
+func ToSemanticGroupMemberTaskStatusResponse(s *domain.SemanticGrouperTaskStatus) *SemanticGroupMemberTaskStatusResponse {
+	if s == nil {
+		return nil
+	}
+	return &SemanticGroupMemberTaskStatusResponse{
+		TaskID: s.TaskID,
+		Status: s.Status,
+		Result: s.Result,
+		Error:  s.Error,
+	}
+}
+
 type SemanticGroupResponse struct {
 	ID          string  `json:"id"`
 	GroupName   string  `json:"group_name"`
@@ -117,12 +150,6 @@ func toSemanticDomainResponse(s *domain.SemanticDomain) *SemanticDomainResponse 
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
 	}
-}
-
-type CreateDDGroupRelationRequest struct {
-	SemanticDomainID  string `json:"sd_id" validate:"required"`
-	GroupID           string `json:"group_id" validate:"required"`
-	AssociationReason string `json:"association_reason"`
 }
 
 type DDGroupRelationResponse struct {

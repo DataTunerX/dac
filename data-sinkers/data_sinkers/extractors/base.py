@@ -15,7 +15,9 @@ import logging
 from a2a.types import AgentCard, AgentSkill
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict
+from langchain_text_splitters import CharacterTextSplitter
 from .code_caller import CodeSplitter
+from .code_analysis_runtime import CodeAnalysisRuntime
 from ..llm_output_json import parse_llm_output_string
 
 # Configure logging
@@ -23,6 +25,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("base_extractor")
 
 DEFAULT_CODE_DOWNLOAD_DIR = "/app/download_dir"
+
+# file_summary 递归 refine 合并时每轮并发调用 LLM 的最大线程数
+FILE_SUMMARY_REFINE_MAX_WORKERS = int(os.getenv("FILE_SUMMARY_REFINE_MAX_WORKERS", "20"))
 
 manager = ModelManager()
 
@@ -173,11 +178,21 @@ class CodeFileLister:
 
 
 class CodeAnalyzer:
-    def __init__(self, llm, max_workers: int = 5, batch_size: int = 10):
+    def __init__(
+        self,
+        llm,
+        max_workers: int = 5,
+        batch_size: int = 10,
+        runtime: CodeAnalysisRuntime | None = None,
+    ):
         self.llm = llm
         self.analysis_results = []
-        self.max_workers = max_workers
-        self.batch_size = batch_size
+        self.runtime = runtime or CodeAnalysisRuntime.from_env(
+            default_max_workers=max_workers,
+            default_batch_size=batch_size,
+        )
+        self.max_workers = self.runtime.max_workers
+        self.batch_size = self.runtime.batch_size
         
     def _get_system_prompt(self, file_type: str, db_information: str = None) -> str:
 
@@ -297,7 +312,11 @@ class CodeAnalyzer:
             human_message = HumanMessage(content=f"请分析以下文件:\n\n文件路径: {file_path}\n文件类型: {file_type}\n\n文件内容:\n```\n{content}\n```")
 
             start_time = time.time()
-            response = self.llm.invoke([system_message, human_message])
+            response = self.runtime.invoke_llm(
+                self.llm,
+                [system_message, human_message],
+                label=f"code-analyze-file:{file_path}",
+            )
             analysis_time = time.time() - start_time
 
             analysis_result = self._parse_llm_response(response.content)
@@ -367,7 +386,11 @@ class CodeAnalyzer:
                     content=f"请分析以下文件:\n\n文件路径: {file_path}\n文件类型: {file_type}\n\n文件内容:\n```\n{chunk_content}\n```")
 
                 start_time = time.time()
-                response = self.llm.invoke([system_message, human_message])
+                response = self.runtime.invoke_llm(
+                    self.llm,
+                    [system_message, human_message],
+                    label=f"code-analyze-file-chunk:{file_path}",
+                )
                 analysis_time = time.time() - start_time
                 total_time += analysis_time
 
@@ -542,32 +565,29 @@ class CodeAnalyzer:
     
     def _process_batch(self, batch: List[Dict]) -> List[Dict]:
         batch_results = []
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_file = {
-                executor.submit(self.analyze_file, file_info): file_info 
-                for file_info in batch
+
+        completed_count = 0
+        for file_info, result, exc in self.runtime.map_unordered(
+            batch,
+            self.analyze_file,
+            label="code-analyzer-files",
+        ):
+            if exc is None and result is not None:
+                batch_results.append(result)
+                completed_count += 1
+                logger.info(f"批次进度: {completed_count}/{len(batch)}")
+                continue
+
+            error_result = {
+                'file_path': file_info['file_path'],
+                'file_type': file_info['file_type'],
+                'analysis_time': 0,
+                'analysis_result': {'error': str(exc)},
+                'status': 'error'
             }
-            
-            completed_count = 0
-            for future in as_completed(future_to_file):
-                file_info = future_to_file[future]
-                try:
-                    result = future.result()
-                    batch_results.append(result)
-                    completed_count += 1
-                    logger.info(f"批次进度: {completed_count}/{len(batch)}")
-                except Exception as e:
-                    error_result = {
-                        'file_path': file_info['file_path'],
-                        'file_type': file_info['file_type'],
-                        'analysis_time': 0,
-                        'analysis_result': {'error': str(e)},
-                        'status': 'error'
-                    }
-                    batch_results.append(error_result)
-                    completed_count += 1
-                    logger.info(f"批次进度: {completed_count}/{len(batch)} - 分析失败: {file_info['file_path']}")
+            batch_results.append(error_result)
+            completed_count += 1
+            logger.info(f"批次进度: {completed_count}/{len(batch)} - 分析失败: {file_info['file_path']}")
         
         return batch_results
     
@@ -890,7 +910,11 @@ class CodeAnalyzer:
 
         human_message = HumanMessage(content=f"tables schema: {content}")
 
-        response = self.llm.invoke([system_message, human_message])
+        response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message],
+            label="code-module-files-group",
+        )
 
         llm_result = self.format_llm_output(response)
 
@@ -907,7 +931,11 @@ class CodeAnalyzer:
             f'{{"group_with_files": [{{"module_name": "模块名", "business_description": "描述", '
             f'"files": ["file1.py"], "file_count": 1}}]}}'
         ))
-        retry_response = self.llm.invoke([system_message, human_message, response, correction_prompt])
+        retry_response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message, response, correction_prompt],
+            label="code-module-files-group-retry",
+        )
         retry_result = self.format_llm_output(retry_response)
 
         retry_validation_error = self._validate_module_files_group(retry_result)
@@ -1264,7 +1292,11 @@ class CodeAnalyzer:
 
         human_message = HumanMessage(content=f"{final_output_string}")
 
-        response = self.llm.invoke([system_message, human_message])
+        response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message],
+            label="code-module-files-regroup",
+        )
 
         llm_result = self.format_llm_output(response)
 
@@ -1500,23 +1532,27 @@ class CodeAnalyzer:
                 "processing_result": semantic_domains_analyse_result
             }
 
-        MAX_WORKERS = min(32, len(module_groups) or 1) 
+        def process_module_item(item):
+            index, module_group = item
+            return process_single_module(index, module_group)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            future_to_module = {
-                executor.submit(process_single_module, index, module_group): (index, module_group.get("module_name", "未知模块"))
-                for index, module_group in enumerate(module_groups)
-            }
-
-            for future in concurrent.futures.as_completed(future_to_module):
-                index, module_name = future_to_module[future]
-                
-                try:
-                    result = future.result()
-                    if result is not None:
-                        results.append(result)
-                except Exception as exc:
-                    logger.error(f"模块 【{module_name}】 (Index: {index}) 在处理过程中发生异常: {exc}", exc_info=True)
+        module_items = list(enumerate(module_groups))
+        for item, result, exc in self.runtime.map_unordered(
+            module_items,
+            process_module_item,
+            label="code-module-summaries",
+            max_workers=self.runtime.module_max_workers,
+        ):
+            index, module_group = item
+            module_name = module_group.get("module_name", "未知模块")
+            if exc is not None:
+                logger.error(
+                    f"模块 【{module_name}】 (Index: {index}) 在处理过程中发生异常: {exc}",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                continue
+            if result is not None:
+                results.append(result)
                     
         logger.info("\n--- 所有模块处理完毕 ---")
         return results
@@ -1685,7 +1721,11 @@ class CodeAnalyzer:
 
         human_message = HumanMessage(content=f"tables schema: {content}")
 
-        response = self.llm.invoke([system_message, human_message])
+        response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message],
+            label="code-semantic-domains-analyse",
+        )
 
         llm_result = self.format_llm_output(response)
 
@@ -1898,7 +1938,11 @@ class CodeAnalyzer:
         system_message = SystemMessage(content=prompt)
         human_message = HumanMessage(content=f"请基于以下内容进行DDD领域设计：\n\n{content}")
 
-        response = self.llm.invoke([system_message, human_message])
+        response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message],
+            label="code-ddd",
+        )
         llm_result = self.format_llm_output(response)
         
         return llm_result
@@ -2046,7 +2090,11 @@ class CodeAnalyzer:
 
         human_message = HumanMessage(content=f"{content}")
 
-        response = self.llm.invoke([system_message, human_message])
+        response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message],
+            label="code-files-overview",
+        )
 
         llm_result = self.format_llm_output(response)
 
@@ -2286,7 +2334,11 @@ class CodeAnalyzer:
         
         for attempt in range(MAX_RETRIES):
             try:
-                response = self.llm.invoke([system_message, human_message])
+                response = self.runtime.invoke_llm(
+                    self.llm,
+                    [system_message, human_message],
+                    label="code-agent-card",
+                )
 
                 llm_result = self.format_llm_output(response)
 
@@ -4239,6 +4291,11 @@ class FileAnalyzer:
             response = self.llm.invoke([system_message, human_message])
             result = self.format_llm_output(response)
             
+            # format_llm_output 可能返回 None 或非 dict 类型（如 list）
+            if not isinstance(result, dict):
+                logger.warning(f"chunk_summary: format_llm_output 返回非 dict 类型 ({type(result).__name__}), 使用默认值")
+                result = self._get_default_result()
+            
             # 添加元数据信息
             if metadata:
                 result["metadata"] = metadata
@@ -4366,10 +4423,8 @@ class FileAnalyzer:
             key_points = result.get("key_points", [])
             if key_points:
                 chunk_info += "关键点:\n"
-                for i, point in enumerate(key_points[:5]):  # 限制前5个关键点
+                for i, point in enumerate(key_points):
                     chunk_info += f"  {i+1}. {point}\n"
-                if len(key_points) > 5:
-                    chunk_info += f"  还有 {len(key_points) - 5} 个关键点...\n"
             else:
                 chunk_info += "关键点: 无\n"
             
@@ -4395,86 +4450,183 @@ class FileAnalyzer:
 
     def file_summary(self, documents: List) -> dict:
         """
-        生成文档整体摘要
-        
+        生成文档整体摘要。内部通过递归 refine 机制处理超长内容：
+        先用 build_summary_input 生成初始文本，若文本超过 MAX_MERGED_SIZE，
+        则用 CharacterTextSplitter 按 CHUNK_SIZE 拆分成若干段，对每一段调用
+        LLM 提炼为精炼的结构化摘要，再将所有段的提炼结果重新拼接。若拼接后
+        仍超过 MAX_MERGED_SIZE，则继续递归拆分-提炼-合并，直到收敛到安全大小
+        后执行最终整体摘要生成。
+
+        这样无论文档有多少分片、build_summary_input 产出多大，每一次实际的
+        LLM 调用都控制在 CHUNK_SIZE 以内，不会超出模型上下文窗口限制。
+
         Args:
             documents: DocumentModel列表
-            
+
         Returns:
             文档整体分析结果
         """
+        CHUNK_SIZE = 50000       # 每轮拆分的目标大小（字符数）
+        CHUNK_OVERLAP = 500      # 拆分时的重叠量
+        MAX_MERGED_SIZE = 80000  # 合并后超过此值则继续递归
+
         logger.info(f"开始处理 {len(documents)} 个文档片段...")
-        
-        # 1. 处理所有片段
+
+        # 1. 并行处理所有文档分片
         chunk_results = self.process_chunks_parallel(documents)
-        
-        # 2. 构建摘要输入
-        logger.info("构建整体摘要输入...")
+        total_chunks = len(documents)
+
+        # 2. 构建初始摘要输入文本
         summary_input = self.build_summary_input(chunk_results)
-        
-        # 3. 生成整体摘要
-        logger.info("生成文档整体摘要...")
-        prompt = f"""你是一位资深的编辑或知识架构师。以下是一份长文档所有部分的详细摘要。请基于这些材料，为我生成一个专业、逻辑清晰、层次分明的文档大纲。
+        logger.info(f"构建初始摘要输入完成，长度={len(summary_input)} 字符")
 
-        请完成以下任务：
-        1. **综合分析**：理解所有片段摘要，还原文档的整体逻辑脉络和核心论点。
-        2. **生成大纲**：创建一个详细的、多层级的大纲。
-           - **要求**：
-             * 大纲应涵盖文档的所有主要部分和核心子点。
-             * 逻辑结构应合理（如：背景->问题->分析->解决方案->结论）。
-             * 同级标题应具有一致的概括粒度。
-             * 使用规范的标题层级格式（如：`1.`, `1.1`, `1.1.1` 或 `#`, `##`, `###`）。
-        3. **提供说明**：在大纲末尾，简要说明你构建此大纲的逻辑思路，以及文档的总体结论和价值。
+        # 3. 递归 refine：反复 拆分→分块LLM提炼→合并，直到结果缩小到安全大小
+        iteration = 0
+        while len(summary_input) > MAX_MERGED_SIZE:
+            iteration += 1
+            logger.info(
+                f"Refine 第 {iteration} 轮：输入长度={len(summary_input)} > "
+                f"{MAX_MERGED_SIZE}，开始拆分..."
+            )
 
-        输出格式要求：
-        请严格按照以下JSON格式输出：
-        {{
-          "summary": "文档的整体总结，概括核心内容和价值",
-          "outline": "生成的详细大纲内容（使用标题层级格式）",
-          "document_structure": {{
-            "total_sections": "总章节数",
-            "main_themes": ["主要主题1", "主要主题2", ...],
-            "document_type": "文档类型（如：技术报告、研究论文、商业计划等）"
-          }}
-        }}
+            # 3a. 按 CHUNK_SIZE 拆分
+            splitter = CharacterTextSplitter(
+                chunk_size=CHUNK_SIZE,
+                chunk_overlap=CHUNK_OVERLAP,
+                length_function=len,
+                is_separator_regex=False,
+            )
+            segments = splitter.split_text(summary_input)
+            logger.info(f"Refine 拆分为 {len(segments)} 个片段")
 
-        【注意：请严格遵循JSON格式输出，不要包含任何额外的解释或文本。】
-        """
+            # 3b. 并发对每个拆分片段调用 LLM，提炼为精简的结构化摘要
+            refine_prompt = (
+                "你是一个专业的文档分析助手。以下是一份长文档某一部分的结构化摘要"
+                "片段。请仔细阅读，将其进一步提炼整合为更精炼的结构化摘要。\n\n"
+                "请按以下要求输出：\n"
+                "1. **核心主题**：用一句话概括本片段覆盖的核心主题。\n"
+                "2. **关键信息点**：以条目形式列出所有重要信息，去重合并，确保不遗漏。\n"
+                "3. **片段类型判断**：这段内容整体属于："
+                "[ ]引言/背景 [ ]方法/过程 [ ]分析/论证 [ ]案例/数据 "
+                "[ ]结论/建议 [ ]其他（请注明）。\n\n"
+                "输出格式要求：请严格按照以下JSON格式输出：\n"
+                '{\n'
+                '  "core_topic": "一句话核心主题",\n'
+                '  "key_points": ["要点1", "要点2", ...],\n'
+                '  "segment_type": "所选类型"\n'
+                '}\n\n'
+                "【注意：请严格遵循JSON格式输出，不要包含任何额外的解释或文本。】"
+            )
+            refine_system = SystemMessage(content=refine_prompt)
 
-        system_message = SystemMessage(content=prompt)
-        human_message = HumanMessage(content=f" 文档片段摘要如下：\n\n{summary_input}")
-        
+            def _refine_segment(idx: int, text: str) -> dict:
+                try:
+                    resp = self.llm.invoke([
+                        refine_system,
+                        HumanMessage(content=f"请提炼整合以下片段摘要：\n\n{text}"),
+                    ])
+                    r = self.format_llm_output(resp)
+                    r.setdefault("core_topic", "提炼失败")
+                    r.setdefault("key_points", [])
+                    r.setdefault("segment_type", "其他")
+                    r["chunk_index"] = idx
+                    return r
+                except Exception as e:
+                    logger.error(f"Refine 片段 {idx} 提炼失败: {e}")
+                    return {
+                        "core_topic": "提炼失败",
+                        "key_points": [],
+                        "segment_type": "其他",
+                        "chunk_index": idx,
+                    }
+
+            segment_results: List[dict] = []
+            with ThreadPoolExecutor(max_workers=FILE_SUMMARY_REFINE_MAX_WORKERS) as executor:
+                future_map = {
+                    executor.submit(_refine_segment, idx, text): idx
+                    for idx, text in enumerate(segments)
+                }
+                for future in as_completed(future_map):
+                    try:
+                        segment_results.append(future.result())
+                    except Exception as e:
+                        idx = future_map[future]
+                        logger.error(f"Refine 并发片段 {idx} 异常: {e}")
+                        segment_results.append({
+                            "core_topic": "提炼失败",
+                            "key_points": [],
+                            "segment_type": "其他",
+                            "chunk_index": idx,
+                        })
+
+            # 按 chunk_index 排序以保持原文顺序
+            segment_results.sort(key=lambda x: x.get("chunk_index", 0))
+
+            # 3c. 重新拼接合并后的文本
+            summary_input = self.build_summary_input(segment_results)
+            logger.info(
+                f"Refine 第 {iteration} 轮完成：合并后长度={len(summary_input)} 字符"
+            )
+
+        # 4. 最终整体摘要生成（summary_input 此时已安全）
+        logger.info(f"生成最终整体摘要，输入长度={len(summary_input)} 字符...")
+
+        final_prompt = (
+            "你是一位资深的编辑或知识架构师。以下是一份长文档所有部分的详细摘要。"
+            "请基于这些材料，为我生成一个专业、逻辑清晰、层次分明的文档大纲。\n\n"
+            "请完成以下任务：\n"
+            "1. **综合分析**：理解所有片段摘要，还原文档的整体逻辑脉络和核心论点。\n"
+            "2. **生成大纲**：创建一个详细的、多层级的大纲。\n"
+            "   - 大纲应涵盖文档的所有主要部分和核心子点。\n"
+            "   - 逻辑结构应合理（如：背景->问题->分析->解决方案->结论）。\n"
+            "   - 同级标题应具有一致的概括粒度。\n"
+            "   - 使用规范的标题层级格式"
+            "（如：`1.`, `1.1`, `1.1.1` 或 `#`, `##`, `###`）。\n"
+            "3. **提供说明**：在大纲末尾，简要说明你构建此大纲的逻辑思路，"
+            "以及文档的总体结论和价值。\n\n"
+            "输出格式要求：请严格按照以下JSON格式输出：\n"
+            '{\n'
+            '  "summary": "文档的整体总结，概括核心内容和价值",\n'
+            '  "outline": "生成的详细大纲内容（使用标题层级格式）",\n'
+            '  "document_structure": {\n'
+            '    "total_sections": "总章节数",\n'
+            '    "main_themes": ["主要主题1", "主要主题2", ...],\n'
+            '    "document_type": "文档类型（如：技术报告、研究论文、商业计划等）"\n'
+            '  }\n'
+            '}\n\n'
+            "【注意：请严格遵循JSON格式输出，不要包含任何额外的解释或文本。】"
+        )
+
+        final_system = SystemMessage(content=final_prompt)
+        final_human = HumanMessage(content=f" 文档片段摘要如下：\n\n{summary_input}")
+
         try:
-            response = self.llm.invoke([system_message, human_message])
+            response = self.llm.invoke([final_system, final_human])
             final_result = self.format_llm_output(response)
-            
-            # 确保结果包含必要字段
+
             final_result.setdefault("summary", "")
             final_result.setdefault("outline", "")
             final_result.setdefault("analysis_logic", "")
             final_result.setdefault("overall_conclusion", "")
             final_result.setdefault("document_structure", {
-                "total_sections": len(chunk_results),
+                "total_sections": total_chunks,
                 "main_themes": [],
-                "document_type": "未知"
+                "document_type": "未知",
             })
-            
-            # 添加详细信息
-            final_result["total_chunks"] = len(documents)
-            final_result["processed_chunks"] = len(chunk_results)
-            
-            # 提取主要主题（从chunk结果中）
+
+            final_result["total_chunks"] = total_chunks
+            final_result["processed_chunks"] = total_chunks
+
             themes = []
-            for result in chunk_results:
-                segment_type = result.get("segment_type")
-                if segment_type and segment_type != "其他" and segment_type not in themes:
-                    themes.append(segment_type)
-            
+            for r in chunk_results:
+                st = r.get("segment_type")
+                if st and st != "其他" and st not in themes:
+                    themes.append(st)
             final_result["document_structure"]["main_themes"] = themes
-            
+
             logger.info("文档整体摘要生成完成")
             return final_result
-            
+
         except Exception as e:
             logger.error(f"file_summary处理失败: {e}")
             return {
@@ -4483,14 +4635,14 @@ class FileAnalyzer:
                 "analysis_logic": "",
                 "overall_conclusion": "",
                 "document_structure": {
-                    "total_sections": len(chunk_results),
+                    "total_sections": total_chunks,
                     "main_themes": [],
-                    "document_type": "未知"
+                    "document_type": "未知",
                 },
-                "total_chunks": len(documents),
-                "processed_chunks": len(chunk_results),
-                "error": str(e)
-            }    
+                "total_chunks": total_chunks,
+                "processed_chunks": total_chunks,
+                "error": str(e),
+            }
 
     def agent_card(self, content):
         prompt = """你是一个精通领域驱动设计（DDD）和业务建模的资深架构师。你的核心任务是根据业务描述，生成一个高质量的 Agent-to-Agent (A2A) 协议 JSON。
@@ -7207,5 +7359,3 @@ def print_entity_er(test_data):
     print("\n")
     
   
-
-

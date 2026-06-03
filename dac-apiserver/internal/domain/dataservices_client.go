@@ -27,14 +27,9 @@ type DataServicesClient interface {
 	SemanticGroupExists(ctx context.Context, id string) (bool, error)
 	SemanticGroupCount(ctx context.Context) (int, error)
 
-	// DD group relation
-	CreateDDGroupRelation(ctx context.Context, req map[string]any) (*DDGroupRelation, error)
-	BatchCreateDDGroupRelations(ctx context.Context, req []map[string]any) (int, error)
+	// DD group relation (read-only in apiserver; writes go through semantic-grouper)
 	ListDDGroupRelationsByGroup(ctx context.Context, groupID string) ([]DDGroupRelation, int, error)
 	ListDDGroupRelationsBySD(ctx context.Context, sdID string) ([]DDGroupRelation, int, error)
-	DeleteDDGroupRelationByID(ctx context.Context, id int64) error
-	DeleteDDGroupRelationsByGroup(ctx context.Context, groupID string) error
-	DeleteDDGroupRelationsBySD(ctx context.Context, sdID string) error
 
 	// Semantic domain
 	GetSemanticDomain(ctx context.Context, id string) (*SemanticDomain, error)
@@ -47,6 +42,12 @@ type DataServicesClient interface {
 	SemanticDomainExists(ctx context.Context, id string) (bool, error)
 	SemanticDomainExistsByDDInfo(ctx context.Context, ddNamespace, ddName string) (bool, error)
 	SemanticDomainCount(ctx context.Context) (int, error)
+
+	// Vector (data-services pgvector; used for semantic group embedding refresh)
+	GetVectorDocumentIDsByMetadataField(ctx context.Context, collectionName, key, value string) ([]string, error)
+	DeleteVectorDocumentsByIDs(ctx context.Context, collectionName string, documentIDs []string) error
+	DeleteVectorDocumentsByMetadataField(ctx context.Context, collectionName, key, value string) error
+	AddVectorDocuments(ctx context.Context, collectionName string, documents []VectorDocumentInput) error
 
 	// Knowledge graph (passthrough map)
 	KnowledgeGraphAddWithSource(ctx context.Context, req map[string]any) (map[string]any, error)

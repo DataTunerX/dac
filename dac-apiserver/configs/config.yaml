@@ -35,6 +35,17 @@ data_services:
   base_url: "http://10.17.0.41:22000" # Explicitly set based on doc examples
   timeout: 30s
 
+# Semantic Grouper 配置（成员增删异步任务）
+semantic_grouper:
+  base_url: "http://localhost:8000"
+  timeout: 60s
+
+# Agent Registry 配置
+agent_registry:
+  orchestrator_base_url: "http://orchestrator-registry.dac.svc.cluster.local:8000"
+  biz_orchestrator_base_url: "http://biz-orchestrator-registry.dac.svc.cluster.local:8000"
+  timeout: 10s
+
 # 数据库配置
 database:
   driver: "mysql"

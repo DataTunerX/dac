@@ -902,6 +902,36 @@ class AsyncSemanticGroupService:
             logger.error(f"Query orphan groups with members error: {e}")
             return []
 
+    async def get_table_ownership_join(self) -> List[Dict[str, Any]]:
+        """
+        Single-JOIN query across semantic_groups, dd_group_relation, semantic_domain, and
+        signatures to fetch all raw data needed to build the table-ownership index in one
+        round-trip.  Returns rows with group_id, agent_card, dd_namespace, dd_name, and
+        metadata_content.  Table-name extraction from tables_detail (inside metadata_content)
+        is still done in Python because it requires regex over a free-form text field.
+        """
+        query = """
+        SELECT
+            sg.id       AS group_id,
+            sg.agent_card,
+            sd.dd_namespace,
+            sd.dd_name,
+            s.metadata_content
+        FROM semantic_groups sg
+        INNER JOIN dd_group_relation dgr ON sg.id = dgr.group_id
+        INNER JOIN semantic_domain    sd  ON dgr.sd_id = sd.semantic_domain_id
+        INNER JOIN signatures         s   ON sd.dd_namespace = s.dd_namespace
+                                          AND sd.dd_name = s.dd_name
+        WHERE sg.agent_card IS NOT NULL
+        """
+        try:
+            async with self._get_cursor() as cursor:
+                await cursor.execute(query)
+                return await cursor.fetchall()
+        except Error as e:
+            logger.error(f"Table-ownership join query error: {e}")
+            return []
+
     async def get_connection_pool_status(self) -> Dict[str, Any]:
         """
         Get connection pool status information

@@ -8,6 +8,7 @@ import { Eye, EyeOff, Loader2, Plug } from "lucide-react"
 import { listNamespaces } from "@/lib/namespaces-api"
 import { listConfigMaps } from "@/lib/configmaps-api"
 import { probeDataSource, type ProbeRequest } from "@/lib/datasource-probe-api"
+import { getGPUAvailability, type GPUAvailabilityResponse } from "@/lib/environment-api"
 import {
   Dialog,
   DialogContent,
@@ -70,6 +71,7 @@ const dataSourceSchema = z.object({
 
   // Optional: prompts configmap
   promptsConfigMapName: z.string().optional(),
+  gpuEnabled: z.enum(["yes", "no"]),
 
   // Code repo config (only for type=coderepo)
   codeRepoType: z.string().optional(),
@@ -186,6 +188,7 @@ const defaultFormValues: DataSourceFormValues = {
   path: "",
   extractFiles: "",
   promptsConfigMapName: "",
+  gpuEnabled: "no",
   codeRepoType: "",
   codeRepoPath: "",
   codeRepoBranch: "main",
@@ -416,6 +419,9 @@ export function CreateDataSourceDialog({
   const [promptsConfigMaps, setPromptsConfigMaps] = useState<{ name: string }[]>([])
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false)
   const [promptsLoadError, setPromptsLoadError] = useState<string | null>(null)
+  const [gpuAvailability, setGPUAvailability] = useState<GPUAvailabilityResponse | null>(null)
+  const [isLoadingGPU, setIsLoadingGPU] = useState(false)
+  const [gpuLoadError, setGPULoadError] = useState<string | null>(null)
 
   const form = useForm<DataSourceFormValues>({
     resolver: zodResolver(dataSourceSchema),
@@ -448,6 +454,7 @@ export function CreateDataSourceDialog({
 
   const typeValue = form.watch("type")
   const namespaceValue = form.watch("namespace")
+  const gpuSelectable = Boolean(gpuAvailability?.available)
 
   const loadNamespaces = async () => {
     if (isLoadingNs) return
@@ -469,6 +476,7 @@ export function CreateDataSourceDialog({
   useEffect(() => {
     if (open) {
       void loadNamespaces()
+      void loadGPUAvailability()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -482,6 +490,32 @@ export function CreateDataSourceDialog({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialValues])
+
+  useEffect(() => {
+    if (open && !gpuSelectable) {
+      form.setValue("gpuEnabled", "no", { shouldValidate: true })
+    }
+  }, [form, gpuSelectable, open])
+
+  const loadGPUAvailability = async () => {
+    if (isLoadingGPU) return
+    setIsLoadingGPU(true)
+    setGPULoadError(null)
+    try {
+      const availability = await getGPUAvailability()
+      setGPUAvailability(availability)
+      if (!availability.available) {
+        form.setValue("gpuEnabled", "no", { shouldValidate: true })
+      }
+    } catch (e) {
+      console.error("Failed to load GPU availability", e)
+      setGPUAvailability(null)
+      setGPULoadError("无法确认 GPU 环境，已默认使用 CPU")
+      form.setValue("gpuEnabled", "no", { shouldValidate: true })
+    } finally {
+      setIsLoadingGPU(false)
+    }
+  }
 
   const loadPromptsConfigMaps = async (namespace: string) => {
     if (isLoadingPrompts) return
@@ -569,6 +603,59 @@ export function CreateDataSourceDialog({
                   )}
                 />
               </div>
+
+              <FormField
+                control={form.control}
+                name="gpuEnabled"
+                render={({ field }) => {
+                  const on = field.value === "yes"
+                  const disabled = isSubmitting || isLoadingGPU || !gpuSelectable
+                  return (
+                    <FormItem>
+                      <div className="flex items-center justify-between gap-4 rounded-lg border border-line px-4 py-3">
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <FormLabel className="text-sm font-medium text-content cursor-default">
+                            是否启用 GPU
+                          </FormLabel>
+                          <FormDescription className="text-xs">
+                            {isLoadingGPU
+                              ? "正在检查集群 GPU 能力…"
+                              : gpuSelectable
+                                ? `检测到 ${gpuAvailability?.nodeCount ?? 0} 个 GPU 节点，共 ${gpuAvailability?.totalGPUs ?? 0} 张 GPU，可按需启用。`
+                                : gpuLoadError || "当前环境未检测到 GPU，已固定为不使用 GPU。"}
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={on}
+                            aria-label="是否启用 GPU"
+                            disabled={disabled}
+                            onClick={() => {
+                              if (disabled) return
+                              field.onChange(on ? "no" : "yes")
+                            }}
+                            className={cn(
+                              "relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cta focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
+                              on ? "bg-cta" : "bg-surface-muted ring-1 ring-inset ring-line",
+                              disabled && "opacity-50 cursor-not-allowed"
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "pointer-events-none absolute top-0.5 left-0.5 block h-5 w-5 rounded-full bg-surface shadow-sm transition-transform",
+                                on && "translate-x-5"
+                              )}
+                            />
+                          </button>
+                        </FormControl>
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )
+                }}
+              />
             
               <div className="space-y-4">
                 <div className="text-xs font-semibold text-content-muted">连接配置</div>

@@ -14,9 +14,11 @@ type Config struct {
 	Log          LogConfig          `mapstructure:"log"`
 	Observability ObservabilityConfig `mapstructure:"observability"`
 	JWT          JWTConfig          `mapstructure:"jwt"`
-	RoutingAgent RoutingAgentConfig `mapstructure:"routing_agent"`
-	DataServices DataServicesConfig `mapstructure:"data_services"` // Added
-	Database     DatabaseConfig     `mapstructure:"database"`
+	RoutingAgent    RoutingAgentConfig    `mapstructure:"routing_agent"`
+	DataServices    DataServicesConfig    `mapstructure:"data_services"`
+	SemanticGrouper SemanticGrouperConfig `mapstructure:"semantic_grouper"`
+	AgentRegistry   AgentRegistryConfig   `mapstructure:"agent_registry"`
+	Database      DatabaseConfig      `mapstructure:"database"`
 }
 
 // ServerConfig holds server configuration
@@ -62,6 +64,19 @@ type RoutingAgentConfig struct {
 type DataServicesConfig struct {
 	BaseURL string        `mapstructure:"base_url"`
 	Timeout time.Duration `mapstructure:"timeout"`
+}
+
+// SemanticGrouperConfig holds semantic-grouper service configuration.
+type SemanticGrouperConfig struct {
+	BaseURL string        `mapstructure:"base_url"`
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
+// AgentRegistryConfig holds agent-registry service endpoints.
+type AgentRegistryConfig struct {
+	OrchestratorBaseURL    string        `mapstructure:"orchestrator_base_url"`
+	BizOrchestratorBaseURL string        `mapstructure:"biz_orchestrator_base_url"`
+	Timeout                time.Duration `mapstructure:"timeout"`
 }
 
 // DatabaseConfig holds database configuration

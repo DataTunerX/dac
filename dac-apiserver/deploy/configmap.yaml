@@ -33,6 +33,19 @@ data:
       base_url: "http://routing-agent-service:8080"
       timeout: 300s
       session_timeout: 30m
+
+    data_services:
+      base_url: "http://data-services:8000"
+      timeout: 30s
+
+    semantic_grouper:
+      base_url: "http://semantic-grouper.dac.svc.cluster.local:8000"
+      timeout: 60s
+
+    agent_registry:
+      orchestrator_base_url: "http://orchestrator-registry.dac.svc.cluster.local:8000"
+      biz_orchestrator_base_url: "http://biz-orchestrator-registry.dac.svc.cluster.local:8000"
+      timeout: 10s
     
     database:
       driver: "mysql"
@@ -75,6 +88,12 @@ data:
     p, user, /api/v1/namespaces/*/descriptors/*, GET
     p, user, /api/v1/namespaces/*/configmaps, GET
     p, user, /api/v1/namespaces/*/configmaps/*, GET
+    p, user, /api/v1/system/configurations, GET
+    p, user, /api/v1/system/configurations/*, GET
+    p, user, /api/v1/system/configurations/*/versions, GET
+    p, user, /api/v1/system/configurations/*/versions/*, GET
+    p, user, /api/v1/observability/agent-registries, GET
+    p, user, /api/v1/observability/agent-registries/*/agents, GET
     p, user, /api/v1/semantic-groups, GET
     p, user, /api/v1/semantic-groups/*, GET
     p, user, /api/v1/discovery/scans, GET

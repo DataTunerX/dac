@@ -526,3 +526,15 @@ class KnowledgeGraphResponse(BaseModel):
     status: str
     message: str
     data: Optional[Dict[str, Any]] = None
+
+
+# ---------------------------------------------------------------------------
+# Table Ownership Index
+# ---------------------------------------------------------------------------
+
+class TableOwnershipIndexResponse(BaseModel):
+    """Reverse index: ``normalised_table_name → [agent_card_name, ...]``."""
+    status: str
+    data: Optional[Dict[str, List[str]]] = None
+    message: Optional[str] = None
+    count: Optional[int] = None

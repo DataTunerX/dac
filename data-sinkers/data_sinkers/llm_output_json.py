@@ -77,7 +77,7 @@ def _try_json_repair_as_string(cleaned: str) -> Any:
     if not isinstance(fixed, str) or not fixed.strip():
         return None
     try:
-        return json.loads(fixed)
+        return json.loads(fixed, strict=False)
     except json.JSONDecodeError as e:
         logger.error(" === format_llm_output, json.loads after json_repair string failed: %s", e)
         return None
@@ -95,9 +95,9 @@ def parse_llm_output_string(
     if content is None:
         return None
 
-    # 1) Direct JSON
+    # 1) Direct JSON (strict=False to tolerate control chars in LLM output)
     try:
-        return json.loads(content)
+        return json.loads(content, strict=False)
     except json.JSONDecodeError:
         pass
 
@@ -105,7 +105,7 @@ def parse_llm_output_string(
 
     # 2) After markdown / smart-quote cleanup
     try:
-        return json.loads(cleaned)
+        return json.loads(cleaned, strict=False)
     except json.JSONDecodeError as e2:
         logger.error(" === format_llm_output, Parsing failed after cleanup.: %s", e2)
 
@@ -127,7 +127,7 @@ def parse_llm_output_string(
 
     # 5) Single quotes to double
     try:
-        return json.loads(cleaned.replace("'", '"'))
+        return json.loads(cleaned.replace("'", '"'), strict=False)
     except json.JSONDecodeError as e4:
         logger.error(
             " === format_llm_output, secondary parsing failed: %s, using default value",

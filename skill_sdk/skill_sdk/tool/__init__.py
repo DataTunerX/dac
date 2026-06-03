@@ -1,5 +1,11 @@
 """Standalone tools for skills and agents."""
 
+from skill_sdk.tool.lsp_plugin import (
+    LspPlugin,
+    LspInput,
+    LSP_TOOL_NAME,
+    reset_manager,
+)
 from skill_sdk.tool.tavily_extract import (
     TavilyExtractError,
     TavilyExtractSettings,
@@ -27,6 +33,10 @@ from skill_sdk.tool.web_fetch import (
 )
 
 __all__ = [
+    "LspPlugin",
+    "LspInput",
+    "LSP_TOOL_NAME",
+    "reset_manager",
     "SsrfBlockedError",
     "TavilyExtractError",
     "TavilyExtractSettings",

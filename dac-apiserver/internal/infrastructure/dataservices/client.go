@@ -314,40 +314,6 @@ func (c *Client) ListSemanticGroupRoots(ctx context.Context) ([]SemanticGroup, i
 
 // --- DD Group Relations ---
 
-// CreateDDGroupRelation creates a relation between semantic domain and group.
-func (c *Client) CreateDDGroupRelation(ctx context.Context, req map[string]any) (*DDGroupRelation, error) {
-	u, err := c.buildURL("/dd_group_relations")
-	if err != nil {
-		return nil, err
-	}
-	var resp struct {
-		Status string          `json:"status"`
-		Data   DDGroupRelation `json:"data"`
-	}
-	if err := c.doJSON(ctx, http.MethodPost, u, req, &resp); err != nil {
-		return nil, err
-	}
-	return &resp.Data, nil
-}
-
-// BatchCreateDDGroupRelations batch creates relations.
-func (c *Client) BatchCreateDDGroupRelations(ctx context.Context, req []map[string]any) (int, error) {
-	u, err := c.buildURL("/dd_group_relations/batch")
-	if err != nil {
-		return 0, err
-	}
-	var resp struct {
-		Status string `json:"status"`
-		Data   struct {
-			Count int `json:"count"`
-		} `json:"data"`
-	}
-	if err := c.doJSON(ctx, http.MethodPost, u, req, &resp); err != nil {
-		return 0, err
-	}
-	return resp.Data.Count, nil
-}
-
 func (c *Client) ListDDGroupRelationsByGroup(ctx context.Context, groupID string) ([]DDGroupRelation, int, error) {
 	u, err := c.buildURL("/dd_group_relations/group/" + url.PathEscape(groupID))
 	if err != nil {
@@ -378,30 +344,6 @@ func (c *Client) ListDDGroupRelationsBySD(ctx context.Context, sdID string) ([]D
 		return nil, 0, err
 	}
 	return resp.Data, resp.Count, nil
-}
-
-func (c *Client) DeleteDDGroupRelationByID(ctx context.Context, id int64) error {
-	u, err := c.buildURL(fmt.Sprintf("/dd_group_relations/%d", id))
-	if err != nil {
-		return err
-	}
-	return c.doJSON(ctx, http.MethodDelete, u, nil, nil)
-}
-
-func (c *Client) DeleteDDGroupRelationsByGroup(ctx context.Context, groupID string) error {
-	u, err := c.buildURL("/dd_group_relations/group/" + url.PathEscape(groupID))
-	if err != nil {
-		return err
-	}
-	return c.doJSON(ctx, http.MethodDelete, u, nil, nil)
-}
-
-func (c *Client) DeleteDDGroupRelationsBySD(ctx context.Context, sdID string) error {
-	u, err := c.buildURL("/dd_group_relations/sd/" + url.PathEscape(sdID))
-	if err != nil {
-		return err
-	}
-	return c.doJSON(ctx, http.MethodDelete, u, nil, nil)
 }
 
 // GetRunHistory loads conversation history records for a run.
@@ -675,4 +617,64 @@ func (c *Client) DeleteKnowledge(ctx context.Context, collection string, docIDs 
 	}
 	req := map[string]any{"documents": docIDs}
 	return c.doJSON(ctx, http.MethodDelete, u, req, nil)
+}
+
+// DeleteVectorByMetadataField deletes vector documents matching a metadata key-value pair.
+func (c *Client) DeleteVectorByMetadataField(ctx context.Context, collectionName, key, value string) error {
+	u, err := c.buildURL(fmt.Sprintf("/vector/%s/delete_by_metadata_field", url.PathEscape(collectionName)))
+	if err != nil {
+		return err
+	}
+	req := map[string]any{"key": key, "value": value}
+	return c.doJSON(ctx, http.MethodDelete, u, req, nil)
+}
+
+// GetVectorDocumentIDsByMetadataField returns document IDs matching a metadata key-value pair.
+func (c *Client) GetVectorDocumentIDsByMetadataField(ctx context.Context, collectionName, key, value string) ([]string, error) {
+	u, err := c.buildURL(fmt.Sprintf("/vector/%s/get_ids_by_metadata_field", url.PathEscape(collectionName)))
+	if err != nil {
+		return nil, err
+	}
+	req := map[string]any{"key": key, "value": value}
+	var resp struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, u, req, &resp); err != nil {
+		return nil, err
+	}
+	return resp.IDs, nil
+}
+
+// DeleteVectorDocumentsByIDs deletes vector documents by ID.
+func (c *Client) DeleteVectorDocumentsByIDs(ctx context.Context, collectionName string, documentIDs []string) error {
+	if len(documentIDs) == 0 {
+		return nil
+	}
+	u, err := c.buildURL(fmt.Sprintf("/vector/%s/delete_by_ids", url.PathEscape(collectionName)))
+	if err != nil {
+		return err
+	}
+	req := map[string]any{"documents": documentIDs}
+	return c.doJSON(ctx, http.MethodDelete, u, req, nil)
+}
+
+// AddVectorDocuments adds documents to a vector collection (embeddings computed by data-services).
+func (c *Client) AddVectorDocuments(ctx context.Context, collectionName string, documents []VectorDocument) error {
+	u, err := c.buildURL(fmt.Sprintf("/vector/%s/add_documents", url.PathEscape(collectionName)))
+	if err != nil {
+		return err
+	}
+	docs := make([]map[string]any, 0, len(documents))
+	for _, doc := range documents {
+		meta := doc.Metadata
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		docs = append(docs, map[string]any{
+			"page_content": doc.PageContent,
+			"metadata":     meta,
+		})
+	}
+	req := map[string]any{"documents": docs}
+	return c.doJSON(ctx, http.MethodPost, u, req, nil)
 }

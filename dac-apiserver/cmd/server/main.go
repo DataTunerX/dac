@@ -18,11 +18,13 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/config"
 	"github.com/lvyanru/dac-apiserver/internal/handler"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/a2a"
+	agentregistryinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/agentregistry"
 	infradb "github.com/lvyanru/dac-apiserver/internal/infrastructure/database"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 	discoveryinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/discovery"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/k8s"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/probe"
+	semanticgrouperinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/semanticgrouper"
 	"github.com/lvyanru/dac-apiserver/internal/router"
 	"github.com/lvyanru/dac-apiserver/internal/usecase"
 	dbpkg "github.com/lvyanru/dac-apiserver/pkg/database"
@@ -137,8 +139,13 @@ func runServer(cmd *cobra.Command, args []string) {
 	semanticDomainUsecase := usecase.NewSemanticDomainUsecase(dsAdapter, appLogger)
 	semanticDomainHandler := handler.NewSemanticDomainHandler(semanticDomainUsecase, appLogger)
 
-	// Semantic Group module (data-services)
-	semanticGroupUsecase := usecase.NewSemanticGroupUsecase(dsAdapter, appLogger)
+	// Semantic Group module (data-services + semantic-grouper for member mutations)
+	semanticGrouperClient := semanticgrouperinfra.NewClient(
+		cfg.SemanticGrouper.BaseURL,
+		cfg.SemanticGrouper.Timeout,
+		appLogger,
+	)
+	semanticGroupUsecase := usecase.NewSemanticGroupUsecase(dsAdapter, semanticGrouperClient, appLogger)
 	semanticGroupHandler := handler.NewSemanticGroupHandler(semanticGroupUsecase, appLogger)
 
 	// DD Group Relation module (data-services)
@@ -153,6 +160,27 @@ func runServer(cmd *cobra.Command, args []string) {
 	configMapRepo := k8s.NewConfigMapRepository(k8sClient)
 	configMapUsecase := usecase.NewConfigMapUsecase(configMapRepo, appLogger)
 	configMapHandler := handler.NewConfigMapHandler(configMapUsecase, appLogger)
+
+	// System configuration (dac-configuration / dd-configuration with versioned updates)
+	systemConfigRepo := k8s.NewSystemConfigRepository(k8sClient)
+	systemConfigUsecase := usecase.NewSystemConfigUsecase(systemConfigRepo, appLogger)
+	systemConfigHandler := handler.NewSystemConfigHandler(systemConfigUsecase, appLogger)
+
+	agentRegistryTimeout := cfg.AgentRegistry.Timeout
+	if agentRegistryTimeout <= 0 {
+		agentRegistryTimeout = 10 * time.Second
+	}
+	agentRegistryClient := agentregistryinfra.NewClient(
+		[]agentregistryinfra.RegistryEndpoint{
+			{Name: "orchestrator-registry", BaseURL: cfg.AgentRegistry.OrchestratorBaseURL},
+			{Name: "biz-orchestrator-registry", BaseURL: cfg.AgentRegistry.BizOrchestratorBaseURL},
+		},
+		agentRegistryTimeout,
+		appLogger,
+	)
+	agentRegistryRepo := agentregistryinfra.NewRepository(agentRegistryClient)
+	agentRegistryUsecase := usecase.NewAgentRegistryUsecase(agentRegistryRepo, appLogger)
+	agentRegistryHandler := handler.NewAgentRegistryHandler(agentRegistryUsecase, appLogger)
 
 	// Namespace module (for UI namespace dropdown)
 	namespaceRepo := k8s.NewNamespaceRepository(k8sClient)
@@ -240,6 +268,8 @@ func runServer(cmd *cobra.Command, args []string) {
 		probeHandler,
 		chatHandler,
 		configMapHandler,
+		systemConfigHandler,
+		agentRegistryHandler,
 		namespaceHandler,
 		semanticGroupHandler,
 		ddGroupRelationHandler,

@@ -14,6 +14,7 @@ import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from .base import CodeFileLister,CodeAnalyzer,SQLAnalyzer, DEFAULT_CODE_DOWNLOAD_DIR
+from .code_analysis_runtime import CodeAnalysisRuntime
 from model_sdk import ModelManager
 
 # Configure logging
@@ -115,7 +116,8 @@ def extract_postgres(
             local_repo_dir = code_reader.query(code_repo_path, branch=code_repo_branch)
             logger.info(f"===========local_repo_dir = {local_repo_dir}")
     
-    code_analyzer = CodeAnalyzer(llm, max_workers=50, batch_size=50)
+    code_runtime = CodeAnalysisRuntime.from_env()
+    code_analyzer = CodeAnalyzer(llm, runtime=code_runtime)
 
     sql_analyzer = SQLAnalyzer(llm, max_workers=20, batch_size=20)
 

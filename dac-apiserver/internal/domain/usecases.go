@@ -43,17 +43,15 @@ type SemanticGroupUsecase interface {
 	Delete(ctx context.Context, id string) error
 	Exists(ctx context.Context, id string) (bool, error)
 	Count(ctx context.Context) (int, error)
+	AddMember(ctx context.Context, groupID string, req *AddSemanticGroupMemberRequest) (*SemanticGrouperTaskSubmitResult, error)
+	RemoveMember(ctx context.Context, groupID string, req *RemoveSemanticGroupMemberRequest) (*SemanticGrouperTaskSubmitResult, error)
+	GetMemberTask(ctx context.Context, taskID string) (*SemanticGrouperTaskStatus, error)
 }
 
-// DDGroupRelationUsecase defines DD<->semantic-group relation operations backed by data-services.
+// DDGroupRelationUsecase defines read-only DD<->semantic-group relation queries.
 type DDGroupRelationUsecase interface {
-	Create(ctx context.Context, req *CreateDDGroupRelationRequest) (*DDGroupRelation, error)
-	BatchCreate(ctx context.Context, req []CreateDDGroupRelationRequest) (int, error)
 	ListByGroup(ctx context.Context, groupID string) ([]DDGroupRelation, int, error)
 	ListBySemanticDomain(ctx context.Context, semanticDomainID string) ([]DDGroupRelation, int, error)
-	DeleteByID(ctx context.Context, id int64) error
-	DeleteByGroup(ctx context.Context, groupID string) error
-	DeleteBySemanticDomain(ctx context.Context, semanticDomainID string) error
 }
 
 // SemanticDomainUsecase provides semantic domain read operations backed by data-services.

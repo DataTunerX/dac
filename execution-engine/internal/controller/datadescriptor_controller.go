@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"errors"
+
 	"github.com/DataTunerX/dac/execution-engine/internal/handler"
+	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -126,6 +128,10 @@ func (r *DataDescriptorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 						}
 						_, err = r.Handler.DoDelete(ctx, req.Namespace, req.Name)
 						if err != nil {
+							if errors.Is(err, handler.ErrRequeueNeeded) {
+								logger.Info("Normal DAC replacement pending after delete job, requeueing")
+								return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+							}
 							logger.Error(err, "DataDescriptor Handler err during deletion after cleanup")
 						}
 					}
@@ -173,6 +179,10 @@ func (r *DataDescriptorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 					}
 					_, err = r.Handler.DoDelete(ctx, req.Namespace, req.Name)
 					if err != nil {
+						if errors.Is(err, handler.ErrRequeueNeeded) {
+							logger.Info("Normal DAC replacement pending after delete job, requeueing")
+							return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+						}
 						logger.Error(err, "DataDescriptor Handler err during deletion")
 					}
 					// Re-fetch and decide: requeue if resources still exist, else remove finalizer
@@ -189,17 +199,38 @@ func (r *DataDescriptorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				}
 			}
 
-			// All resources cleaned up (or already gone), remove finalizer
-			logger.Info("All resources cleaned up, removing finalizer")
-			controllerutil.RemoveFinalizer(instance, dataDescriptorFinalizer)
-			if err := r.Client.Update(ctx, instance); err != nil {
+			// All resources cleaned up (or already gone). Sync normal DAC for affected
+			// groups before removing the finalizer (reads dac.dac.io/semantic-group-ids).
+			if err := r.Client.Get(ctx, req.NamespacedName, instance); err != nil {
 				if apierrors.IsNotFound(err) {
 					return ctrl.Result{}, nil
 				}
-				logger.Error(err, "Failed to remove finalizer")
+				logger.Error(err, "Failed to re-fetch DataDescriptor before normal DAC sync after delete")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
 			}
-			logger.Info("Finalizer removed, DataDescriptor will be deleted")
+			semanticGroupIDsRaw := ""
+			if instance.Annotations != nil {
+				semanticGroupIDsRaw = instance.Annotations["dac.dac.io/semantic-group-ids"]
+			}
+			logger.Info("Invoking EnsureNormalDACAfterDelete before finalizer removal",
+				"feature", "delete_normal_dac_sync",
+				"step", "controller_invoke",
+				"semanticGroupIDsAnnotation", semanticGroupIDsRaw,
+				"deletionJobStarted", instance.Annotations != nil && instance.Annotations[deletionJobStartedAnnotation] == "true")
+			needsNormalDACRequeue, err := r.Handler.EnsureNormalDACAfterDelete(ctx, instance.Namespace, instance.Name)
+			if err != nil {
+				logger.Error(err, "Failed to sync normal DAC after delete",
+					"feature", "delete_normal_dac_sync",
+					"step", "controller_error")
+			}
+			if needsNormalDACRequeue {
+				logger.Info("Normal DAC blue-green in progress after delete, delaying finalizer removal",
+					"feature", "delete_normal_dac_sync",
+					"step", "controller_delay_finalizer")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			}
+
+			return r.removeDataDescriptorFinalizer(ctx, req.NamespacedName, logger)
 		} else {
 			// Finalizer not present, but DeletionTimestamp is set
 			logger.Info("DeletionTimestamp set but no finalizer, checking for orphaned resources")
@@ -247,6 +278,52 @@ func (r *DataDescriptorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	return ctrl.Result{}, nil
+}
+
+// removeDataDescriptorFinalizer drops the delete finalizer using a fresh Get+Update
+// so concurrent annotation updates (e.g. during delete prep) cannot stale RV/UID.
+func (r *DataDescriptorReconciler) removeDataDescriptorFinalizer(
+	ctx context.Context,
+	nn client.ObjectKey,
+	logger logr.Logger,
+) (ctrl.Result, error) {
+	logger.Info("All resources cleaned up, removing finalizer",
+		"feature", "delete_normal_dac_sync",
+		"step", "remove_finalizer_begin")
+
+	latest := &dacv1alpha1.DataDescriptor{}
+	if err := r.Client.Get(ctx, nn, latest); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+	}
+	if !controllerutil.ContainsFinalizer(latest, dataDescriptorFinalizer) {
+		logger.Info("Finalizer already removed, deletion complete")
+		return ctrl.Result{}, nil
+	}
+
+	controllerutil.RemoveFinalizer(latest, dataDescriptorFinalizer)
+	if err := r.Client.Update(ctx, latest); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		if apierrors.IsConflict(err) {
+			logger.Info("Conflict removing finalizer, will retry")
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
+		if apierrors.IsInvalid(err) {
+			// Object may already be gone (UID precondition / stale cache).
+			logger.Info("Invalid error removing finalizer, treating as already deleted", "error", err)
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "Failed to remove finalizer")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+	}
+	logger.Info("Finalizer removed, DataDescriptor will be deleted",
+		"feature", "delete_normal_dac_sync",
+		"step", "remove_finalizer_done")
 	return ctrl.Result{}, nil
 }
 

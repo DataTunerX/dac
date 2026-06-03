@@ -17,6 +17,8 @@ from a2a.server.tasks import BasePushNotificationSender, InMemoryPushNotificatio
 from .client.redis_registry import RedisRegistry, HeartbeatService
 from .code_agent import CodeAgentExecutor
 from .code_repo_init import init_code_repositories
+from .skill_download import download_skills
+from .skill_runner_service import configure_skill_runtime_env
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 
@@ -47,6 +49,12 @@ logger = logging.getLogger(__name__)
 def main(host, port, agent_card, redis_host, redis_port, redis_db, password, provider, api_key, base_url, model, temperature, heartbeat_interval, stream, max_steps):
     """Starts an Agent server."""
     try:
+        # Pull read-code (default) from dac skill-hub into LOCAL_SKILLS_DIR.
+        try:
+            download_skills()
+        except Exception:  # noqa: BLE001
+            logger.exception("[SkillDownload] startup download raised — continuing")
+
         if not agent_card:
             raise ValueError('Agent card is required')
         with Path.open(agent_card) as file:
@@ -93,6 +101,35 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         else:
             logger.info("DescriptorTypes 为空，跳过代码仓库初始化")
 
+        configure_skill_runtime_env(cloned_repos)
+
+        data_descriptors = os.getenv('Data_Descriptor', '').split(',') if os.getenv('Data_Descriptor') else []
+        dd_namespace = os.getenv('DD_NAMESPACE', '')
+        descriptor_types_list = [descriptor_types_str] if descriptor_types_str else []
+
+        code_executor = CodeAgentExecutor(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            stream=stream,
+            temperature=temperature,
+            data_descriptors=data_descriptors,
+            dd_namespace=dd_namespace,
+            descriptor_types=descriptor_types_list,
+            data_services_url=data_services_url,
+            max_steps=max_steps,
+            code_paths=cloned_repos,
+            agent_id=agent_card.name,
+        )
+
+        try:
+            code_executor.preload_skill_runner()
+        except Exception:  # noqa: BLE001
+            logger.exception("[CodeAgent][Skill] preload_skill_runner raised — continuing")
+
+        atexit.register(code_executor.shutdown_skill_runner)
+
         # Default: register agent to Redis. Set REGISTER_AGENT=false/0/no to skip registration.
         register_agent = (os.getenv("REGISTER_AGENT", "true").strip().lower() not in ("false", "0", "no"))
         if register_agent:
@@ -114,33 +151,11 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         push_config_store = InMemoryPushNotificationConfigStore()
         push_sender = BasePushNotificationSender(httpx_client=httpx_client, config_store=push_config_store)
 
-        request_handler = None
-
-        # 解析 descriptor_types 获取 data_descriptors 和 dd_namespace
-        data_descriptors = os.getenv('Data_Descriptor', '').split(',') if os.getenv('Data_Descriptor') else []
-        dd_namespace = os.getenv('DD_NAMESPACE', '')
-        descriptor_types_list = [descriptor_types_str] if descriptor_types_str else []
-        
-        # CodeAgent 只处理 code 类型
         logger.info("使用 CodeAgentExecutor 处理请求")
         logger.info(f"传入代码路径: {cloned_repos}")
-        
+
         request_handler = DefaultRequestHandler(
-            agent_executor=CodeAgentExecutor(
-                provider=provider,
-                api_key=api_key,
-                base_url=base_url,
-                model=model,
-                stream=stream,
-                temperature=temperature,
-                data_descriptors=data_descriptors,
-                dd_namespace=dd_namespace,
-                descriptor_types=descriptor_types_list,
-                data_services_url=data_services_url,
-                max_steps=max_steps,
-                code_paths=cloned_repos,
-                agent_id=agent_card.name,
-            ),
+            agent_executor=code_executor,
             task_store=InMemoryTaskStore(),
             push_config_store=push_config_store,
             push_sender=push_sender

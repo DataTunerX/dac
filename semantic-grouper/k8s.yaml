@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: semantic-grouper-api
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:v0.7.0-amd64
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:v0.11.0-amd64
         imagePullPolicy: IfNotPresent
         command: ["/bin/bash", "/app/entrypoint-api.sh"]
         env:
@@ -84,7 +84,7 @@ spec:
       serviceAccountName: semantic-grouper-worker
       containers:
       - name: semantic-grouper-worker
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:v0.7.0-amd64
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:v0.11.0-amd64
         imagePullPolicy: IfNotPresent
         command: ["/bin/bash", "/app/entrypoint-worker.sh"]
         env:

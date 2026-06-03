@@ -42,7 +42,7 @@ spec:
           value: "https://api.tavily.com"
         - name: TAVILY_API_KEY
           value: "xxx"
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:v0.10.0-amd64
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:v0.11.0-amd64
         imagePullPolicy: IfNotPresent
         ports:
           - containerPort: 10100

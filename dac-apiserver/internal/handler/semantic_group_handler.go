@@ -167,3 +167,49 @@ func (h *SemanticGroupHandler) Count(ctx context.Context, c *app.RequestContext)
 	}
 	SuccessResponse(c, map[string]any{"totalCount": n})
 }
+
+func (h *SemanticGroupHandler) AddMember(ctx context.Context, c *app.RequestContext) {
+	id := c.Param("id")
+	var req dto.AddSemanticGroupMemberRequest
+	if err := c.BindAndValidate(&req); err != nil {
+		ErrorResponse(c, domain.ErrInvalidInput)
+		return
+	}
+	result, err := h.usecase.AddMember(ctx, id, &domain.AddSemanticGroupMemberRequest{
+		DDNamespace:       req.DDNamespace,
+		DDName:            req.DDName,
+		AssociationReason: req.AssociationReason,
+	})
+	if err != nil {
+		ErrorResponse(c, err)
+		return
+	}
+	AcceptedResponse(c, dto.SemanticGroupMemberTaskSubmitResponse{TaskID: result.TaskID})
+}
+
+func (h *SemanticGroupHandler) RemoveMember(ctx context.Context, c *app.RequestContext) {
+	id := c.Param("id")
+	var req dto.RemoveSemanticGroupMemberRequest
+	if err := c.BindAndValidate(&req); err != nil {
+		ErrorResponse(c, domain.ErrInvalidInput)
+		return
+	}
+	result, err := h.usecase.RemoveMember(ctx, id, &domain.RemoveSemanticGroupMemberRequest{
+		SemanticDomainID: req.SemanticDomainID,
+	})
+	if err != nil {
+		ErrorResponse(c, err)
+		return
+	}
+	AcceptedResponse(c, dto.SemanticGroupMemberTaskSubmitResponse{TaskID: result.TaskID})
+}
+
+func (h *SemanticGroupHandler) GetMemberTask(ctx context.Context, c *app.RequestContext) {
+	taskID := c.Param("taskId")
+	status, err := h.usecase.GetMemberTask(ctx, taskID)
+	if err != nil {
+		ErrorResponse(c, err)
+		return
+	}
+	SuccessResponse(c, dto.ToSemanticGroupMemberTaskStatusResponse(status))
+}

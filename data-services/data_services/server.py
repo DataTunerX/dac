@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from .vector_sdk import Document
 from model_sdk import ModelManager
 import asyncio
+import time as _time
 from enum import Enum
 from datetime import datetime
 from .memory.memory import AsyncMemoryService
@@ -28,6 +29,7 @@ from .api.base import UnstructuredFile, UnstructuredFileUpsertRequest, Unstructu
 from .api.base import SemanticGroupCreateRequest, SemanticGroupUpdateRequest, SemanticGroupResponse, SemanticGroupListResponse, DDGroupRelationCreateRequest, DDGroupRelationUpdateRequest, DDGroupRelationListResponse, SemanticGroupWithMembersResponse, SemanticGroupWithMembersData, SemanticGroupMemberDetail, SemanticGroupInfo
 from .api.base import CreateHistoryRequest, CreateHistoryResponse, SearchHistoryRequest, SearchHistoryResponse, HistoryRecordResponse, HistoryRecord, HistoryMessage,SearchHistoryRequestByUserAndRun
 from .api.base import KnowledgeGraphAddRequest, KnowledgeGraphSearchRequest, KnowledgeGraphDeleteRequest, KnowledgeGraphGetGraphRequest, KnowledgeGraphResponse
+from .api.base import TableOwnershipIndexResponse
 from .knowledge_pyramid.knowledge_pyramid import KnowledgePyramidService
 from .vector.vector import VectorService
 from .history.history import AsyncHistoryService
@@ -2621,6 +2623,86 @@ async def search_history_records_by_user_and_run(search_request: SearchHistoryRe
     except Exception as e:
         logger.error(f"search history error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"search history error: {str(e)}")
+
+##################################### table ownership index ####################################
+# Reverse index: for every table in the fingerprint DB, list which SG agent
+# Cards own it.  Built by scanning all semantic groups → member DDs → signatures.
+# In-memory cached (default 30s) so N+1 queries are amortised across all
+# SG Orchestrator clients.  Cache TTL is configurable via env var.
+_TABLE_OWNERSHIP_INDEX_CACHE: Optional[Dict[str, Any]] = None
+_TABLE_OWNERSHIP_INDEX_CACHE_AT: float = 0.0
+_TABLE_OWNERSHIP_INDEX_TTL_SEC: int = int(os.getenv("TABLE_OWNERSHIP_INDEX_CACHE_TTL_SEC", "30") or 30)
+
+@app.get("/table-ownership-index", response_model=TableOwnershipIndexResponse)
+async def get_table_ownership_index():
+    global _TABLE_OWNERSHIP_INDEX_CACHE, _TABLE_OWNERSHIP_INDEX_CACHE_AT
+    now = _time.time()
+    if _TABLE_OWNERSHIP_INDEX_CACHE is not None and (now - _TABLE_OWNERSHIP_INDEX_CACHE_AT) <= _TABLE_OWNERSHIP_INDEX_TTL_SEC:
+        logger.info(
+            "[TableOwnershipIndex] cache hit: tables=%d age=%.1fs ttl=%ds",
+            _TABLE_OWNERSHIP_INDEX_CACHE["count"],
+            now - _TABLE_OWNERSHIP_INDEX_CACHE_AT,
+            _TABLE_OWNERSHIP_INDEX_TTL_SEC,
+        )
+        return TableOwnershipIndexResponse(
+            status="success",
+            data=_TABLE_OWNERSHIP_INDEX_CACHE["data"],
+            count=_TABLE_OWNERSHIP_INDEX_CACHE["count"],
+        )
+    try:
+        rows = await semantic_group_service.get_table_ownership_join()
+        index: Dict[str, List[str]] = {}
+        agent_name_cache: Dict[str, str] = {}  # group_id → agent_name (avoids redundant JSON parsing)
+        for row in rows:
+            group_id = row.get("group_id")
+            agent_name = agent_name_cache.get(group_id)
+            if agent_name is None:
+                raw_agent_card = row.get("agent_card")
+                if raw_agent_card:
+                    try:
+                        card_dict = json.loads(raw_agent_card) if isinstance(raw_agent_card, str) else raw_agent_card
+                        agent_name = str(card_dict.get("name") or "").strip()
+                    except (json.JSONDecodeError, TypeError):
+                        agent_name = ""
+                else:
+                    agent_name = ""
+                agent_name_cache[group_id] = agent_name
+            if not agent_name:
+                continue
+            mc = row.get("metadata_content") or {}
+            if isinstance(mc, str):
+                try:
+                    mc = json.loads(mc)
+                except (json.JSONDecodeError, TypeError):
+                    mc = {}
+            td = (mc or {}).get("tables_detail", "")
+            if isinstance(td, str) and td.strip():
+                for line in td.split("\n"):
+                    m = re.search(r"table\s*name\s*:\s*(\S+?)(?:\([^)]*\))?\s*[，,]", line)
+                    if not m:
+                        continue
+                    raw = str(m.group(1)).strip().strip("`'\"")
+                    tn = raw.lower()
+                    if tn:
+                        owners = index.setdefault(tn, [])
+                        if agent_name not in owners:
+                            owners.append(agent_name)
+        _TABLE_OWNERSHIP_INDEX_CACHE = {"data": index, "count": len(index)}
+        _TABLE_OWNERSHIP_INDEX_CACHE_AT = now
+        logger.info("[TableOwnershipIndex] built and cached: rows=%d tables=%d", len(rows), len(index))
+        sample_tables = sorted(index.keys())[:20]
+        logger.info("[TableOwnershipIndex] content sample (first %d of %d): %s", len(sample_tables), len(index), {t: index[t] for t in sample_tables})
+        return TableOwnershipIndexResponse(
+            status="success",
+            data=index,
+            count=len(index),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error building table ownership index: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 ##################################### knowledge graph #######################################
 @app.post("/knowledge_graph/add_with_source", response_model=KnowledgeGraphResponse)

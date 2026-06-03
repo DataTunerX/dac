@@ -35,6 +35,7 @@ dependencies = [
     "langfuse~=3.9.0",
     "json-repair>=0.29.0",
     "pymupdf>=1.24.0",
+    "python-lsp-jsonrpc==1.1.2",
     "model_sdk @ file:///Users/james/daocloud/code/dac/orchestrator-agent/sdks/model_sdk-0.2.0-py3-none-any.whl",
     "skill_sdk @ file:///Users/james/daocloud/code/dac/orchestrator-agent/sdks/skill_sdk-0.2.0-py3-none-any.whl",
 ]

@@ -10,17 +10,22 @@ import (
 	"github.com/lvyanru/dac-apiserver/pkg/k8s"
 )
 
+type healthK8sClient interface {
+	HealthCheck(ctx context.Context) error
+	GPUAvailability(ctx context.Context) (*k8s.GPUAvailability, error)
+}
+
 // HealthHandler 健康检查处理器
 type HealthHandler struct {
-	k8sClient *k8s.Client
-	logger   *slog.Logger
+	k8sClient healthK8sClient
+	logger    *slog.Logger
 }
 
 // NewHealthHandler createnewof健康检查处理器
-func NewHealthHandler(k8sClient *k8s.Client, logger *slog.Logger) *HealthHandler {
+func NewHealthHandler(k8sClient healthK8sClient, logger *slog.Logger) *HealthHandler {
 	return &HealthHandler{
 		k8sClient: k8sClient,
-		logger:   logger,
+		logger:    logger,
 	}
 }
 
@@ -73,5 +78,21 @@ func (h *HealthHandler) Readiness(ctx context.Context, c *app.RequestContext) {
 func (h *HealthHandler) Liveness(ctx context.Context, c *app.RequestContext) {
 	c.JSON(200, utils.H{
 		"status": "alive",
+	})
+}
+
+func (h *HealthHandler) GPUAvailability(ctx context.Context, c *app.RequestContext) {
+	availability, err := h.k8sClient.GPUAvailability(ctx)
+	if err != nil {
+		h.logger.Warn("failed to check gpu availability", "error", err)
+		ErrorResponse(c, err)
+		return
+	}
+
+	SuccessResponse(c, utils.H{
+		"available":   availability.Available,
+		"nodeCount":   availability.NodeCount,
+		"totalGPUs":   availability.TotalGPUs,
+		"resourceKey": availability.ResourceKey,
 	})
 }

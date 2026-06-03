@@ -160,6 +160,10 @@ function InfoItem({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
+function displayLimitValue(value?: string) {
+  return value?.trim() ? value : "-"
+}
+
 async function fetcherAgent(_key: readonly [string, string, string]) {
   const [, ns, nm] = _key
   return getAgent(ns, nm)
@@ -545,8 +549,12 @@ export default function AgentDetailPage() {
                   }
                 />
                 <InfoItem
-                  label="最大步数"
-                  value={<span>{typeof agent?.expertAgentMaxSteps === "string" && agent.expertAgentMaxSteps ? agent.expertAgentMaxSteps : "-"}</span>}
+                  label="编排最大循环数"
+                  value={<span>{displayLimitValue(agent?.orchestratorAgentMaxLoops)}</span>}
+                />
+                <InfoItem
+                  label="专家最大步数"
+                  value={<span>{displayLimitValue(agent?.expertAgentMaxSteps)}</span>}
                 />
               </div>
             </CardContent>

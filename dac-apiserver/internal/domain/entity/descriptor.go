@@ -2,6 +2,15 @@ package entity
 
 import "time"
 
+// NormalizeGPUEnabled keeps the public DataDescriptor contract constrained to yes/no.
+// Empty or unknown values are treated as "no" for backward-compatible legacy CRs.
+func NormalizeGPUEnabled(value string) string {
+	if value == "yes" {
+		return "yes"
+	}
+	return "no"
+}
+
 // DataDescriptor represents a data descriptor in the domain
 type DataDescriptor struct {
 	// Metadata
@@ -11,6 +20,7 @@ type DataDescriptor struct {
 
 	// Spec
 	DescriptorType string
+	GPUEnabled     string
 	Sources        []DataSource
 
 	// Status

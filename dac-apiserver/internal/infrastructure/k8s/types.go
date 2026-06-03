@@ -13,6 +13,7 @@ type K8sDataDescriptor struct {
 	Metadata   metav1.ObjectMeta `json:"metadata"`
 	Spec       struct {
 		DescriptorType string          `json:"descriptorType"`
+		GPUEnabled     string          `json:"gpuEnabled,omitempty"`
 		Sources        []K8sDataSource `json:"sources"`
 	} `json:"spec"`
 	Status struct {
@@ -58,8 +59,8 @@ type K8sAgentContainer struct {
 	Kind       string            `json:"kind"`
 	Metadata   metav1.ObjectMeta `json:"metadata"`
 	Spec       struct {
-		DACType             string            `json:"dacType,omitempty"`
-		DataPolicy          struct {
+		DACType    string `json:"dacType,omitempty"`
+		DataPolicy struct {
 			DataSourceType     string   `json:"dataSourceType,omitempty"`
 			SemanticGroupID    string   `json:"semanticGroupID,omitempty"`
 			SourceNameSelector []string `json:"sourceNameSelector,omitempty"`
@@ -80,8 +81,8 @@ type K8sAgentContainer struct {
 			ExpertLLM  string `json:"expertLLM"`
 			PlannerLLM string `json:"plannerLLM"`
 		} `json:"model"`
-		ExpertAgentMaxSteps       string            `json:"expertAgentMaxSteps,omitempty"`
-		OrchestratorAgentMaxLoops string            `json:"orchestratorAgentMaxLoops,omitempty"`
+		ExpertAgentMaxSteps       string `json:"expertAgentMaxSteps,omitempty"`
+		OrchestratorAgentMaxLoops string `json:"orchestratorAgentMaxLoops,omitempty"`
 	} `json:"spec"`
 	Status struct {
 		ActiveDataDescriptors []struct {

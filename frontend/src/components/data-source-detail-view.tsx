@@ -8,9 +8,14 @@ import axios from "axios";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { getDescriptor } from "@/lib/descriptors-api";
-import { listAgentsAll } from "@/lib/agents-api";
 import { getConfigMap } from "@/lib/configmaps-api";
 import type { DataSourceResponse, DataDescriptorResponse, ObjectReferenceResponse } from "@/lib/api-types";
+import {
+  getDataDescriptorDependencyKindLabel,
+  listAllAgentContainers,
+  listDataDescriptorDependencies,
+  type DataDescriptorDependency,
+} from "@/lib/data-descriptor-dependencies";
 import { cn } from "@/lib/utils";
 import { RbacWrapper } from "@/components/rbac";
 import { Button } from "@/components/ui/button";
@@ -46,7 +51,6 @@ import {
   X,
 } from "lucide-react";
 import { Markdown, defaultMarkdownComponents } from "@/components/markdown";
-import { BrandIcon } from "@/components/brand-icon";
 import {
   Table,
   TableBody,
@@ -74,6 +78,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { HoverHint } from "@/components/hover-hint";
 import { KnowledgeGraphView } from "@/components/knowledge-graph-view";
+import {
+  getDataSourceKindLabel,
+  isStructuredDataSourceKind,
+  normalizeDataSourceKind,
+  type DataSourceKind,
+} from "@/lib/data-source-kind";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -130,7 +140,7 @@ type DataDescriptor = {
   namespace: string;
   descriptor_type?: string;
   overall_phase?: string;
-  sources?: unknown[];
+  sources?: DataSourceResponse[];
   source_statuses?: unknown[];
   created_at?: string;
   updated_at?: string;
@@ -152,12 +162,6 @@ type LineageConsumer = {
   namespace: string;
 };
 
-type DependentResource = {
-  kind: "agent" | "dac";
-  name: string;
-  namespace: string;
-};
-
 function kv(v: unknown): string {
   if (v === null || v === undefined) return "-";
   if (typeof v === "string") return v.trim() || "-";
@@ -169,19 +173,145 @@ function getCodeRepoFromSource(
   source: DataSourceResponse | null | undefined
 ): { type: string; path: string; branch?: string } | null {
   const cr = source?.codeRepo;
-  const type = (typeof cr?.codeRepoType === "string" ? cr.codeRepoType : "").trim();
-  const path = (typeof cr?.codeRepoPath === "string" ? cr.codeRepoPath : "").trim();
-  const branch = (typeof cr?.codeRepoBranch === "string" ? cr.codeRepoBranch : "").trim();
+  const meta = source?.metadata ?? {};
+  const type = (
+    typeof cr?.codeRepoType === "string" ? cr.codeRepoType :
+    typeof meta.codeRepoType === "string" ? meta.codeRepoType :
+    typeof source?.type === "string" ? source.type :
+    ""
+  ).trim();
+  const path = (
+    typeof cr?.codeRepoPath === "string" ? cr.codeRepoPath :
+    typeof meta.codeRepoPath === "string" ? meta.codeRepoPath :
+    ""
+  ).trim();
+  const branch = (
+    typeof cr?.codeRepoBranch === "string" ? cr.codeRepoBranch :
+    typeof meta.codeRepoBranch === "string" ? meta.codeRepoBranch :
+    ""
+  ).trim();
   if (!path) return null;
   return { type, path, branch: branch || undefined };
 }
 
-function toRepoBrandSlug(t: string): "github" | "gitee" | "gitlab" | "git" {
-  const v = String(t || "").trim().toLowerCase()
-  if (v === "github") return "github"
-  if (v === "gitee") return "gitee"
-  if (v === "gitlab") return "gitlab"
-  return "git"
+function getPrimarySource(dd: DataDescriptor | null): DataSourceResponse | null {
+  return Array.isArray(dd?.sources) && dd.sources.length > 0 ? dd.sources[0] : null;
+}
+
+function getExtractFileCount(source: DataSourceResponse | null) {
+  const files = source?.extract?.files;
+  if (!Array.isArray(files)) return null;
+  return files
+    .map((file) => (typeof file === "string" ? file.trim() : ""))
+    .filter(Boolean).length;
+}
+
+function getSafeConfigSummary(source: DataSourceResponse | null) {
+  const meta = source?.metadata ?? {};
+  const safeEntries = Object.entries(meta).filter(
+    ([key, value]) => value && !/(password|secret|token|key)/i.test(key),
+  );
+  if (safeEntries.length === 0) return "-";
+  return safeEntries.map(([key, value]) => `${key}: ${value}`).join(" / ");
+}
+
+type OverviewConnectionInfo = {
+  host: unknown;
+  port: unknown;
+  database: unknown;
+  username: unknown;
+};
+
+type OverviewField = {
+  label: string;
+  value: string;
+  highlight?: boolean;
+  copyText?: string;
+};
+
+function overviewField(
+  label: string,
+  value: unknown,
+  options: { highlight?: boolean; copy?: boolean } = {},
+): OverviewField {
+  const text = kv(value);
+  return {
+    label,
+    value: text,
+    highlight: options.highlight,
+    copyText: options.copy && text !== "-" ? text : undefined,
+  };
+}
+
+function buildOverviewFields({
+  kind,
+  source,
+  connectionInfo,
+  tableCount,
+}: {
+  kind: DataSourceKind;
+  source: DataSourceResponse | null;
+  connectionInfo: OverviewConnectionInfo;
+  tableCount: number | null;
+}): OverviewField[] {
+  const meta = source?.metadata ?? {};
+  const fileCount = getExtractFileCount(source);
+
+  if (kind === "mysql" || kind === "postgres") {
+    return [
+      overviewField("主机", connectionInfo.host, { copy: true }),
+      overviewField("端口", connectionInfo.port, { copy: true }),
+      overviewField("数据库", connectionInfo.database, { copy: true }),
+      overviewField("用户名", connectionInfo.username, { copy: true }),
+      {
+        label: "数据表数量",
+        value: typeof tableCount === "number" ? String(tableCount) : "-",
+        highlight: typeof tableCount === "number",
+      },
+    ];
+  }
+
+  if (kind === "minio") {
+    return [
+      overviewField("主机", meta.host, { copy: true }),
+      overviewField("端口", meta.port, { copy: true }),
+      overviewField("Bucket", meta.bucket, { copy: true }),
+      overviewField("Access Key", meta.access_key ?? meta.accessKey, { copy: true }),
+      {
+        label: "对象范围",
+        value: fileCount && fileCount > 0 ? `${fileCount} 个对象` : "整个 Bucket",
+      },
+    ];
+  }
+
+  if (kind === "fileserver") {
+    return [
+      overviewField("主机", meta.host, { copy: true }),
+      overviewField("端口", meta.port, { copy: true }),
+      overviewField("根路径", meta.path, { copy: true }),
+      {
+        label: "文件清单数量",
+        value: typeof fileCount === "number" ? String(fileCount) : "-",
+        highlight: typeof fileCount === "number",
+      },
+    ];
+  }
+
+  if (kind === "coderepo") {
+    const repo = getCodeRepoFromSource(source);
+    return [
+      overviewField("仓库类型", repo?.type || source?.type, { copy: true }),
+      overviewField("仓库地址", repo?.path, { copy: true }),
+      overviewField("分支", repo?.branch, { copy: true }),
+    ];
+  }
+
+  return [
+    { label: "来源类型", value: getDataSourceKindLabel(kind) },
+    overviewField("主机", meta.host, { copy: true }),
+    overviewField("端口", meta.port, { copy: true }),
+    { label: "配置摘要", value: getSafeConfigSummary(source) },
+  ];
 }
 
 export function DataSourceDetailView() {
@@ -202,7 +332,7 @@ export function DataSourceDetailView() {
     null,
   );
   const [agentConsumers, setAgentConsumers] = useState<LineageConsumer[]>([]);
-  const [dependentResources, setDependentResources] = useState<DependentResource[]>([]);
+  const [dependentResources, setDependentResources] = useState<DataDescriptorDependency[]>([]);
   const [showDependencyDialog, setShowDependencyDialog] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [checkingDependency, setCheckingDependency] = useState(false);
@@ -234,12 +364,17 @@ export function DataSourceDetailView() {
     if (typeof v !== "string" || !v.trim()) return "";
     return v.replace("T", " ").replace("Z", "");
   }, [dd?.updated_at]);
+  const primarySource = useMemo(() => getPrimarySource(dd), [dd]);
+  const dataSourceKind = useMemo(
+    () => normalizeDataSourceKind(dd?.descriptor_type, primarySource?.type),
+    [dd?.descriptor_type, primarySource?.type],
+  );
+  const isStructuredSource = isStructuredDataSourceKind(dataSourceKind);
 
   const connectionInfo = useMemo(() => {
     // 1. Try to get connection info from dd.sources[0].metadata
-    if (dd?.sources && Array.isArray(dd.sources) && dd.sources.length > 0) {
-      const s = dd.sources[0] as DataSourceResponse | undefined;
-      const meta = s?.metadata;
+    if (primarySource) {
+      const meta = primarySource.metadata;
       if (meta && typeof meta === "object" && !Array.isArray(meta)) {
         return {
           host: (meta as Record<string, unknown>).host,
@@ -264,7 +399,7 @@ export function DataSourceDetailView() {
     }
 
     return { host: null, port: null, database: null, username: null };
-  }, [dd?.sources, signature]);
+  }, [primarySource, signature]);
 
   const signatureMeta = useMemo(() => {
     if (!isRecord(signature)) return null;
@@ -273,14 +408,13 @@ export function DataSourceDetailView() {
   }, [signature]);
 
   const sourceConfig = useMemo(() => {
-    if (!dd?.sources || !Array.isArray(dd.sources) || dd.sources.length === 0)
-      return null;
-    const s = dd.sources[0] as DataSourceResponse | undefined;
+    const s = primarySource;
+    if (!s) return null;
     return {
       promptsConfig: s?.prompts?.configMapName,
       codeRepo: getCodeRepoFromSource(s ?? null),
     };
-  }, [dd?.sources]);
+  }, [primarySource]);
 
   const semanticDomainText = useMemo(() => {
     if (isRecord(semanticDomain)) {
@@ -335,6 +469,29 @@ export function DataSourceDetailView() {
 
     return null;
   }, [signatureMeta]);
+
+  const overviewFields = useMemo(
+    () =>
+      buildOverviewFields({
+        kind: dataSourceKind,
+        source: primarySource,
+        connectionInfo,
+        tableCount,
+      }),
+    [connectionInfo, dataSourceKind, primarySource, tableCount],
+  );
+  const structureTitle = isStructuredSource ? "数据表结构" : "结构化 Schema";
+  const structureCountLabel = isStructuredSource
+    ? typeof tableCount === "number"
+      ? `${tableCount} Tables`
+      : "Unknown"
+    : "N/A";
+  const structureEmptyMessage = isStructuredSource
+    ? "暂无表结构信息"
+    : "暂无结构化 schema 信息";
+  const structureEmptyRowMessage = isStructuredSource
+    ? "暂无表结构数据"
+    : "暂无结构化 schema 数据";
 
   const tablesDetailMap = useMemo(() => {
     const detailStr = signatureMeta?.tables_detail;
@@ -437,7 +594,7 @@ export function DataSourceDetailView() {
       });
 
       try {
-        const { items } = await listAgentsAll();
+        const items = await listAllAgentContainers();
         const deps: LineageConsumer[] = [];
         for (const a of items) {
           const an = a.name ?? "";
@@ -445,7 +602,7 @@ export function DataSourceDetailView() {
           if (!an) continue;
           let hit = false;
           const sel = a.dataPolicy?.sourceNameSelector ?? [];
-          if (sel.some((x) => x === name)) hit = true;
+          if (ans === namespace && sel.some((x) => x === name)) hit = true;
           const ads = a.activeDataDescriptors ?? [];
           if (ads.some((x) => x.name === name && (x.namespace ?? "default") === namespace)) hit = true;
           if (hit) deps.push({ kind: "agent", name: an, namespace: ans });
@@ -586,57 +743,7 @@ export function DataSourceDetailView() {
   const checkDependencies = async () => {
     setCheckingDependency(true);
     try {
-      const deps: DependentResource[] = [];
-
-      try {
-        const desc = await getDescriptor(namespace, name);
-        const consumed = desc.consumed_by ?? [];
-        for (const c of consumed) {
-          const depName = c.name;
-          if (!depName) continue;
-          deps.push({
-            kind: "dac",
-            name: depName,
-            namespace: c.namespace ?? "default",
-          });
-        }
-      } catch {
-        // Ignore consumed_by lookup failures and continue with agent scan.
-      }
-
-      try {
-        const { items } = await listAgentsAll();
-        for (const agent of items) {
-          const agentName = agent.name ?? "";
-          const agentNamespace = agent.namespace ?? "default";
-          if (!agentName) continue;
-
-          let hit = false;
-          const selectedSources = agent.dataPolicy?.sourceNameSelector ?? [];
-          if (selectedSources.some((source) => source === name)) hit = true;
-
-          const activeDescriptors = agent.activeDataDescriptors ?? [];
-          if (activeDescriptors.some((item) => item.name === name && (item.namespace ?? "default") === namespace)) {
-            hit = true;
-          }
-
-          if (hit) {
-            deps.push({ kind: "agent", name: agentName, namespace: agentNamespace });
-          }
-        }
-      } catch {
-        // Ignore agents lookup failures and keep best-effort consumed_by result.
-      }
-
-      const uniqueDependencies = new Map<string, DependentResource>();
-      for (const dep of deps) {
-        const key = `${dep.kind}/${dep.namespace}/${dep.name}`;
-        if (!uniqueDependencies.has(key)) {
-          uniqueDependencies.set(key, dep);
-        }
-      }
-
-      return Array.from(uniqueDependencies.values());
+      return await listDataDescriptorDependencies(namespace, name);
     } catch (err) {
       console.error("check dd dependencies failed", err);
       toast.error("检查依赖关系失败");
@@ -820,20 +927,17 @@ export function DataSourceDetailView() {
                 基础信息
               </h3>
               <div className="bg-surface rounded-lg border border-line p-5 shadow-sm space-y-5">
-                {/* Row 1: Connection Info */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
-                  <InfoItem label="主机" value={kv(connectionInfo.host)} />
-                  <InfoItem label="端口" value={kv(connectionInfo.port)} />
-                  <InfoItem
-                    label="数据库"
-                    value={kv(connectionInfo.database)}
-                  />
-                  <InfoItem
-                    label="用户名"
-                    value={kv(connectionInfo.username)}
-                  />
+                  {overviewFields.map((field) => (
+                    <InfoItem
+                      key={field.label}
+                      label={field.label}
+                      value={field.value}
+                      highlight={field.highlight}
+                      copyText={field.copyText}
+                    />
+                  ))}
 
-                  {/* Row 2: Prompts Config, Code Repo */}
                   <div className="space-y-1.5">
                     <div className="text-xs font-medium text-content-muted">
                       提示词配置
@@ -872,49 +976,7 @@ export function DataSourceDetailView() {
                       </div>
                     )}
                   </div>
-
-                  {/* Table Count */}
-                  <div className="space-y-1.5">
-                    <div className="text-xs font-medium text-content-muted">
-                      数据表数量
-                    </div>
-                    <div className="flex items-center px-3 py-2 rounded-md border border-line bg-surface-muted text-sm font-medium text-content">
-                      {typeof tableCount === "number" ? tableCount : 0}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <div className="text-xs font-medium text-content-muted">
-                      代码仓库
-                    </div>
-                    {sourceConfig?.codeRepo ? (
-                      <HoverHint
-                        text={`${sourceConfig.codeRepo.path}${sourceConfig.codeRepo.branch ? `#${sourceConfig.codeRepo.branch}` : ""}`}
-                        enableCopy
-                        copyText={`${sourceConfig.codeRepo.path}${sourceConfig.codeRepo.branch ? `#${sourceConfig.codeRepo.branch}` : ""}`}
-                        className="min-w-0"
-                      >
-                        <div
-                          className="flex items-center gap-3 px-3 py-2 rounded-md border bg-surface border-line text-sm text-content font-medium shadow-sm min-w-0 w-full h-9"
-                          title={`${sourceConfig.codeRepo.path}${sourceConfig.codeRepo.branch ? `#${sourceConfig.codeRepo.branch}` : ""}`}
-                        >
-                          <div className="shrink-0 w-6 h-6 flex items-center justify-center">
-                            <BrandIcon slug={toRepoBrandSlug(sourceConfig.codeRepo.type)} size={14} />
-                          </div>
-                          <span className="truncate block w-full font-mono">
-                            {`${sourceConfig.codeRepo.path}${sourceConfig.codeRepo.branch ? `#${sourceConfig.codeRepo.branch}` : ""}`}
-                          </span>
-                        </div>
-                      </HoverHint>
-                    ) : (
-                      <div className="flex items-center px-3 py-2 rounded-md border border-line bg-surface-muted text-sm text-content-muted">
-                        未配置
-                      </div>
-                    )}
-                  </div>
                 </div>
-
-                {/* Row 3 removed, merged into Row 2 */}
               </div>
             </section>
 
@@ -944,24 +1006,24 @@ export function DataSourceDetailView() {
             <div className="flex items-center justify-between">
               <h3 className="text-base font-medium text-content flex items-center gap-2">
                 <TableIcon className="w-4 h-4 text-content-muted" />
-                数据表结构
+                {structureTitle}
               </h3>
               <div className="flex items-center gap-3">
                 <Badge
                   variant="secondary"
                   className="bg-surface border-line text-content"
                 >
-                  {typeof tableCount === "number"
-                    ? `${tableCount} Tables`
-                    : "Unknown"}
+                  {structureCountLabel}
                 </Badge>
               </div>
             </div>
 
             <div className="bg-surface rounded-xl border border-line shadow-sm overflow-hidden">
               <div className="p-0">
-                {!signatureMeta ? (
-                  <EmptyState icon={TableIcon} message="暂无表结构信息" />
+                {!isStructuredSource ? (
+                  <EmptyState icon={TableIcon} message={structureEmptyMessage} />
+                ) : !signatureMeta ? (
+                  <EmptyState icon={TableIcon} message={structureEmptyMessage} />
                 ) : (
                   <div className="flex flex-col">
                     {/* Table List (Main Content) */}
@@ -1060,7 +1122,7 @@ export function DataSourceDetailView() {
                                 colSpan={4}
                                 className="h-24 text-center text-content-muted"
                               >
-                                暂无表结构数据
+                                {structureEmptyRowMessage}
                               </TableCell>
                             </TableRow>
                           )}
@@ -1544,7 +1606,7 @@ export function DataSourceDetailView() {
           <AlertDialogHeader>
             <AlertDialogTitle>无法删除 - 存在依赖关系</AlertDialogTitle>
             <AlertDialogDescription>
-              该数据源正在被以下 {dependentResources.length} 个 DAC 资源使用，无法删除。
+              该数据源正在被以下 {dependentResources.length} 个资源使用，无法删除。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="mt-4 space-y-3 px-6">
@@ -1559,9 +1621,9 @@ export function DataSourceDetailView() {
                 </TableHeader>
                 <TableBody>
                   {dependentResources.map((resource, idx) => (
-                    <TableRow key={`${resource.kind}/${resource.namespace}/${resource.name}/${idx}`}>
+                    <TableRow key={`${resource.kind}/${resource.id ?? resource.namespace}/${resource.name}/${idx}`}>
                       <TableCell className="font-medium whitespace-normal break-all">
-                        {resource.kind} / {resource.name}
+                        {getDataDescriptorDependencyKindLabel(resource.kind)} / {resource.name}
                       </TableCell>
                       <TableCell className="text-content-muted">{resource.namespace}</TableCell>
                       <TableCell className="text-right">
@@ -1572,8 +1634,10 @@ export function DataSourceDetailView() {
                             setShowDependencyDialog(false);
                             if (resource.kind === "agent") {
                               router.push(`/agents/${encodeURIComponent(resource.namespace)}/${encodeURIComponent(resource.name)}`);
-                            } else {
-                              router.push(`/datasources/${encodeURIComponent(resource.namespace)}/${encodeURIComponent(resource.name)}`);
+                            } else if (resource.kind === "group") {
+                              router.push(`/semantic-groups/${encodeURIComponent(resource.id ?? resource.name)}`);
+                            } else if (resource.kind === "dac") {
+                              router.push(`/agents/${encodeURIComponent(resource.namespace)}/${encodeURIComponent(resource.name)}`);
                             }
                           }}
                           className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"
@@ -1743,11 +1807,13 @@ function InfoItem({
   value,
   fullWidth = false,
   highlight = false,
+  copyText,
 }: {
   label: string;
   value: string;
   fullWidth?: boolean;
   highlight?: boolean;
+  copyText?: string;
 }) {
   const isEmpty = !value || value === "-" || (value === "0" && !highlight); // Keep 0 highlighted if it's a stat
 
@@ -1764,7 +1830,13 @@ function InfoItem({
               : "bg-surface border-line text-content font-medium shadow-sm",
         )}
       >
-        {value}
+        {copyText ? (
+          <HoverHint text={value} copyText={copyText} enableCopy className="w-full">
+            <span className="truncate block w-full">{value}</span>
+          </HoverHint>
+        ) : (
+          value
+        )}
       </div>
     </div>
   );

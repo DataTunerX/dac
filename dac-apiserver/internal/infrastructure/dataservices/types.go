@@ -108,6 +108,12 @@ type KnowledgeDocument struct {
 	Children    any                    `json:"children,omitempty"`
 }
 
+// VectorDocument is a document payload for data-services vector add_documents.
+type VectorDocument struct {
+	PageContent string
+	Metadata    map[string]any
+}
+
 // HTTPError represents a non-2xx response from data-services.
 type HTTPError struct {
 	StatusCode int

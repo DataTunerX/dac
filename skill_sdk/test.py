@@ -123,7 +123,7 @@ async def main() -> None:
 
     runner = SkillRunner(
         llm=llm,
-        max_steps=10,
+        max_steps=100,
         cmd_timeout_sec=60,
         same_cmd_fail_budget=2,
         total_fail_budget=3,
@@ -157,7 +157,7 @@ async def main() -> None:
         # await demo_plan_and_run(runner, "这段话里有多少个单词、多少行、多少字符？\nThe quick brown fox jumps over the lazy dog.\nSphinx of black quartz, judge my vow.")
 
         # 04-uuidgen
-        # await demo_plan_and_run(runner, "帮我生成 3 个 UUID。")
+        await demo_plan_and_run(runner, "帮我生成 3 个 UUID。")
 
         # 05-timestamp
         # await demo_plan_and_run(runner, "把 unix 时间戳 1700000000 转换成对应的 UTC 人类可读时间。")
@@ -199,7 +199,7 @@ async def main() -> None:
         # await demo_plan_and_run(runner, "在https://www.python.org/downloads/release/python-3120/ 这个地址中有哪些 New features")
 
         # 18-code-execution
-        await demo_plan_and_run(runner, "从 1 到 100 所有奇数的平方和是多少")
+        # await demo_plan_and_run(runner, "从 1 到 100 所有奇数的平方和是多少")
 
         # 19-tavily-search
         # 测试前要设置env ， TAVILY_BASE_URL='https://api.tavily.com' TAVILY_API_KEY='xxx'
@@ -212,12 +212,13 @@ async def main() -> None:
         # await demo_plan_and_run(runner, "分析一下dac/tests-data/files/laws.pdf 这个文件")
         # await demo_plan_and_run(runner, "分析一下dac/tests-data/files/manual-1page.pdf 这个文件， 看看有没有使用到chatopenai这个python库")
         # await demo_plan_and_run(runner, "分析一下dac/tests-data/files/manual-2pages.pdf 这个文件， 看看有没有使用到chatopenai这个python库")
-        
         # await demo_plan_and_run(runner, "分析一下https://arxiv.org/pdf/2401.00001.pdf 这个文件")
-        
-
         # await demo_plan_and_run(runner, "读取这个https://arxiv.org/pdf/2401.00001.pdf pdf文件，分析一下这个文件在干什么？")
 
+        # 22 lsp
+        # await demo_plan_and_run(runner, "分析一下/Users/james/daocloud/code/dac/dac-apiserver这个repo，看看SendMessageStreaming的代码块是什么")
+
+        # await demo_plan_and_run(runner, "看看/Users/james/daocloud/code/dac/skill_sdk/skill_sdk/tool/lsp_plugin.py里_get_or_create_manager调用了哪个方法，它的代码是什么")
 
     finally:
         runner.close()

@@ -1,0 +1,92 @@
+[
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/main.c -o src/main.o",
+    "file": "src/main.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/core/data_processor.h -o src/core/data_processor.h.gch",
+    "file": "src/core/data_processor.h"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/core/processor_config.h -o src/core/processor_config.h.gch",
+    "file": "src/core/processor_config.h"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/core/default_processor.c -o src/core/default_processor.o",
+    "file": "src/core/default_processor.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/core/handler.c -o src/core/handler.o",
+    "file": "src/core/handler.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/core/helper.c -o src/core/helper.o",
+    "file": "src/core/helper.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/core/finalize_output.c -o src/core/finalize_output.o",
+    "file": "src/core/finalize_output.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/models.c -o src/shop/models.o",
+    "file": "src/shop/models.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/cart.c -o src/shop/cart.o",
+    "file": "src/shop/cart.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/percentage_discount.c -o src/shop/percentage_discount.o",
+    "file": "src/shop/percentage_discount.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/fixed_amount_discount.c -o src/shop/fixed_amount_discount.o",
+    "file": "src/shop/fixed_amount_discount.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/bogo_discount.c -o src/shop/bogo_discount.o",
+    "file": "src/shop/bogo_discount.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/stripe_gateway.c -o src/shop/stripe_gateway.o",
+    "file": "src/shop/stripe_gateway.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/paypal_gateway.c -o src/shop/paypal_gateway.o",
+    "file": "src/shop/paypal_gateway.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/mock_gateway.c -o src/shop/mock_gateway.o",
+    "file": "src/shop/mock_gateway.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/inmemory_repository.c -o src/shop/inmemory_repository.o",
+    "file": "src/shop/inmemory_repository.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/postgres_repository.c -o src/shop/postgres_repository.o",
+    "file": "src/shop/postgres_repository.c"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/c-project",
+    "command": "clang -std=c17 -Wall -Wextra -I src -c src/shop/order_service.c -o src/shop/order_service.o",
+    "file": "src/shop/order_service.c"
+  }
+]

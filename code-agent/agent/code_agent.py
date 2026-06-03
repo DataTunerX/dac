@@ -17,7 +17,7 @@ from decimal import Decimal
 import uuid
 import numpy as np
 from typing import Annotated, Any, AsyncIterable, Dict, Literal, List, Optional, Union
-from pydantic import BaseModel, Field, BeforeValidator
+from pydantic import BaseModel, Field, BeforeValidator, ValidationError
 from abc import ABC
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -46,6 +46,23 @@ from .prompts import (
     QUICK_RELEVANCE_CHECK_PROMPT
 )
 from .tools.extract_code_by_lines import read_file_from_code_repo, read_file_with_context, smart_read_code
+from .tools.skill_read_code_recall import (
+    SCHEME_METADATA_LOCAL,
+    SCHEME_READ_CODE,
+    recall_via_read_code_skill,
+    resolve_grep_recall_scheme,
+)
+from .tools.snippet_dedup import log_merge_dedup_report, merge_hybrid_code_snippets
+from .tools.snippet_context_budget import (
+    log_selection_report,
+    score_trigger_chars,
+    select_snippets_by_score,
+    should_score_and_select,
+    total_snippet_chars,
+)
+from .tools.snippet_llm_score import score_snippets_batch_parallel
+from .skill_repo_cwd import use_code_repo_cwd
+from .skill_runner_service import CodeAgentSkillRunnerService, SKILL_FALLBACK_ON_EMPTY
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 try:
@@ -118,6 +135,22 @@ def _escape_known_string_field_inner_quotes(text: str) -> str:
         return head + "".join(fixed_chars) + tail
 
     return pattern.sub(_repl, text)
+
+
+def _extract_json_object_from_llm_text(raw: str) -> Optional[str]:
+    """Pull a JSON object string from prose / markdown-fenced LLM output."""
+    if not raw:
+        return None
+    text = raw.strip()
+    fence = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    return text[start : end + 1]
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -313,14 +346,14 @@ class AuditResult(BaseModel):
         description="被审核文件的完整路径"
     )
     action: Literal["KEEP", "DISCARD"] = Field(
-        description="审计动作：KEEP 表示保留该文件，DISCARD 表示剔除该文件"
+        description="审计动作：KEEP 表示与用户问题代码相关，DISCARD 表示业务域明显无关"
     )
     logic_score: int = Field(
         ge=0, le=10, 
-        description="逻辑匹配得分 (0-10)，分数越高代表该文件与用户意图的职责层级越契合"
+        description="代码相关度得分 (0-10)；含关键数据/逻辑但缺现成接口仍可给高分"
     )
     reasoning: str = Field(
-        description="基于职责层级（Orchestrator/Worker）和业务链条解释保留或剔除的深层原因"
+        description="基于代码相关性（实体、字段、方法、调用链）说明保留或剔除原因"
     )
 
 class FileAuditResponse(BaseModel):
@@ -334,7 +367,7 @@ class FileAuditResponse(BaseModel):
         description="对每个候选文件进行逻辑审查的结果列表"
     )
     final_context_summary: str = Field(
-        description="说明保留下来的文件集如何协同工作，共同形成解释用户问题的逻辑闭环"
+        description="说明保留下来的文件如何共同提供与用户问题相关的代码上下文"
     )
     
     def get_kept_files(self, unique: bool = True) -> List[str]:
@@ -1861,7 +1894,8 @@ class CodeAgent(BaseAgent):
         agent_id: str = None,
         code_paths: Dict[str, str] = None,
         codebase_index: 'CodebaseIndex' = None,  # 外部传入的全局索引
-        codebase_index_loaded: bool = False  # 索引是否已加载
+        codebase_index_loaded: bool = False,  # 索引是否已加载
+        skill_runner: Any = None,
 
     ):
         logger.info('Initializing CodeAgent')
@@ -1906,8 +1940,122 @@ class CodeAgent(BaseAgent):
         # 使用外部传入的全局索引，如果没有则创建新的（兼容旧代码）
         self.codebase_index = codebase_index if codebase_index is not None else CodebaseIndex()
         self._codebase_index_loaded = codebase_index_loaded  # 使用外部传入的状态
-        logger.info(f"CodeAgent initialized with code_paths: {list(self.code_paths.keys())}, codebase_index_loaded: {self._codebase_index_loaded}")
+        self.skill_runner = skill_runner
+        logger.info(
+            f"CodeAgent initialized with code_paths: {list(self.code_paths.keys())}, "
+            f"codebase_index_loaded: {self._codebase_index_loaded}, "
+            f"skill_runner: {skill_runner is not None}"
+        )
         self.agent_id = agent_id or (metadata or {}).get("agent_id") or self.agent_name
+
+    @staticmethod
+    def _skill_first_enabled(metadata: Optional[dict]) -> bool:
+        if metadata and str(metadata.get("execution_mode", "")).strip().lower() in (
+            "skill", "local_skill",
+        ):
+            return True
+        return os.getenv("SKILL_FIRST", "false").strip().lower() in ("1", "true", "yes")
+
+    def _skill_trace_ids(self) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        md = self.metadata or {}
+        if not isinstance(md, dict):
+            return None, None, None
+        return (
+            md.get("user_id"),
+            md.get("run_id"),
+            md.get("trace_id"),
+        )
+
+    def _langfuse_trace_context(self):
+        from .tools.snippet_llm_score import LangfuseTraceContext
+
+        md = self.metadata or {}
+        if not isinstance(md, dict):
+            md = {}
+        return LangfuseTraceContext(
+            user_id=md.get("user_id", ""),
+            run_id=md.get("run_id", ""),
+            trace_id=md.get("trace_id", ""),
+            agent_id=self.agent_id,
+        )
+
+    def _langfuse_trace_input(self, **extra: Any) -> Dict[str, Any]:
+        md = self.metadata or {}
+        if not isinstance(md, dict):
+            md = {}
+        payload: Dict[str, Any] = {
+            "agent_id": self.agent_id,
+            "run_id": md.get("run_id", ""),
+            "trace_id": md.get("trace_id", ""),
+            "user_id": md.get("user_id", ""),
+        }
+        payload.update(extra)
+        return payload
+
+    async def _run_skill_plan_and_run(self, query: str) -> Optional[dict]:
+        """Run skill-sdk plan_and_run; returns result dict or None if unavailable."""
+        if self.skill_runner is None:
+            return None
+        user_id, run_id, trace_id = self._skill_trace_ids()
+        logger.info(
+            "[CodeAgent][Skill] plan_and_run query=%r user_id=%s run_id=%s",
+            (query or "")[:180],
+            user_id,
+            run_id,
+        )
+        try:
+            async with use_code_repo_cwd(list(self.code_paths.values())):
+                return await self.skill_runner.plan_and_run(
+                    query=query,
+                    user_id=user_id or "",
+                    run_id=run_id or "",
+                    trace_id=trace_id or "",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[CodeAgent][Skill] plan_and_run raised: %s", exc)
+            return {
+                "status": "local_skill_error",
+                "skill": "",
+                "final_answer": f"Skill execution error: {exc}",
+                "attempts": [],
+            }
+
+    @staticmethod
+    def _skill_result_is_success(result: dict) -> bool:
+        return str(result.get("status") or "").strip().lower() == "completed"
+
+    def _format_skill_success_answer(self, final_answer: str) -> str:
+        marker = "reason:The current answer addresses the question very well."
+        body = (final_answer or "").strip()
+        if not body:
+            body = "Skill completed without a final answer."
+        if body.startswith("reason:"):
+            return body
+        return f"{marker}\n\n{body}"
+
+    async def _try_skill_answer(self, query: str, *, context: str) -> Optional[str]:
+        """Attempt skill-sdk; return formatted answer on success, else None."""
+        result = await self._run_skill_plan_and_run(query)
+        if not result:
+            return None
+        status = result.get("status")
+        skill_name = result.get("skill") or "(unknown)"
+        logger.info(
+            "[CodeAgent][Skill] %s status=%s skill=%s",
+            context,
+            status,
+            skill_name,
+        )
+        if not self._skill_result_is_success(result):
+            preview = str(result.get("final_answer") or "")[:200]
+            logger.info("[CodeAgent][Skill] %s did not succeed: %s", context, preview)
+            return None
+        answer = self._format_skill_success_answer(str(result.get("final_answer") or ""))
+        self.state = AgentState.FINISHED
+        self.save_step_status(query, answer)
+        return answer
 
     @staticmethod
     def _step_query_preview(text: str, limit: int = 420) -> str:
@@ -2005,6 +2153,16 @@ class CodeAgent(BaseAgent):
             return json.loads(raw)
         except json.JSONDecodeError:
             pass
+
+        extracted = _extract_json_object_from_llm_text(raw)
+        if extracted:
+            try:
+                parsed = json.loads(extracted)
+                if isinstance(parsed, dict):
+                    logger.info(" === format_llm_output, recovered via embedded JSON block")
+                    return parsed
+            except json.JSONDecodeError:
+                pass
 
         cleaned_content = raw.strip()
         if cleaned_content.startswith('```json'):
@@ -2107,7 +2265,7 @@ class CodeAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": self.query}
+                input=self._langfuse_trace_input(query=self.query)
             )
 
             answer = await chain.ainvoke(
@@ -2138,7 +2296,8 @@ class CodeAgent(BaseAgent):
 
     async def observe_locate_files(self, locate_files, knowledge: str = "",):
         """
-        审查一次初步选择的块的detail，是不是detail是不是真正的匹配客户的问题，如果匹配就会保留相关的文件，对于不匹配的就去掉第一轮选择的文件。
+        对 Stage 1 定位的文件做代码相关性审计：剔除明显无关的噪音文件，保留含相关业务/数据的代码载体。
+        不要求文件已具备可直接回答用户的完整实现（见 OBSERVE_LOCATE_FILES 提示词）。
         
         Args:
             locate_files: 第一轮定位出来的文件信息
@@ -2178,7 +2337,7 @@ class CodeAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": self.query}
+                input=self._langfuse_trace_input(query=self.query)
             )
 
             answer = await chain.ainvoke(
@@ -2195,16 +2354,49 @@ class CodeAgent(BaseAgent):
         data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
-            data_dict = {
-                "query": "System error: Unable to process model response",
-                "conclusion": "error"
-            }
+            logger.warning(
+                "[observe_locate_files] LLM output parse failed — keeping Stage-1 located files"
+            )
+            return self._audit_fallback_keep_stage1(locate_files)
 
-        llm_result = FileAuditResponse(**data_dict)
+        try:
+            llm_result = FileAuditResponse(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[observe_locate_files] invalid audit schema (%s) — keeping Stage-1 files",
+                exc.error_count(),
+            )
+            return self._audit_fallback_keep_stage1(locate_files)
 
         logger.debug(f" === CodeAgent.observe_locate_files , FileAuditResponse.llm_result = {llm_result}")
 
         return llm_result
+
+    def _audit_fallback_keep_stage1(self, locate_files: "FileLocationResult") -> FileAuditResponse:
+        """When audit JSON fails, retain all Stage-1 located files instead of erroring."""
+        audit_results: List[AuditResult] = []
+        for kf in locate_files.knowledge_files:
+            for fp in kf.files:
+                audit_results.append(
+                    AuditResult(
+                        knowledge_id=kf.knowledge_id,
+                        file_path=fp,
+                        action="KEEP",
+                        logic_score=5,
+                        reasoning="Audit LLM JSON parse failed; retaining Stage-1 located file.",
+                    )
+                )
+        kept = [ar.file_path for ar in audit_results if ar.action == "KEEP"]
+        summary = (
+            f"Retained Stage-1 located files after audit parse failure: {kept}"
+            if kept
+            else "No Stage-1 files to retain after audit parse failure."
+        )
+        return FileAuditResponse(
+            intent_reconstruction="Stage-1 file location retained (audit parse fallback).",
+            audit_results=audit_results,
+            final_context_summary=summary,
+        )
 
     async def invoke_requery(self) -> RequeryResult:
 
@@ -2252,7 +2444,7 @@ class CodeAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": self.query}
+                input=self._langfuse_trace_input(query=self.query)
             )
 
             answer = await chain.ainvoke(
@@ -2338,7 +2530,7 @@ class CodeAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": query}
+                input=self._langfuse_trace_input(query=query)
             )
 
             llm_answer = await chain.ainvoke(
@@ -3118,7 +3310,7 @@ class CodeAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": self.query}
+                input=self._langfuse_trace_input(query=self.query)
             )
             
             answer = await chain.ainvoke(
@@ -3265,7 +3457,7 @@ class CodeAgent(BaseAgent):
         
         流程：
         Stage 1:   使用 two_stage_knowledge_retrieval 定位相关文件（或使用传入的 filepaths）
-        Stage 1.5: 使用 observe_locate_files 审查验证，过滤不相关文件
+        Stage 1.5: 使用 observe_locate_files 做代码相关性审计（剔除噪音，不要求已有完整实现）
         Stage 2:   加载全量代码分析到内存（CodebaseIndex）
         Stage 3:   基于定位到的文件，分析多级依赖关系（2级深度）
         Stage 4:   扩展文件列表，包含相关依赖文件
@@ -3920,7 +4112,7 @@ class CodeAgent(BaseAgent):
                 span.update_trace(
                     user_id=user_id,
                     session_id=run_id,
-                    input={"query": query}
+                    input=self._langfuse_trace_input(query=query)
                 )
                 
                 answer = await chain.ainvoke(
@@ -3998,8 +4190,33 @@ class CodeAgent(BaseAgent):
                 description=match.get("content", "")[:200]  # 截断以加快判断
             )
             
-            # 使用较短的超时，快速判断
-            answer = await self.llm.ainvoke(prompt)
+            message = HumanMessage(content=prompt)
+            trace = self._langfuse_trace_context()
+            trace_ctx = {"trace_id": trace.trace_id} if trace.trace_id else {}
+
+            with langfuse.start_as_current_span(
+                name="codeagent-quick-relevance-check",
+                trace_context=trace_ctx,
+            ) as span:
+                span.update_trace(
+                    user_id=trace.user_id,
+                    session_id=trace.run_id,
+                    input=self._langfuse_trace_input(
+                        query=query,
+                        file_path=match.get("file_path", ""),
+                        name=match.get("name", ""),
+                        segment_type=match.get("match_type", "unknown"),
+                    ),
+                )
+                answer = await self.llm.ainvoke(
+                    [message],
+                    config={"callbacks": [langfuse_handler]},
+                )
+                span.update_trace(
+                    output={"answer": getattr(answer, "content", str(answer))},
+                )
+
+            langfuse.flush()
             data_dict = self.format_llm_output(answer)
             
             if data_dict and "relevant" in data_dict:
@@ -4010,188 +4227,199 @@ class CodeAgent(BaseAgent):
             logger.debug(f"Quick relevance check failed: {e}")
             return True  # 出错时默认保留
 
+    def _empty_grep_recall_result(
+        self,
+        *,
+        keywords: Optional[Dict[str, List[str]]] = None,
+        grep_recall_scheme: str = "",
+    ) -> Dict[str, Any]:
+        kw = keywords or {"entity_keywords": [], "action_keywords": []}
+        return {
+            "code_snippets": [],
+            "grep_matches": [],
+            "keywords": kw,
+            "files_matched": [],
+            "filtered_count": 0,
+            "use_llm_filter": False,
+            "grep_recall_scheme": grep_recall_scheme,
+            "local_grep_count": 0,
+            "skill_grep_count": 0,
+            "skill_recall_count": 0,
+        }
+
     async def grep_recall_code_segments(self, max_results: int = 20, use_llm_filter: bool = True,
-                                          use_local_grep: bool = False) -> Dict[str, Any]:
+                                          grep_recall_scheme: Optional[str] = None,
+                                          use_local_grep: Optional[bool] = None,
+                                          use_skill_grep: Optional[bool] = None) -> Dict[str, Any]:
         """
-        使用 grep 机制召回代码块（先搜主体，再筛选动作）
-        
-        搜索策略：
-        1. 使用 LLM 提取主体关键词（entity）和动作关键词（action）
-        2. 先用主体关键词搜索，找到相关文件/代码段
-        3. 在主体搜索结果中，用动作关键词进一步筛选
-        4. 可选使用 LLM 快速判断相关性进行过滤
-        5. 可选使用本地文件 grep 补充搜索结果（混合搜索）
-        
-        这种"先主体后动作"的策略能避免通用词（如"创建"）匹配到大量无关文件。
-        
+        grep 召回：两套互斥方案（默认 read-code skill）。
+
+        方案 A ``read_code_skill``（默认）：
+            read-code skill agent（LLM + grep + LSP + readline_in_range）
+
+        方案 B ``metadata_local``：
+            metadata grep + local grep（绑定为一组）
+
         Args:
             max_results: 最多返回的代码块数量
-            use_llm_filter: 是否使用 LLM 对每个代码片段进行相关性筛选
-            use_local_grep: 是否使用本地文件 grep 补充搜索（混合搜索模式）
-            
-        Returns:
-            Dict[str, Any]: 包含 grep 召回结果
-            
-        Return Sample:
-            # query = "怎么创建订单", use_llm_filter = True, use_local_grep = False
-            {
-                'code_snippets': [
-                    {
-                        'file_path': 'order-service/services/order_service.py',
-                        'code': 'def create_order(self, order_data: dict):\\n    \"\"\"创建新订单\"\"\"\\n    ...',
-                        'start_line': 25,
-                        'end_line': 45,
-                        'matched_keyword': '订单 + 创建',
-                        'match_type': 'function',
-                        'score': 9.0,
-                        'source': 'metadata'
-                    },
-                    {
-                        'file_path': 'order-service/controllers/order_controller.py',
-                        'code': '@post("/api/v1/orders")\\ndef create_order_api(request):\\n    ...',
-                        'start_line': 15,
-                        'end_line': 30,
-                        'matched_keyword': '订单 + 创建',
-                        'match_type': 'api_endpoint',
-                        'score': 9.0,
-                        'source': 'metadata'
-                    }
-                ],
-                'grep_matches': [
-                    {
-                        'file_path': 'order-service/services/order_service.py',
-                        'match_type': 'function',
-                        'name': 'create_order',
-                        'content': '创建新订单，处理订单创建流程',
-                        'line_no': '25',
-                        'matched_entity_keyword': '订单',
-                        'matched_action_keyword': '创建',
-                        'source': 'metadata'
-                    }
-                ],
-                'keywords': {
-                    'entity_keywords': ['订单', 'Order'],
-                    'action_keywords': ['创建', 'create']
-                },
-                'files_matched': [
-                    'order-service/services/order_service.py',
-                    'order-service/controllers/order_controller.py'
-                ],
-                'filtered_count': 5,  # 被 LLM 筛选过滤掉的数量
-                'use_llm_filter': True,
-                'local_grep_count': 0  # 本地 grep 找到的额外匹配数（use_local_grep=True 时有值）
-            }
+            use_llm_filter: metadata_local 方案是否 LLM 筛选（read-code 方案不适用）
+            grep_recall_scheme: ``read_code_skill`` | ``metadata_local``；默认读 GREP_RECALL_SCHEME
+            use_local_grep: 兼容旧参数，True 强制 metadata_local
+            use_skill_grep: 兼容旧参数，False 强制 metadata_local
         """
-        logger.info(f"=== grep_recall_code_segments, query: {self.query}, use_llm_filter: {use_llm_filter}, use_local_grep: {use_local_grep} ===")
-        
-        # 确保 codebase index 已加载
+        scheme = resolve_grep_recall_scheme(
+            explicit=grep_recall_scheme,
+            use_local_grep=use_local_grep,
+            use_skill_grep=use_skill_grep,
+        )
+        logger.info(
+            f"=== grep_recall_code_segments, query: {self.query}, "
+            f"scheme: {scheme}, use_llm_filter: {use_llm_filter} ==="
+        )
+
+        if scheme == SCHEME_READ_CODE:
+            return await self._grep_recall_read_code_skill(max_results=max_results, scheme=scheme)
+
+        return await self._grep_recall_metadata_local(
+            max_results=max_results,
+            use_llm_filter=use_llm_filter,
+            scheme=scheme,
+        )
+
+    async def _grep_recall_read_code_skill(
+        self,
+        *,
+        max_results: int,
+        scheme: str,
+    ) -> Dict[str, Any]:
+        """方案 A：完整 read-code skill agent 召回。"""
+        if not self.code_paths:
+            logger.warning("[Grep recall] read-code skill scheme but no code_paths")
+            return self._empty_grep_recall_result(grep_recall_scheme=scheme)
+
+        if self.skill_runner is None:
+            logger.warning("[Grep recall] read-code skill scheme but skill_runner unavailable")
+            return self._empty_grep_recall_result(grep_recall_scheme=scheme)
+
+        user_id, run_id, trace_id = self._skill_trace_ids()
+        recall = await recall_via_read_code_skill(
+            query=self.query,
+            skill_runner=self.skill_runner,
+            user_id=user_id or "",
+            run_id=run_id or "",
+            trace_id=trace_id or "",
+            code_paths=list(self.code_paths.values()),
+            max_snippets=max_results,
+        )
+        snippets = (recall.get("code_snippets") or [])[:max_results]
+        skill_recall_count = len(snippets)
+        logger.info(
+            "[Grep recall] read-code skill status=%s snippets=%d",
+            recall.get("skill_status"),
+            skill_recall_count,
+        )
+        return {
+            "code_snippets": snippets,
+            "grep_matches": [],
+            "keywords": {"entity_keywords": [], "action_keywords": []},
+            "files_matched": [],
+            "filtered_count": 0,
+            "use_llm_filter": False,
+            "grep_recall_scheme": scheme,
+            "local_grep_count": 0,
+            "skill_grep_count": skill_recall_count,
+            "skill_recall_count": skill_recall_count,
+        }
+
+    async def _grep_recall_metadata_local(
+        self,
+        *,
+        max_results: int,
+        use_llm_filter: bool,
+        scheme: str,
+    ) -> Dict[str, Any]:
+        """方案 B：metadata grep + local grep。"""
         if not self._codebase_index_loaded:
             await self.load_codebase_index()
-        
+
         if not self._codebase_index_loaded:
-            logger.warning("Codebase index not loaded, grep recall not available")
-            return {
-                'code_snippets': [],
-                'grep_matches': [],
-                'keywords': {'entity_keywords': [], 'action_keywords': []},
-                'files_matched': [],
-                'filtered_count': 0,
-                'local_grep_count': 0
-            }
-        
-        # 1. 使用 LLM 提取分类关键词
+            logger.warning("Codebase index not loaded, metadata_local grep recall unavailable")
+            return self._empty_grep_recall_result(grep_recall_scheme=scheme)
+
         keywords_dict = await self.extract_keywords_with_llm(self.query)
-        entity_keywords = keywords_dict.get('entity_keywords', [])
-        action_keywords = keywords_dict.get('action_keywords', [])
-        
-        logger.info(f"Grep recall - entity: {entity_keywords}, action: {action_keywords}")
-        
+        entity_keywords = keywords_dict.get("entity_keywords", [])
+        action_keywords = keywords_dict.get("action_keywords", [])
+
+        logger.info(f"Grep recall [metadata_local] - entity: {entity_keywords}, action: {action_keywords}")
+
         if not entity_keywords:
-            logger.info("No entity keywords extracted, grep recall returns empty")
-            return {
-                'code_snippets': [],
-                'grep_matches': [],
-                'keywords': keywords_dict,
-                'files_matched': [],
-                'filtered_count': 0,
-                'local_grep_count': 0
-            }
-        
-        # 2. 先用主体关键词在元数据中搜索
-        entity_matches = {}  # file_path -> list of matches
+            logger.info("No entity keywords extracted, metadata_local grep recall returns empty")
+            empty = self._empty_grep_recall_result(keywords=keywords_dict, grep_recall_scheme=scheme)
+            empty["use_llm_filter"] = use_llm_filter
+            return empty
+
+        entity_matches: Dict[str, List[Dict[str, Any]]] = {}
         for keyword in entity_keywords:
             matches = self.codebase_index.grep(keyword)
             for match in matches:
                 filepath = match["file_path"]
                 if filepath not in entity_matches:
                     entity_matches[filepath] = []
-                match['matched_entity_keyword'] = keyword
-                match['source'] = 'metadata'
+                match["matched_entity_keyword"] = keyword
+                match["source"] = "metadata"
                 entity_matches[filepath].append(match)
-        
+
         metadata_match_count = sum(len(m) for m in entity_matches.values())
-        logger.info(f"Grep recall - metadata search found {metadata_match_count} matches in {len(entity_matches)} files")
-        
-        # 2.5 如果启用本地文件 grep，补充搜索结果
+        logger.info(
+            f"Grep recall [metadata_local] - metadata found {metadata_match_count} matches "
+            f"in {len(entity_matches)} files"
+        )
+
         local_grep_count = 0
-        if use_local_grep and self.code_paths:
-            # code_paths 是字典，需要提取值（路径列表）
+        if self.code_paths:
             code_path_list = list(self.code_paths.values())
-            
             for keyword in entity_keywords:
-                # 只对像标识符的关键词使用本地 grep
                 if self._is_identifier(keyword):
                     local_matches = self.codebase_index.local_file_grep(
-                        keyword, 
+                        keyword,
                         code_path_list,
-                        max_results_per_file=5
+                        max_results_per_file=5,
                     )
                     local_grep_count += len(local_matches)
-                    
                     for match in local_matches:
                         filepath = match["file_path"]
-                        # 标准化路径
                         for code_path in code_path_list:
                             if filepath.startswith(code_path):
-                                filepath = filepath[len(code_path):].lstrip('/')
+                                filepath = filepath[len(code_path) :].lstrip("/")
                                 break
-                        
                         if filepath not in entity_matches:
                             entity_matches[filepath] = []
-                        match['file_path'] = filepath
-                        match['matched_entity_keyword'] = keyword
-                        match['source'] = 'local_grep'
+                        match["file_path"] = filepath
+                        match["matched_entity_keyword"] = keyword
+                        match["source"] = "local_grep"
                         entity_matches[filepath].append(match)
-            
-            logger.info(f"Grep recall - local grep found {local_grep_count} additional matches")
-        
-        # 3. 在主体搜索结果中，用动作关键词进一步筛选
-        all_matches = []
-        file_scores = {}
-        
+            logger.info(f"Grep recall [metadata_local] - local grep found {local_grep_count} matches")
+
+        all_matches: List[Dict[str, Any]] = []
+        file_scores: Dict[str, float] = {}
+
         for filepath, matches in entity_matches.items():
-            # 检查这个文件的代码分析中是否包含动作关键词
             action_match_count = 0
-            action_matched_keywords = set()
-            
+            action_matched_keywords: set[str] = set()
+
             if action_keywords:
-                # 检查文件中的匹配项是否同时包含动作关键词
                 for match in matches:
                     match_content = f"{match.get('name', '')} {match.get('content', '')}"
                     for action_kw in action_keywords:
                         if action_kw.lower() in match_content.lower():
                             action_match_count += 1
                             action_matched_keywords.add(action_kw)
-                            match['matched_action_keyword'] = action_kw
+                            match["matched_action_keyword"] = action_kw
                             break
-                
-                # 如果有动作关键词但文件中没有匹配，降低优先级但不排除
                 if action_match_count == 0:
-                    # 仍然保留，但分数较低
                     for match in matches:
-                        match['matched_action_keyword'] = None
-            
-            # 计算文件分数
+                        match["matched_action_keyword"] = None
+
             base_score = 0
             for match in matches:
                 match_type = match.get("match_type", "")
@@ -4203,99 +4431,39 @@ class CodeAgent(BaseAgent):
                     base_score += 3
                 else:
                     base_score += 1
-            
-            # 动作关键词匹配加成
+
             if action_keywords:
-                if action_match_count > 0:
-                    # 同时匹配主体和动作，大幅加分
-                    multiplier = 3.0 + len(action_matched_keywords)
-                else:
-                    # 只匹配主体，轻微降分
-                    multiplier = 0.7
+                multiplier = 3.0 + len(action_matched_keywords) if action_match_count > 0 else 0.7
             else:
-                # 没有动作关键词要求，正常计分
                 multiplier = 1.0
-            
+
             file_scores[filepath] = base_score * multiplier
-            
-            # 添加匹配到结果列表
-            for match in matches:
-                all_matches.append(match)
-        
-        # 4. 可选 LLM 筛选
+            all_matches.extend(matches)
+
+        if use_llm_filter:
+            logger.info(
+                "Grep recall [metadata_local] - use_llm_filter is deprecated; "
+                "post-search batch LLM scoring handles relevance"
+            )
         filtered_count = 0
-        if use_llm_filter and all_matches:
-            original_count = len(all_matches)
-            batch_size = 50
-            total_batches = (len(all_matches) + batch_size - 1) // batch_size
 
-            # 为每个批次定义异步处理函数
-            async def _filter_batch(batch, batch_idx):
-                tasks = [self.quick_relevance_check(m, self.query) for m in batch]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                kept = []
-                for match, is_relevant in zip(batch, results):
-                    if isinstance(is_relevant, Exception) or is_relevant:
-                        kept.append(match)
-                logger.info(
-                    f"[LLM filter] 批次 {batch_idx}/{total_batches}: "
-                    f"本批 {len(batch)} 个片段，{len(kept)} 个相关，{len(batch) - len(kept)} 个无关"
-                )
-                return kept
-
-            # 所有批次并行执行（批次间无依赖）
-            batch_coros = []
-            for i in range(0, len(all_matches), batch_size):
-                batch = all_matches[i:i + batch_size]
-                batch_idx = i // batch_size + 1
-                batch_coros.append(_filter_batch(batch, batch_idx))
-
-            batch_results = await asyncio.gather(*batch_coros, return_exceptions=True)
-
-            filtered_matches = []
-            for br in batch_results:
-                if isinstance(br, Exception):
-                    logger.error(f"[LLM filter] batch failed: {br}")
-                else:
-                    filtered_matches.extend(br)
-
-            filtered_count = original_count - len(filtered_matches)
-            all_matches = filtered_matches
-            logger.info(f"[LLM filter] 汇总: local grep 共 {original_count} 个片段，LLM 判定相关 {len(filtered_matches)} 个，过滤无关 {filtered_count} 个")
-        
-        logger.info(f"Grep recall - found {len(all_matches)} matches in {len(file_scores)} files" + 
-                   (f", filtered out {filtered_count}" if use_llm_filter else ""))
-        
-        # 5. 去重并按分数排序匹配结果
-        seen = set()
-        unique_matches = []
+        seen: set[tuple[str, str, str]] = set()
+        unique_matches: List[Dict[str, Any]] = []
         for match in all_matches:
-            # 使用 (文件路径, 名称, 行号) 作为唯一键
             key = (match["file_path"], match.get("name", ""), match.get("line_no", ""))
             if key not in seen:
                 seen.add(key)
                 unique_matches.append(match)
-        
-        # 按文件分数排序
-        unique_matches.sort(
-            key=lambda m: file_scores.get(m["file_path"], 0),
-            reverse=True
-        )
-        
-        # 限制结果数量
+
+        unique_matches.sort(key=lambda m: file_scores.get(m["file_path"], 0), reverse=True)
         unique_matches = unique_matches[:max_results]
-        
-        # 6. 读取代码内容，构建与语义检索兼容的 code_snippets 格式
-        # 使用 seen_code_blocks 去重：local grep 在同一函数内匹配多行时，
-        # smart_read_code 会读到相同的完整函数，通过代码首行去重避免重复
-        code_snippets = []
-        seen_code_blocks = set()
-        
+
+        code_snippets: List[Dict[str, Any]] = []
+        seen_code_blocks: set[tuple[str, str]] = set()
+
         for match in unique_matches:
             filepath = match["file_path"]
             line_no = match.get("line_no")
-            
-            # 读取代码内容（使用智能读取：code_text 类型会自动扩展到完整函数）
             code_content = ""
             if line_no:
                 code_path = self.get_code_path()
@@ -4304,123 +4472,104 @@ class CodeAgent(BaseAgent):
                         code_base_path=code_path,
                         filepath=filepath,
                         line_no=str(line_no),
-                        match_type=match.get("match_type", "unknown")
+                        match_type=match.get("match_type", "unknown"),
                     )
                 else:
                     code_content = self.extract_code_by_line_range(
                         filepath=filepath,
                         line_no=str(line_no),
-                        context_lines=5
+                        context_lines=5,
                     )
-            
-            # 去重：用 (文件路径, 代码内容首行) 作为唯一键
-            # 避免 local grep 多行匹配同一函数时返回重复的完整函数代码
+
             if code_content:
-                first_line = code_content.split('\n')[0].strip() if code_content else ""
+                first_line = code_content.split("\n", 1)[0].strip()
                 dedup_key = (filepath, first_line)
                 if dedup_key in seen_code_blocks:
                     continue
                 seen_code_blocks.add(dedup_key)
-            
-            # 记录匹配的关键词
-            entity_kw = match.get('matched_entity_keyword', '')
-            action_kw = match.get('matched_action_keyword', '')
+
+            entity_kw = match.get("matched_entity_keyword", "")
+            action_kw = match.get("matched_action_keyword", "")
             matched_info = entity_kw
             if action_kw:
                 matched_info = f"{entity_kw} + {action_kw}"
-            
-            snippet = {
-                'file_path': filepath,
-                'segment_type': match.get("match_type", "unknown"),
-                'name': match.get("name", ""),
-                'line_no': str(line_no) if line_no else "",
-                'relevance_reason': f"grep 匹配: {match.get('content', '')[:100]}",
-                'business_meaning': match.get("content", ""),
-                'code_content': code_content,
-                'source': match.get('source', 'metadata'),  # 保留原始来源：metadata / local_grep
-                'matched_keyword': matched_info
-            }
-            code_snippets.append(snippet)
-        
+
+            code_snippets.append(
+                {
+                    "file_path": filepath,
+                    "segment_type": match.get("match_type", "unknown"),
+                    "name": match.get("name", ""),
+                    "line_no": str(line_no) if line_no else "",
+                    "relevance_reason": f"grep 匹配: {match.get('content', '')[:100]}",
+                    "business_meaning": match.get("content", ""),
+                    "code_content": code_content,
+                    "source": match.get("source", "metadata"),
+                    "matched_keyword": matched_info,
+                }
+            )
+
         files_matched = list(file_scores.keys())
-        logger.info(f"Grep recall - returning {len(code_snippets)} code snippets from {len(files_matched)} files")
-        
+        logger.info(
+            f"Grep recall [metadata_local] - returning {len(code_snippets)} snippets "
+            f"from {len(files_matched)} files"
+        )
         return {
-            'code_snippets': code_snippets,
-            'grep_matches': unique_matches,
-            'keywords': keywords_dict,  # 返回分类后的关键词
-            'files_matched': files_matched,
-            'filtered_count': filtered_count,
-            'use_llm_filter': use_llm_filter,
-            'local_grep_count': local_grep_count if use_local_grep else 0
+            "code_snippets": code_snippets,
+            "grep_matches": unique_matches,
+            "keywords": keywords_dict,
+            "files_matched": files_matched,
+            "filtered_count": filtered_count,
+            "use_llm_filter": use_llm_filter,
+            "grep_recall_scheme": scheme,
+            "local_grep_count": local_grep_count,
+            "skill_grep_count": 0,
+            "skill_recall_count": 0,
         }
 
+
+    async def score_snippets_with_llm(self, snippets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Batch LLM score complete code blocks after hybrid search dedup."""
+        if not snippets:
+            return snippets
+        return await score_snippets_batch_parallel(
+            snippets,
+            query=self.query,
+            llm=self.llm,
+            parse_output=self.format_llm_output,
+            trace=self._langfuse_trace_context(),
+        )
+
     async def hybrid_search(self, filepaths: List[str] = None, use_llm_filter: bool = True,
-                            use_local_grep: bool = True) -> Dict[str, Any]:
+                            grep_recall_scheme: Optional[str] = None,
+                            use_local_grep: Optional[bool] = None,
+                            use_skill_grep: Optional[bool] = None) -> Dict[str, Any]:
         """
         混合检索：结合语义检索和 grep 召回（并行执行）
         
-        **并行**执行 search_and_extract_code_enhanced（语义检索）和 grep_recall_code_segments（grep 召回），
-        然后合并两者的代码块结果，去重后返回。
-        
-        语义检索的结果优先级更高（排在前面），grep 召回的结果作为补充。
-        
-        Args:
-            filepaths: 可选，直接指定文件路径列表传给语义检索
-            use_llm_filter: grep 召回时是否使用 LLM 筛选（默认 True）
-            use_local_grep: 是否启用本地文件 grep 补充搜索（默认 True，方案二）
-            
-        Returns:
-            Dict[str, Any]: 合并后的结果
-            
-        Return Sample:
-            # query = "怎么创建订单"
-            {
-                'code_snippets': [
-                    # 语义检索结果（优先）
-                    {
-                        'file_path': 'order-service/services/order_service.py',
-                        'segment_type': 'function',
-                        'name': 'create_order',
-                        'line_no': '25-45',
-                        'relevance_score': 10,
-                        'code_content': 'async def create_order(self, data):\\n    ...',
-                        'source': 'semantic'
-                    },
-                    # grep 召回补充结果（metadata 元数据匹配 或 local_grep 本地文件搜索）
-                    {
-                        'file_path': 'order-service/validators/order_validator.py',
-                        'code': 'def validate_order_data(data):\\n    ...',
-                        'start_line': 10,
-                        'end_line': 25,
-                        'matched_keyword': '订单 + 创建',
-                        'match_type': 'function',
-                        'source': 'metadata'
-                    }
-                ],
-                'semantic_result': {
-                    'search_result': CodeSearchResult(...),
-                    'code_snippets': [...]  # 语义检索完整结果
-                },
-                'grep_result': {
-                    'code_snippets': [...],
-                    'grep_matches': [...],
-                    'keywords': {'entity_keywords': ['订单'], 'action_keywords': ['创建']},
-                    'files_matched': [...],
-                    'filtered_count': 3
-                },
-                'semantic_snippets_count': 5,    # 语义检索返回的代码块数量
-                'grep_only_snippets_count': 2,   # grep 独有的代码块数量（去重后）
-                'total_snippets_count': 7        # 合并后总数
-            }
+        grep 召回两套互斥方案（默认 read-code skill）：
+        - ``read_code_skill``：read-code skill agent
+        - ``metadata_local``：metadata grep + local grep
         """
-        logger.info(f"=== hybrid_search (parallel), query: {self.query}, use_local_grep: {use_local_grep} ===")
+        scheme = resolve_grep_recall_scheme(
+            explicit=grep_recall_scheme,
+            use_local_grep=use_local_grep,
+            use_skill_grep=use_skill_grep,
+        )
+        logger.info(
+            f"=== hybrid_search (parallel), query: {self.query}, grep_recall_scheme: {scheme} ==="
+        )
         
-        # **并行**执行语义检索和 grep 召回
-        logger.info("Hybrid search - Parallel execution: Semantic + Grep (local_grep={})".format(use_local_grep))
+        logger.info(
+            "Hybrid search - Parallel execution: Semantic + Grep recall "
+            f"(scheme={scheme})"
+        )
         
         semantic_task = self.search_and_extract_code_enhanced(filepaths)
-        grep_task = self.grep_recall_code_segments(max_results=20, use_llm_filter=use_llm_filter, use_local_grep=use_local_grep)
+        grep_task = self.grep_recall_code_segments(
+            max_results=20,
+            use_llm_filter=use_llm_filter,
+            grep_recall_scheme=scheme,
+        )
         
         # 并行等待两个任务完成
         results = await asyncio.gather(semantic_task, grep_task, return_exceptions=True)
@@ -4444,35 +4593,39 @@ class CodeAgent(BaseAgent):
         logger.info(f"Grep recall returned {len(grep_snippets)} code snippets" + 
                    (f", filtered {grep_result.get('filtered_count', 0)}" if use_llm_filter else ""))
         
-        # 3. 合并代码块，去重
-        # 使用 (file_path, name, line_no) 作为唯一键
-        seen_keys = set()
-        merged_snippets = []
-        
-        # 先添加语义检索的结果（优先级高）
-        for snippet in semantic_snippets:
-            key = (snippet['file_path'], snippet.get('name', ''), snippet.get('line_no', ''))
-            if key not in seen_keys:
-                seen_keys.add(key)
-                snippet['source'] = 'semantic'  # 标记来源
-                merged_snippets.append(snippet)
-        
-        semantic_count = len(merged_snippets)
-        
-        # 再添加 grep 召回的结果（作为补充）
-        # 保留原始来源标记：'metadata'（元数据匹配）或 'local_grep'（本地文件 grep）
-        grep_only_count = 0
-        for snippet in grep_snippets:
-            key = (snippet['file_path'], snippet.get('name', ''), snippet.get('line_no', ''))
-            if key not in seen_keys:
-                seen_keys.add(key)
-                # 保留原始 source（metadata / local_grep），没有标记的兜底为 metadata
-                if not snippet.get('source'):
-                    snippet['source'] = 'metadata'
-                merged_snippets.append(snippet)
-                grep_only_count += 1
-        
-        logger.info(f"Hybrid search - Merged: {semantic_count} semantic + {grep_only_count} grep-only = {len(merged_snippets)} total")
+        merged_snippets, semantic_count, grep_only_count, overlap_skipped_count, overlap_replaced_count, dedup_report = (
+            merge_hybrid_code_snippets(semantic_snippets, grep_snippets)
+        )
+        log_merge_dedup_report(logger, dedup_report)
+        logger.info(
+            f"Hybrid search - Merged: {semantic_count} semantic + {grep_only_count} grep-only = "
+            f"{len(merged_snippets)} total"
+        )
+
+        total_chars = total_snippet_chars(merged_snippets)
+        trigger_chars = score_trigger_chars()
+        count_after_dedup = len(merged_snippets)
+        score_select_applied = False
+        select_report: Dict[str, Any] = {}
+
+        if should_score_and_select(merged_snippets):
+            score_select_applied = True
+            logger.info(
+                "[CODE SEARCH GATE] total_chars=%d > trigger=%d → LLM score + select",
+                total_chars,
+                trigger_chars,
+            )
+            merged_snippets = await self.score_snippets_with_llm(merged_snippets)
+            merged_snippets, select_report = select_snippets_by_score(merged_snippets)
+            log_selection_report(logger, report=select_report)
+        else:
+            log_selection_report(
+                logger,
+                report={},
+                skipped=True,
+                total_chars=total_chars,
+                trigger_chars=trigger_chars,
+            )
         
         return {
             'code_snippets': merged_snippets,
@@ -4481,6 +4634,12 @@ class CodeAgent(BaseAgent):
             'semantic_snippets_count': semantic_count,
             'grep_only_snippets_count': grep_only_count,
             'total_snippets_count': len(merged_snippets),
+            'score_select_applied': score_select_applied,
+            'snippets_after_dedup': count_after_dedup,
+            'snippets_after_select': len(merged_snippets),
+            'score_select_report': select_report,
+            'total_chars_before_select': total_chars,
+            'score_trigger_chars': trigger_chars,
             # 保留语义检索的其他字段
             'search_result': semantic_result.get('search_result'),
             'located_files': semantic_result.get('located_files', []),
@@ -4564,6 +4723,10 @@ class CodeAgent(BaseAgent):
                 source_tag = " [元数据检索]"
             elif source == 'local_grep':
                 source_tag = " [本地grep]"
+            elif source == 'skill_grep':
+                source_tag = " [Skill grep]"
+            elif source == 'skill_read_code':
+                source_tag = " [read-code skill]"
             elif source == 'semantic':
                 source_tag = " [语义检索]"
             
@@ -4578,13 +4741,24 @@ class CodeAgent(BaseAgent):
         
         return "\n".join(parts)
 
-    def _log_code_snippets_info(self, code_snippets: List[Dict[str, Any]]) -> None:
+    def _log_code_snippets_info(
+        self,
+        code_snippets: List[Dict[str, Any]],
+        *,
+        search_meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         友好地打印找到的代码片段信息
         
         Args:
-            code_snippets: 代码片段列表
+            code_snippets: 代码片段列表（通常为 hybrid_search 最终返回的列表）
+            search_meta: hybrid_search 附带的选取元信息（可选）
         """
+        meta = search_meta or {}
+        score_select_applied = bool(meta.get("score_select_applied"))
+        after_dedup = meta.get("snippets_after_dedup")
+        after_select = meta.get("snippets_after_select", len(code_snippets))
+
         if not code_snippets:
             logger.info("=" * 60)
             logger.info("[CODE SEARCH] 未找到相关代码片段")
@@ -4599,7 +4773,23 @@ class CodeAgent(BaseAgent):
         source_summary = ", ".join(f"{k}: {v}" for k, v in source_counts.items())
         
         logger.info("=" * 80)
-        logger.info(f"[CODE SEARCH] 找到 {len(code_snippets)} 个相关代码片段 ({source_summary})")
+        if score_select_applied and after_dedup is not None:
+            logger.info(
+                f"[CODE SEARCH] 选取后保留 {after_select} 个代码片段 "
+                f"(dedup 后 {after_dedup} 个 → LLM 打分选取, {source_summary})"
+            )
+        elif after_dedup is not None:
+            logger.info(
+                f"[CODE SEARCH] 返回 dedup 后全部 {len(code_snippets)} 个代码片段 "
+                f"(未超长度阈值，未打分选取, {source_summary})"
+            )
+        else:
+            logger.info(f"[CODE SEARCH] 找到 {len(code_snippets)} 个相关代码片段 ({source_summary})")
+        if any(s.get("supersedes") for s in code_snippets):
+            logger.info(
+                "[CODE SEARCH] 说明: 部分 READ_CODE_SKILL 类块已合并替换 SEMANTIC 方法片段，"
+                "详见上方 [HYBRID DEDUP] 日志；被合并的 semantic 信息见各片段 Superseded 字段"
+            )
         logger.info("=" * 80)
         
         for i, snippet in enumerate(code_snippets, 1):
@@ -4618,6 +4808,8 @@ class CodeAgent(BaseAgent):
                 'metadata': 'METADATA_GREP',
                 'call_chain': 'CALL_CHAIN',
                 'local_grep': 'LOCAL_GREP',
+                'skill_grep': 'SKILL_GREP',
+                'skill_read_code': 'READ_CODE_SKILL',
             }.get(source, source.upper())
             
             logger.info("-" * 80)
@@ -4628,8 +4820,30 @@ class CodeAgent(BaseAgent):
             logger.info(f"    Source: {source_label}")
             if relevance_reason:
                 logger.info(f"    Relevance: {relevance_reason}")
+            score = snippet.get("relevance_score")
+            score_desc = snippet.get("score_description") or ""
+            if score is not None:
+                if score_desc:
+                    logger.info(f"    Score: {score} | {score_desc}")
+                else:
+                    logger.info(f"    Score: {score}")
             if business_meaning:
                 logger.info(f"    Business: {business_meaning}")
+
+            superseded = snippet.get("supersedes") or []
+            if superseded:
+                parts = []
+                for item in superseded:
+                    if isinstance(item, dict):
+                        parts.append(
+                            f"{item.get('source', '?')} {item.get('name', '?')} "
+                            f"({item.get('line_no', '?')})"
+                        )
+                if parts:
+                    logger.info(f"    Superseded: {', '.join(parts)}")
+            superseded_relevance = snippet.get("superseded_relevance") or []
+            if superseded_relevance:
+                logger.info(f"    Superseded relevance: {' | '.join(superseded_relevance[:2])}")
             
             # 打印代码内容（限制长度，避免日志过长）
             if code_content:
@@ -4721,7 +4935,7 @@ class CodeAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": self.query}
+                input=self._langfuse_trace_input(query=self.query)
             )
             
             answer = await chain.ainvoke(
@@ -4757,17 +4971,9 @@ class CodeAgent(BaseAgent):
            │   ├── search_relevant_code_segments() - LLM 精确筛选代码片段
            │   └── extract_code_by_line_range() - 从本地文件读取代码
            │
-           └── [并行分支2] grep_recall_code_segments() - grep 召回
-               ├── extract_keywords_with_llm() - LLM 提取分类关键词
-               │   └── 返回 entity_keywords（主体）+ action_keywords（动作）
-               ├── codebase_index.grep() - 元数据关键词搜索
-               │   └── 搜索 file_summary、entity、function、api_endpoint
-               ├── local_file_grep() - 本地文件 grep（可选，默认启用）
-               │   └── _is_identifier() 判断：仅对标识符命名执行
-               │       ├── create_order, OrderService → ✅ 执行 local grep
-               │       └── 订单, 创建 → ❌ 跳过（中文词不适合搜代码）
-               ├── 动作关键词二次筛选 - 在主体结果中匹配动作词
-               └── quick_relevance_check() - LLM 快速相关性过滤（并行）
+           └── [并行分支2] grep_recall_code_segments() — 二选一方案（默认 read-code skill）
+               ├── 方案 A read_code_skill：read-code agent（grep + LSP + readline_in_range）
+               └── 方案 B metadata_local：extract_keywords → metadata grep + local grep
            
         2. answer_with_code() - 基于代码片段生成自然语言回答
         3. observe_common() - LLM 验证回答质量
@@ -4782,6 +4988,15 @@ class CodeAgent(BaseAgent):
         llm_result = None
         
         try:
+            # ========== Optional: skill-sdk first (metadata.execution_mode=skill or SKILL_FIRST) ==========
+            if self._skill_first_enabled(self.metadata) and self.skill_runner is not None:
+                logger.info("[step] SKILL_FIRST — trying skill-sdk before hybrid search")
+                skill_answer = await self._try_skill_answer(
+                    self.query, context="skill-first",
+                )
+                if skill_answer is not None:
+                    return skill_answer
+
             # ========== Step 1: 混合检索相关代码（语义检索 + grep 召回 并行执行） ==========
             logger.info(f"[step] 开始混合检索相关代码，query: {self.query}")
             
@@ -4790,9 +5005,27 @@ class CodeAgent(BaseAgent):
             code_snippets = search_result.get('code_snippets', [])
             search_info = search_result.get('search_result')
             call_chain_info = search_result.get('call_chain_info', [])
-            
-            logger.info(f"[step] 搜索完成，找到 {len(code_snippets)} 个代码片段"
-                       + (f"（含 {len(call_chain_info)} 条调用链路径）" if call_chain_info else ""))
+            search_log_meta = {
+                "score_select_applied": search_result.get("score_select_applied"),
+                "snippets_after_dedup": search_result.get("snippets_after_dedup"),
+                "snippets_after_select": search_result.get("snippets_after_select"),
+            }
+
+            if search_log_meta.get("score_select_applied"):
+                logger.info(
+                    f"[step] 搜索完成，最终保留 {len(code_snippets)} 个代码片段 "
+                    f"(dedup 后 {search_log_meta.get('snippets_after_dedup')} 个，已 LLM 打分选取)"
+                    + (f"（含 {len(call_chain_info)} 条调用链路径）" if call_chain_info else "")
+                )
+            elif search_log_meta.get("snippets_after_dedup") is not None:
+                logger.info(
+                    f"[step] 搜索完成，返回 dedup 后 {len(code_snippets)} 个代码片段 "
+                    f"(未触发打分选取)"
+                    + (f"（含 {len(call_chain_info)} 条调用链路径）" if call_chain_info else "")
+                )
+            else:
+                logger.info(f"[step] 搜索完成，找到 {len(code_snippets)} 个代码片段"
+                           + (f"（含 {len(call_chain_info)} 条调用链路径）" if call_chain_info else ""))
             
             # ========== answer_model=original: 直接返回代码片段，跳过 LLM 回答和验证 ==========
             answer_model = self.metadata.get('answer_model', '') if self.metadata else ''
@@ -4807,7 +5040,7 @@ class CodeAgent(BaseAgent):
                     "(same format as observe_common pass path)"
                 )
                 if code_snippets:
-                    self._log_code_snippets_info(code_snippets)
+                    self._log_code_snippets_info(code_snippets, search_meta=search_log_meta)
                     # 将代码片段格式化为可读文本直接返回
                     parts = []
                     for snippet in code_snippets:
@@ -4830,6 +5063,13 @@ class CodeAgent(BaseAgent):
                 else:
                     self.state = AgentState.FINISHED
                     no_code_msg = f"未找到与问题 '{self.query}' 相关的代码"
+                    if SKILL_FALLBACK_ON_EMPTY and self.skill_runner is not None:
+                        logger.info("[step] empty snippets + SKILL_FALLBACK — trying skill-sdk")
+                        skill_answer = await self._try_skill_answer(
+                            self.query, context="fallback-original",
+                        )
+                        if skill_answer is not None:
+                            return skill_answer
                     out = _orig_success_prefix + no_code_msg
                     self.save_step_status(self.query, out)
                     return out
@@ -4837,7 +5077,7 @@ class CodeAgent(BaseAgent):
             # ========== Step 2: 基于代码生成回答 ==========
             if code_snippets:
                 # 打印找到的代码信息（友好格式）
-                self._log_code_snippets_info(code_snippets)
+                self._log_code_snippets_info(code_snippets, search_meta=search_log_meta)
                 
                 logger.info(f"[step] 开始生成回答")
                 answer = await self.answer_with_code(code_snippets, call_chain_info=call_chain_info)
@@ -4850,7 +5090,15 @@ class CodeAgent(BaseAgent):
                 )
                 logger.info(f"[step] 回答生成完成")
             else:
-                # 未找到相关代码，尝试重新查询
+                # 未找到相关代码，尝试 skill-sdk 回退或 requery
+                if SKILL_FALLBACK_ON_EMPTY and self.skill_runner is not None:
+                    logger.info("[step] empty code_snippets + SKILL_FALLBACK — trying skill-sdk")
+                    skill_answer = await self._try_skill_answer(
+                        self.query, context="fallback-empty",
+                    )
+                    if skill_answer is not None:
+                        return skill_answer
+
                 logger.warning(f"[step] 未找到相关代码片段，尝试重新生成问题")
                 self.state = AgentState.IDLE
                 
@@ -5213,6 +5461,26 @@ class CodeAgentExecutor(AgentExecutor):
         
         # 服务启动时预加载 codebase index
         self._preload_codebase_index()
+
+        self._skill_service = CodeAgentSkillRunnerService(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=temperature,
+        )
+    
+    def preload_skill_runner(self) -> Any:
+        """Eagerly initialise SkillRunner at server startup (sync, idempotent)."""
+        return self._skill_service.preload()
+
+    def shutdown_skill_runner(self) -> None:
+        """Release SkillRunner resources on process exit."""
+        self._skill_service.shutdown()
+
+    async def _ensure_skill_runner(self) -> Any:
+        """Return process-wide SkillRunner, constructing on first use if needed."""
+        return await self._skill_service.ensure()
     
     def _preload_codebase_index(self) -> None:
         """
@@ -5373,6 +5641,13 @@ class CodeAgentExecutor(AgentExecutor):
         # 确保全局 codebase index 已加载（懒加载，只加载一次）
         await self._ensure_codebase_index_loaded()
 
+        skill_runner = await self._ensure_skill_runner()
+
+        from .skill_runner_service import configure_skill_runtime_env
+
+        if self.code_paths:
+            configure_skill_runtime_env(self.code_paths)
+
         agent = CodeAgent(
             provider=self.provider,
             api_key=self.api_key,
@@ -5392,7 +5667,8 @@ class CodeAgentExecutor(AgentExecutor):
             agent_id=self.agent_id,
             code_paths=self.code_paths,
             codebase_index=self._codebase_index,  # 传入全局索引
-            codebase_index_loaded=self._codebase_index_loaded  # 传入加载状态
+            codebase_index_loaded=self._codebase_index_loaded,  # 传入加载状态
+            skill_runner=skill_runner,
         )
 
         task = context.current_task

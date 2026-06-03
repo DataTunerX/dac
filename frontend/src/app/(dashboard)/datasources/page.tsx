@@ -4,9 +4,13 @@ import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import useSWR from "swr"
 import { api } from "@/lib/api"
-import { getDescriptor, listDescriptorsAll } from "@/lib/descriptors-api"
-import { listAgentsAll } from "@/lib/agents-api"
+import { listDescriptorsAll } from "@/lib/descriptors-api"
 import type { DataDescriptorListResponse } from "@/lib/api-types"
+import {
+  getDataDescriptorDependencyKindLabel,
+  listDataDescriptorDependencies,
+  type DataDescriptorDependency,
+} from "@/lib/data-descriptor-dependencies"
 import { Button } from "@/components/ui/button"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
 import { PaginationBar } from "@/components/pagination-bar"
@@ -32,6 +36,7 @@ import { Plus, Eye, Loader2, RefreshCw, Trash2, Box } from "lucide-react"
 import { CreateDataSourceDialog } from "@/components/data-source-forms"
 import { toast } from "sonner"
 import { BrandIcon } from "@/components/brand-icon"
+import { getDataSourceKindLabel, normalizeDataSourceKind, type DataSourceKind } from "@/lib/data-source-kind"
 
 // --- Types ---
 interface DataSource {
@@ -39,7 +44,7 @@ interface DataSource {
   name: string;
   namespace: string;
   type: string;
-  sourceType?: "mysql" | "postgres" | "git" | "minio" | "generic";
+  sourceType?: DataSourceKind;
   status: string;
   isDeleting?: boolean;
   lastUpdated: string;
@@ -66,6 +71,7 @@ interface CreateDataSourcePayload {
     path?: string;
     extractFiles?: string;
     promptsConfigMapName?: string;
+    gpuEnabled?: "yes" | "no";
     enableCodeRepo?: boolean;
     codeRepoType?: string;
     codeRepoPath?: string;
@@ -88,33 +94,24 @@ function sanitizeDBSegment(raw: string): string {
   return cleaned || "db"
 }
 
-type DependentResource = {
-  kind: string
-  name: string
-  namespace: string
-}
-
 function isRecord(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === "object" && !Array.isArray(v)
 }
 
-function normalizeSourceType(descriptorType: string, sourceType: string): "mysql" | "postgres" | "git" | "minio" | "generic" {
-  const dt = String(descriptorType || "").trim().toLowerCase()
-  const st = String(sourceType || "").trim().toLowerCase()
-
-  if (dt === "structured-mysql" || st === "mysql") return "mysql"
-  if (dt === "structured-postgres" || st === "postgres") return "postgres"
-  if (dt === "code" || st === "github" || st === "gitee" || st === "gitlab" || st === "git") return "git"
-  if (st === "minio") return "minio"
-  return "generic"
-}
-
-function SourceIcon({ kind }: { kind: ReturnType<typeof normalizeSourceType> }) {
-  if (kind === "git") return <BrandIcon slug="git" size={16} title="Git" color="#0f172a" />
-  if (kind === "minio") return <BrandIcon slug="minio" size={16} />
-  if (kind === "generic") return <Box className="w-4 h-4" />
-  if (kind === "mysql") return <BrandIcon slug="mysql" size={16} />
-  return <BrandIcon slug="postgresql" size={16} />
+function SourceIcon({ kind }: { kind: DataSourceKind }) {
+  switch (kind) {
+    case "coderepo":
+      return <BrandIcon slug="git" size={16} title="Git" color="#0f172a" />
+    case "minio":
+      return <BrandIcon slug="minio" size={16} />
+    case "mysql":
+      return <BrandIcon slug="mysql" size={16} />
+    case "postgres":
+      return <BrandIcon slug="postgresql" size={16} />
+    case "fileserver":
+    case "generic":
+      return <Box className="w-4 h-4" />
+  }
 }
 
 export default function DataSourcesPage() {
@@ -122,7 +119,7 @@ export default function DataSourcesPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   // Delete + dependency check state (same pattern as 配置管理)
   const [deleteTarget, setDeleteTarget] = useState<{ namespace: string; name: string } | null>(null)
-  const [dependentResources, setDependentResources] = useState<DependentResource[]>([])
+  const [dependentResources, setDependentResources] = useState<DataDescriptorDependency[]>([])
   const [showDependencyDialog, setShowDependencyDialog] = useState(false)
   const [checkingDependency, setCheckingDependency] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -149,14 +146,14 @@ export default function DataSourcesPage() {
       const sources = item.sources ?? []
       const first = sources[0]
       const sourceType = first?.type ?? ""
-      const iconKind = normalizeSourceType(descriptorType, sourceType)
+      const iconKind = normalizeDataSourceKind(descriptorType, sourceType)
       const overallPhase = item.overall_phase ?? "NotReady"
       const updatedAt = item.updated_at ?? ""
       return {
         id: item.name,
         name: item.name,
         namespace: item.namespace ?? "default",
-        type: descriptorType.replace("structured-", "") || "unknown",
+        type: getDataSourceKindLabel(iconKind),
         sourceType: iconKind,
         status: (item.deleting || item.deletion_timestamp) ? "Deleting" : overallPhase,
         isDeleting: Boolean(item.deleting || item.deletion_timestamp),
@@ -185,50 +182,7 @@ export default function DataSourcesPage() {
   const checkDependencies = async (namespace: string, name: string) => {
     setCheckingDependency(true)
     try {
-      const deps: DependentResource[] = []
-
-      // 1) Best-effort: backend may expose lineage via consumed_by on descriptor detail.
-      try {
-        const desc = await getDescriptor(namespace, name)
-        const consumed = desc.consumed_by ?? []
-        for (const c of consumed) {
-          const depName = c.name
-          if (!depName) continue
-          deps.push({
-            kind: "dac",
-            name: depName,
-            namespace: c.namespace ?? "default",
-          })
-        }
-      } catch {
-        // ignore: some backends may not support consumed_by
-      }
-
-      // 2) Check agents referencing this DD: dataPolicy.sourceNameSelector, activeDataDescriptors.
-      try {
-        const { items } = await listAgentsAll()
-        for (const a of items) {
-          const an = a.name ?? ""
-          const ans = a.namespace ?? "default"
-          if (!an) continue
-          let hit = false
-          const sel = a.dataPolicy?.sourceNameSelector ?? []
-          if (sel.some((x) => x === name)) hit = true
-          const ads = a.activeDataDescriptors ?? []
-          if (ads.some((x) => x.name === name && (x.namespace ?? "default") === namespace)) hit = true
-          if (hit) deps.push({ kind: "agent", name: an, namespace: ans })
-        }
-      } catch {
-        // ignore: if agents API not available, we still rely on consumed_by
-      }
-
-      // Deduplicate
-      const uniq = new Map<string, DependentResource>()
-      for (const d of deps) {
-        const k = `${d.kind}/${d.namespace}/${d.name}`
-        if (!uniq.has(k)) uniq.set(k, d)
-      }
-      return Array.from(uniq.values())
+      return await listDataDescriptorDependencies(namespace, name)
     } catch (err) {
       console.error("check dd dependencies failed", err)
       toast.error("检查依赖关系失败")
@@ -251,8 +205,8 @@ export default function DataSourcesPage() {
   const handleDelete = async () => {
     if (!deleteTarget) return
     setIsDeleting(true)
+    const key = `${deleteTarget.namespace}/${deleteTarget.name}`
     try {
-      const key = `${deleteTarget.namespace}/${deleteTarget.name}`
       setDeletingKeys((prev) => new Set(prev).add(key))
       await api.delete(`/namespaces/${encodeURIComponent(deleteTarget.namespace)}/descriptors/${encodeURIComponent(deleteTarget.name)}`)
       toast.success("数据源已删除")
@@ -267,6 +221,11 @@ export default function DataSourcesPage() {
       console.error("delete datasource failed", err)
       const e = err as { response?: { data?: { message?: string } } }
       toast.error(e.response?.data?.message || "删除失败")
+      setDeletingKeys((prev) => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
     } finally {
       setIsDeleting(false)
     }
@@ -283,6 +242,7 @@ export default function DataSourcesPage() {
       const repoBranch = data.codeRepoBranch?.trim() || ""
       const repoToken = data.codeRepoToken?.trim() || ""
       const t = String(data.type || "").trim()
+      const gpuEnabled = data.gpuEnabled === "yes" ? "yes" : "no"
       const isCodeRepo = t === "coderepo"
       const hasCodeRepo =
         isCodeRepo || (Boolean(data.enableCodeRepo) && Boolean(repoType || repoPath || repoBranch || repoToken))
@@ -304,6 +264,7 @@ export default function DataSourcesPage() {
           name: data.name,
           namespace,
           descriptorType,
+          gpuEnabled,
           sources: [
             {
               name: data.name + "-source",
@@ -388,6 +349,7 @@ export default function DataSourcesPage() {
         name,
         namespace,
         descriptorType,
+        gpuEnabled,
         sources,
       }
 
@@ -488,7 +450,7 @@ export default function DataSourcesPage() {
                   {ds.name}
                 </TableCell>
                 <TableCell className="text-content-muted">{ds.namespace}</TableCell>
-                <TableCell className="capitalize">{ds.type}</TableCell>
+                <TableCell>{ds.type}</TableCell>
                 <TableCell>
                   {(() => {
                     const raw = String(ds.status ?? "").trim()
@@ -581,7 +543,7 @@ export default function DataSourcesPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>无法删除 - 存在依赖关系</AlertDialogTitle>
             <AlertDialogDescription>
-              该数据源正在被以下 {dependentResources.length} 个 DAC 资源使用，无法删除。
+              该数据源正在被以下 {dependentResources.length} 个资源使用，无法删除。
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -597,9 +559,9 @@ export default function DataSourcesPage() {
                 </TableHeader>
                 <TableBody>
                   {dependentResources.map((r, idx) => (
-                    <TableRow key={`${r.kind}/${r.namespace}/${r.name}/${idx}`}>
+                    <TableRow key={`${r.kind}/${r.id ?? r.namespace}/${r.name}/${idx}`}>
                       <TableCell className="font-medium whitespace-normal break-all">
-                        {r.kind} / {r.name}
+                        {getDataDescriptorDependencyKindLabel(r.kind)} / {r.name}
                       </TableCell>
                       <TableCell className="text-content-muted">{r.namespace}</TableCell>
                       <TableCell className="text-right">
@@ -610,8 +572,10 @@ export default function DataSourcesPage() {
                             setShowDependencyDialog(false)
                             if (r.kind === "agent") {
                               router.push(`/agents/${encodeURIComponent(r.namespace)}/${encodeURIComponent(r.name)}`)
-                            } else {
-                              router.push(`/datasources/${encodeURIComponent(r.namespace)}/${encodeURIComponent(r.name)}`)
+                            } else if (r.kind === "group") {
+                              router.push(`/semantic-groups/${encodeURIComponent(r.id ?? r.name)}`)
+                            } else if (r.kind === "dac") {
+                              router.push(`/agents/${encodeURIComponent(r.namespace)}/${encodeURIComponent(r.name)}`)
                             }
                           }}
                           className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"

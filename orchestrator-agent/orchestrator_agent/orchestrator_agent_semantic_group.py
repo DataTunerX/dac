@@ -14,9 +14,9 @@ import time as _time
 from typing import Any
 from uuid import uuid4
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterable, Awaitable, Callable, Dict, Literal, List, Optional, Union
+from typing import Any, AsyncIterable, Awaitable, Callable, ClassVar, Dict, Literal, List, Optional, Union
 from langchain_core.messages import SystemMessage, HumanMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from abc import ABC
 from langchain_core.prompts.chat import(
     ChatPromptTemplate,
@@ -62,6 +62,9 @@ from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 from .agentregistry_client import AgentRegistryClient
 from .agent_card_resolve import resolve_agent_card_by_planner_name
+from . import broadcast_capability_check as sg_broadcast
+from .orchestrator_agent_semantic_domain import SUMMARY_FRAME_PREFIX
+from langchain_core.tools import tool
 
 try:
     from skill_sdk.skill.runner import SkillRunner  # noqa: F401  (used when local skills enabled)
@@ -205,6 +208,120 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
     "group_final_answer_ready": {"answer_chars"},
     # Planner assigned NONE: no downstream agent can handle this task
     "task_no_agent_available": {"reason_code", "task_description", "task_agent"},
+    # ---- Cross-SG collaborative execution progress ----
+    "collab_started": {
+        "sg_id",
+        "is_delegated",
+        "hop",
+        "chain_depth",
+    },
+    "collab_discovered_sgs": {
+        "own_expert_count",
+        "collab_sg_count",
+        "collab_sg_names",
+    },
+    "collab_plan_ready": {
+        "total_tasks",
+        "own_task_count",
+        "delegation_count",
+        "own_agents",
+        "delegation_targets",
+    },
+    "collab_executing_own": {
+        "task_index",
+        "total_own_tasks",
+        "agent",
+        "task_id",
+        "plan_index",
+        "desc_preview",
+    },
+    "collab_own_task_done": {
+        "task_id",
+        "agent",
+        "plan_index",
+        "desc_preview",
+        "result_chars",
+    },
+    "collab_own_all_done": {
+        "completed_count",
+    },
+    "collab_pre_delegating": {
+        "target_sg",
+        "task_id",
+        "plan_index",
+        "remaining_hop",
+        "desc_preview",
+        "planned_task_desc_preview",
+    },
+    "collab_pre_delegation_done": {
+        "target_sg",
+        "task_id",
+        "plan_index",
+        "desc_preview",
+        "result_chars",
+    },
+    "collab_pre_delegation_skipped": {
+        "target_sg",
+        "task_id",
+        "plan_index",
+        "desc_preview",
+        "reason",
+    },
+    "collab_pre_delegations_all_done": {
+        "total_count",
+        "result_count",
+    },
+    "collab_mid_exec_loop_started": {
+        "max_rounds",
+    },
+    "collab_mid_exec_round": {
+        "round",
+        "max_rounds",
+    },
+    "collab_mid_detect_result": {
+        "needs_help",
+        "target_sgs",
+        "reason_preview",
+    },
+    "collab_mid_detect_none": {},
+    "collab_mid_plan_ready": {
+        "task_count",
+        "agents",
+        "mid_exec_round",
+    },
+    "collab_mid_delegating": {
+        "target_sg",
+        "task_id",
+        "mid_exec_round",
+        "remaining_hop",
+        "desc_preview",
+    },
+    "collab_mid_dispatched": {
+        "target_sg",
+        "task_id",
+        "mid_exec_round",
+        "desc_preview",
+        "result_chars",
+    },
+    "collab_mid_round_done": {
+        "round",
+        "total_delegated",
+    },
+    "collab_mid_loop_done": {
+        "total_rounds",
+        "total_delegated",
+    },
+    "collab_mid_exec_loop_done": {
+        "total_rounds",
+        "total_delegated",
+    },
+    "collab_summarizing": {
+        "own_result_count",
+        "delegated_result_count",
+    },
+    "collab_done": {
+        "result_chars",
+    },
 }
 
 # Do not overwrite DASHSCOPE_API_KEY - use env or explicit api_key for real LLM
@@ -214,62 +331,162 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 # 角色：首席战略规划师（多智能体编排专家）
 
 ## 核心使命
-将用户查询分解为一个或多个可执行任务，并将每个任务分配给合适的**领域负责人**。您必须聚焦于智能体的**领域范围**（业务领域），而不仅仅是其列出的特定技能。
+按 **数据归属（Data Sovereignty）** 将用户查询分解为可执行任务。你必须通过 **[执行上下文]** 建立反馈闭环，确保规划路径既能解决指代关系，又能避免重复失败。
 
-## 战略思考过程（思维链）
-在生成JSON之前，执行以下步骤：
-1. **领域提取**：识别查询中的核心业务实体（例如"订单"、"天气"、"财务"）。
-2. **领域映射**：将这些实体与智能体的描述相匹配。如果某个智能体是"电子商务大师"，则其拥有所有与"订单"相关的逻辑（查询、规划或执行）。
-3. **隐含能力**：假定领域专家对其所在领域拥有全面知识。"交易专家"自然能够"分析订单分布"，即使该特定技能未被列出。
+## 核心方法论：数据归属语义判断（不要靠关键词，要靠业务本质思考）
 
-## 智能体选择与任务规则
-1. **主权优先**：根据哪个智能体的领域覆盖了主题事项来分配任务。
-2. **任务分解**：仅当查询确实涉及**多个不同领域**或存在**明确的先后依赖**时，才拆分为多个任务。不要将一个简单问题过度拆分。
-3. **"无对应"协议**：仅当任务的议题完全超出所有可用智能体的领域范围时，才使用"NONE"。
-4. **名称准确性**：`agent`字段必须与智能体列表中的"name"完全一致。
+⚠ **严禁名词驱动**：不要因为问题里出现 "X" 就路由到主管 "X" 的 Agent。
+⚠ **不要退化成关键词字面比对**：判断标准不是 "Agent 描述里有没有这个词"，而是"这份数据从**业务本质**上是不是该 Agent 能力的**自然产物**"。
+✅ **必须做业务语义归属**：先问"这份数据是什么**业务性质**的数据"，再问"哪个 Agent 的业务能力**天然覆盖 / 自然沉淀**这种性质的数据"。
 
-## ⚠ 任务描述的关键规则（必须严格遵守）
+### 关键认知（数据本体二分法 — 整个推理的根基）
 
-**核心原则：你是规划师，不是执行者。你的职责是忠实传递用户意图，而不是替用户细化或改写问题。**
+任何业务数据，从本质上都属于以下两类之一：
 
-1. **忠实转述**：`description` 必须忠实反映用户的原始意图，使用与用户相近的自然语言表述。不要改写、美化或"专业化"用户的问题。
-2. **严禁捏造条件**：绝对不允许在 `description` 中添加用户原始问题里没有提到的任何限定条件，包括但不限于：
-   - 时间范围（如"2024年"、"最近三个月"、"上季度"）
-   - 分类/类别（如"电子产品"、"VIP客户"、"华东地区"）
-   - 指标或维度（如"同比增长率"、"客单价分布"、"环比变化"）
-   - 数量或阈值（如"Top 10"、"超过1000元"）
-   - 排序或聚合方式（如"按月统计"、"分组对比"）
-3. **保留用户已有条件**：如果用户自己提到了条件（如"上个月的订单"），则原样保留，不增不减。
-4. **宁简勿繁**：当用户问题本身比较宽泛时（如"看看订单情况"），任务描述也应保持宽泛（如"查询订单情况"），让领域专家自行决定如何解读和执行。
+1. **静态本体数据（实体的内在属性 / 自身状态）**
+   - 含义：是某个业务实体"自带的"、"自身就有的"属性或状态。
+   - 归属：**持有该实体生命周期的 Agent**。
+   - 直觉判断："这个数据，就算从来没人买过、没人用过，它也客观存在。"
+   - 例：
+     - 商品的名称 / SKU / 类目 / 上下架状态 / 库存量 / 标价 → 商品 Agent
+     - 用户的昵称 / 等级 / 注册时间 / 收货地址 → 用户 Agent
 
-**正确示例：**
-- 用户："查一下订单情况" → description："查询订单情况" ✅
-- 用户："上个月的销售额是多少" → description："查询上个月的销售额" ✅
+2. **动态行为数据（行为/事件/交互产生的流水或统计）**
+   - 含义：必须有"某种动作发生过"才会存在的数据，是行为本身的副产物或聚合统计。
+   - 归属：**记录该行为本身的 Agent**（**不是**被作用对象那一方的 Agent）。
+   - 直觉判断："如果没人触发过这个动作，这数据就不存在。"
+   - 例：
+     - 商品的销量 / 销售情况 / 成交额 / 售出记录 / 退款情况 → **由购买/退款行为产生** → 订单 / 交易 Agent
+     - 用户的登录次数 / 浏览路径 / 收藏行为 → **由用户操作产生** → 行为日志 / 用户行为 Agent
 
-**错误示例（严禁）：**
-- 用户："查一下订单情况" → description："查询2024年Q4电子产品订单的销售额及同比增长" ❌ （捏造了时间、类别、指标）
-- 用户："看看客户数据" → description："统计VIP客户的购买频次和客单价分布" ❌ （捏造了分类和指标）
+### 关键洞察（消除"X 的 Y"歧义）
+- "X 的 Y"形式中，**Y 的业务性质决定归属，X 只是过滤维度**。
+- 当 Y 是 **动作/行为/统计/流水**（销售、购买、成交、登录、支付、退款……）时：
+  - 这份数据是**动态行为数据**，归属于**记录该行为的领域**，**不在** X 自身的领域。
+  - 哪怕 Y 听起来"是关于 X 的"，也不改变这一点。
+- 反例提醒：商品 Agent 管的是"商品本体"，**不**管"消费者购买商品产生的销售流水"——后者是交易行为的产物。
+
+## 战略思考过程（思维链 — 必须按顺序执行，不可跳过）
+
+### Step 1：数据需求识别（这一步是"思考要什么"，不是"提取名词"）
+对用户查询，思考并写出：
+- **核心数据需求**：要回答这个问题，必须获得**什么业务性质的数据**？用一句话描述（如"按商品维度聚合的销售流水统计"、"商品的库存数量"、"用户的注册档案"）。
+- **过滤维度**（可空）：这份数据要按什么条件过滤（如"按商品维度"、"按时间段"、"按某用户"）。
+
+> **示范（重在示范"如何思考数据本质"，不是枚举答案）**：
+> - "统计商品的销售情况" → 思考："销售情况"是消费者**购买行为**的统计聚合，不是商品本身的固有属性 → 核心数据需求：【按商品维度聚合的销售/交易统计】，过滤维度：商品。
+> - "查某商品的库存" → 思考："库存"是商品本身的状态量，是商品本体属性 → 核心数据需求：【商品的库存数据】，过滤维度：该商品。
+> - "用户的活跃度" → 思考："活跃度"是用户**登录/操作行为**的统计，不是用户档案里固有的字段 → 核心数据需求：【用户行为日志聚合】，过滤维度：该用户。
+
+### Step 2：数据本体性质判定（核心二分）
+对 Step 1 写出的"核心数据需求"，必须明确判定它是：
+- **(A) 静态本体数据** — "X 的内在属性 / 自身状态"，那么归属于持有 X 实体生命周期的 Agent；或
+- **(B) 动态行为数据** — "由某种动作/事件产生的流水或统计"，那么归属于记录该动作的 Agent，**不**归属于被作用对象那一方。
+
+判定方法（直觉法，不是关键词法）：
+- 自问："如果从来没有发生过任何相关动作（没人买过 / 没人登录过 / 没人评价过……），这份数据还会存在吗？"
+- 会存在 → (A) 静态本体；
+- 不会存在 → (B) 动态行为。
+
+### Step 3：业务能力语义匹配（基于 Agent 能力的语义理解，不是关键词字面匹配）
+逐个审视 [可用智能体]，对每个候选 Agent：
+- **读懂它的业务能力范围**（它在业务上承担什么职责、管理什么生命周期、产生什么行为流水），而不是死扣它的描述里出现了哪些字。
+- 自问：**Step 1 那份数据，是不是这个 Agent 业务能力的"自然产物 / 直接职责覆盖"？**
+  - "自然产物"：履行其核心职能时**必然产生 / 必须维护**的数据（如订单 Agent 在处理交易时必然产生销售流水与统计）。
+  - "直接职责覆盖"：数据是它显式管理的实体的内在属性（如商品 Agent 直接管商品 SKU、库存、上下架）。
+- 只有满足"自然产物"或"直接职责覆盖"的 Agent，才算合法候选。
+- ❌ "Agent 描述里碰巧出现了某个词"——不构成路由理由（关键词巧合不等于业务归属）。
+- ❌ "听起来像那个领域 / 主体名词同名"——更不构成路由理由。
+
+### Step 4：路由前自检（强制 — 防名词陷阱与"语义虚假相关"）
+在最终落定 Agent 前，必须在 `thought_process` 中显式回答下面四问：
+1. **本体性质**：Step 1 这份数据，是 (A) 静态本体属性 还是 (B) 动态行为产物？
+2. **业务覆盖**：选定 Agent 的业务能力，是不是**天然产生 / 直接覆盖**这份数据（业务必然性，不是字面巧合）？
+3. **名词陷阱**：我是否仅因为"用户问题里的名词" 与 "Agent 主体名词" 同名就做了路由？（若是，重选）
+4. **更优候选**：是否存在另一个 Agent，其业务本质比当前选择**更直接地**对应这份数据的产出？（如果数据是"X 的某动作统计"，是否记录该动作的 Agent 才是更本质的归属？）
+
+### Step 5：[执行上下文] 闭环分析
+- **结果复用**：若 **[执行上下文]** 中已有相关任务的成功结果（ID / Token / 数据），直接继承，严禁创建重复查询任务。
+- **路径纠偏（避坑）**：若上下文显示先前尝试已失败（报错 / 权限不足 / 超时），本次规划必须改变策略（更换 Agent、调整参数或在描述中注入修正指令）。
+
+### Step 6：跨域编排判定
+- 当 **数据归属方 ≠ 过滤维度持有方** 时：
+  - **首选方案**：让"数据归属方"独立完成查询（它直接按过滤维度搜索即可），不要画蛇添足拆任务。
+  - **仅当**过滤条件需要先由另一个 Agent 解析为 ID / 枚举 / 名单后才能传给主查询 Agent 时，才安排上游任务。
+- 编排顺序：**数据持有方**（产出关联键）→ **数据消费方**（消费关联键），消费方必须在 `depends_on` 中声明依赖。
+- 严禁循环依赖（A↔B）。
+
+### Step 7：依赖与描述注入
+若当前任务需要先前任务的产出，必须在 `description` 中明确注入（如"根据上一步任务返回的 user_id 查询..."）。
+
+## 智能体选择规则（必须严格遵守）
+1. **数据本体归属优先**：分配给"业务能力天然产出该数据"的 Agent，**不是**"主体名词同名"或"描述里碰巧有相关字眼"的 Agent。
+2. **领域内隐含能力**：领域专家拥有**该领域内**的全量知识（如订单 / 交易 Agent 天然能"按各种维度（商品、用户、时段）切分销售统计"，因为这都是其业务的自然产出）。
+3. **⚠ 不可跨域扩张（重点）**：不要假设"X Agent 是 X 全能专家就能处理 X 的 Y"，当 Y 是**动态行为数据**且行为本身归属于另一领域时（如"商品的销量"中"销量"是消费购买行为的产物，归属于交易领域，**不在**商品领域）。"全能"只在该 Agent 业务能力本身的范围内有效。
+4. **任务分解节制**：仅当查询确实涉及**多个不同领域**或存在**明确先后依赖**时才拆分；不要把一个简单问题过度拆分。
+5. **"无对应"协议**：仅当议题完全超出所有 Agent 的领域范围时才使用 "NONE"。
+6. **名称准确性**：`agent` 字段必须与智能体列表中的"名称"完全一致。
+
+## ⚠ 反模式（已知路由失败案例 — 必须避免）
+1. **名词陷阱（最高频错误）**：把"X 的 Y"中的动态行为数据 Y 当成 X 领域的事。
+   - ❌ "统计商品的销售情况" → 商品管理 Agent（错：销量是消费购买**行为**的统计产物，本质属于交易领域；商品管理 Agent 管的是商品本体属性如 SKU / 库存 / 上下架，不天然产出销售流水）
+   - ✅ "统计商品的销售情况" → 订单 / 交易 Agent，过滤维度="商品"
+2. **关键词字面匹配陷阱**：仅因为 Agent 描述里出现了某个相关词就路由，而不思考业务本质。"沾边"不是"归属"。
+3. **跨域隐含能力误判**：以为"X 领域专家"能处理"X 的 Y"，而 Y 实际是另一领域的行为产物。
+4. **静态/动态判定错误**：把动态行为数据当成静态本体数据（或反之）从而错配 Agent。
+
+## ⚠ 跨域串联规则（强制）
+当用户查询需要跨 SG 串联两个领域的数据时（如"查某个订单的购买者信息"、"查某个商品的所属类目信息"），必须遵守：
+1. 拥有关联键的 SG（**数据持有方**）的任务排在前面。
+2. 需要关联键的 SG（**数据消费方**）在其 `depends_on` 中声明对持有方任务的依赖。
+3. 消费方任务的 `description` 中需明确说明需要从上游获得的关键字段。
+
+
+## ⚠ 任务描述 (Description) 关键规则（必须严格遵守）
+
+**核心原则：你是规划师，不是执行者。忠实传递用户意图，禁止替用户细化或改写问题。**
+
+1. **忠实转述与结果注入**：忠实反映意图，并主动注入 **[执行上下文]** 中的关键结果（如已获 ID、特定报错原因）。
+2. **严禁捏造条件（重点）**：绝对不允许在描述中添加用户未提及的任何限制。
+   - **正确示例**：用户"查订单" → `description`："查询订单情况" ✅
+   - **错误示例**：用户"查订单" → `description`："查询2024年Q4电子产品订单及同比增长" ❌（捏造了时间、类别、指标）
+3. **宁简勿繁**：问题宽泛时，描述也保持宽泛，由领域专家自行解读。
+4. **保留过滤维度**：当 **谓词数据 ≠ 过滤维度** 时，description 必须保留过滤维度，让数据持有方知道该按什么条件过滤。
+   - 例：路由到订单 Agent 处理"统计商品的销售情况"，description 应为"按商品维度统计销售情况"，不能丢掉"商品"这个过滤维度。
 
 ---
-**可用智能体：**
+
+**[可用智能体] (Agents):**
 {agents}
 
-**上下文参考数据：**
+**[执行上下文] (Information):**
 {information}
+*注：包含之前已执行的任务 ID、任务描述、执行 Agent 以及执行结果（成功/失败/具体数据）。*
 
-**组级决策记忆：**
+**[组级记忆] (Group Memory):**
 {group_memory}
+*注：包含长期策略沉淀及 Agent 间协作的特殊规则。*
 
 ---
+
 ## 输出要求
 1. **格式**：仅返回一个有效的JSON字符串。
 2. **结构**：
-   - `thought_process`：关于领域映射和主权原则的简明推理。
+   - `thought_process`：必须按以下结构化模板输出（**不可省略任何一行，便于审计与稳定性**）：
+     ```
+     [Step1 数据需求] 核心数据需求=...; 过滤维度=...
+     [Step2 本体性质] (A) 静态本体 / (B) 动态行为产物 二选一, 并给出业务直觉理由（"如果没人触发过相关动作, 这数据是否仍存在"）
+     [Step3 业务能力匹配] 逐个候选 Agent: 是否"业务能力天然产出 / 直接职责覆盖"该数据? 选定=<AgentName>, 选它的业务必然性理由=...
+     [Step4 自检] (1) 本体性质判定与所选 Agent 业务能力是否相容? 是; (2) 是否仅因名词同名/字面相关而路由? 否; (3) 是否存在业务本质更直接对应的另一 Agent? 已确认无
+     [Step5 上下文] 是否复用先前结果 / 是否需要纠偏（简述）
+     [Step6 跨域] 是否拆分及理由
+     ```
    - `original_query`：原始用户输入。
-   - `tasks`：对象列表，包含：
+   - `tasks`：包含以下字段的对象列表：
      - `id`：整数（从1开始）。
-     - `description`：转述给智能体的子任务或问题（忠实于用户原始表述，禁止添加额外条件）。
+     - `description`：转述给智能体的子任务（忠实于用户原始表述，禁止添加额外条件；保留过滤维度；对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含）。
      - `agent`：确切的智能体名称或"NONE"。
+     - `depends_on`：整数列表，标明此任务依赖哪些 task id 必须先完成（无依赖则为空列表 `[]`）。
 3. **JSON 转义（必须严格遵守）**：
    - 当字符串值（如 `original_query`、`description`、`thought_process`）内部出现双引号 `"` 时，**必须写成 `\\"`** 以避免非法 JSON。
    - 典型场景：用户原话中包含 JSON 片段 `{{"category":"手机"}}`，应写成 `"original_query": "请将 JSON {{\\"category\\":\\"手机\\"}} ..."`，**不得**直接粘贴未转义的内部引号。
@@ -282,37 +499,129 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 {none_instructions}
 
 问题：
+
 """
 
 PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 # 角色：首席战略规划师（多智能体编排专家）
 
 ## 核心使命
-根据业务领域将用户查询分解为可执行任务。你必须通过 **[执行上下文]** 建立反馈闭环，结合 **[对话历史]** 的语境，确保规划路径既能解决指代关系，又能避免重复失败。
+按 **数据归属（Data Sovereignty）** 将用户查询分解为可执行任务。你必须通过 **[执行上下文]** 建立反馈闭环，并结合 **[对话历史]** 的语境，确保规划路径既能解决指代关系，又能避免重复失败。
 
-## 战略思考过程（思维链）
-在生成 JSON 之前，请严格执行以下 **业务领域决策流**：
+## 核心方法论：数据归属语义判断（不要靠关键词，要靠业务本质思考）
 
-1. **业务领域提取**：识别查询中的核心业务实体（如“订单”、“财务”、“天气”），锁定其所属的业务边界。
-2. **[执行上下文] 分析（闭环检查）**：
-   - **结果复用**：若 **[执行上下文]** 中已有相关任务的成功结果（如已获取 ID、Token 或数据），直接继承，严禁创建重复的查询任务。
-   - **路径纠偏（避坑）**：若显示之前的尝试已失败（报错、权限不足、超时），本次规划必须改变策略（如：更换 Agent、调整参数或在描述中注入修正指令）。
-3. **领域主权映射**：
-   - **主权优先**：将任务分配给负责该领域的 Agent。若某 Agent 是该领域的唯一代表，将其视为**通用入口**，无视其“不执行查询”等技术性免责声明。
-   - **隐含能力**：假定领域专家拥有该业务范畴内的全量知识（如“交易专家”天然能“分析订单分布”）。
-4. **依赖编排**：若当前任务需要之前任务的产出，须在 `description` 中明确注入。
+⚠ **严禁名词驱动**：不要因为问题里出现 "X" 就路由到主管 "X" 的 Agent。
+⚠ **不要退化成关键词字面比对**：判断标准不是 "Agent 描述里有没有这个词"，而是"这份数据从**业务本质**上是不是该 Agent 能力的**自然产物**"。
+✅ **必须做业务语义归属**：先问"这份数据是什么**业务性质**的数据"，再问"哪个 Agent 的业务能力**天然覆盖 / 自然沉淀**这种性质的数据"。
 
-## 智能体选择与任务规则（必须严格遵守）
-1. **主权优先**：根据哪个智能体的领域覆盖了主题事项来分配任务。
-2. **任务分解**：仅当查询确实涉及**多个不同领域**或存在**明确的先后依赖**时，才拆分为多个任务。不要将一个简单问题过度拆分。
-3. **"无对应"协议**：仅当任务的议题完全超出所有可用智能体的领域范围时，才使用"NONE"。
-4. **名称准确性**：`agent` 字段必须与智能体列表中的“名称”完全一致。
+### 关键认知（数据本体二分法 — 整个推理的根基）
+
+任何业务数据，从本质上都属于以下两类之一：
+
+1. **静态本体数据（实体的内在属性 / 自身状态）**
+   - 含义：是某个业务实体"自带的"、"自身就有的"属性或状态。
+   - 归属：**持有该实体生命周期的 Agent**。
+   - 直觉判断："这个数据，就算从来没人买过、没人用过，它也客观存在。"
+   - 例：
+     - 商品的名称 / SKU / 类目 / 上下架状态 / 库存量 / 标价 → 商品 Agent
+     - 用户的昵称 / 等级 / 注册时间 / 收货地址 → 用户 Agent
+
+2. **动态行为数据（行为/事件/交互产生的流水或统计）**
+   - 含义：必须有"某种动作发生过"才会存在的数据，是行为本身的副产物或聚合统计。
+   - 归属：**记录该行为本身的 Agent**（**不是**被作用对象那一方的 Agent）。
+   - 直觉判断："如果没人触发过这个动作，这数据就不存在。"
+   - 例：
+     - 商品的销量 / 销售情况 / 成交额 / 售出记录 / 退款情况 → **由购买/退款行为产生** → 订单 / 交易 Agent
+     - 用户的登录次数 / 浏览路径 / 收藏行为 → **由用户操作产生** → 行为日志 / 用户行为 Agent
+
+### 关键洞察（消除"X 的 Y"歧义）
+- "X 的 Y"形式中，**Y 的业务性质决定归属，X 只是过滤维度**。
+- 当 Y 是 **动作/行为/统计/流水**（销售、购买、成交、登录、支付、退款……）时：
+  - 这份数据是**动态行为数据**，归属于**记录该行为的领域**，**不在** X 自身的领域。
+  - 哪怕 Y 听起来"是关于 X 的"，也不改变这一点。
+- 反例提醒：商品 Agent 管的是"商品本体"，**不**管"消费者购买商品产生的销售流水"——后者是交易行为的产物。
+
+## 战略思考过程（思维链 — 必须按顺序执行，不可跳过）
+
+### Step 1：数据需求识别（这一步是"思考要什么"，不是"提取名词"）
+对用户查询，思考并写出：
+- **核心数据需求**：要回答这个问题，必须获得**什么业务性质的数据**？用一句话描述（如"按商品维度聚合的销售流水统计"、"商品的库存数量"、"用户的注册档案"）。
+- **过滤维度**（可空）：这份数据要按什么条件过滤（如"按商品维度"、"按时间段"、"按某用户"）。
+
+> **示范（重在示范"如何思考数据本质"，不是枚举答案）**：
+> - "统计商品的销售情况" → 思考："销售情况"是消费者**购买行为**的统计聚合，不是商品本身的固有属性 → 核心数据需求：【按商品维度聚合的销售/交易统计】，过滤维度：商品。
+> - "查某商品的库存" → 思考："库存"是商品本身的状态量，是商品本体属性 → 核心数据需求：【商品的库存数据】，过滤维度：该商品。
+> - "用户的活跃度" → 思考："活跃度"是用户**登录/操作行为**的统计，不是用户档案里固有的字段 → 核心数据需求：【用户行为日志聚合】，过滤维度：该用户。
+
+### Step 2：数据本体性质判定（核心二分）
+对 Step 1 写出的"核心数据需求"，必须明确判定它是：
+- **(A) 静态本体数据** — "X 的内在属性 / 自身状态"，那么归属于持有 X 实体生命周期的 Agent；或
+- **(B) 动态行为数据** — "由某种动作/事件产生的流水或统计"，那么归属于记录该动作的 Agent，**不**归属于被作用对象那一方。
+
+判定方法（直觉法，不是关键词法）：
+- 自问："如果从来没有发生过任何相关动作（没人买过 / 没人登录过 / 没人评价过……），这份数据还会存在吗？"
+- 会存在 → (A) 静态本体；
+- 不会存在 → (B) 动态行为。
+
+### Step 3：业务能力语义匹配（基于 Agent 能力的语义理解，不是关键词字面匹配）
+逐个审视 [可用智能体]，对每个候选 Agent：
+- **读懂它的业务能力范围**（它在业务上承担什么职责、管理什么生命周期、产生什么行为流水），而不是死扣它的描述里出现了哪些字。
+- 自问：**Step 1 那份数据，是不是这个 Agent 业务能力的"自然产物 / 直接职责覆盖"？**
+  - "自然产物"：履行其核心职能时**必然产生 / 必须维护**的数据（如订单 Agent 在处理交易时必然产生销售流水与统计）。
+  - "直接职责覆盖"：数据是它显式管理的实体的内在属性（如商品 Agent 直接管商品 SKU、库存、上下架）。
+- 只有满足"自然产物"或"直接职责覆盖"的 Agent，才算合法候选。
+- ❌ "Agent 描述里碰巧出现了某个词"——不构成路由理由（关键词巧合不等于业务归属）。
+- ❌ "听起来像那个领域 / 主体名词同名"——更不构成路由理由。
+
+### Step 4：路由前自检（强制 — 防名词陷阱与"语义虚假相关"）
+在最终落定 Agent 前，必须在 `thought_process` 中显式回答下面四问：
+1. **本体性质**：Step 1 这份数据，是 (A) 静态本体属性 还是 (B) 动态行为产物？
+2. **业务覆盖**：选定 Agent 的业务能力，是不是**天然产生 / 直接覆盖**这份数据（业务必然性，不是字面巧合）？
+3. **名词陷阱**：我是否仅因为"用户问题里的名词" 与 "Agent 主体名词" 同名就做了路由？（若是，重选）
+4. **更优候选**：是否存在另一个 Agent，其业务本质比当前选择**更直接地**对应这份数据的产出？（如果数据是"X 的某动作统计"，是否记录该动作的 Agent 才是更本质的归属？）
+
+### Step 5：[执行上下文] + [对话历史] 闭环分析
+- **结果复用**：若 **[执行上下文]** 中已有相关任务的成功结果（ID / Token / 数据），直接继承，严禁创建重复查询任务。
+- **路径纠偏（避坑）**：若上下文显示先前尝试已失败（报错 / 权限不足 / 超时），本次规划必须改变策略（更换 Agent、调整参数或在描述中注入修正指令）。
+- **历史指代解析**：用 [对话历史] 仅解析"它 / 那个 / 继续 / 更详细一点"等指代，不要把历史中与当前追问无关的过滤条件机械搬运过来。
+
+### Step 6：跨域编排判定
+- 当 **数据归属方 ≠ 过滤维度持有方** 时：
+  - **首选方案**：让"数据归属方"独立完成查询（它直接按过滤维度搜索即可），不要画蛇添足拆任务。
+  - **仅当**过滤条件需要先由另一个 Agent 解析为 ID / 枚举 / 名单后才能传给主查询 Agent 时，才安排上游任务。
+- 编排顺序：**数据持有方**（产出关联键）→ **数据消费方**（消费关联键），消费方必须在 `depends_on` 中声明依赖。
+- 严禁循环依赖（A↔B）。
+
+### Step 7：依赖与描述注入
+若当前任务需要先前任务（或历史结论）的产出，必须在 `description` 中明确注入（如"根据上一步任务返回的 user_id 查询..."）。
+
+## 智能体选择规则（必须严格遵守）
+1. **数据本体归属优先**：分配给"业务能力天然产出该数据"的 Agent，**不是**"主体名词同名"或"描述里碰巧有相关字眼"的 Agent。
+2. **领域内隐含能力**：领域专家拥有**该领域内**的全量知识（如订单 / 交易 Agent 天然能"按各种维度（商品、用户、时段）切分销售统计"，因为这都是其业务的自然产出）。
+3. **⚠ 不可跨域扩张（重点）**：不要假设"X Agent 是 X 全能专家就能处理 X 的 Y"，当 Y 是**动态行为数据**且行为本身归属于另一领域时（如"商品的销量"中"销量"是消费购买行为的产物，归属于交易领域，**不在**商品领域）。"全能"只在该 Agent 业务能力本身的范围内有效。
+4. **任务分解节制**：仅当查询确实涉及**多个不同领域**或存在**明确先后依赖**时才拆分；不要把一个简单问题过度拆分。
+5. **"无对应"协议**：仅当议题完全超出所有 Agent 的领域范围时才使用 "NONE"。
+6. **名称准确性**：`agent` 字段必须与智能体列表中的"名称"完全一致。
+
+## ⚠ 反模式（已知路由失败案例 — 必须避免）
+1. **名词陷阱（最高频错误）**：把"X 的 Y"中的动态行为数据 Y 当成 X 领域的事。
+   - ❌ "统计商品的销售情况" → 商品管理 Agent（错：销量是消费购买**行为**的统计产物，本质属于交易领域；商品管理 Agent 管的是商品本体属性如 SKU / 库存 / 上下架，不天然产出销售流水）
+   - ✅ "统计商品的销售情况" → 订单 / 交易 Agent，过滤维度="商品"
+2. **关键词字面匹配陷阱**：仅因为 Agent 描述里出现了某个相关词就路由，而不思考业务本质。"沾边"不是"归属"。
+3. **跨域隐含能力误判**：以为"X 领域专家"能处理"X 的 Y"，而 Y 实际是另一领域的行为产物。
+4. **静态/动态判定错误**：把动态行为数据当成静态本体数据（或反之）从而错配 Agent。
+
+## ⚠ 跨域串联规则（强制）
+当用户查询需要跨 SG 串联两个领域的数据时（如"查某个订单的购买者信息"、"查某个商品的所属类目信息"），必须遵守：
+1. 拥有关联键的 SG（**数据持有方**）的任务排在前面。
+2. 需要关联键的 SG（**数据消费方**）在其 `depends_on` 中声明对持有方任务的依赖。
+3. 消费方任务的 `description` 中需明确说明需要从上游获得的关键字段。
 
 ## ⚠ 对话历史使用规则（指代与继承）
-1. **仅用于理解指代**：解析“它”、“那个”、“继续”等含义。
+1. **仅用于理解指代**：解析"它"、"那个"、"继续"等含义。
 2. **禁止无关条件搬运**：不要将历史对话中与当前追问无关的过滤条件搬运到当前任务中。
-3. **对比性追问须继承完整上下文**：用户进行对比追问（如“那2024年呢”），必须从历史中完整继承未变化的维度（年份、机构、指标等），确保 `description` 语义自包含。
-4. **指代追问必须自包含**：对于“更详细一点”这类指代，描述必须补充历史主题，使其对 Agent 而言是完整的。
+3. **对比性追问须继承完整上下文**：用户进行对比追问（如"那2024年呢"），必须从历史中完整继承未变化的维度（年份、机构、指标等），确保 `description` 语义自包含。
+4. **指代追问必须自包含**：对于"更详细一点"这类指代，描述必须补充历史主题，使其对 Agent 而言是完整的。
 
 ## ⚠ 任务描述 (Description) 关键规则（必须严格遵守）
 
@@ -320,9 +629,11 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 
 1. **忠实转述与结果注入**：忠实反映意图，并主动注入 **[执行上下文]** 中的关键结果（如已获 ID、特定报错原因）。
 2. **严禁捏造条件（重点）**：绝对不允许在描述中添加用户未提及的任何限制。
-   - **正确示例**：用户“查订单” → `description`：“查询订单情况” ✅
-   - **错误示例**：用户“查订单” → `description`：“查询2024年Q4电子产品订单及同比增长” ❌（捏造了时间、类别、指标）
+   - **正确示例**：用户"查订单" → `description`："查询订单情况" ✅
+   - **错误示例**：用户"查订单" → `description`："查询2024年Q4电子产品订单及同比增长" ❌（捏造了时间、类别、指标）
 3. **宁简勿繁**：问题宽泛时，描述也保持宽泛，由领域专家自行解读。
+4. **保留过滤维度**：当 **谓词数据 ≠ 过滤维度** 时，description 必须保留过滤维度，让数据持有方知道该按什么条件过滤。
+   - 例：路由到订单 Agent 处理"统计商品的销售情况"，description 应为"按商品维度统计销售情况"，不能丢掉"商品"这个过滤维度。
 
 ---
 
@@ -346,12 +657,21 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 ## 输出要求
 1. **格式**：仅返回一个有效的JSON字符串。
 2. **结构**：
-   - `thought_process`：关于领域映射和主权原则的简明推理。
+   - `thought_process`：必须按以下结构化模板输出（**不可省略任何一行，便于审计与稳定性**）：
+     ```
+     [Step1 数据需求] 核心数据需求=...; 过滤维度=...
+     [Step2 本体性质] (A) 静态本体 / (B) 动态行为产物 二选一, 并给出业务直觉理由（"如果没人触发过相关动作, 这数据是否仍存在"）
+     [Step3 业务能力匹配] 逐个候选 Agent: 是否"业务能力天然产出 / 直接职责覆盖"该数据? 选定=<AgentName>, 选它的业务必然性理由=...
+     [Step4 自检] (1) 本体性质判定与所选 Agent 业务能力是否相容? 是; (2) 是否仅因名词同名/字面相关而路由? 否; (3) 是否存在业务本质更直接对应的另一 Agent? 已确认无
+     [Step5 上下文/历史] 是否复用先前结果 / 是否需要纠偏 / 历史指代解析（简述）
+     [Step6 跨域] 是否拆分及理由
+     ```
    - `original_query`：原始用户输入。
    - `tasks`：包含以下字段的对象列表：
      - `id`：整数（从1开始）。
-     - `description`：转述给智能体的子任务或问题（忠实于用户原始表述，禁止添加额外条件；对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含）。
+     - `description`：转述给智能体的子任务（忠实于用户原始表述，禁止添加额外条件；保留过滤维度；对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含）。
      - `agent`：确切的智能体名称或"NONE"。
+     - `depends_on`：整数列表，标明此任务依赖哪些 task id 必须先完成（无依赖则为空列表 `[]`）。
 3. **JSON 转义（必须严格遵守）**：
    - 当字符串值（如 `original_query`、`description`、`thought_process`）内部出现双引号 `"` 时，**必须写成 `\\"`** 以避免非法 JSON。
    - 典型场景：用户原话中包含 JSON 片段 `{{"category":"手机"}}`，应写成 `"original_query": "请将 JSON {{\\"category\\":\\"手机\\"}} ..."`，**不得**直接粘贴未转义的内部引号。
@@ -546,6 +866,11 @@ class PlannerTask(BaseModel):
         description='agent name of the task to be executed.'
     )
 
+    depends_on: list[int] = Field(
+        default_factory=list,
+        description='List of task IDs that this task depends on (must complete before this one runs).',
+    )
+
 
 class TaskList(BaseModel):
     """Output schema for the Planner Agent."""
@@ -626,6 +951,14 @@ MAX_MULTI_HANDLE_COLLAB_AGENTS = int(os.getenv("MAX_MULTI_HANDLE_COLLAB_AGENTS",
 ENABLE_REASON_AWARE_RETRY = os.getenv("ENABLE_REASON_AWARE_RETRY", "true").strip().lower() in ("true", "1", "yes")
 MAX_SAME_PLAN_RETRY = int(os.getenv("MAX_SAME_PLAN_RETRY", "1"))
 NON_RETRYABLE_MARKER = "NON_RETRYABLE::OUT_OF_SCOPE"
+# Repeated-failure marker emitted by SD Expert when ``is_stuck`` fires
+# (e.g. SQL_WHITELIST validator rejecting the same table twice).  Unlike
+# OUT_OF_SCOPE, repeated_failure carries ``unfulfilled_needs`` in its
+# structured_control payload, which the SG Orchestrator uses together with
+# :class:`SovereigntyIndex` to redirect the gap to the peer SG that actually
+# owns the missing table.  Surfacing this marker here closes the
+# classification gap noted in R5.
+NON_RETRYABLE_REPEAT_MARKER = "NON_RETRYABLE::REPEATED_FAILURE"
 MAX_JOIN_KEY_VALUES_PER_KEY = int(os.getenv("MAX_JOIN_KEY_VALUES_PER_KEY", "50"))
 JOIN_KEY_ALLOWLIST = [k.strip() for k in os.getenv("JOIN_KEY_ALLOWLIST", "").split(",") if k.strip()]
 
@@ -818,6 +1151,9 @@ ALLOWED_FAILURE_REASON_CODES = {
     "invalid_request",
     "cross_source_join_unavailable",
     "missing_relation_in_context",
+    # Repeated SD Expert failure where structured ``unfulfilled_needs`` lets the
+    # outer loop route the gap to a peer SG that owns the missing tables.
+    "data_sovereignty_gap",
     "unknown_failure",
     "outcome_eval_error",
 }
@@ -896,6 +1232,10 @@ failure_reason_code 只能从以下白名单中选择（严格二选一风格，
 
 # Fixed description when no agent is relevant (agent=NONE)
 NONE_TASK_DESCRIPTION = "No available agent can do this task. "
+DEPENDENT_TASK_SKIP_MARKER = "__SG_SKIP_UPSTREAM_NO_DATA__"
+DEPENDENT_TASK_SKIP_DESCRIPTION = (
+    DEPENDENT_TASK_SKIP_MARKER + "上游依赖任务未返回有效数据，当前子任务无输入来源，已自动跳过。"
+)
 
 # Agent selection evaluation prompt (batch_llm mode)
 AGENT_SELECTION_EVALUATION_PROMPT = """你是一个智能体选择专家。给定用户问题和一组候选智能体，请评估每个智能体能否处理该问题，并给出 0-1 的可信度（confidence）。
@@ -1014,6 +1354,8 @@ class PlannerAgent(BaseAgent):
             stream=stream,
             extra_body=_extra_body,
         )
+        self.llm = self.llm.bind_tools([self.make_plan_tool])
+        self.make_plan_max_attempts = int(os.getenv("MAKE_PLAN_MAX_ATTEMPTS", "3"))
         self.data_services_client = DataServicesClient(
             base_url=data_services_url,
             timeout=600,
@@ -1023,6 +1365,35 @@ class PlannerAgent(BaseAgent):
         self.enable_history = enable_history
         self.agent_id = agent_id
         self.semantic_group_id = semantic_group_id
+
+    make_plan_tool: ClassVar[Any]
+
+    @tool("make_plan_cmd", args_schema=TaskList)
+    def make_plan_tool(
+        thought_process: Optional[str] = None,
+        original_query: Optional[str] = None,
+        tasks: List[PlannerTask] = None
+    ) -> str:
+        """Create and return a structured plan with tasks to be executed sequentially.
+        
+        This tool takes a thought process, original query, and a list of tasks,
+        and returns them as a structured JSON plan. The tasks will be executed
+        by the runner in sequence.
+        
+        Args:
+            thought_process: The internal reasoning steps of the planner
+            original_query: The original user query for context
+            tasks: A list of PlannerTask objects to be executed sequentially
+        
+        Returns:
+            JSON string containing the structured plan
+        """
+        plan_data = {
+            "thought_process": thought_process,
+            "original_query": original_query,
+            "tasks": [task.dict() if isinstance(task, PlannerTask) else task for task in (tasks or [])]
+        }
+        return json.dumps(plan_data, ensure_ascii=False)
 
     # generate agent skills string
     def format_agent_skills(self, skills_list):
@@ -1143,7 +1514,7 @@ class PlannerAgent(BaseAgent):
         raw = getattr(answer, "content", "") or ""
 
         try:
-            return json.loads(raw)
+            return json.loads(raw, strict=False)
         except json.JSONDecodeError:
             pass
 
@@ -1157,14 +1528,14 @@ class PlannerAgent(BaseAgent):
         cleaned_content = cleaned_content.strip()
 
         try:
-            return json.loads(cleaned_content)
+            return json.loads(cleaned_content, strict=False)
         except json.JSONDecodeError as e2:
             logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
 
         escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
         if escaped_content != cleaned_content:
             try:
-                parsed = json.loads(escaped_content)
+                parsed = json.loads(escaped_content, strict=False)
                 logger.info(" === format_llm_output, recovered via inner-quote field escaping")
                 return parsed
             except json.JSONDecodeError as e_esc:
@@ -1177,7 +1548,7 @@ class PlannerAgent(BaseAgent):
                     logger.info(" === format_llm_output, recovered via json_repair")
                     return repaired
                 if isinstance(repaired, str):
-                    parsed = json.loads(repaired)
+                    parsed = json.loads(repaired, strict=False)
                     if isinstance(parsed, dict):
                         logger.info(" === format_llm_output, recovered via json_repair (string)")
                         return parsed
@@ -1200,7 +1571,7 @@ class PlannerAgent(BaseAgent):
             logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
 
         try:
-            parsed = json.loads(cleaned_content.replace("'", '"'))
+            parsed = json.loads(cleaned_content.replace("'", '"'), strict=False)
             if isinstance(parsed, dict):
                 return parsed
         except json.JSONDecodeError as e4:
@@ -1238,7 +1609,7 @@ class PlannerAgent(BaseAgent):
         human_template = "{query}"
 
         json_prompt_instructions_zh: dict = {
-            "thought_process": "1. 识别实体：'北京天气'（气象领地）和'穿衣建议'（生活方式领地）。2. 领地映射：'气象'归属于天气查询员，'穿衣'归属于时尚顾问。3. 涉及两个不同领域且有先后依赖，拆分为两个任务。注意：description 忠实转述用户原话，不添加额外条件。",
+            "thought_process": "[Step1 数据需求] 子问1: 核心数据需求=北京当下的实时气象观测数据, 过滤维度=城市(北京)+当下时刻; 子问2: 核心数据需求=与给定天气相匹配的穿衣搭配建议(知识/咨询型), 过滤维度=该天气条件。 [Step2 本体性质] 子问1=(A)静态本体(气象站持续观测产出的'天气状态量', 即使无人查询也客观存在); 子问2=(B)动态产出(由穿衣推理这一动作生成的建议)。 [Step3 业务能力匹配] 天气查询员的核心业务是'获取并提供气象观测/天气状态'→子问1是它的直接职责覆盖→选定承接子问1; 时尚顾问的核心业务是'根据情境产出穿搭建议'→子问2是它的自然产物→选定承接子问2。 [Step4 自检] (1) 本体性质与所选 Agent 业务能力相容: 是; (2) 是否仅因名词同名/字面相关而路由: 否(基于业务本质); (3) 是否存在业务本质更直接对应的另一 Agent: 无。 [Step5 上下文] 无可复用结果, 无需纠偏。 [Step6 跨域] 涉及气象与生活方式两个领域, 且穿衣建议依赖天气结果, 故拆分为两个任务并建立依赖。description 忠实转述用户原话, 不添加额外条件。",
             "original_query": "帮我查询北京的天气并推荐合适的穿衣建议",
             "tasks": [
                 {
@@ -1257,7 +1628,7 @@ class PlannerAgent(BaseAgent):
         }
 
         json_prompt_instructions_en: dict = {
-            "thought_process": "1. Domain Extraction: 'Beijing weather' and 'clothing advice'. 2. Sovereignty Mapping: 'Weather-Checker' owns meteorological data; 'Fashion-Consultant' owns lifestyle styling. 3. Two different domains with sequential dependency, split into two tasks. Note: description faithfully relays user's words without adding extra conditions.",
+            "thought_process": "[Step1 Data Need] Subq1: core-need=current real-time meteorological observation for Beijing, filter=city(Beijing)+now; Subq2: core-need=outfit/styling advice matching the given weather, filter=that weather condition. [Step2 Ontology] Subq1=(A) Static-State (weather observations exist objectively regardless of any query); Subq2=(B) Dynamic-Output (advice produced by a styling inference action). [Step3 Capability Semantics] Weather-Checker's business is to fetch and serve meteorological state → Subq1 is its direct duty → owns Subq1; Fashion-Consultant's business is to produce outfit advice from a context → Subq2 is its natural output → owns Subq2. [Step4 Self-Check] (1) Ontology vs chosen agent's capability are aligned: yes; (2) Routed solely by noun/keyword coincidence: no, based on business essence; (3) Any agent more essentially aligned: none. [Step5 Context] No reusable prior result, no correction needed. [Step6 Cross-Domain] Two distinct domains (meteorology vs lifestyle) with sequential dependency, so split into two tasks with dependency. Note: description faithfully relays user's words without adding extra conditions.",
             "original_query": "Help me check the weather in Beijing and recommend suitable clothing advice",
             "tasks": [
                 {
@@ -1277,7 +1648,7 @@ class PlannerAgent(BaseAgent):
 
         # When no agent is relevant, return a single task with agent "NONE" and fixed description
         json_prompt_no_agent_en: dict = {
-            "thought_process": "1. Entity Extraction: 'Starlink project' (Aerospace/Telecommunications). 2. Territory Check: No available agents cover aerospace or satellite tech domains. 3. Conclusion: Subject is outside all known agent sovereignties.",
+            "thought_process": "[Step1 Data Need] core-need=knowledge/explanation about the Starlink project (aerospace + satellite-communication domain), filter=Starlink. [Step2 Ontology] (B) Dynamic-Output (an explanation produced by a knowledge-bearing agent). [Step3 Capability Semantics] Reviewed every available agent's business essence — none of them naturally produces aerospace/satellite knowledge as a core duty. [Step4 Self-Check] (1) No agent's business naturally covers this need: confirmed; (2) Not routed by noun coincidence: yes; (3) Any agent more essentially aligned: none. [Step5 Context] N/A. [Step6 Cross-Domain] N/A. Conclusion: subject lies outside every available agent's business sovereignty, fall back to NONE.",
             "original_query": "What is the Starlink project?",
             "tasks": [
                 {
@@ -1309,8 +1680,6 @@ class PlannerAgent(BaseAgent):
 
         system_prompt_agents = self.generate_system_prompt_agents(agent_cards)
 
-        chain = chat_prompt | self.llm
-
         user_id = self.metadata.get('user_id', '')
         run_id = self.metadata.get('run_id', '')
         trace_id = self.metadata.get('trace_id', '')
@@ -1324,7 +1693,33 @@ class PlannerAgent(BaseAgent):
             + len(str(group_memory or ""))
         )
 
-        answer = None
+        if self.enable_history == "enable":
+            history = await self.get_history()
+            planner_prompt_chars += len(str(history or ""))
+
+        logger.info(
+            "[RetryAware][PlannerInput] query_chars=%d replan_context_chars=%d group_memory_chars=%d replan_marker_count=%d planner_prompt_chars=%d agent_count=%d agents=%s",
+            len(str(query or "")),
+            len(str(information or "")),
+            len(str(group_memory or "")),
+            replan_marker_count,
+            planner_prompt_chars,
+            len(agent_cards or []),
+            ", ".join(getattr(c, "name", "") or "(unnamed)" for c in (agent_cards or [])),
+        )
+
+        # Build initial messages (system + human) for tool-calling loop
+        format_kwargs = {
+            "query": query,
+            "agents": system_prompt_agents,
+            "information": information,
+            "group_memory": group_memory,
+        }
+        if self.enable_history == "enable":
+            format_kwargs["history"] = history
+        messages = chat_prompt.format_messages(**format_kwargs)
+
+        tasks = None
 
         with langfuse.start_as_current_span(
             name="biz-orchestrator-make_plan",
@@ -1335,44 +1730,153 @@ class PlannerAgent(BaseAgent):
                 session_id=run_id,
                 input={"query": query}
             )
-            
-            if self.enable_history == "enable":
-                history = await self.get_history()
-                planner_prompt_chars += len(str(history or ""))
-            logger.info(
-                "[RetryAware][PlannerInput] query_chars=%d replan_context_chars=%d group_memory_chars=%d replan_marker_count=%d planner_prompt_chars=%d",
-                len(str(query or "")),
-                len(str(information or "")),
-                len(str(group_memory or "")),
-                replan_marker_count,
-                planner_prompt_chars,
-            )
-            if self.enable_history == "enable":
-                answer = await chain.ainvoke(
-                    {"query": query, "history": history, "agents": system_prompt_agents, "information": information, "group_memory": group_memory},
-                    config={"callbacks": [langfuse_handler]}
+
+            for attempt in range(1, self.make_plan_max_attempts + 1):
+                logger.info(
+                    "make_plan llm_invoke attempt=%d/%d messages=%d",
+                    attempt,
+                    self.make_plan_max_attempts,
+                    len(messages),
                 )
-            else:
-                answer = await chain.ainvoke(
-                    {"query": query, "agents": system_prompt_agents, "information": information, "group_memory": group_memory},
-                    config={"callbacks": [langfuse_handler]}
+                answer = await self.llm.ainvoke(
+                    messages,
+                    config={"callbacks": [langfuse_handler]},
+                )
+                messages.append(answer)
+                tool_calls = getattr(answer, "tool_calls", None) or []
+                logger.info(
+                    "make_plan llm_reply attempt=%d tool_calls=%s content=%r",
+                    attempt,
+                    [c.get("name") for c in tool_calls],
+                    str(getattr(answer, "content", ""))[:200],
                 )
 
-            span.update_trace(output={"answer": answer})
+                if not tool_calls:
+                    logger.warning(
+                        "make_plan attempt %s/%s: no tool call, nudging.",
+                        attempt,
+                        self.make_plan_max_attempts,
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "你上一次没有调用工具。请**必须**调用 `make_plan_cmd` 工具来输出规划结果。"
+                                "不要直接输出文本或 JSON。"
+                            )
+                        )
+                    )
+                    continue
+
+                call = next(
+                    (c for c in tool_calls if c.get("name") == "make_plan_cmd"),
+                    None,
+                )
+                if call is None:
+                    logger.warning(
+                        "make_plan attempt %s/%s: unknown tool=%r, nudging.",
+                        attempt,
+                        self.make_plan_max_attempts,
+                        [c.get("name") for c in tool_calls],
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "你调用了未知工具。请只使用 `make_plan_cmd` 工具来输出规划结果。"
+                            )
+                        )
+                    )
+                    continue
+
+                args = call.get("args", {}) or {}
+                logger.info(
+                    "make_plan attempt=%d args keys=%s",
+                    attempt,
+                    list(args.keys()),
+                )
+
+                try:
+                    tasks = TaskList(
+                        thought_process=args.get("thought_process"),
+                        original_query=args.get("original_query"),
+                        tasks=args.get("tasks") or [],
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "make_plan attempt %s/%s: failed to parse TaskList from args: %s, nudging.",
+                        attempt,
+                        self.make_plan_max_attempts,
+                        e,
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                f"工具调用参数解析失败: {e}。"
+                                "请检查 `tasks` 字段格式是否正确（需要 id, description, agent 三个字段），"
+                                "并重新调用 `make_plan_cmd`。"
+                            )
+                        )
+                    )
+                    continue
+
+                if not tasks.tasks:
+                    logger.warning(
+                        "make_plan attempt %s/%s: empty tasks list, nudging.",
+                        attempt,
+                        self.make_plan_max_attempts,
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "你返回的 `tasks` 列表为空。必须至少包含一个任务。"
+                                "如果确实没有合适的智能体，请使用 agent='NONE' 和 "
+                                f"description='{NONE_TASK_DESCRIPTION}'。"
+                            )
+                        )
+                    )
+                    continue
+
+                logger.info(
+                    "make_plan SELECTED attempt=%d tasks_count=%d",
+                    attempt,
+                    len(tasks.tasks),
+                )
+                for t in tasks.tasks:
+                    logger.info(
+                        "  task id=%s agent=%s depends_on=%s description=%s",
+                        t.id,
+                        t.agent,
+                        t.depends_on,
+                        str(t.description)[:120],
+                    )
+                break
+
+            span.update_trace(
+                output={
+                    "tasks": tasks.model_dump() if tasks else None,
+                }
+            )
 
         langfuse.flush()
 
-        logger.info(f" === PlannerAgent.make_plan , llm result = {answer.content}")
-
-        data_dict = self.format_llm_output(answer)
-        if data_dict is None or not isinstance(data_dict, dict):
-            logger.error("PlannerAgent.make_plan: LLM output could not be parsed as JSON")
-            raise ValueError("LLM plan output could not be parsed; please retry or rephrase.")
-        if "tasks" not in data_dict or not isinstance(data_dict.get("tasks"), list):
-            logger.error("PlannerAgent.make_plan: parsed output missing valid 'tasks' list")
-            raise ValueError("LLM plan output missing valid 'tasks' field; please retry or rephrase.")
-
-        tasks = TaskList(**data_dict)
+        if tasks is None:
+            logger.warning(
+                "make_plan EXIT no_valid_selection after %s attempts.",
+                self.make_plan_max_attempts,
+            )
+            tasks = TaskList(
+                thought_process=(
+                    f"Planner failed to produce a valid plan "
+                    f"after {self.make_plan_max_attempts} attempts."
+                ),
+                original_query=str(query),
+                tasks=[
+                    PlannerTask(
+                        id=1,
+                        description=NONE_TASK_DESCRIPTION,
+                        agent="NONE",
+                    )
+                ],
+            )
 
         logger.info(f" === PlannerAgent.make_plan , tasks = {tasks}")
 
@@ -1426,6 +1930,7 @@ class OrchestratorAgent(BaseAgent):
         self.base_url = base_url
         self.model = model
         self.temperature = temperature
+        self.data_services_url = data_services_url
         self.manager = ModelManager()
         _extra_body = {"enable_thinking": False} if os.getenv("ENABLE_THINKING_PARAM", "true").strip().lower() not in ("false", "0", "no") else {}
         self.llm = self.manager.get_llm(
@@ -1461,6 +1966,8 @@ class OrchestratorAgent(BaseAgent):
         # a synthetic AgentCard named ``LOCAL_SKILL_AGENT_NAME`` to the planner
         # and intercepts tasks routed to it in ``a2a_tasks``.
         self.skill_runner = skill_runner
+        self._routing_agent_pool: list[dict] | None = None
+        self._routing_skip_broadcast_used = False
         self.local_skill_agent_name = LOCAL_SKILL_AGENT_NAME
         if self.skill_runner is not None:
             try:
@@ -1741,6 +2248,7 @@ class OrchestratorAgent(BaseAgent):
                 task.description,
                 self.local_skill_agent_name,
                 display_answer,
+                status_code,
             )
         )
 
@@ -1865,7 +2373,7 @@ class OrchestratorAgent(BaseAgent):
         self._update_task_status(task.id, "complete", final_answer)
         current_agents_knowledge.append(
             self._format_task_knowledge(
-                task.id, task.description, self.local_skill_agent_name, final_answer
+                task.id, task.description, self.local_skill_agent_name, final_answer, "complete"
             )
         )
         if self.debug == 1:
@@ -1942,6 +2450,14 @@ class OrchestratorAgent(BaseAgent):
         cleaned = self._strip_retry_diagnostics_block(self._strip_replan_context_block(raw))
         if NON_RETRYABLE_MARKER in raw and NON_RETRYABLE_MARKER not in cleaned:
             return f"{NON_RETRYABLE_MARKER}\n{cleaned}" if cleaned else NON_RETRYABLE_MARKER
+        if NON_RETRYABLE_REPEAT_MARKER in raw and NON_RETRYABLE_REPEAT_MARKER not in cleaned:
+            # Preserve REPEATED_FAILURE marker upward so an outer-layer SG / SG
+            # Orchestrator can still see the structured signal and either route
+            # via the sovereignty index or abort with full attribution.
+            return (
+                f"{NON_RETRYABLE_REPEAT_MARKER}\n{cleaned}"
+                if cleaned else NON_RETRYABLE_REPEAT_MARKER
+            )
         return cleaned
 
     def _get_sg_memory_owner(self) -> str:
@@ -1956,7 +2472,12 @@ class OrchestratorAgent(BaseAgent):
         replan_guidance: str = "",
     ) -> Optional[TaskList]:
         base_query = self._strip_replan_context_block(query)
-        self.agent_cards = await self.list_agent_cards(base_query)
+        if self._routing_pool_flow_enabled():
+            self._init_routing_pool_from_metadata()
+            augmented_pool, _, _ = await self._resolve_planner_agent_pool(base_query)
+            self.agent_cards = augmented_pool
+        else:
+            self.agent_cards = await self.list_agent_cards(base_query)
         if len(self.agent_cards) == 0:
             return None
         if len(self.agent_cards) == 1:
@@ -2114,6 +2635,146 @@ class OrchestratorAgent(BaseAgent):
             logger.info("Filtered out %d tree-internal agent(s) (-sg-/-dd-), keeping %d utility agent(s)", removed, len(filtered))
         return filtered
 
+    def _filter_internal_agents_for_collaboration_pool(self, agent_cards: list[AgentCard]) -> list[AgentCard]:
+        """Remove only -dd- tree-internal agents; keep -sg- orchestrators for cross-SG collaboration.
+
+        The global registry pool may list other Semantic Group orchestrators (``*-sg-*``).
+        Plain ``_filter_tree_internal_agents`` would drop them as "tree-internal"; the
+        collaboration planner needs those cards reachable from the augmented pool."""
+        filtered = []
+        removed = 0
+        for c in agent_cards:
+            name = getattr(c, "name", "") or ""
+            if "-dd-" in name:
+                removed += 1
+                continue
+            filtered.append(c)
+        if removed > 0:
+            logger.info(
+                "Collaboration pool: filtered out %d -dd-only tree-internal agent(s), keeping %d agent(s)",
+                removed,
+                len(filtered),
+            )
+        return filtered
+
+    def _looks_like_sg_orchestrator_identity(self, card: AgentCard) -> bool:
+        """Collaboration delegation targets are SG orchestrators (``…-sg-<id>``), not Chart/Skill utilities."""
+        name = getattr(card, "name", "") or ""
+        return "-sg-" in name
+
+    def _dedupe_agent_cards_by_name_preserve_order(self, cards: list[AgentCard]) -> tuple[list[AgentCard], int]:
+        """First occurrence wins. Returns (deduped_list, removed_duplicate_row_count)."""
+        seen: set[str] = set()
+        out: list[AgentCard] = []
+        for c in cards:
+            n = getattr(c, "name", "") or ""
+            if n in seen:
+                continue
+            seen.add(n)
+            out.append(c)
+        return out, len(cards) - len(out)
+
+    def _routing_pool_flow_enabled(self) -> bool:
+        return os.getenv("ENABLE_ROUTING_AGENT_POOL", "true").strip().lower() in ("true", "1", "yes")
+
+    def _sg_capability_rebroadcast_enabled(self) -> bool:
+        return os.getenv("ENABLE_SG_CAPABILITY_REBROADCAST", "true").strip().lower() in ("true", "1", "yes")
+
+    def _self_planner_agent_name(self) -> str:
+        if self.agent_card and getattr(self.agent_card, "name", None):
+            return str(self.agent_card.name)
+        return (self.agent_id or self.agent_name or "").strip()
+
+    def _init_routing_pool_from_metadata(self, metadata: Optional[dict] = None) -> None:
+        md = metadata if isinstance(metadata, dict) else (self.metadata if isinstance(self.metadata, dict) else {})
+        parsed = sg_broadcast.parse_routing_agent_pool(md)
+        if parsed:
+            self._routing_agent_pool = parsed
+
+    def _may_skip_routing_broadcast(self) -> bool:
+        if not self._routing_pool_flow_enabled():
+            return False
+        md = self.metadata if isinstance(self.metadata, dict) else {}
+        if md.get("collaboration_delegation") is True:
+            return False
+        if not md.get(sg_broadcast.ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY):
+            return False
+        if self._routing_skip_broadcast_used:
+            return False
+        pool = self._routing_agent_pool or sg_broadcast.parse_routing_agent_pool(md)
+        return bool(pool)
+
+    def _build_local_execution_pool(self) -> list[AgentCard]:
+        own = self._build_own_expert_card()
+        cards = [own] if own else []
+        return self._maybe_append_local_skill_card(cards)
+
+    async def _legacy_collab_planner_pools(
+        self,
+        query: str,
+    ) -> tuple[list[AgentCard], set[str], set[str]]:
+        own_cards = await self.list_agent_cards(query, for_collaboration=True)
+        collaborator_cards = await self.discover_collaborator_sgs()
+        raw_augmented = (own_cards or []) + (collaborator_cards or [])
+        augmented_pool, _ = self._dedupe_agent_cards_by_name_preserve_order(raw_augmented)
+        own_names = {c.name for c in (own_cards or [])}
+        collab_names = {c.name for c in (collaborator_cards or [])}
+        return augmented_pool, own_names, collab_names
+
+    async def _resolve_planner_agent_pool(
+        self,
+        query: str,
+    ) -> tuple[list[AgentCard], set[str], set[str]]:
+        """Build planner agent_cards: local execution pool + peer SGs from routing pool or broadcast."""
+        if not self._routing_pool_flow_enabled():
+            return await self._legacy_collab_planner_pools(query)
+
+        md = self.metadata if isinstance(self.metadata, dict) else {}
+        pool: list[dict]
+
+        if self._may_skip_routing_broadcast():
+            pool = self._routing_agent_pool or sg_broadcast.parse_routing_agent_pool(md)
+            self._routing_agent_pool = pool
+            self._routing_skip_broadcast_used = True
+            logger.info(
+                "[RoutingPool] skip SG broadcast (root first plan) pool_size=%d",
+                len(pool),
+            )
+        elif self._sg_capability_rebroadcast_enabled():
+            capable = await sg_broadcast.broadcast_capability_check(
+                query,
+                str(md.get("user_id", "")),
+                str(md.get("run_id", "")),
+                str(md.get("trace_id", "")),
+                propagated_history=parse_propagated_history(md.get(PROPAGATED_HISTORY_KEY)),
+                get_response_text=self.get_response_text,
+            )
+            pool = sg_broadcast.build_routing_agent_pool(capable)
+            self._routing_agent_pool = pool
+            logger.info(
+                "[RoutingPool] SG rebroadcast refreshed pool_size=%d query_chars=%d",
+                len(pool),
+                len(str(query or "")),
+            )
+        elif self._routing_agent_pool:
+            pool = self._routing_agent_pool
+        else:
+            return await self._legacy_collab_planner_pools(query)
+
+        peer_cards = sg_broadcast.pool_to_peer_agent_cards(pool, self._self_planner_agent_name())
+        local_cards = self._build_local_execution_pool()
+        augmented_pool, dup_drop = self._dedupe_agent_cards_by_name_preserve_order(local_cards + peer_cards)
+        own_names = {getattr(c, "name", "") for c in local_cards if getattr(c, "name", "")}
+        collab_names = {getattr(c, "name", "") for c in peer_cards if getattr(c, "name", "")}
+        logger.info(
+            "[RoutingPool] planner_pool local=%d peer=%d total=%d dup_dropped=%d",
+            len(local_cards),
+            len(peer_cards),
+            len(augmented_pool),
+            dup_drop,
+        )
+        return augmented_pool, own_names, collab_names
+
     def _parse_agent_cards_from_response(self, raw_list: list) -> list[AgentCard]:
         """Parse raw agent data (from asearch or list_all) into AgentCard list."""
         cards = []
@@ -2140,10 +2801,12 @@ class OrchestratorAgent(BaseAgent):
             logger.info(f"Filtered out {before - len(filtered)} stale semantic group agent(s)")
         return filtered
 
-    async def _list_agent_cards_semantic_group(self, query) -> list[AgentCard]:
+    async def _list_agent_cards_semantic_group(self, query, *, for_collaboration: bool = False) -> list[AgentCard]:
         """SemanticGroup mode: candidate pool = own Expert Agent + global utility agents.
-        Tree-internal agents (-sg-/-dd-) are filtered out to prevent cross-tree routing.
-        Fast path: when no utility agents exist, skip LLM evaluation entirely."""
+
+        Default: tree-internal agents (-sg-/-dd-) are filtered out (cross-tree routing off).
+        When ``for_collaboration``: keep -sg- orchestrators so other SGs stay in the pool;
+        still drop -dd- subtree-internal agents."""
         own_expert = self._build_own_expert_card()
         if own_expert is None:
             logger.warning("SemanticGroup mode: cannot build own expert card, no agents available")
@@ -2159,28 +2822,185 @@ class OrchestratorAgent(BaseAgent):
             logger.warning("Failed to fetch global agents: %s, using own expert only", e)
             return [own_expert]
 
-        utility_cards = self._filter_tree_internal_agents(all_cards)
+        utility_cards = (
+            self._filter_internal_agents_for_collaboration_pool(all_cards)
+            if for_collaboration
+            else self._filter_tree_internal_agents(all_cards)
+        )
+
+        expert_name = getattr(own_expert, "name", "") or ""
+        if for_collaboration and expert_name:
+            _n = len(utility_cards)
+            utility_cards = [c for c in utility_cards if (getattr(c, "name", "") or "") != expert_name]
+            if _n > len(utility_cards):
+                logger.info(
+                    "SemanticGroup [collaboration]: removed %d registry row(s) duplicate of this_SG_expert=%s",
+                    _n - len(utility_cards),
+                    expert_name,
+                )
+
+        # ── Strip other SG orchestrators (*-sg-*) from the OWN pool ──
+        # In collaboration mode, peer SG cards must only enter through
+        # discover_collaborator_sgs() → collaborator_names.  If we keep
+        # them in own_names they collide with delegation routing and defeat
+        # hop/chaining.
+        if for_collaboration:
+            _n_before = len(utility_cards)
+            utility_cards = [c for c in utility_cards if "-sg-" not in (getattr(c, "name", "") or "")]
+            _dropped = _n_before - len(utility_cards)
+            if _dropped:
+                logger.info(
+                    "SemanticGroup [collaboration]: removed %d other-SG card(s) from own pool "
+                    "(SG routing must go through delegate_to_collaborator_sg)",
+                    _dropped,
+                )
 
         if not utility_cards:
             logger.info("SemanticGroup mode: no utility agents found, fast path with own expert only")
             return [own_expert]
 
         candidates = [own_expert] + utility_cards
-        logger.info("SemanticGroup mode: %d candidates (1 own expert + %d utility)", len(candidates), len(utility_cards))
+        expert_name = getattr(own_expert, "name", "") or "(unnamed)"
+        registry_names = sorted(getattr(c, "name", "") or "(unnamed)" for c in utility_cards)
+        reg_other_sg = sorted(n for n in registry_names if "-sg-" in n)
+        reg_tools = sorted(n for n in registry_names if "-sg-" not in n)
+
         return candidates
 
+    async def discover_collaborator_sgs(self) -> list[AgentCard]:
+        """Return **peer SG orchestrator** cards (name contains ``-sg-``), excluding self.
+
+        The collaboration collection often also lists ChartAgent / SkillAgent / etc.; those are
+        not valid cross-SG delegation endpoints and are skipped (see skip log line).
+
+        Re-delegation to previously visited SGs is now allowed (A→B→A is permitted).
+        Hop-based depth limiting (CROSS_SG_MAX_HOP) prevents infinite delegation loops.
+        """
+        agent_registry_client = AgentRegistryClient()
+        coll_collection = os.getenv(
+            "SG_COLLABORATION_COLLECTION",
+            "biz_orchestrator_agent_cards",
+        )
+        try:
+            raw = await agent_registry_client.alist_all_agents(
+                collection=coll_collection,
+            )
+            all_cards = self._parse_agent_cards_from_response(raw)
+        except Exception as e:
+            logger.warning("Failed to discover collaborator SGs: %s", e)
+            return []
+        all_cards = self._filter_stale_semantic_group_agents(all_cards)
+        my_name = (self.agent_card.name if self.agent_card else self.agent_name)
+
+        # ── allow re-delegation to SGs already in the chain; only exclude self ──
+        # Previously SGs in the delegation_chain were removed from the candidate pool
+        # to enforce a DAG. Removing the DAG constraint allows A→B→A patterns (e.g.
+        # Order delegates to User, and User needs to go back to Order for a follow-up).
+        # Hop-based depth limiting prevents infinite loops.
+        chain = list((self.metadata or {}).get("delegation_chain", []))
+        not_myself = [c for c in all_cards if c.name != my_name]
+
+        skipped_non_sg = sorted({c.name for c in not_myself if not self._looks_like_sg_orchestrator_identity(c)})
+        cards = [c for c in not_myself if self._looks_like_sg_orchestrator_identity(c)]
+        coll_names = sorted(c.name for c in cards if getattr(c, "name", ""))
+        if chain:
+            logger.info(
+                "Cross-SG [collaborator discovery from %s]: re-delegation allowed; prior chain: %s",
+                coll_collection,
+                ", ".join(chain),
+            )
+        if skipped_non_sg:
+            logger.info(
+                "Cross-SG [collaborator discovery from %s]: skipped %d row(s) that are not SG orchestrators "
+                "(name must contain '-sg-'): %s",
+                coll_collection,
+                len(skipped_non_sg),
+                ", ".join(skipped_non_sg),
+            )
+        logger.info(
+            "Cross-SG [delegation targets — SG orchestrators only from %s]: %d peer SG card row(s), "
+            "excluding self=%s: %s",
+            coll_collection,
+            len(cards),
+            my_name or "?",
+            ", ".join(coll_names) if coll_names else "(none)",
+        )
+        return cards
+
+    async def delegate_to_collaborator_sg(
+        self,
+        target_card: AgentCard,
+        task_description: str,
+        user_id: str = "",
+        run_id: str = "",
+        trace_id: str = "",
+        hop_remaining: int = 0,
+        delegation_chain: Optional[list[str]] = None,
+        upstream_context: Optional[dict] = None,
+        progress_updater: Optional[Any] = None,
+        progress_artifact_name: str = "collaboration-progress",
+    ) -> str:
+        """Send a structured delegation request to another SG Orchestrator.
+
+        Uses A2A SendStreamingMessage with metadata so the downstream SG
+        can recognise the request as a collaboration delegation.
+        """
+        chain = list(delegation_chain or [])
+        ctx = dict(upstream_context or {})
+
+        send_payload = {
+            "message": {
+                "role": "user",
+                "parts": [{"type": "text", "text": task_description}],
+                "messageId": uuid4().hex,
+            },
+            "metadata": {
+                "collaboration_delegation": True,
+                "hop_remaining": hop_remaining,
+                "delegation_chain": chain,
+                "upstream_context": ctx,
+                "user_id": user_id,
+                "run_id": run_id,
+                "trace_id": trace_id,
+                "delegator_name": self.agent_name,
+                "skip_history_write": True,
+            },
+        }
+
+        timeout = float(os.getenv("A2A_REQUEST_TIMEOUT", "3600"))
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as httpx_client:
+            client = A2AClient(httpx_client=httpx_client, agent_card=target_card)
+            streaming_req = SendStreamingMessageRequest(
+                id=uuid4().hex,
+                params=MessageSendParams(**send_payload),
+            )
+            stream = client.send_message_streaming(streaming_req)
+            result = await self.stream_a2a_collect_forward_progress_frames(
+                stream,
+                self.get_response_text,
+                progress_updater,
+                progress_artifact_name,
+            )
+        logger.info(
+            "Cross-SG: delegation to %s done, result_chars=%d",
+            target_card.name,
+            len(result),
+        )
+        return result
+
     # get all AgentCards using find_resource func
-    async def list_agent_cards(self, query) -> list[AgentCard]:
+    async def list_agent_cards(self, query, *, for_collaboration: bool = False) -> list[AgentCard]:
         """Reads agent cards from registry.
         - SemanticGroup mode: scoped pool (own expert + utility agents, no cross-tree)
         - SemanticDomain mode: controlled by AGENT_SELECTION_MODE (batch_llm / vector)
+        - ``for_collaboration=True`` (SG mode only): same fetch but retention of ``-sg-`` cards
 
         The synthetic LocalSkill card (route B) is appended at the end when
         ``_should_inject_local_skill_card`` allows it, so every selection path
         uniformly exposes it to the planner.
         """
         if self.semantic_group_id:
-            cards = await self._list_agent_cards_semantic_group(query)
+            cards = await self._list_agent_cards_semantic_group(query, for_collaboration=for_collaboration)
             return self._maybe_append_local_skill_card(cards)
 
         agent_registry_client = AgentRegistryClient()
@@ -2321,12 +3141,117 @@ class OrchestratorAgent(BaseAgent):
             return None
         return data if isinstance(data, dict) else None
 
+    @staticmethod
+    def is_summary_artifact(text: str) -> bool:
+        """Detect DAC_SUMMARY frame (SD Orchestrator → SG Orchestrator / SG Expert)."""
+        return isinstance(text, str) and text.lstrip().startswith(SUMMARY_FRAME_PREFIX)
+
+    @staticmethod
+    def parse_summary_artifact(text: str) -> Optional[str]:
+        """Parse DAC_SUMMARY frame; return summary text or None if not a summary frame."""
+        if not isinstance(text, str):
+            return None
+        stripped = text.strip()
+        if not stripped.startswith(SUMMARY_FRAME_PREFIX):
+            return None
+        json_str = stripped[len(SUMMARY_FRAME_PREFIX):]
+        try:
+            payload = json.loads(json_str)
+            return payload.get("summary", "")
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    @staticmethod
+    def _downstream_answer_model_for_a2a(agent_name: str, agent_card: Any = None) -> str:
+        """SD domain orchestrators (-dd-) emit DAC_SUMMARY via summarized; others stay original."""
+        name = (agent_name or "").strip().lower()
+        if not name and agent_card is not None:
+            name = (getattr(agent_card, "name", "") or "").strip().lower()
+        if "-dd-" in name:
+            return "summarized"
+        return "original"
+
+    @staticmethod
+    def _finalize_a2a_collected_text(raw_parts: List[str], summary_text: Optional[str]) -> str:
+        """Prefer DAC_SUMMARY over raw step chunks when SD orchestrator summarized downstream."""
+        if summary_text is not None:
+            return (summary_text or "").strip()
+        return "\n".join(raw_parts).strip() if raw_parts else ""
+
     @classmethod
     def strip_progress_lines(cls, text: str) -> str:
         if not text:
             return ""
         lines = [line for line in text.splitlines() if not cls.is_progress_frame(line)]
         return "\n".join(lines).strip()
+
+    @staticmethod
+    async def stream_a2a_collect_forward_progress_frames(
+        stream_chunks: AsyncIterable[Any],
+        get_text_fn: Callable[[Any], str],
+        updater: Optional[Any],
+        progress_artifact_name: str,
+    ) -> str:
+        """Consume A2A streaming chunks: relay DAC progress/answer frames to ``updater`` (same artifact name as ``a2a_tasks`` path) and return body text for summaries.
+
+        Collaborative mode previously concatenated Expert streams verbatim, hiding
+        ``[[DAC_PROGRESS]]`` from RoutingAgent and poisoning downstream LLM prompts.
+        """
+        line_buf = ""
+        result_segments: list[str] = []
+        summary_text: Optional[str] = None
+
+        async def handle_line(raw_line: str) -> None:
+            nonlocal summary_text
+            s = raw_line.strip()
+            if not s:
+                return
+            if OrchestratorAgent.is_progress_frame(s):
+                if updater is not None:
+                    await updater.add_artifact(
+                        [TextPart(text=s + "\n")],
+                        name=progress_artifact_name,
+                    )
+                return
+            if OrchestratorAgent.is_summary_artifact(s):
+                parsed = OrchestratorAgent.parse_summary_artifact(s)
+                if parsed is not None:
+                    summary_text = parsed
+                return
+            if OrchestratorAgent.is_answer_frame(s):
+                if updater is not None:
+                    await updater.add_artifact(
+                        [TextPart(text=s + "\n")],
+                        name=progress_artifact_name,
+                    )
+                data = OrchestratorAgent.parse_answer_frame(s) or {}
+                if str(data.get("event") or "").strip() == "final_answer":
+                    payload = data.get("payload") or {}
+                    ft = str(payload.get("text") or "").strip()
+                    if ft:
+                        result_segments.append(ft)
+                return
+            result_segments.append(s)
+
+        async for chunk in stream_chunks:
+            text = get_text_fn(chunk)
+            if not text:
+                continue
+            stripped = text.strip()
+            if OrchestratorAgent.is_summary_artifact(stripped):
+                parsed = OrchestratorAgent.parse_summary_artifact(stripped)
+                if parsed is not None:
+                    summary_text = parsed
+                continue
+            line_buf += text
+            while "\n" in line_buf:
+                line, line_buf = line_buf.split("\n", 1)
+                await handle_line(line)
+        if line_buf:
+            await handle_line(line_buf)
+
+        body = OrchestratorAgent._finalize_a2a_collected_text(result_segments, summary_text)
+        return OrchestratorAgent.strip_progress_lines(body)
 
     def current_agent_label(self) -> str:
         return (self.agent_id or self.semantic_group_id or self.agent_name or "sg_orchestrator").strip()
@@ -2470,8 +3395,8 @@ class OrchestratorAgent(BaseAgent):
             'current_tasks_status': current_tasks_status,
             'current_task': f"current task id: [{task_id}], task description: {query} ",
             'current_task_id': f"{task_id}",
-            # SemanticGroup orchestrator 始终让下游 agent 返回原始知识，由自己做 LLM 总结
-            'answer_model': 'original',
+            # SD orchestrators (-dd-) use summarized + DAC_SUMMARY; SG experts stay original.
+            'answer_model': self._downstream_answer_model_for_a2a(agent_name, agent_card),
             # 下游执行仅返回知识片段，完整对话历史由入口编排器统一落库。
             'skip_history_write': True,
         }
@@ -2485,7 +3410,11 @@ class OrchestratorAgent(BaseAgent):
                     len(prior_doc),
                     task_id,
                 )
-        logger.info(f">>>>>> [answer_model=original] OrchestratorAgent(SemanticGroup).a2a_stream() 设置 answer_model=original 给 agent={agent_name} <<<<<<")
+        logger.info(
+            ">>>>>> [answer_model=%s] OrchestratorAgent(SemanticGroup).a2a_stream() agent=%s <<<<<<",
+            a2a_metadata['answer_model'],
+            agent_name,
+        )
 
         send_message_payload: dict[str, Any] = {
             'message': {
@@ -2509,7 +3438,8 @@ class OrchestratorAgent(BaseAgent):
         )
 
         # build a2a client with agent_card
-        async with httpx.AsyncClient() as httpx_client:
+        _a2a_timeout = float(os.getenv("A2A_REQUEST_TIMEOUT", "3600"))
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_a2a_timeout, connect=10.0)) as httpx_client:
             client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
             try:
                 streaming_request = SendStreamingMessageRequest(
@@ -2569,8 +3499,8 @@ class OrchestratorAgent(BaseAgent):
             'run_id': self.metadata.get('run_id', ''),
             'trace_id': self.metadata.get('trace_id', ''),
             PROPAGATED_HISTORY_KEY: parse_propagated_history(self.metadata.get(PROPAGATED_HISTORY_KEY)),
-            # SemanticGroup orchestrator 始终让下游 agent 返回原始知识，由自己做 LLM 总结
-            'answer_model': 'original',
+            # SD orchestrators (-dd-) use summarized + DAC_SUMMARY; SG experts stay original.
+            'answer_model': self._downstream_answer_model_for_a2a(agent_name, agent_card),
             # 下游执行仅返回知识片段，完整对话历史由入口编排器统一落库。
             'skip_history_write': True,
         }
@@ -2583,7 +3513,11 @@ class OrchestratorAgent(BaseAgent):
                     "[A2A][non_stream] upstream_prior_knowledge for downstream execution | chars=%d",
                     len(prior_doc),
                 )
-        logger.info(f">>>>>> [answer_model=original] OrchestratorAgent(SemanticGroup).a2a_non_stream() 设置 answer_model=original 给 agent={agent_name} <<<<<<")
+        logger.info(
+            ">>>>>> [answer_model=%s] OrchestratorAgent(SemanticGroup).a2a_non_stream() agent=%s <<<<<<",
+            a2a_metadata['answer_model'],
+            agent_name,
+        )
 
         send_message_payload: dict[str, Any] = {
             'message': {
@@ -2606,7 +3540,8 @@ class OrchestratorAgent(BaseAgent):
         )
 
         # build a2a client with agent_card
-        async with httpx.AsyncClient() as httpx_client:
+        _a2a_timeout = float(os.getenv("A2A_REQUEST_TIMEOUT", "3600"))
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_a2a_timeout, connect=10.0)) as httpx_client:
             client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
             try:
                 streaming_request = SendStreamingMessageRequest(
@@ -2614,21 +3549,40 @@ class OrchestratorAgent(BaseAgent):
                     params=MessageSendParams(**send_message_payload)
                 )
                 stream_response = client.send_message_streaming(streaming_request)
-                agent_knowledge = []
+                agent_knowledge: List[str] = []
+                summary_text: Optional[str] = None
                 async for chunk in stream_response:
                     result = self.get_response_text(chunk)
-                    if result != "" and not self.is_progress_frame(result):
-                        if self.is_answer_frame(result):
-                            answer_data = self.parse_answer_frame(result) or {}
-                            if str(answer_data.get("event") or "").strip() != "final_answer":
-                                continue
-                            payload = answer_data.get("payload") or {}
-                            final_text = str(payload.get("text") or "").strip()
-                            if final_text:
-                                agent_knowledge.append(final_text)
+                    if result == "" or self.is_progress_frame(result):
+                        continue
+                    if self.is_summary_artifact(result):
+                        parsed = self.parse_summary_artifact(result)
+                        if parsed is not None:
+                            summary_text = parsed
+                            logger.info(
+                                "[DACSummary][SG-Orch][non_stream] received summary from agent=%s (%d chars)",
+                                agent_name,
+                                len(parsed),
+                            )
+                        continue
+                    if self.is_answer_frame(result):
+                        answer_data = self.parse_answer_frame(result) or {}
+                        if str(answer_data.get("event") or "").strip() != "final_answer":
                             continue
-                        agent_knowledge.append(result)
-                return " ".join(agent_knowledge)
+                        payload = answer_data.get("payload") or {}
+                        final_text = str(payload.get("text") or "").strip()
+                        if final_text:
+                            agent_knowledge.append(final_text)
+                        continue
+                    agent_knowledge.append(result)
+                finalized = self._finalize_a2a_collected_text(agent_knowledge, summary_text)
+                if summary_text is not None:
+                    logger.info(
+                        "[DACSummary][SG-Orch][non_stream] using summary from agent=%s, discarded %d raw chunks",
+                        agent_name,
+                        len(agent_knowledge),
+                    )
+                return finalized
 
             except Exception as e:
                 logger.error(
@@ -2654,10 +3608,20 @@ class OrchestratorAgent(BaseAgent):
         
         return last_step_last_status
 
-    def _format_task_knowledge(self, task_id: int, description: str, agent: str, result: str) -> str:
+    def _format_task_knowledge(self, task_id: int, description: str, agent: str, result: str, status: str = "") -> str:
         """将单条任务结果格式化为大模型易读的块，便于总结时区分任务与结果。"""
         agent_label = (agent or "").strip() or "（未分配）"
-        return f"【任务 {task_id}】\n{description}\n\n【执行 Agent】\n{agent_label}\n\n【结果】\n{(result or '').strip()}"
+        status_line = f"\n【任务状态】\n{status}\n" if status else ""
+        if status == "fail":
+            # When a task has failed, any raw data in its result (e.g. partial
+            # SQL query output) is unverified and misleading.  Replace the full
+            # result with a clean failure signal so the summary LLM cannot
+            # accidentally treat speculative data as confirmed facts.
+            result = (
+                "【此任务执行失败，以下内容为多步尝试过程摘要，其中的具体数据不可作为事实引用】\n"
+                + (result or "").strip()
+            )
+        return f"【任务 {task_id}】\n{description}\n\n【执行 Agent】\n{agent_label}{status_line}\n【结果】\n{(result or '').strip()}"
 
     def _update_task_status(
         self,
@@ -2675,7 +3639,10 @@ class OrchestratorAgent(BaseAgent):
                 task_status.status = status_final
                 task_status.answer = raw_answer
                 task_status.answer_final = answer_final
-                task_status.marker_present = NON_RETRYABLE_MARKER in raw_answer
+                task_status.marker_present = (
+                    NON_RETRYABLE_MARKER in raw_answer
+                    or NON_RETRYABLE_REPEAT_MARKER in raw_answer
+                )
                 # Keep diagnostics bounded; only needed for debug/trace, not planning payload.
                 if raw_answer != answer_final:
                     task_status.diagnostics_excerpt = raw_answer[:1200]
@@ -2968,6 +3935,30 @@ class OrchestratorAgent(BaseAgent):
             normalized.suggested_retry_action = "abort"
             return normalized
 
+        # REPEATED_FAILURE marker: when structured_control carries actionable
+        # unfulfilled_needs we steer the outer loop to replan_with_decomposition
+        # (sovereignty re-routing); otherwise fall back to abort like
+        # OUT_OF_SCOPE.  Avoids the R5 gap where REPEATED_FAILURE was silently
+        # downgraded to ``unknown_failure``.
+        if NON_RETRYABLE_REPEAT_MARKER.lower() in answer_lower:
+            sc = self._extract_structured_control_from_text(answer_text)
+            has_needs = bool(isinstance(sc, dict) and sc.get("unfulfilled_needs"))
+            normalized.status = "fail"
+            if has_needs:
+                normalized.failure_reason_code = "data_sovereignty_gap"
+                normalized.suggested_retry_action = "replan_with_decomposition"
+            else:
+                normalized.failure_reason_code = "non_retryable_misrouted_task"
+                normalized.suggested_retry_action = "abort"
+            logger.warning(
+                "[OutcomeEval][Normalize] task=%s marker=%s status=fail reason=%s action=%s",
+                task.id,
+                NON_RETRYABLE_REPEAT_MARKER,
+                normalized.failure_reason_code,
+                normalized.suggested_retry_action,
+            )
+            return normalized
+
         if normalized.status == "complete":
             normalized.failure_reason_code = ""
             if normalized.suggested_retry_action not in ALLOWED_RETRY_ACTIONS:
@@ -3035,6 +4026,41 @@ class OrchestratorAgent(BaseAgent):
                 confidence=0.99,
                 failure_reason_code="non_retryable_misrouted_task",
                 failure_explanation="Rule-based fail: agent answer contains NON_RETRYABLE::OUT_OF_SCOPE marker.",
+                missing_requirements=[],
+                suggested_retry_action="abort",
+            )
+        if NON_RETRYABLE_REPEAT_MARKER.lower() in raw_lower:
+            sc = self._extract_structured_control_from_text(raw_text)
+            has_needs = bool(isinstance(sc, dict) and sc.get("unfulfilled_needs"))
+            if has_needs:
+                logger.warning(
+                    "[OutcomeEval][RuleBased] task=%s status=fail reason=data_sovereignty_gap unfulfilled=%d",
+                    task.id,
+                    len(sc.get("unfulfilled_needs") or []),
+                )
+                return TaskOutcomeEval(
+                    status="fail",
+                    confidence=0.99,
+                    failure_reason_code="data_sovereignty_gap",
+                    failure_explanation=(
+                        "Rule-based fail: agent answer contains NON_RETRYABLE::REPEATED_FAILURE marker "
+                        "with structured unfulfilled_needs; replan via sovereignty index."
+                    ),
+                    missing_requirements=[],
+                    suggested_retry_action="replan_with_decomposition",
+                )
+            logger.warning(
+                "[OutcomeEval][RuleBased] task=%s status=fail reason=marker_repeated_failure_no_needs",
+                task.id,
+            )
+            return TaskOutcomeEval(
+                status="fail",
+                confidence=0.99,
+                failure_reason_code="non_retryable_misrouted_task",
+                failure_explanation=(
+                    "Rule-based fail: agent answer contains NON_RETRYABLE::REPEATED_FAILURE marker "
+                    "without actionable unfulfilled_needs; abort."
+                ),
                 missing_requirements=[],
                 suggested_retry_action="abort",
             )
@@ -3174,6 +4200,10 @@ class OrchestratorAgent(BaseAgent):
                 ),
                 "missing_requirements": list(t.missing_requirements or [])[:10],
                 "marker_present": bool(t.marker_present),
+                # P3 contract: surface SD Expert's machine-readable
+                # unfulfilled_needs into the replan context so the Planner can
+                # route by table sovereignty rather than re-guessing.
+                "unfulfilled_needs": self._collect_task_unfulfilled_needs(t),
             }
             for t in self.tasks_status
             if t.status == "fail"
@@ -3193,6 +4223,91 @@ class OrchestratorAgent(BaseAgent):
             },
             "split_decision_trace": self._last_split_decision_trace or {},
         }
+
+    async def _resolve_sovereignty_hints(
+        self,
+        replan_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Compute forbidden / recommended agents for a replan.
+
+        Combines per-task ``unfulfilled_needs`` collected in
+        :meth:`_build_replan_context` with the :class:`SovereigntyIndex` reverse
+        lookup over the parent registry.  Returns ``{}`` when no actionable
+        unfulfilled_needs are present so callers can short-circuit.
+        """
+        structured_failures = replan_context.get("structured_failures") or []
+        forbidden_agents: List[str] = []
+        all_unfulfilled: List[Dict[str, Any]] = []
+        for f in structured_failures:
+            if not isinstance(f, dict):
+                continue
+            agent_name = (f.get("agent") or "").strip()
+            needs = f.get("unfulfilled_needs") or []
+            if not needs:
+                continue
+            if agent_name and agent_name not in forbidden_agents:
+                forbidden_agents.append(agent_name)
+            for need in needs:
+                if isinstance(need, dict) and need.get("missing_table"):
+                    all_unfulfilled.append(need)
+
+        if not all_unfulfilled:
+            logger.info("[ReplanHints] no unfulfilled needs — skipping sovereignty resolution")
+            return {}
+
+        try:
+            from .data_inventory import SovereigntyIndex
+            own_name = (getattr(self.agent_card, "name", None) or "").strip() if getattr(self, "agent_card", None) else ""
+            index = getattr(self, "_sovereignty_index", None)
+            if index is None:
+                index = SovereigntyIndex(
+                    data_services_url=os.getenv("DataServicesURL", "http://data-services.dac.svc.cluster.local:8000"),
+                    own_agent_name=own_name,
+                )
+                self._sovereignty_index = index
+                logger.info("[ReplanHints] SovereigntyIndex created for agent=%s", own_name)
+            tables = [n["missing_table"] for n in all_unfulfilled if n.get("missing_table")]
+            logger.info("[ReplanHints] resolving %d missing tables via SovereigntyIndex", len(tables))
+            owners_map = await index.find_owners_for_many(tables)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[ReplanHints] sovereignty index lookup failed: %s", e)
+            return {
+                "forbidden_agents": forbidden_agents,
+                "recommended_agents": [],
+                "unfulfilled_needs": all_unfulfilled,
+            }
+
+        recommended: List[Dict[str, Any]] = []
+        seen_tables: set = set()
+        for need in all_unfulfilled:
+            t = (need.get("missing_table") or "").strip()
+            if not t or t.lower() in seen_tables:
+                continue
+            seen_tables.add(t.lower())
+            owners = list(owners_map.get(t.lower()) or [])
+            # Strip out the same forbidden_agents so the Planner never sees
+            # itself as a recommendation for a gap it just failed to fill.
+            owners = [o for o in owners if o not in forbidden_agents]
+            recommended.append({
+                "missing_table": t,
+                "owners": owners,
+            })
+
+        hints = {
+            "forbidden_agents": forbidden_agents,
+            "recommended_agents": recommended,
+            "unfulfilled_needs": all_unfulfilled,
+        }
+        logger.info(
+            "[ReplanHints] sovereignty hints: forbidden=%d unfulfilled=%d recommended_groups=%d",
+            len(forbidden_agents), len(all_unfulfilled), len(recommended),
+        )
+        logger.info(
+            "[ReplanHints] sovereignty hints detail: forbidden=%s recommended=%s",
+            forbidden_agents,
+            [{"table": r["missing_table"], "owners": r["owners"]} for r in recommended],
+        )
+        return hints
 
     def _build_prior_task_context(
         self,
@@ -3261,6 +4376,54 @@ class OrchestratorAgent(BaseAgent):
         )
         return text, {}
 
+    @staticmethod
+    def _extract_structured_control_from_text(text: str) -> Dict[str, Any]:
+        """Mirror ExpertAgent._extract_structured_control_from_text.
+
+        SD Expert emits ``structured_control: {...}`` lines in its answer; the
+        SG Orchestrator parses them here so it can read ``reason_code`` and
+        ``unfulfilled_needs`` programmatically (rather than re-classifying via
+        free-form regexes).
+        """
+        for line in str(text or "").splitlines():
+            stripped = line.strip()
+            if not stripped.lower().startswith("structured_control:"):
+                continue
+            payload = stripped.split(":", 1)[1].strip()
+            try:
+                data = json.loads(payload)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            if isinstance(data, dict):
+                return data
+        return {}
+
+    def _collect_task_unfulfilled_needs(self, task: TaskStatus) -> List[Dict[str, Any]]:
+        """Extract the SD Expert's ``unfulfilled_needs`` for a failed task.
+
+        Returns a normalized list (may be empty).  Used by the replan path so
+        the planner sees *which tables* the failing agent could not reach and
+        can route them to a peer SG that owns them.
+        """
+        sc = self._extract_structured_control_from_text(str(task.answer or ""))
+        if not isinstance(sc, dict):
+            return []
+        raw = sc.get("unfulfilled_needs") or []
+        out: List[Dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            missing = str(item.get("missing_table") or "").strip()
+            if not missing:
+                continue
+            out.append({
+                "missing_table": missing,
+                "reason": str(item.get("reason") or "").strip(),
+                "intent_fragment": str(item.get("intent_fragment") or "").strip(),
+                "stage": str(item.get("stage") or "").strip(),
+            })
+        return out
+
     def _classify_task_failure_reason(self, task: TaskStatus) -> str:
         """Classify failure reason into coarse-grained reason codes."""
         # LocalSkill reason codes are set directly via
@@ -3271,6 +4434,45 @@ class OrchestratorAgent(BaseAgent):
         if existing in LOCAL_SKILL_FAIL_REASONS:
             return existing
         text = f"{task.description}\n{task.answer}".lower()
+
+        # Parse SD Expert's structured_control first — it is the authoritative
+        # programmatic signal.  When it carries unfulfilled_needs we can re-route
+        # via the sovereignty index instead of aborting.
+        sc = self._extract_structured_control_from_text(str(task.answer or ""))
+        sc_reason = str(sc.get("reason_code") or "").strip().lower()
+        has_unfulfilled_needs = bool(sc.get("unfulfilled_needs"))
+
+        if NON_RETRYABLE_REPEAT_MARKER.lower() in text or sc_reason == "repeated_failure_non_retryable":
+            if has_unfulfilled_needs:
+                logger.warning(
+                    "[NonRetryablePropagation][SemanticGroup] task_id=%s marker=%s data_sovereignty_gap unfulfilled_needs=%d",
+                    task.id,
+                    NON_RETRYABLE_REPEAT_MARKER,
+                    len(sc.get("unfulfilled_needs") or []),
+                )
+                return "data_sovereignty_gap"
+            logger.warning(
+                "[NonRetryablePropagation][SemanticGroup] task_id=%s marker=%s repeated_failure no actionable unfulfilled_needs",
+                task.id,
+                NON_RETRYABLE_REPEAT_MARKER,
+            )
+            return "non_retryable_misrouted_task"
+        # SD feasibility 自检返回的 structured_control（reason_code=data_sovereignty_gap）。
+        # 不消耗 SD 内部的 step 预算，直接引导 retry loop 走
+        # replan_with_decomposition → _resolve_sovereignty_hints → SovereigntyIndex → 重路由。
+        if sc_reason == "data_sovereignty_gap":
+            if has_unfulfilled_needs:
+                logger.warning(
+                    "[SDFeasibility][Propagation] task_id=%s sc_reason=data_sovereignty_gap → unfulfilled_needs=%d",
+                    task.id,
+                    len(sc.get("unfulfilled_needs") or []),
+                )
+                return "data_sovereignty_gap"
+            logger.info(
+                "[SDFeasibility][Propagation] task_id=%s sc_reason=data_sovereignty_gap no actionable unfulfilled_needs — 走通用分类",
+                task.id,
+            )
+            # 没有 actionable unfulfilled_needs → 继续走下面 eval_result / heuristic 分类
         if NON_RETRYABLE_MARKER.lower() in text:
             logger.warning(
                 "[NonRetryablePropagation][SemanticGroup] task_id=%s marker_detected=%s source=task_answer",
@@ -3323,7 +4525,15 @@ class OrchestratorAgent(BaseAgent):
             return "abort"
         if reason_code == "transient_network" and same_plan_retry_count < MAX_SAME_PLAN_RETRY:
             return "retry_same_plan"
-        if reason_code in ("cross_source_join_unavailable", "missing_relation_in_context"):
+        # data_sovereignty_gap: SD Expert reported ``unfulfilled_needs`` (e.g.
+        # SQL_WHITELIST repeated failure with a known missing table).  The
+        # sovereignty index will surface the peer SG that owns the table, so
+        # decomposition replan is the right action — not abort.
+        if reason_code in (
+            "cross_source_join_unavailable",
+            "missing_relation_in_context",
+            "data_sovereignty_gap",
+        ):
             return "replan_with_decomposition"
         # LocalSkill (route B) failures: allow the planner to redraft the plan.
         # The failed skill name is already captured in ``execution_results`` so
@@ -3357,10 +4567,33 @@ class OrchestratorAgent(BaseAgent):
                 return code
         return reason_codes[0] if reason_codes else "unknown_failure"
 
-    def _build_replan_guidance(self, reason_code: str) -> str:
-        """Build strategy guidance text for replanning prompt."""
+    def _build_replan_guidance(
+        self,
+        reason_code: str,
+        *,
+        sovereignty_hints: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Build strategy guidance text for replanning prompt.
+
+        When ``sovereignty_hints`` is supplied (typical for
+        ``data_sovereignty_gap``), the guidance embeds explicit "forbidden /
+        recommended agents" instructions so the Planner cannot reuse the
+        failing route and is steered to the peer SG that actually owns the
+        missing tables.
+        """
+        hints_text = self._format_sovereignty_hints(sovereignty_hints)
+        if reason_code == "data_sovereignty_gap":
+            base = (
+                "重试策略要求（数据归属重路由）：\n"
+                "1) 上一轮失败任务的根因是 **数据归属不匹配**（agent 的 whitelist 不包含必要表）。\n"
+                "2) 禁止再次将相同的 missing_table 路由到 forbidden_agents 列出的 agent。\n"
+                "3) 必须依据 recommended_agents（来自 sovereignty index 反查）选择新的归属 agent。\n"
+                "4) 若无单一 agent 同时覆盖所有 missing_table，按归属拆分为多个子任务并在 dependencies 中正确串联。\n"
+                "5) 在 task.description 中显式声明所需读取的表名，便于 SD Expert 校验。"
+            )
+            return f"{base}{hints_text}" if hints_text else base
         if reason_code in ("cross_source_join_unavailable", "missing_relation_in_context"):
-            return (
+            base = (
                 "重试策略要求（通用）：\n"
                 "1) 不要在单一数据源中执行跨源 JOIN。\n"
                 "2) 先在主数据源完成聚合并产出 join_key 列表（如 *_id）。\n"
@@ -3368,9 +4601,43 @@ class OrchestratorAgent(BaseAgent):
                 "4) 最终由编排层按 join_key 进行结果合并，并标注缺失 key。\n"
                 "5) 禁止复用上轮失败的 task-agent 方案，除非给出可验证修复。"
             )
+            return f"{base}{hints_text}" if hints_text else base
         if reason_code == "transient_network":
             return "重试策略要求：优先保持原任务分解，仅微调以降低外部调用失败概率；禁止无关改动。"
-        return "重试策略要求：优先修复失败任务，逐条覆盖 missing_requirements，避免无关任务改动，并说明与上轮差异。"
+        base = "重试策略要求：优先修复失败任务，逐条覆盖 missing_requirements，避免无关任务改动，并说明与上轮差异。"
+        return f"{base}{hints_text}" if hints_text else base
+
+    @staticmethod
+    def _format_sovereignty_hints(hints: Optional[Dict[str, Any]]) -> str:
+        if not hints or not isinstance(hints, dict):
+            return ""
+        forbidden = hints.get("forbidden_agents") or []
+        recommended = hints.get("recommended_agents") or []
+        unfulfilled = hints.get("unfulfilled_needs") or []
+        if not forbidden and not recommended and not unfulfilled:
+            return ""
+        sections: List[str] = ["\n\n--- 数据归属提示（sovereignty index）---"]
+        if unfulfilled:
+            sections.append("unfulfilled_needs:")
+            for item in unfulfilled[:20]:
+                if not isinstance(item, dict):
+                    continue
+                missing = item.get("missing_table") or ""
+                intent = item.get("intent_fragment") or ""
+                stage = item.get("stage") or ""
+                sections.append(f"  - missing_table={missing} | stage={stage} | intent={intent}")
+        if forbidden:
+            sections.append("forbidden_agents (上轮失败，禁止再次承担相同 missing_table):")
+            for agent in forbidden[:20]:
+                sections.append(f"  - {agent}")
+        if recommended:
+            sections.append("recommended_agents (sovereignty index 反查，按 missing_table 列出候选归属):")
+            for entry in recommended[:30]:
+                if isinstance(entry, dict):
+                    sections.append(
+                        f"  - missing_table={entry.get('missing_table', '')} -> {', '.join(entry.get('owners', []) or [])}"
+                    )
+        return "\n".join(sections)
 
     async def analyze_failure_reasons(self, tasks_status: List[TaskStatus]) -> str:
         failure_analysis = []
@@ -3483,7 +4750,7 @@ class OrchestratorAgent(BaseAgent):
                     none_description = NONE_TASK_DESCRIPTION
                     logger.info("Task %s: agent=NONE (no relevant agent)", task.id)
                     self._update_task_status(task.id, "complete", none_description)
-                    current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, "", none_description))
+                    current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, "", none_description, "complete"))
                     none_progress_msg = (
                         f"Task [{task.id}]: {none_description.strip()} - [NONE]"
                     )
@@ -3528,7 +4795,8 @@ class OrchestratorAgent(BaseAgent):
                         len(merged_prior_task_results),
                     )
 
-                agent_steps_knowledge = []
+                agent_steps_raw: List[str] = []
+                summary_text: Optional[str] = None
 
                 if self.debug == 1:
                     agent_knowledge_step = f"Task [{task.id}]: {task.description}; \n\n"
@@ -3549,12 +4817,33 @@ class OrchestratorAgent(BaseAgent):
                                     name=task_name,
                                 )
                                 continue
+                            if self.is_summary_artifact(agent_step_knowledge):
+                                parsed = self.parse_summary_artifact(agent_step_knowledge)
+                                if parsed is not None:
+                                    summary_text = parsed
+                                    logger.info(
+                                        "[DACSummary][SG-Orch] received summary from agent=%s task=%s (%d chars)",
+                                        task.agent,
+                                        task.id,
+                                        len(parsed),
+                                    )
+                                continue
                             if self.debug == 1:
                                 agent_knowledge_step = f"{agent_step_knowledge} \n"
                                 think.append(agent_knowledge_step)
-                            agent_steps_knowledge.append(agent_step_knowledge)
+                            agent_steps_raw.append(agent_step_knowledge)
 
-                        agent_steps_knowledge_str = "\n".join(agent_steps_knowledge)
+                        agent_steps_knowledge_str = self._finalize_a2a_collected_text(
+                            agent_steps_raw,
+                            summary_text,
+                        )
+                        if summary_text is not None:
+                            logger.info(
+                                "[DACSummary][SG-Orch] using summary for task=%s agent=%s, discarded %d raw chunks",
+                                task.id,
+                                task.agent,
+                                len(agent_steps_raw),
+                            )
 
                         eval_result = await self._llm_evaluate_task_outcome(
                             original_query=base_query,
@@ -3590,7 +4879,7 @@ class OrchestratorAgent(BaseAgent):
                             task_id=task.id,
                             extra={"task_agent": task.agent, "task_status": current_task_status},
                         )
-                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, agent_steps_knowledge_str))
+                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, agent_steps_knowledge_str, current_task_status))
                         if current_task_status == "fail":
                             break
 
@@ -3605,7 +4894,7 @@ class OrchestratorAgent(BaseAgent):
                             status="fail",
                             task_id=task.id,
                         )
-                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, f"Execution error: {str(e)}"))
+                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, f"Execution error: {str(e)}", "fail"))
 
                 else:
                     try:
@@ -3642,12 +4931,12 @@ class OrchestratorAgent(BaseAgent):
                         if self.debug == 1:
                             think.append(agent_knowledge_step)
                         
-                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, agent_result or ""))
+                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, agent_result or "", current_task_status))
                         
                     except Exception as e:
                         logger.error(f"Error during non-streaming execution of task {task.id}: {e}")
                         self._update_task_status(task.id, "fail", f"Execution error: {str(e)}")
-                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, f"Execution error: {str(e)}"))
+                        current_agents_knowledge.append(self._format_task_knowledge(task.id, task.description, task.agent, f"Execution error: {str(e)}", "fail"))
 
             # 用本轮结果覆盖，保证交给总结 LLM 的始终是「最后一轮」
             last_round_knowledge = list(current_agents_knowledge)
@@ -3712,7 +5001,6 @@ class OrchestratorAgent(BaseAgent):
                         continue
 
                     same_plan_retry_count = 0
-                    guidance = self._build_replan_guidance(reason_code)
                     replan_context = self._build_replan_context(
                         original_query=base_query,
                         current_tasks=current_tasks,
@@ -3720,6 +5008,27 @@ class OrchestratorAgent(BaseAgent):
                         reason_code=reason_code,
                         retry_action=retry_action,
                         failure_analysis=failure_analysis,
+                    )
+                    # P7: when the failure includes structured unfulfilled_needs,
+                    # consult the sovereignty index to mark the failing agent as
+                    # forbidden and recommend peer SGs that actually own the
+                    # missing tables.  These hints are surfaced both in the
+                    # context payload and inlined into the guidance prompt.
+                    sovereignty_hints: Dict[str, Any] = {}
+                    try:
+                        sovereignty_hints = await self._resolve_sovereignty_hints(replan_context)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("[ReplanHints] sovereignty hint resolution raised — continuing")
+                    if sovereignty_hints:
+                        replan_context["sovereignty_hints"] = sovereignty_hints
+                        logger.info(
+                            "[ReplanHints] sovereignty hints applied to replan_context: forbidden=%d recommended=%d",
+                            len(sovereignty_hints.get("forbidden_agents") or []),
+                            len(sovereignty_hints.get("recommended_agents") or []),
+                        )
+                    guidance = self._build_replan_guidance(
+                        reason_code,
+                        sovereignty_hints=sovereignty_hints or None,
                     )
                     if isinstance(self.metadata, dict):
                         self.metadata["replan_context"] = replan_context
@@ -4022,7 +5331,14 @@ class OrchestratorAgent(BaseAgent):
         system_template = Orchestrator_INSTRUCTIONS_ZH
 
         # human_template = "background knowledge: {knowledge}。\n\n history memory: {memory}\n\nuser question:{query}"
-        human_template = "background knowledge: {knowledge}。\n\nuser question:{query}"
+        human_template = (
+            "background knowledge: {knowledge}。\n\n"
+            "user question:{query}\n\n"
+            "【重要提示】background knowledge 中每个任务块都标注了「任务状态」。"
+            "状态为「fail」的任务，其返回的数据可能是局部/不完整/不正确的，"
+            "严禁将其中的具体数据（如查询到的记录、数字、字段值）当作事实引用。"
+            "状态为「fail」的任务数据仅能说明「该任务未成功完成」，不能证明任何事实性结论。"
+        )
 
         logger.info(
             "============ biz orchestrator stream, answer user question, knowledge length: %s, knowledge (full):\n%s",
@@ -4152,6 +5468,61 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         self._skill_runner_initialised = False
         self._skill_runner_lock = asyncio.Lock()
         self._log_local_skill_executor_config()
+
+    # ─────────────────────── Data-Flow Logging Helper ───────────────────────
+
+    @staticmethod
+    def _log_data_flow(
+        *,
+        direction: str,
+        description: str,
+        source_id: str = "",
+        target_id: str = "",
+        payload_chars: int = 0,
+        payload_preview: str = "",
+        metadata_extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Structured, visually scannable data-flow log for every agent-agent handoff.
+
+        Example output for a ``direction="OWN_TASK_EXEC"`` call::
+
+            ┌▶ DATA_FLOW  OWN_TASK_EXEC ───────────────────────────┐
+            │  来源: UserCenterAgent-sg-xxx
+            │  目标: UserCenterAgent-sg-xxx (expert on localhost:10101)
+            │  载荷: 2,054 chars
+            │  前置上下文: Task#1 (2,054 chars)
+            ├───────────────────────────────────────────────────────┤
+            │  预览: step 1/1: query: 查询所有用户的信息…
+            └───────────────────────────────────────────────────────┘
+        """
+        block_width = 80
+
+        lines: list[str] = []
+        lines.append(f"┌▶ DATA_FLOW  {direction}")
+        lines.append("─" * (block_width + 1) + "┐")
+        lines.append(f"│  {description}")
+        if source_id:
+            lines.append(f"│  来源: {source_id}")
+        if target_id:
+            lines.append(f"│  目标: {target_id}")
+        if payload_chars:
+            lines.append(f"│  载荷: {payload_chars:,} chars")
+        if metadata_extra:
+            for k, v in metadata_extra.items():
+                vs = str(v)
+                if len(vs) > 240:
+                    vs = vs[:240] + "…"
+                lines.append(f"│  metadata.{k}: {vs}")
+        lines.append("├" + "─" * block_width + "┤")
+        if payload_preview:
+            pp = payload_preview.replace("\n", "⏎ ")
+            if len(pp) > 1000:
+                pp = pp[:1000] + "…"
+            lines.append(f"│  预览: {pp}")
+        else:
+            lines.append("│  预览: (无内容)")
+        lines.append("└" + "─" * block_width + "┘")
+        logger.info("\n".join(lines))
 
     @staticmethod
     def _log_local_skill_executor_config() -> None:
@@ -4705,6 +6076,2263 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             message=new_agent_text_message("", context_id=task.context_id)
         )
 
+    @staticmethod
+    def _enrich_group_memory_with_upstream(
+        upstream_context: dict,
+        base_group_memory: str = "",
+        extra_context: dict | None = None,
+    ) -> str:
+        """Enrich group_memory with upstream delegation context.
+
+        Injects the upstream's executed_tasks, key_findings, delegator_plan,
+        and (in mid-exec rounds) already_delegated / synthesized_query /
+        detection_reason into the group_memory string so the Planner can
+        produce more precise task descriptions that reference prior work.
+        """
+        parts: list[str] = []
+        if base_group_memory:
+            parts.append(base_group_memory)
+
+        exec_tasks = upstream_context.get("executed_tasks")
+        key_findings = upstream_context.get("key_findings_so_far")
+        delegator_plan = upstream_context.get("delegator_plan")
+        upstream_inner = upstream_context.get("upstream_context")
+
+        upstream_info_parts: list[str] = []
+        if delegator_plan:
+            plan_text = json.dumps(delegator_plan, ensure_ascii=False)
+            upstream_info_parts.append(f"上游原始计划: {plan_text}")
+        if exec_tasks:
+            tasks_text = json.dumps(exec_tasks, ensure_ascii=False)
+            upstream_info_parts.append(f"上游已执行任务及结果: {tasks_text}")
+        if key_findings:
+            upstream_info_parts.append(f"上游关键发现: {key_findings}")
+        if upstream_inner:
+            inner_text = json.dumps(upstream_inner, ensure_ascii=False)
+            upstream_info_parts.append(f"更上层上下文: {inner_text}")
+
+        if extra_context:
+            ctx_parts: list[str] = []
+            already = extra_context.get("already_delegated")
+            synth = extra_context.get("synthesized_query")
+            reason = extra_context.get("detection_reason")
+            if already:
+                ctx_parts.append(
+                    f"已委托结果: {json.dumps(already, ensure_ascii=False)}"
+                )
+            if synth:
+                ctx_parts.append(f"当前合成子问题: {synth}")
+            if reason:
+                ctx_parts.append(f"委托原因: {reason}")
+            if ctx_parts:
+                upstream_info_parts.append(
+                    "当前轮次上下文:\n" + "\n".join(ctx_parts)
+                )
+
+        if upstream_info_parts:
+            parts.append(
+                "=== 上游委托上下文（已有分析结论及进展，请在此基础上规划） ===\n"
+                + "\n\n".join(upstream_info_parts)
+            )
+
+        result = "\n\n".join(parts)
+        logger.debug(
+            "[Cross-SG][CollabEnrichMem] upstream_context injection | base_chars=%d enriched_chars=%d fields=%s",
+            len(base_group_memory or ""),
+            len(result),
+            [
+                k
+                for k in ("delegator_plan", "executed_tasks", "key_findings_so_far", "upstream_context")
+                if upstream_context.get(k)
+            ],
+        )
+        return result
+
+    async def _emit_collab_mid_round_done(
+        self,
+        updater: TaskUpdater,
+        *,
+        round_num: int,
+        max_rounds: int,
+        total_delegated: int,
+        early_exit: str = "",
+    ) -> None:
+        msg = f"Mid-execution round {round_num}/{max_rounds} finished"
+        if early_exit:
+            msg = f"{msg}: {early_exit}"
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_mid_round_done",
+            message=msg,
+            status="done",
+            extra={
+                "round": round_num,
+                "total_delegated": total_delegated,
+            },
+        )
+
+    async def _emit_collab_mid_exec_loop_done(
+        self,
+        updater: TaskUpdater,
+        *,
+        total_rounds: int,
+        total_delegated: int,
+    ) -> None:
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_mid_exec_loop_done",
+            message=f"Mid-execution loop finished ({total_rounds} round(s))",
+            status="done",
+            extra={
+                "total_rounds": total_rounds,
+                "total_delegated": total_delegated,
+            },
+        )
+
+    async def execute_collaborative(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+    ) -> None:
+        """Cross-SG collaborative execution entry point.
+
+        When ``metadata.collaboration_delegation`` is ``True`` this request
+        was delegated from another SG; otherwise it is the original user
+        request that happened to arrive with collaborative mode enabled.
+        """
+
+        # ---- 基础准备 ----
+        query = context.get_user_input()
+        metadata = dict(context.metadata or {})
+        self.metadata = metadata
+
+        is_delegated = metadata.get("collaboration_delegation") is True
+        hop_remaining = int(metadata.get("hop_remaining", 0))
+        delegation_chain = list(metadata.get("delegation_chain", []))
+        upstream_context = dict(metadata.get("upstream_context", {}))
+        user_id = str(metadata.get("user_id", ""))
+        run_id = str(metadata.get("run_id", ""))
+        trace_id = str(metadata.get("trace_id", ""))
+        self._progress_context = {
+            "run_id": run_id,
+            "user_id": user_id,
+            "agent_id": self.agent_id or self.current_agent_label(),
+        }
+
+        task = context.current_task
+        if not task:
+            task = new_task(context.message)
+            await event_queue.enqueue_event(task)
+
+        updater = TaskUpdater(event_queue, task.id, task.context_id)
+
+        if is_delegated:
+            current_hop = hop_remaining
+        else:
+            current_hop = int(os.getenv("CROSS_SG_MAX_HOP", "5"))
+
+        sg_label = self.agent_card.name if self.agent_card else (self.agent_id or self.semantic_group_id or "?")
+
+        logger.info(
+            "[Cross-SG][CollabEntry] execute_collaborative started | sg=%s sg_id=%s is_delegated=%s hop=%d chain=%s "
+            "query_len=%d user_id=%s run_id=%s trace_id=%s",
+            sg_label,
+            self.semantic_group_id,
+            is_delegated,
+            current_hop,
+            delegation_chain,
+            len(query or ""),
+            user_id,
+            run_id,
+            trace_id,
+        )
+
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_started",
+            message=f"Collaborative execution started (SG: {sg_label}, delegated: {is_delegated}, hop: {current_hop})",
+            status="running",
+            extra={
+                "sg_label": sg_label,
+                "sg_id": self.semantic_group_id or "?",
+                "is_delegated": is_delegated,
+                "hop": current_hop,
+                "chain_depth": len(delegation_chain),
+            },
+        )
+
+        # ---- 发现协作 SG ----
+        skill_runner = await self._ensure_skill_runner()
+        agent = OrchestratorAgent(
+            provider=self.provider,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            stream=self.stream,
+            temperature=self.temperature,
+            semantic_group_id=self.semantic_group_id,
+            debug=self.debug,
+            data_services_url=self.data_services_url,
+            metadata=metadata,
+            enable_history=self.enable_history,
+            agent_id=self.agent_id,
+            max_loops=self.max_loops,
+            agent_card=self.agent_card,
+            skill_runner=skill_runner,
+        )
+        agent._init_routing_pool_from_metadata(metadata)
+
+        if agent._routing_pool_flow_enabled():
+            augmented_pool, own_names, collaborator_names = await agent._resolve_planner_agent_pool(query)
+            agent.agent_cards = augmented_pool
+            collaborator_cards = [
+                c for c in augmented_pool if getattr(c, "name", "") in collaborator_names
+            ]
+        else:
+            agent.agent_cards = await agent.list_agent_cards(query, for_collaboration=True)
+            collaborator_cards = await agent.discover_collaborator_sgs()
+            own_names = {c.name for c in (agent.agent_cards or [])}
+            collaborator_names = {c.name for c in collaborator_cards}
+            augmented_pool, dup_drop = agent._dedupe_agent_cards_by_name_preserve_order(
+                (agent.agent_cards or []) + collaborator_cards
+            )
+
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_discovered_sgs",
+            message=f"Collaborator pool ready: {', '.join(sorted(collaborator_names)) or '(none)'}",
+            status="running",
+            extra={
+                "own_expert_count": len(own_names),
+                "collab_sg_count": len(collaborator_names),
+                "collab_sg_names": sorted(collaborator_names),
+                "pool_source": "routing_agent_pool" if agent._routing_pool_flow_enabled() else "legacy_discover",
+            },
+        )
+
+        # ---- 规划：agent 池 ----
+        own_cards = [c for c in (augmented_pool or []) if getattr(c, "name", "") in own_names]
+        if not agent._routing_pool_flow_enabled():
+            own_cards = agent.agent_cards or []
+        coll_collection = os.getenv(
+            "SG_COLLABORATION_COLLECTION",
+            "biz_orchestrator_agent_cards",
+        )
+        local_names_sorted = sorted(own_names)
+        collab_names_sorted = sorted(collaborator_names)
+        local_dup_rows = len(own_cards) - len(own_names)
+        self_agent_name = agent._self_planner_agent_name()
+        logger.info(
+            "[Cross-SG][CollabPlanning] local execution pool | agents run on this SG (Expert + LocalSkill) | "
+            "count=%d unique=%d%s | agents=[%s]",
+            len(own_cards),
+            len(own_names),
+            f" dup_rows={local_dup_rows}" if local_dup_rows else "",
+            ", ".join(local_names_sorted) if local_names_sorted else "(empty)",
+        )
+        if agent._routing_pool_flow_enabled():
+            routing_pool_size = len(
+                agent._routing_agent_pool or sg_broadcast.parse_routing_agent_pool(metadata)
+            )
+            logger.info(
+                "[Cross-SG][CollabPlanning] peer delegation pool | from RoutingAgent routing_agent_pool "
+                "routing_pool_size=%d self=%s peer_count=%d peers=[%s]",
+                routing_pool_size,
+                self_agent_name or "(unknown)",
+                len(collaborator_names),
+                ", ".join(collab_names_sorted) if collab_names_sorted else "(none)",
+            )
+        else:
+            logger.info(
+                "[Cross-SG][CollabPlanning] peer delegation pool | from registry discover "
+                "(collection=%s → delegate_to_collaborator_sg candidates) | "
+                "peer_count=%d peers=[%s]",
+                coll_collection,
+                len(collaborator_names),
+                ", ".join(collab_names_sorted) if collab_names_sorted else "(none)",
+            )
+        logger.info(
+            "[Cross-SG][CollabPlanning] planner input pool | local + peer merged for make_plan | "
+            "total=%d agents=[%s]",
+            len(augmented_pool or []),
+            ", ".join(sorted({getattr(c, "name", "") for c in (augmented_pool or [])})),
+        )
+
+        base_group_memory = await agent.get_memory(query)
+        group_memory = self._enrich_group_memory_with_upstream(
+            upstream_context=upstream_context,
+            base_group_memory=base_group_memory,
+        )
+        logger.info(
+            "[Cross-SG][CollabPlanning] group_memory prepared | base_chars=%d enriched_chars=%d",
+            len(base_group_memory or ""),
+            len(group_memory or ""),
+        )
+        try:
+            plan = await agent.planner_agent.make_plan(
+                query,
+                augmented_pool,
+                group_memory=group_memory,
+            )
+        except ValueError as plan_err:
+            # 规划阶段失败（包含 make_plan 内部 2 次重试后仍失败的情况）：
+            # 不能再继续执行后续 own_tasks / delegation_tasks 拆解逻辑，否则
+            # 会触发 AttributeError。这里复用已经创建好的 task / updater，
+            # 把失败信息以 artifact + failed 状态正常回传给上游，避免抛到
+            # ASGI 任务组里变成 500。
+            err_msg = f"任务规划失败：{plan_err}"
+            logger.error(
+                "[Cross-SG][CollabPlanning] make_plan failed after retries | sg=%s err=%s",
+                sg_label, plan_err,
+            )
+            await updater.add_artifact(
+                [TextPart(text=err_msg)],
+                name="planning-error",
+            )
+            await updater.failed(
+                message=new_agent_text_message(err_msg, context_id=task.context_id),
+            )
+            return
+
+        own_tasks: list[PlannerTask] = []
+        delegation_tasks: list[PlannerTask] = []
+        for t in plan.tasks:
+            agent_name = (t.agent or "").strip()
+            if agent_name.upper() == "NONE":
+                own_tasks.append(t)
+                continue
+            # --- mutual-exclusive classification: own_pool wins for execution ---
+            if agent_name in own_names:
+                own_tasks.append(t)
+            elif agent_name in collaborator_names:
+                delegation_tasks.append(t)
+
+        _orphan_tasks = [
+            t for t in plan.tasks
+            if (t.agent or "").strip().upper() != "NONE"
+            and t.agent not in own_names
+            and t.agent not in collaborator_names
+        ]
+        if _orphan_tasks:
+            logger.warning(
+                "[Cross-SG][CollabPlanning] orphan tasks detected — agent not found in own or collaborator cards: %s",
+                [{"task_id": t.id, "agent": t.agent, "desc": (t.description or "")[:80]} for t in _orphan_tasks],
+            )
+
+        def _collab_plan_task_one_line(_t: PlannerTask) -> str:
+            agent_nm = (_t.agent or "").strip() or "?"
+            desc = ((_t.description or "").replace("\n", " ").strip())[:140]
+            deps = f"(depends on: [{', '.join(str(d) for d in _t.depends_on)}]) " if _t.depends_on else ""
+            return f"#{_t.id} {deps}agent={agent_nm!r} | {desc}"
+
+        task_blocks = [_collab_plan_task_one_line(t) for t in plan.tasks]
+        logger.info(
+            "[Cross-SG][CollabPlan] %d planner task(s) — breakdown: exec_in_local_pool=%d (agents: %s) | delegate_to_SG=%d (agents: %s)",
+            len(plan.tasks),
+            len(own_tasks),
+            ", ".join(sorted({t.agent for t in own_tasks})) or "(n/a)",
+            len(delegation_tasks),
+            ", ".join(sorted({t.agent for t in delegation_tasks})) or "(none)",
+        )
+        if task_blocks:
+            logger.info("[Cross-SG][CollabPlan] tasks:\n%s", "\n".join(f"  • {ln}" for ln in task_blocks))
+        else:
+            logger.info("[Cross-SG][CollabPlan] tasks: (empty list)")
+
+        # Build a human-readable plan summary message with task details
+        plan_lines = [f"Plan ready: {len(own_tasks)} local tasks, {len(delegation_tasks)} delegate tasks"]
+        for t in plan.tasks:
+            agent_nm = (t.agent or "").strip() or "?"
+            desc = ((t.description or "").replace("\n", " ").strip())[:140]
+            deps = f"(depends on: [{', '.join(str(d) for d in t.depends_on)}]) " if t.depends_on else ""
+            plan_lines.append(f"  • #{t.id} {deps}agent='{agent_nm}' | {desc}")
+        plan_msg = "\n".join(plan_lines)
+
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_plan_ready",
+            message=plan_msg,
+            status="running",
+            extra={
+                "total_tasks": len(plan.tasks),
+                "own_task_count": len(own_tasks),
+                "delegation_count": len(delegation_tasks),
+                "own_agents": [t.agent for t in own_tasks],
+                "delegation_targets": [t.agent for t in delegation_tasks],
+            },
+        )
+
+        # ---- 按 plan 顺序依次执行任务（own 与 delegation 交替执行，保证 depends_on 顺序正确） ----
+        own_results: dict[int, str] = {}
+        delegated_results: dict[str, str] = {}
+        # 用于跨 own/delegation 边界的依赖传播：按 task_id 索引所有已执行完成的结果
+        _all_task_results: dict[int, str] = {}
+        # 记录已跳过的 delegation 任务（hop 耗尽时标记，避免遗漏 summary）
+        skipped_delegation_agents: set[str] = set()
+        _own_executed_count = 0
+        _delegation_executed_count = 0
+        for plan_idx, t in enumerate(plan.tasks):
+            agent_name = (t.agent or "").strip()
+            # --- Route A (NONE): 跳过 ---
+            if agent_name.upper() == "NONE":
+                self._log_data_flow(
+                    direction="TASK_SKIPPED",
+                    description=f"Task #{t.id} agent=NONE, skip",
+                    source_id="planner",
+                    target_id=agent.agent_name or "?",
+                    metadata_extra={"task_id": t.id, "reason": "agent_is_none"},
+                )
+                continue
+
+            # --- Route B: LocalSkill 或 Own Expert ---
+            if agent_name in own_names:
+                _own_executed_count += 1
+                await self.emit_progress(
+                    updater,
+                    "collaboration-progress",
+                    event="collab_executing_own",
+                    message=f"Executing task {_own_executed_count} (plan #{plan_idx + 1}/{len(plan.tasks)}): [{agent_name}] {(t.description or '')[:80]}",
+                    status="running",
+                    extra={
+                        "plan_index": plan_idx + 1,
+                        "own_task_index": _own_executed_count,
+                        "total_own_tasks": len(own_tasks),
+                        "agent": agent_name,
+                        "task_id": t.id,
+                        "desc_preview": (t.description or "")[:120],
+                    },
+                )
+                logger.info(
+                    "[Cross-SG][CollabExecuteOwn] dispatching task | plan_idx=%d task_id=%d agent=%s desc_preview=%s",
+                    plan_idx,
+                    t.id,
+                    agent_name,
+                    (t.description or "")[:100],
+                )
+                result = await self._execute_own_task_via_expert(
+                    t, user_id, run_id, trace_id, updater, agent,
+                    prior_task_results=_all_task_results,
+                    collaboration_original_query=query,
+                )
+                own_results.setdefault(t.id, "")
+                own_results[t.id] = result
+                _all_task_results.setdefault(t.id, "")
+                _all_task_results[t.id] = result
+                # --- Data Flow: task execution complete ---
+                self._log_data_flow(
+                    direction="A2A_RESULT",
+                    description=f"Task #{t.id} 执行完毕",
+                    source_id=f"{t.agent or '?'}",
+                    target_id=f"{agent.agent_name or '?'}",
+                    payload_chars=len(result or ""),
+                    payload_preview=(result or "")[:1000],
+                    metadata_extra={
+                        "task_id": t.id,
+                        "depends_on": t.depends_on if t.depends_on else [],
+                    },
+                )
+                _own_done_desc = self._truncate_progress_message(t.description or "", 120)
+                await self.emit_progress(
+                    updater,
+                    "collaboration-progress",
+                    event="collab_own_task_done",
+                    message=(
+                        f"Task #{t.id} done: [{agent_name}] {_own_done_desc} "
+                        f"({len(result or '')} chars)"
+                    ),
+                    status="done",
+                    task_id=t.id,
+                    extra={
+                        "task_id": t.id,
+                        "agent": agent_name,
+                        "plan_index": plan_idx + 1,
+                        "desc_preview": _own_done_desc,
+                        "result_chars": len(result or ""),
+                    },
+                )
+                logger.info(
+                    "[Cross-SG][CollabExecuteOwn] task complete | plan_idx=%d task_id=%d agent=%s result_chars=%d result_preview=%s",
+                    plan_idx,
+                    t.id,
+                    agent_name,
+                    len(result or ""),
+                    (result or "")[:5000],
+                )
+                continue
+
+            # --- Route C: 委托给协作 SG ---
+            if agent_name in collaborator_names:
+                _target_card = next((c for c in collaborator_cards if c.name == agent_name), None)
+                if _target_card is None:
+                    logger.warning(
+                        "[Cross-SG][CollabPreExecDelegation] no card found for target=%s, skip", agent_name,
+                    )
+                    continue
+                _can_delegate = (not is_delegated) or (current_hop > 0)
+                if _can_delegate:
+                    _delegation_executed_count += 1
+                    _next_hop = current_hop - 1
+                    _new_chain = delegation_chain + [agent.agent_name]
+
+                    _task_desc_for_delegate = t.description or ""
+                    if self._llm_dependent_query_refine_enabled() and t.depends_on:
+                        _deps = list(t.depends_on)
+                        if all(
+                            tid in _all_task_results and (_all_task_results.get(tid) or "").strip()
+                            for tid in _deps
+                        ):
+                            _upstream_blob = "\n\n".join(
+                                f"=== Task #{tid} （上游已成功执行的结果）===\n{(_all_task_results.get(tid) or '').strip()}"
+                                for tid in sorted(_deps)
+                            )
+                            _task_desc_for_delegate = await self._llm_refine_dependent_task_query(
+                                original_query=query,
+                                planned_downstream_description=t.description or "",
+                                downstream_agent_name=agent_name,
+                                upstream_results_blob=_upstream_blob,
+                                user_id=user_id,
+                                run_id=run_id,
+                                trace_id=trace_id,
+                                refine_stage="pre_delegate_sg",
+                            )
+                            # --- 上游数据无效：跳过当前委托任务 ---
+                            if _task_desc_for_delegate.startswith(DEPENDENT_TASK_SKIP_MARKER):
+                                logger.info(
+                                    "[Cross-SG][CollabPreExecDelegation] task_id=%s skipped — "
+                                    "upstream data invalid, cancelling delegation to %s",
+                                    t.id,
+                                    agent_name,
+                                )
+                                self._log_data_flow(
+                                    direction="TASK_SKIPPED",
+                                    description=f"Task #{t.id} skipped — upstream dep returned no usable data for {agent_name}",
+                                    source_id="planner",
+                                    target_id=agent_name,
+                                    metadata_extra={
+                                        "task_id": t.id,
+                                        "reason": "upstream_no_data",
+                                        "depends_on": t.depends_on if t.depends_on else [],
+                                    },
+                                )
+                                delegated_results[agent_name] = _task_desc_for_delegate
+                                _all_task_results[t.id] = _task_desc_for_delegate
+                                continue
+                        else:
+                            logger.info(
+                                "[Cross-SG][CollabPreExecDelegation] skip dependent-query refine "
+                                "| task_id=%s missing_prior_results deps=%s",
+                                t.id,
+                                _deps,
+                            )
+
+                    # Build upstream context with only completed results (not "delegated" placeholders)
+                    _completed_tasks_context = [
+                        {
+                            "task_id": tid,
+                            "description": "",
+                            "agent": "",
+                            "status": "completed",
+                            "result": res,
+                        }
+                        for tid, res in _all_task_results.items() if res
+                    ]
+                    _ctx: dict[str, Any] = {
+                        "delegator_plan": [pt.model_dump() for pt in plan.tasks],
+                        "executed_tasks": _completed_tasks_context,
+                        "key_findings_so_far": "\n".join(
+                            f"[Task#{tid}] {res[:300]}"
+                            for tid, res in _all_task_results.items() if res
+                        ),
+                        "remaining_tasks": [dt.model_dump() for dt in delegation_tasks],
+                        "upstream_context": upstream_context,
+                    }
+                    # --- Data Flow: upstream context being packed for delegation ---
+                    _ctx_chars = len(json.dumps(_ctx, ensure_ascii=False))
+                    self._log_data_flow(
+                        direction="PRE_DELEGATE_SEND",
+                        description=f"委派给 [{agent_name}] — 构造 upstream_context",
+                        source_id=agent.agent_name or "?",
+                        target_id=agent_name,
+                        payload_chars=_ctx_chars,
+                        payload_preview=(
+                            f"delegator_plan (tasks={len(plan.tasks)}), "
+                            f"executed_tasks (count={len(_completed_tasks_context)}), "
+                            f"key_findings_so_far ({len(_ctx.get('key_findings_so_far','') or '')} chars), "
+                            f"remaining_tasks (count={len(delegation_tasks)})"
+                        ),
+                        metadata_extra={
+                            "delegation_chain": _new_chain,
+                            "hop_remaining": _next_hop,
+                            "task_description": (_task_desc_for_delegate[:200] if _task_desc_for_delegate else ""),
+                            "llm_dependency_refined": (_task_desc_for_delegate != (t.description or "").strip()),
+                        },
+                    )
+                    _pre_delegate_desc = self._truncate_progress_message(
+                        _task_desc_for_delegate or t.description or "", 120,
+                    )
+                    await self.emit_progress(
+                        updater,
+                        "collaboration-progress",
+                        event="collab_pre_delegating",
+                        message=(
+                            f"Pre-exec delegating Task #{t.id} to [{agent_name}] "
+                            f"(plan #{plan_idx + 1}/{len(plan.tasks)}): {_pre_delegate_desc}"
+                        ),
+                        status="running",
+                        task_id=t.id,
+                        extra={
+                            "target_sg": agent_name,
+                            "task_id": t.id,
+                            "remaining_hop": _next_hop,
+                            "plan_index": plan_idx + 1,
+                            "desc_preview": _pre_delegate_desc,
+                            "planned_task_desc_preview": self._truncate_progress_message(
+                                t.description or "", 120,
+                            ),
+                        },
+                    )
+                    logger.info(
+                        "[Cross-SG][CollabPreExecDelegation] delegating task | plan_idx=%d target_sg=%s hop=%d chain=%s desc_preview=%s",
+                        plan_idx,
+                        agent_name,
+                        _next_hop,
+                        _new_chain,
+                        _task_desc_for_delegate[:100] if _task_desc_for_delegate else "",
+                    )
+                    result = await agent.delegate_to_collaborator_sg(
+                        target_card=_target_card,
+                        task_description=_task_desc_for_delegate,
+                        user_id=user_id,
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        hop_remaining=_next_hop,
+                        delegation_chain=_new_chain,
+                        upstream_context=_ctx,
+                        progress_updater=updater,
+                        progress_artifact_name="collaboration-progress",
+                    )
+                    delegated_results[agent_name] = result
+                    # 写入 _all_task_results，使得后续依赖此 delegation task 的 own 任务能访问到结果
+                    _all_task_results.setdefault(t.id, "")
+                    _all_task_results[t.id] = result
+                    # --- Data Flow: delegation result received ---
+                    self._log_data_flow(
+                        direction="PRE_DELEGATE_RECV",
+                        description=f"委派 [{agent_name}] 结果返回 → delegated_results 字典",
+                        source_id=agent_name,
+                        target_id=agent.agent_name or "?",
+                        payload_chars=len(result or ""),
+                        payload_preview=(result or "")[:1000],
+                        metadata_extra={"hop_used": _next_hop, "chain": _new_chain},
+                    )
+
+                    logger.info(
+                        "[Cross-SG][CollabPreExecDelegation] delegation returned | plan_idx=%d target_sg=%s result_chars=%d",
+                        plan_idx,
+                        agent_name,
+                        len(result or ""),
+                    )
+                    await self.emit_progress(
+                        updater,
+                        "collaboration-progress",
+                        event="collab_pre_delegation_done",
+                        message=(
+                            f"Pre-exec Task #{t.id} done via [{agent_name}]: {_pre_delegate_desc} "
+                            f"({len(result or '')} chars)"
+                        ),
+                        status="done",
+                        task_id=t.id,
+                        extra={
+                            "target_sg": agent_name,
+                            "task_id": t.id,
+                            "plan_index": plan_idx + 1,
+                            "desc_preview": _pre_delegate_desc,
+                            "result_chars": len(result or ""),
+                        },
+                    )
+                else:
+                    skipped_delegation_agents.add(agent_name)
+                    _skipped_desc = self._truncate_progress_message(t.description or "", 120)
+                    await self.emit_progress(
+                        updater,
+                        "collaboration-progress",
+                        event="collab_pre_delegation_skipped",
+                        message=(
+                            f"Pre-exec Task #{t.id} skipped (hop exhausted): "
+                            f"[{agent_name}] {_skipped_desc}"
+                        ),
+                        status="done",
+                        task_id=t.id,
+                        extra={
+                            "target_sg": agent_name,
+                            "task_id": t.id,
+                            "plan_index": plan_idx + 1,
+                            "desc_preview": _skipped_desc,
+                            "reason": "hop_exhausted",
+                        },
+                    )
+                    logger.info(
+                        "[Cross-SG][CollabPreExecDelegation] hop exhausted, cannot delegate | target_sg=%s",
+                        agent_name,
+                    )
+                    delegated_results[agent_name] = NONE_TASK_DESCRIPTION
+
+        # ---- 执行进度汇总 ----
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_own_all_done",
+            message=f"All {len(_all_task_results)} results accumulated (own: {_own_executed_count}, delegated: {_delegation_executed_count})",
+            status="done",
+            extra={
+                "completed_count": len(_all_task_results),
+                "own_executed": _own_executed_count,
+                "delegation_executed": _delegation_executed_count,
+            },
+        )
+        logger.info(
+            "[Cross-SG][CollabExecuteOwn] all tasks done | accumulated_results=%d own=%d delegated=%d",
+            len(_all_task_results),
+            _own_executed_count,
+            _delegation_executed_count,
+        )
+
+        # ---- 构造 own_task_context（用于后续 mid-exec 和 summary） ----
+        # 只包含真正已执行完成的任务，不包含尚未执行的未完成占位符
+        own_task_context = [
+            {
+                "task_id": tid,
+                "description": "",
+                "agent": "",
+                "status": "completed",
+                "result": res,
+            }
+            for tid, res in _all_task_results.items() if res
+        ]
+
+        if skipped_delegation_agents:
+            logger.info(
+                "[Cross-SG][CollabPreExecDelegation] %d delegation task(s) skipped due to hop exhausted: %s",
+                len(skipped_delegation_agents),
+                sorted(skipped_delegation_agents),
+            )
+        if len(delegation_tasks) == 0:
+            pre_exec_msg = "No tasks to delegate"
+        elif len(delegated_results) < len(delegation_tasks):
+            pre_exec_msg = f"Delegation complete: {len(delegated_results)}/{len(delegation_tasks)} results returned"
+        else:
+            pre_exec_msg = f"Delegation complete: all {len(delegated_results)} results returned"
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_pre_delegations_all_done",
+            message=pre_exec_msg,
+            status="done",
+            extra={
+                "total_count": len(delegation_tasks),
+                "result_count": len(delegated_results),
+            },
+        )
+        logger.info(
+            "[Cross-SG][CollabPreExecDelegation] all pre-exec delegations complete | total=%d results=%d",
+            len(delegation_tasks),
+            len(delegated_results),
+        )
+
+        # ---- mid-execution: 递归检测 + 规划 + 派发 ----
+        mid_exec_round = 0
+        max_mid_exec_rounds = int(os.getenv("CROSS_SG_MID_EXEC_ROUNDS", "3"))
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_mid_exec_loop_started",
+            message=f"Mid-execution loop starting (max {max_mid_exec_rounds} rounds)",
+            status="running",
+            extra={
+                "max_rounds": max_mid_exec_rounds,
+            },
+        )
+        logger.info(
+            "[Cross-SG][CollabMidExecLoop] mid-execution loop starting | max_rounds=%d",
+            max_mid_exec_rounds,
+        )
+        while mid_exec_round < max_mid_exec_rounds:
+            if not collaborator_cards:
+                break
+
+            logger.info(
+                "[Cross-SG][CollabMidExecLoop] round %d / %d started",
+                mid_exec_round + 1,
+                max_mid_exec_rounds,
+            )
+            await self.emit_progress(
+                updater,
+                "collaboration-progress",
+                event="collab_mid_exec_round",
+                message=f"Mid-execution round {mid_exec_round + 1}/{max_mid_exec_rounds} started",
+                status="running",
+                extra={
+                    "round": mid_exec_round + 1,
+                    "max_rounds": max_mid_exec_rounds,
+                },
+            )
+
+            # Step 1: detect
+            detection = await self._detect_delegation_needs(
+                query=query,
+                own_results=own_results,
+                delegated_results=delegated_results,
+                collaborator_cards=collaborator_cards,
+                user_id=user_id,
+                run_id=run_id,
+                trace_id=trace_id,
+            )
+            if detection is None:
+                await self.emit_progress(
+                    updater,
+                    "collaboration-progress",
+                    event="collab_mid_detect_none",
+                    message="Mid-execution detection: no further delegation needed",
+                    status="done",
+                )
+                logger.info("[Cross-SG][CollabMidExecLoop] no further delegation needed, exiting loop")
+                await self._emit_collab_mid_round_done(
+                    updater,
+                    round_num=mid_exec_round + 1,
+                    max_rounds=max_mid_exec_rounds,
+                    total_delegated=len(delegated_results),
+                    early_exit="no further delegation needed",
+                )
+                break
+
+            synthesized_query = detection.get("synthesized_query", "")
+            target_sg_names = detection.get("target_sgs", [])
+            reason = detection.get("reason", "")
+            detection_source = detection.get("source") or "llm_detection"
+            skipped_owners = detection.get("skipped_owners") or []
+            await self.emit_progress(
+                updater,
+                "collaboration-progress",
+                event="collab_mid_detect_result",
+                message=(
+                    f"Mid-execution detection ({detection_source}): needs "
+                    f"{', '.join(target_sg_names)}, reason: {(reason or '')[:80]}"
+                ),
+                status="running",
+                extra={
+                    "needs_help": True,
+                    "target_sgs": target_sg_names,
+                    "reason_preview": (reason or "")[:120],
+                    "detection_source": detection_source,
+                    "structured_unfulfilled_needs": detection.get("structured_unfulfilled_needs") or [],
+                    "skipped_owners": skipped_owners,
+                },
+            )
+            if not target_sg_names or not synthesized_query:
+                logger.info(
+                    "[Cross-SG][CollabMidExecDetect] detection returned empty targets or query, exiting loop"
+                )
+                await self._emit_collab_mid_round_done(
+                    updater,
+                    round_num=mid_exec_round + 1,
+                    max_rounds=max_mid_exec_rounds,
+                    total_delegated=len(delegated_results),
+                    early_exit="empty detection targets or query",
+                )
+                break
+
+            # Step 2: plan (with enriched group_memory carrying upstream + current execution context)
+            target_cards = [c for c in collaborator_cards if c.name in target_sg_names]
+            if not target_cards:
+                logger.warning(
+                    "[Cross-SG][CollabMidExecDetect] detected targets not found in collaborator cards: %s",
+                    target_sg_names,
+                )
+                await self._emit_collab_mid_round_done(
+                    updater,
+                    round_num=mid_exec_round + 1,
+                    max_rounds=max_mid_exec_rounds,
+                    total_delegated=len(delegated_results),
+                    early_exit="detected targets not in collaborator pool",
+                )
+                break
+
+            # Build execution context for this mid-exec round
+            # 只包含真正已执行完成的任务
+            own_task_context = [
+                {
+                    "task_id": tid,
+                    "description": "",
+                    "agent": "",
+                    "status": "completed",
+                    "result": res,
+                }
+                for tid, res in _all_task_results.items() if res
+            ]
+            key_findings_so_far = "\n".join(
+                f"[Task#{tid}] {res[:300]}"
+                for tid, res in _all_task_results.items() if res
+            )
+
+            # Merge upstream_context with current execution results so the Planner
+            # sees both what was done before (upstream) and what this SG just did
+            mid_upstream: dict[str, Any] = dict(upstream_context)
+            mid_upstream["delegator_plan"] = [t.model_dump() for t in plan.tasks]
+            mid_upstream["executed_tasks"] = own_task_context
+            mid_upstream["key_findings_so_far"] = key_findings_so_far
+
+            mid_group_memory = self._enrich_group_memory_with_upstream(
+                upstream_context=mid_upstream,
+                base_group_memory=group_memory,
+                extra_context={
+                    "already_delegated": [
+                        {"target_sg": name, "result": result or ""}
+                        for name, result in delegated_results.items() if result
+                    ],
+                    "synthesized_query": synthesized_query,
+                    "detection_reason": reason,
+                },
+            )
+
+            logger.info(
+                "[Cross-SG][CollabMidExecPlan] planning mid-exec delegation | targets=%s synth_query_len=%d",
+                target_sg_names,
+                len(synthesized_query or ""),
+            )
+
+            mid_plan = await self._plan_mid_exec_delegation(
+                synthesized_query=synthesized_query,
+                target_cards=target_cards,
+                group_memory=mid_group_memory,
+                agent=agent,
+                skill_runner=skill_runner,
+            )
+            if mid_plan is None:
+                logger.warning("[Cross-SG][CollabMidExecPlan] mid-exec plan returned None")
+                await self._emit_collab_mid_round_done(
+                    updater,
+                    round_num=mid_exec_round + 1,
+                    max_rounds=max_mid_exec_rounds,
+                    total_delegated=len(delegated_results),
+                    early_exit="mid-exec plan failed",
+                )
+                break
+
+            logger.info(
+                "[Cross-SG][CollabMidExecPlan] mid-exec plan produced | task_count=%d agents=%s",
+                len(mid_plan.tasks),
+                [t.agent for t in mid_plan.tasks],
+            )
+            _mid_plan_lines = [
+                f"Mid-exec plan ready (round {mid_exec_round + 1}): "
+                f"{len(mid_plan.tasks)} tasks for {', '.join(target_sg_names)}",
+            ]
+            for _mt in mid_plan.tasks:
+                _m_agent = (_mt.agent or "").strip() or "?"
+                _m_desc = self._truncate_progress_message(_mt.description or "", 140)
+                _m_deps = (
+                    f"(depends on: [{', '.join(str(d) for d in _mt.depends_on)}]) "
+                    if _mt.depends_on else ""
+                )
+                _mid_plan_lines.append(f"  • #{_mt.id} {_m_deps}agent='{_m_agent}' | {_m_desc}")
+            await self.emit_progress(
+                updater,
+                "collaboration-progress",
+                event="collab_mid_plan_ready",
+                message="\n".join(_mid_plan_lines),
+                status="running",
+                extra={
+                    "task_count": len(mid_plan.tasks),
+                    "agents": [t.agent for t in mid_plan.tasks],
+                    "mid_exec_round": mid_exec_round + 1,
+                },
+            )
+
+            # Step 3: dispatch
+            upstream_ctx: dict[str, Any] = dict(mid_upstream)
+            upstream_ctx.update({
+                "already_delegated": [
+                    {"target_sg": name, "result": result or ""}
+                    for name, result in delegated_results.items() if result
+                ],
+                "mid_exec_round": mid_exec_round + 1,
+                "synthesized_query": synthesized_query,
+                "detection_reason": reason,
+            })
+            mid_results = await self._dispatch_mid_exec_delegation(
+                plan=mid_plan,
+                target_cards=target_cards,
+                user_id=user_id,
+                run_id=run_id,
+                trace_id=trace_id,
+                current_hop=current_hop,
+                delegation_chain=delegation_chain,
+                upstream_context=upstream_ctx,
+                is_delegated=is_delegated,
+                agent=agent,
+                progress_updater=updater,
+                collaboration_original_query=query,
+            )
+            # --- Data Flow: mid-exec round dispatch ---
+            _mid_ctx_chars = len(json.dumps(upstream_ctx, ensure_ascii=False))
+            self._log_data_flow(
+                direction="MID_DISPATCH_SEND",
+                description=f"Mid-exec R{mid_exec_round+1} 委派出参 → 目标 SGs {target_sg_names}",
+                source_id=agent.agent_name or "?",
+                target_id=", ".join(target_sg_names) or "?",
+                payload_chars=_mid_ctx_chars,
+                payload_preview=(
+                    f"已委托: {len(delegated_results)} 条, "
+                    f"synthesized_query: {(synthesized_query or '')[:200]}"
+                ),
+                metadata_extra={
+                    "mid_exec_round": mid_exec_round + 1,
+                    "delegation_chain": delegation_chain,
+                },
+            )
+            for sg_name, result in mid_results.items():
+                delegated_results.setdefault(sg_name, "")
+                delegated_results[sg_name] = result
+                # --- Data Flow: mid-exec result received ---
+                self._log_data_flow(
+                    direction="MID_DISPATCH_RECV",
+                    description=f"Mid-exec 委派 [{sg_name}] 结果返回 → delegated_results 字典",
+                    source_id=sg_name or "?",
+                    target_id=agent.agent_name or "?",
+                    payload_chars=len(result or ""),
+                    payload_preview=(result or "")[:1000],
+                )
+
+                logger.info(
+                    "[Cross-SG][CollabMidExecDispatch] dispatch returned | target_sg=%s result_chars=%d",
+                    sg_name,
+                    len(result or ""),
+                )
+
+            mid_exec_round += 1
+
+            logger.info(
+                "[Cross-SG][CollabMidExecLoop] round %d complete | total_delegated=%d",
+                mid_exec_round,
+                len(delegated_results),
+            )
+            await self._emit_collab_mid_round_done(
+                updater,
+                round_num=mid_exec_round,
+                max_rounds=max_mid_exec_rounds,
+                total_delegated=len(delegated_results),
+            )
+
+        logger.info(
+            "[Cross-SG][CollabMidExecLoop] mid-execution loop finished | rounds=%d total_delegated=%d",
+            mid_exec_round,
+            len(delegated_results),
+        )
+        await self._emit_collab_mid_exec_loop_done(
+            updater,
+            total_rounds=mid_exec_round,
+            total_delegated=len(delegated_results),
+        )
+
+        # ---- Step 4: summary ----
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_summarizing",
+            message=f"Summarizing results: {len(own_results)} own + {len(delegated_results)} delegated",
+            status="running",
+            extra={
+                "own_result_count": len(own_results),
+                "delegated_result_count": len(delegated_results),
+            },
+        )
+        logger.info(
+            "[Cross-SG][CollabSummary] generating final summary | own_results=%d delegated_results=%d",
+            len(own_results),
+            len(delegated_results),
+        )
+        # --- Data Flow: summary input aggregation ---
+        _summary_input_chars = sum(len(v or "") for v in own_results.values()) + sum(
+            len(v or "") for v in delegated_results.values()
+        )
+        _own_snippets = []
+        for _tid, _res in own_results.items():
+            _snip = (_res or "").replace("\n", " ").strip()[:120]
+            _own_snippets.append(f"#{_tid}: {_snip}")
+        _own_preview = "\n".join(_own_snippets) if _own_snippets else "(none)"
+        _del_snippets = []
+        for _name, _res in delegated_results.items():
+            _snip = (_res or "").replace("\n", " ").strip()[:120]
+            _del_snippets.append(f"[{_name}]: {_snip}")
+        _del_preview = "\n".join(_del_snippets) if _del_snippets else "(none)"
+        self._log_data_flow(
+            direction="SUMMARY_INPUT",
+            description=f"聚合 {len(own_results)} 项 own_results + {len(delegated_results)} 项 delegated_results → 送入 Summary LLM",
+            source_id=agent.agent_name or "?",
+            target_id="SummaryLLM",
+            payload_chars=_summary_input_chars,
+            payload_preview=(
+                f"own_results:\n{_own_preview}\n\ndelegated_results:\n{_del_preview}"
+            ),
+            metadata_extra={
+                "own_result_chars": sum(len(v or "") for v in own_results.values()),
+                "delegated_result_chars": sum(len(v or "") for v in delegated_results.values()),
+            },
+        )
+        summary = await self._summarize_delegated_result(
+            query=query,
+            own_results=own_results,
+            delegated_results=delegated_results,
+            upstream_context=upstream_context,
+            user_id=user_id,
+            run_id=run_id,
+            trace_id=trace_id,
+        )
+
+        await self.emit_progress(
+            updater,
+            "collaboration-progress",
+            event="collab_done",
+            message=f"Collaborative execution complete, final summary {len(summary or '')} chars",
+            status="done",
+            extra={
+                "result_chars": len(summary or ""),
+            },
+        )
+        logger.info(
+            "[Cross-SG][CollabSummary] final summary ready | result_chars=%d",
+            len(summary or ""),
+        )
+        # --- Data Flow: summary output ---
+        self._log_data_flow(
+            direction="SUMMARY_OUTPUT",
+            description=f"Summary LLM 产出最终回答 → 返回 {agent.agent_name}",
+            source_id="SummaryLLM",
+            target_id=agent.agent_name or "?",
+            payload_chars=len(summary or ""),
+            payload_preview=(summary or "")[:1000],
+        )
+
+        await updater.add_artifact(
+            [TextPart(text=summary)],
+            name="collaborative-result",
+        )
+        await updater.complete(
+            message=new_agent_text_message("", context_id=task.context_id),
+        )
+
+    async def _execute_own_task_via_expert(
+        self,
+        task: PlannerTask,
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+        updater: TaskUpdater,
+        agent,
+        prior_task_results: dict[int, str] | None = None,
+        collaboration_original_query: str = "",
+    ) -> str:
+        """Execute a single own task by forwarding it to the matching Expert Agent.
+
+        Pure A2A dispatch — no SQL generation, DB queries, or knowledge retrieval.
+        When the task is routed to the synthetic LocalSkill card, the local
+        SkillRunner executes it in-process instead.
+
+        ``prior_task_results`` contains results from dependency tasks that must
+        complete before this one.  Their text is prepended to the task description
+        so the downstream Expert Agent can use upstream data (user IDs, token lists,
+        etc.) without guessing.
+        """
+        if (task.agent or "").strip().upper() == "NONE":
+            return NONE_TASK_DESCRIPTION
+
+        # Route B: local skill execution (in-process, no A2A).
+        if agent._is_local_skill_task(task):
+            return await self._execute_local_skill_task(
+                task, user_id, run_id, trace_id, updater, agent,
+                prior_task_results=prior_task_results,
+                collaboration_original_query=collaboration_original_query,
+            )
+
+        agent_card = next(
+            (c for c in (agent.agent_cards or []) if c.name == task.agent),
+            None,
+        )
+        if agent_card is None:
+            logger.warning(
+                "[Cross-SG][CollabExecuteOwn] no card for agent=%s, returning empty", task.agent,
+            )
+            return ""
+
+        logger.info(
+            "[Cross-SG][CollabExecuteOwn] A2A call to agent | agent=%s url=%s",
+            task.agent,
+            agent_card.url,
+        )
+
+        prior = prior_task_results or {}
+        _message_body = task.description or ""
+        if self._llm_dependent_query_refine_enabled() and task.depends_on:
+            _deps = list(task.depends_on)
+            if all(tid in prior and (prior.get(tid) or "").strip() for tid in _deps):
+                _refine_blob = "\n\n".join(
+                    f"=== Task #{tid} （上游已成功执行的结果）===\n{(prior.get(tid) or '').strip()}"
+                    for tid in sorted(_deps)
+                )
+                _message_body = await self._llm_refine_dependent_task_query(
+                    original_query=(collaboration_original_query or "").strip(),
+                    planned_downstream_description=task.description or "",
+                    downstream_agent_name=task.agent or "",
+                    upstream_results_blob=_refine_blob,
+                    user_id=user_id,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    refine_stage="own_expert",
+                )
+                # --- 上游数据无效：跳过当前依赖任务 ---
+                if _message_body.startswith(DEPENDENT_TASK_SKIP_MARKER):
+                    logger.info(
+                        "[Cross-SG][OwnExpertDependRefine] task_id=%s skipped — upstream data invalid | "
+                        "skip_reason=%s",
+                        task.id,
+                        _message_body[len(DEPENDENT_TASK_SKIP_MARKER):],
+                    )
+                    self._log_data_flow(
+                        direction="TASK_SKIPPED",
+                        description=f"Task #{task.id} skipped — upstream dependency returned no usable data",
+                        source_id="planner",
+                        target_id=task.agent or "?",
+                        metadata_extra={
+                            "task_id": task.id,
+                            "reason": "upstream_no_data",
+                            "depends_on": task.depends_on if task.depends_on else [],
+                        },
+                    )
+                    return _message_body
+                logger.info(
+                    "[Cross-SG][OwnExpertDependRefine] task_id=%s refined_chars=%d",
+                    task.id,
+                    len(_message_body or ""),
+                )
+            else:
+                logger.info(
+                    "[Cross-SG][OwnExpertDependRefine] skip refine task_id=%s deps=%s "
+                    "| missing non-empty prior for some dependency",
+                    task.id,
+                    _deps,
+                )
+
+        # ── Package prior-task results into metadata.upstream_context ──
+        # (NOT injected into the task description – keeps the A2A message body pure)
+        _upstream_executed_tasks: list[dict] = []
+        _packaged_task_ids: list[int] = []
+        if prior:
+            completed_tids = sorted(tid for tid, res in prior.items() if res)
+            for _tid in completed_tids:
+                _upstream_executed_tasks.append({
+                    "task_id": _tid,
+                    "description": "",
+                    "agent": task.agent,
+                    "status": "completed",
+                    "result": prior[_tid],
+                })
+            _packaged_task_ids = completed_tids
+            if _upstream_executed_tasks:
+                _inject_summary = (
+                    f"前置任务已完成 ({len(_upstream_executed_tasks)}): "
+                    f"{_packaged_task_ids} — 完整结果在 metadata.upstream_context.executed_tasks 中"
+                )
+                logger.info(
+                    "[Cross-SG][CollabExecuteOwn] packaging prior results as upstream_context | task_id=%d "
+                    "depends_on=%s completed_context_count=%d "
+                    "task_desc_chars=%d",
+                    task.id,
+                    task.depends_on if task.depends_on else [],
+                    len(completed_tids),
+                    len(task.description or ""),
+                )
+                # --- Data Flow: prior context packaging (metadata, NOT task description) ---
+                self._log_data_flow(
+                    direction="PRIOR_INJECT",
+                    description=f"Task #{task.id} 打包 {len(_upstream_executed_tasks)} 个前置任务结果 → metadata.upstream_context.executed_tasks",
+                    source_id="own_results (已完成任务)",
+                    target_id=f"{task.agent or '?'} (task #{task.id} 的 downstream expert)",
+                    payload_chars=sum(len(r.get("result", "")) for r in _upstream_executed_tasks),
+                    payload_preview=_inject_summary,
+                    metadata_extra={
+                        "injected_task_ids": _packaged_task_ids,
+                        "depends_on": task.depends_on if task.depends_on else [],
+                    },
+                )
+
+        _current_tasks_status: list[dict] = []
+        if prior:
+            for _tid, _res in sorted(prior.items()):
+                _ts = {
+                    "id": _tid,
+                    "description": "",
+                    "agent": task.agent,
+                    "answer": _res or "",
+                    "status": "completed" if _res else "unknown",
+                }
+                _current_tasks_status.append(_ts)
+        current_tasks_status_json = json.dumps(_current_tasks_status)
+
+        # ── upstream_context for the downstream expert (own expert or peer SG) ──
+        _a2a_upstream_context: dict = {}
+        if _upstream_executed_tasks:
+            _a2a_upstream_context = {"executed_tasks": _upstream_executed_tasks}
+
+        send_payload = {
+            "message": {
+                "role": "user",
+                "parts": [{"type": "text", "text": _message_body}],
+                "messageId": uuid4().hex,
+            },
+            "metadata": {
+                "user_id": user_id,
+                "run_id": run_id,
+                "trace_id": trace_id,
+                PROPAGATED_HISTORY_KEY: parse_propagated_history(
+                    (agent.metadata or {}).get(PROPAGATED_HISTORY_KEY),
+                ),
+                "current_tasks_status": current_tasks_status_json,
+                "current_task": (
+                    f"current task id: [{task.id}], task description: {_message_body} "
+                ),
+                "current_task_id": str(task.id),
+                "answer_model": OrchestratorAgent._downstream_answer_model_for_a2a(
+                    task.agent or "",
+                    agent_card,
+                ),
+                "skip_history_write": True,
+                "upstream_context": _a2a_upstream_context,
+            },
+        }
+
+        # Same artifact task name as OrchestratorAgentExecutor.a2a_tasks so RoutingAgent
+        # sees sg_expert / nested progress in the same stream channel.
+        task_progress_name = f"{agent.agent_name}-result"
+        # --- Data Flow: expert A2A call (body may be LLM-refined when depends_on; context in metadata) ---
+        _a2a_message_text = _message_body
+        self._log_data_flow(
+            direction="A2A_SEND",
+            description=f"Task #{task.id} → 调用 Expert Agent: {task.agent} ({agent_card.url})",
+            source_id=agent.agent_name or "?",
+            target_id=f"{task.agent or '?'} ({agent_card.url})",
+            payload_chars=len(_a2a_message_text),
+            payload_preview=_a2a_message_text[:1000],
+            metadata_extra={
+                "task_id": task.id,
+                "current_tasks_status_count": len(_current_tasks_status),
+                "upstream_task_ids": _packaged_task_ids if _packaged_task_ids else [],
+            },
+        )
+        _a2a_timeout = float(os.getenv("A2A_REQUEST_TIMEOUT", "3600"))
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_a2a_timeout, connect=10.0)) as httpx_client:
+            client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
+            req = SendStreamingMessageRequest(
+                id=uuid4().hex,
+                params=MessageSendParams(**send_payload),
+            )
+            stream = client.send_message_streaming(req)
+            return await OrchestratorAgent.stream_a2a_collect_forward_progress_frames(
+                stream,
+                agent.get_response_text,
+                updater,
+                task_progress_name,
+            )
+
+    async def _execute_local_skill_task(
+        self,
+        task: PlannerTask,
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+        updater: TaskUpdater,
+        agent,
+        prior_task_results: dict[int, str] | None = None,
+        collaboration_original_query: str = "",
+    ) -> str:
+        """Execute a task routed to the synthetic LocalSkill card in-process."""
+        prior = prior_task_results or {}
+        _run_query = task.description or ""
+        if self._llm_dependent_query_refine_enabled() and task.depends_on:
+            _deps = list(task.depends_on)
+            if all(tid in prior and (prior.get(tid) or "").strip() for tid in _deps):
+                _refine_blob = "\n\n".join(
+                    f"=== Task #{tid} （上游已成功执行的结果）===\n{(prior.get(tid) or '').strip()}"
+                    for tid in sorted(_deps)
+                )
+                _run_query = await self._llm_refine_dependent_task_query(
+                    original_query=(collaboration_original_query or "").strip(),
+                    planned_downstream_description=task.description or "",
+                    downstream_agent_name="LocalSkill",
+                    upstream_results_blob=_refine_blob,
+                    user_id=user_id,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    refine_stage="local_skill",
+                )
+                if _run_query.startswith(DEPENDENT_TASK_SKIP_MARKER):
+                    logger.info(
+                        "[Cross-SG][LocalSkillDependRefine] task_id=%s skipped — upstream data invalid",
+                        task.id,
+                    )
+                    return _run_query
+                logger.info(
+                    "[Cross-SG][LocalSkillDependRefine] task_id=%s refined_chars=%d",
+                    task.id,
+                    len(_run_query or ""),
+                )
+            else:
+                logger.info(
+                    "[Cross-SG][LocalSkillDependRefine] skip refine task_id=%s deps=%s",
+                    task.id,
+                    list(task.depends_on),
+                )
+
+        logger.info(
+            "[Cross-SG][CollabExecuteOwn] local skill execution | task_id=%d desc_preview=%s",
+            task.id,
+            (_run_query or "")[:120],
+        )
+        try:
+            result = await agent.skill_runner.plan_and_run(
+                query=_run_query,
+                user_id=user_id,
+                run_id=run_id,
+                trace_id=trace_id,
+            )
+            final_answer = str(result.get("final_answer") or "").strip()
+            logger.info(
+                "[Cross-SG][CollabExecuteOwn] local skill done | task_id=%d status=%s skill=%s result_chars=%d",
+                task.id,
+                result.get("status"),
+                result.get("skill", ""),
+                len(final_answer),
+            )
+            return final_answer
+        except Exception as exc:
+            logger.exception(
+                "[Cross-SG][CollabExecuteOwn] local skill failed for task_id=%d: %s",
+                task.id, exc,
+            )
+            return f"LocalSkill execution error: {exc}"
+
+    @staticmethod
+    def _llm_dependent_query_refine_enabled() -> bool:
+        """Gate for depends_on LLM query synthesis (Expert, LocalSkill, SG delegation paths)."""
+        raw = os.getenv("ENABLE_LLM_DEPENDENT_QUERY_REFINE")
+        if raw is None:
+            raw = os.getenv("ENABLE_LLM_DEPENDENT_DELEGATION_REFINE", "true")
+        return str(raw).strip().lower() in ("true", "1", "yes")
+
+    @staticmethod
+    def _task_results_from_upstream_ctx(upstream_context: dict | None) -> dict[int, str]:
+        out: dict[int, str] = {}
+        for row in (upstream_context or {}).get("executed_tasks") or []:
+            if not isinstance(row, dict):
+                continue
+            tid = row.get("task_id")
+            if tid is None:
+                continue
+            try:
+                out[int(tid)] = str(row.get("result") or "")
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    _REFINED_DEP_QUERY_ROUTE_AGENT_RE = re.compile(
+        r"\b[A-Za-z0-9_-]+(?:Agent|agent)(?:-sg-[\w\-]+|-dd-[\w\-]+)\b"
+    )
+
+    def _sanitize_refined_dependent_query(self, text: str) -> str:
+        """Remove routing/card-style agent identifiers leaked into refined text (best-effort)."""
+        scrubbed = self._REFINED_DEP_QUERY_ROUTE_AGENT_RE.sub("", (text or "").strip())
+        scrubbed = re.sub(r"[ \t]{2,}", " ", scrubbed)
+        scrubbed = re.sub(r"\s*,\s*,", ",", scrubbed).strip(", ")
+        scrubbed = re.sub(r"（\s*）|\(\s*\)", "", scrubbed)
+        return scrubbed.strip()
+
+    async def _llm_refine_dependent_task_query(
+        self,
+        *,
+        original_query: str,
+        planned_downstream_description: str,
+        downstream_agent_name: str,
+        upstream_results_blob: str,
+        user_id: str = "",
+        run_id: str = "",
+        trace_id: str = "",
+        refine_stage: str = "generic",
+    ) -> str:
+        """LLM merges original user query + planner subtask text + deps' execution output into one coherent query."""
+        if not (planned_downstream_description or "").strip():
+            return planned_downstream_description or ""
+
+        _max_prior = max(4096, int(os.getenv("SG_DELEGATION_REFINE_PRIOR_CHARS", "20000")))
+        _prior = (upstream_results_blob or "").strip()
+        if len(_prior) > _max_prior:
+            _prior = _prior[: _max_prior] + "\n\n[truncated upstream results for dependent-task refine]"
+
+        prompt = (
+            "你是一个「依赖任务 Query 改写助手」，用于多智能体编排。把下面三段材料合成 **一段话**："
+            "作为下游收到的**唯一用户 Query（正文）**（可能是本语义组 Expert、跨组委派或其它路由；"
+            "**输出中永远不要写出**任何编排器/agent 卡片名或内部路由 ID）。\n\n"
+            "硬性要求：\n"
+            "0）**有效性先行判断（最高优先级）**：首先分析「上游依赖任务的综合执行结果」是否真实包含本条下游任务所需的数据"
+            "（如用户ID、订单号、支付流水等关联键或事实记录）。如果上游结果明确表示未查询到任何有效记录"
+            "（例如包含\u201c未找到\u201d、\u201c无匹配记录\u201d、\u201c返回 0 条\u201d、\u201c查询结果为空\u201d、\u201cNo records found\u201d等语义），"
+            "或上游结果仅包含描述性文字但未给出任何可用于本任务的具体标识符或事实数据，"
+            "则必须输出 `{{\"skip\": true, \"reason\": \"<简短说明跳过原因>\"}}`，"
+            "且此时无需输出 delegation_query 字段。\n"
+            "1）**任务边界**：以「原计划中当前任务的描述」为**本条必须完成的工作范围**。"
+            "原始用户问题是**业务语境与自然用语**的补充参考，可帮助你还原说法与字段关注点，"
+            "但不得把**计划中分配给其它并行/后续子任务的工作**塞进本条正文（除非该 planned 表述本身明确包含）。"
+            "**禁止扩写**：本条不得新增 planned 任务未隐含的新交付目标（例如在仅查用户资料的子任务里，"
+            "不要附带要求查订单支付明细、退款记录等除非你从 planned 能看出该资料任务确实需要这些内容）。\n"
+            "2）**业务语义**：在遵守第 1 条边界的前提下，用自然业务措辞写清要完成什么（查什么字段、对谁、"
+            "要什么粒度），使执行方不靠猜就能理解。**不要**假定对方能读到未在此处给出的库表。\n"
+            "3）**上游事实**：从「上游依赖任务的综合执行结果」中抽取本条所需的关键事实"
+            "（主键、订单号、用户标识等），**自然嵌入**正文；只允许使用已在这些结果中出现的值，严禁编造。\n"
+            "4）**命名禁区**：`delegation_query` 正文**禁止出现**任何形式的智能体卡片名、组名、`Agent-sg-…`、`Agent-dd-…`、"
+            "十六进制式路由后缀，以及「请以某某 Agent」「以某某身份」「由某某语义组」「针对某某Expert」之类指向执行单元的措辞。"
+            "只写领域对象与操作（订单、用户、SKU、支付方式、开票信息等）。\n"
+            "5）**自包含**：尽量单靠这段话即可完成当前步，少用「见上文 JSON」。\n"
+            "6）只输出 **JSON** 单行对象，不要使用 Markdown，"
+            "不需要跳过时结构必须为：`{{\"delegation_query\":\"<合成后的正文>\"}}`；"
+            "需要跳过时仅输出 `{{\"skip\": true, \"reason\": \"<原因>\"}}`。\n"
+            "（键名沿用 delegation_query；与是否跨 SG 无关。）\n\n"
+            "--- 原始用户问题（全文） ---\n{}\n\n"
+            "--- 原计划中当前任务的描述 ---\n{}\n\n"
+            "--- 上游依赖任务的综合执行结果 ---\n{}\n"
+        ).format(
+            (original_query or "").strip(),
+            (planned_downstream_description or "").strip(),
+            _prior,
+        )
+
+        _planner = PlannerAgent(
+            provider=self.provider,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            stream=False,
+            temperature=self.temperature,
+            data_services_url=self.data_services_url,
+            metadata=self.metadata,
+            enable_history=self.enable_history,
+            agent_id=self.agent_id,
+            semantic_group_id=self.semantic_group_id,
+        )
+
+        _span_tag = refine_stage.replace(" ", "_")[:48]
+        logger.info(
+            "[DepQueryRefine][%s] invoking LLM | agent=%s prior_chars=%d planned_chars=%d query_chars=%d",
+            refine_stage,
+            downstream_agent_name,
+            len(_prior),
+            len(planned_downstream_description or ""),
+            len(original_query or ""),
+        )
+
+        try:
+            with langfuse.start_as_current_span(
+                name=f"dependent-task-query-refine-{_span_tag}",
+                trace_context={"trace_id": trace_id},
+            ) as span:
+                span.update_trace(
+                    user_id=user_id,
+                    session_id=run_id,
+                    input={
+                        "stage": refine_stage,
+                        "downstream_agent": downstream_agent_name,
+                        "upstream_chars": len(_prior),
+                    },
+                )
+                response = await self.llm.ainvoke(
+                    [HumanMessage(content=prompt)],
+                    config={"callbacks": [langfuse_handler]},
+                )
+                span.update_trace(
+                    output={"raw_chars": len(str(response.content or ""))},
+                )
+            langfuse.flush()
+        except Exception as exc:
+            logger.error("[DepQueryRefine][%s] LLM failed: %s", refine_stage, exc)
+            return planned_downstream_description
+
+        parsed = _planner.format_llm_output(response)
+        if not isinstance(parsed, dict):
+            logger.warning(
+                "[DepQueryRefine][%s] unparsable LLM JSON, fallback to planned description", refine_stage
+            )
+            return planned_downstream_description
+
+        # --- 上游数据有效性检查：LLM 判定上游无可用数据，标记跳过 ---
+        if parsed.get("skip") is True:
+            _skip_reason = str(parsed.get("reason", "")).strip()
+            logger.info(
+                "[DepQueryRefine][%s] upstream data invalid — skipping dependent task | agent=%s "
+                "planned_chars=%d upstream_chars=%d reason=%s",
+                refine_stage,
+                downstream_agent_name,
+                len(planned_downstream_description or ""),
+                len(_prior),
+                _skip_reason[:200] if _skip_reason else "(no reason)",
+            )
+            return DEPENDENT_TASK_SKIP_DESCRIPTION
+
+        refined = (
+            parsed.get("delegation_query")
+            or parsed.get("task_query")
+            or parsed.get("refined_description")
+            or parsed.get("query")
+            or ""
+        )
+        refined = str(refined).strip()
+        if not refined:
+            logger.warning(
+                "[DepQueryRefine][%s] empty synthesized query after parse, fallback", refine_stage
+            )
+            return planned_downstream_description
+
+        refined_scrubbed = self._sanitize_refined_dependent_query(refined)
+        if not refined_scrubbed.strip():
+            logger.warning(
+                "[DepQueryRefine][%s] refined text empty after sanitizing leaks, fallback", refine_stage
+            )
+            return planned_downstream_description
+        refined = refined_scrubbed
+
+        logger.info(
+            "[DepQueryRefine][%s] refined | out_chars=%d preview=%s",
+            refine_stage,
+            len(refined),
+            refined[:400],
+        )
+        return refined
+
+    def _detect_delegation_via_structured(
+        self,
+        query: str,
+        own_results: dict[int, str],
+        collaborator_cards: list[AgentCard],
+        delegated_results: Optional[dict[str, str]] = None,
+    ) -> Optional[dict]:
+        """P10 fast-path: derive delegation directly from structured signals.
+
+        Scans every own-task answer for ``structured_control.unfulfilled_needs``
+        (emitted by the SD Expert under the P3 contract), and looks up the
+        owners over the *local* ``collaborator_cards`` set so the returned
+        ``target_sgs`` names are guaranteed to be routable downstream.
+
+        ``delegated_results`` carries the mid-exec round history (peer SG ->
+        result string).  Any SG already present there is treated as
+        "already attempted" for *every* still-unfulfilled need, so the
+        fast-path won't re-issue the same delegation.  When every candidate
+        owner has already been tried, the fast-path **yields** to the LLM
+        Track 2 (returns ``None``) — Track 2 sees both own_results and
+        delegated_results and can decide whether the prior delegation already
+        produced enough data or whether we are truly stuck.
+
+        Returns ``None`` when no actionable structured signal is present, in
+        which case the caller falls back to the original LLM detection.  This
+        gives deterministic mid-exec routing whenever the SD Expert produced a
+        proper unfulfilled_needs payload, and only pays the LLM cost otherwise.
+        """
+        if not own_results or not collaborator_cards:
+            return None
+        try:
+            from .data_inventory import build_table_owner_index
+        except Exception:  # noqa: BLE001
+            return None
+
+        # Aggregate unfulfilled_needs across all own-task answers.  The
+        # ``_extract_structured_control_from_text`` helper lives on
+        # ``OrchestratorAgent`` (it is shared with the retry/eval paths there)
+        # and is intentionally a @staticmethod, so we invoke it via the class
+        # rather than ``self`` because the executor class does not inherit
+        # from ``OrchestratorAgent``.
+        aggregated: List[Dict[str, Any]] = []
+        seen_tables: set = set()
+        for tid, raw_answer in own_results.items():
+            if not raw_answer:
+                continue
+            sc = OrchestratorAgent._extract_structured_control_from_text(str(raw_answer))
+            if not isinstance(sc, dict):
+                continue
+            for need in sc.get("unfulfilled_needs") or []:
+                if not isinstance(need, dict):
+                    continue
+                missing = str(need.get("missing_table") or "").strip()
+                if not missing:
+                    continue
+                key = missing.lower()
+                if key in seen_tables:
+                    continue
+                seen_tables.add(key)
+                aggregated.append({
+                    "task_id": tid,
+                    "missing_table": missing,
+                    "reason": str(need.get("reason") or "").strip(),
+                    "intent_fragment": str(need.get("intent_fragment") or "").strip(),
+                    "stage": str(need.get("stage") or "").strip(),
+                })
+        if not aggregated:
+            return None
+
+        owner_index = build_table_owner_index(collaborator_cards)
+        own_name = (
+            (getattr(self.agent_card, "name", None) or "").strip()
+            if getattr(self, "agent_card", None) else ""
+        )
+        # Treat every SG that appears in ``delegated_results`` as already
+        # attempted in a prior mid-exec round.  We don't track per-(sg,table)
+        # success/failure here, so the conservative rule is: if the fast-path
+        # already routed work to a SG, don't pick it again — let Track 2 LLM
+        # (which sees both own + delegated context) decide whether to retry.
+        already_tried: set = {
+            name
+            for name in (delegated_results or {}).keys()
+            if isinstance(name, str) and name
+        }
+        target_sgs: List[str] = []
+        mapped_needs: List[Dict[str, Any]] = []
+        any_owner_visible = False
+        any_owner_skipped = False
+        for need in aggregated:
+            raw_owners = list(owner_index.get(need["missing_table"].lower()) or [])
+            raw_owners = [o for o in raw_owners if o and o != own_name]
+            fresh_owners = [o for o in raw_owners if o not in already_tried]
+            skipped_owners = [o for o in raw_owners if o in already_tried]
+            if raw_owners:
+                any_owner_visible = True
+            if skipped_owners:
+                any_owner_skipped = True
+            need_entry = dict(need)
+            need_entry["owners"] = fresh_owners
+            need_entry["all_owners"] = raw_owners
+            need_entry["skipped_owners"] = skipped_owners
+            mapped_needs.append(need_entry)
+            for o in fresh_owners:
+                if o not in target_sgs:
+                    target_sgs.append(o)
+
+        if not target_sgs:
+            if any_owner_skipped and any_owner_visible:
+                logger.info(
+                    "[Cross-SG][CollabMidExecDetect][Structured] %d unfulfilled need(s) — all owners already delegated to (already_tried=%s); yielding to LLM Track 2",
+                    len(aggregated),
+                    sorted(already_tried),
+                )
+            else:
+                logger.info(
+                    "[Cross-SG][CollabMidExecDetect][Structured] %d unfulfilled need(s) but no peer SG owns them — falling back to LLM",
+                    len(aggregated),
+                )
+            return None
+
+        intent_fragments = sorted({
+            n["intent_fragment"] for n in mapped_needs if n.get("intent_fragment")
+        })
+        synthesized_lines = [
+            "请基于以下数据归属信号补齐缺失数据：",
+            f"原始问题: {query}",
+            "缺失/不可达数据 (来自上游 SD Expert 的 structured_control.unfulfilled_needs):",
+        ]
+        for n in mapped_needs:
+            synthesized_lines.append(
+                f"  - 表 `{n['missing_table']}` (stage={n.get('stage') or 'n/a'})"
+                + (f" / 业务意图：{n['intent_fragment']}" if n.get('intent_fragment') else "")
+            )
+        if intent_fragments:
+            synthesized_lines.append(
+                "原始任务片段汇总: " + " | ".join(intent_fragments[:6])
+            )
+        if already_tried:
+            synthesized_lines.append(
+                "已委托过且本轮跳过的 SG: " + ", ".join(sorted(already_tried))
+            )
+        synthesized_query = "\n".join(synthesized_lines)
+
+        result = {
+            "synthesized_query": synthesized_query,
+            "target_sgs": target_sgs,
+            "reason": (
+                "structured_signal: SD Expert 报告 unfulfilled_needs，"
+                f"已通过 sovereignty index 反查命中 {len(target_sgs)} 个 owner SG"
+                + (
+                    f"（跳过已委托过的 {len(already_tried)} 个 SG）"
+                    if already_tried
+                    else ""
+                )
+            ),
+            "structured_unfulfilled_needs": mapped_needs,
+            "skipped_owners": sorted(already_tried),
+            "source": "structured_signal",
+        }
+        logger.info(
+            "[Cross-SG][CollabMidExecDetect][Structured] resolved | needs=%d fresh_owners=%d skipped=%d synth_query_len=%d",
+            len(aggregated),
+            len(target_sgs),
+            len(already_tried),
+            len(synthesized_query),
+        )
+        return result
+
+    async def _detect_delegation_needs(
+        self,
+        query: str,
+        own_results: dict[int, str],
+        delegated_results: dict[str, str],
+        collaborator_cards: list[AgentCard],
+        user_id: str = "",
+        run_id: str = "",
+        trace_id: str = "",
+    ) -> Optional[dict]:
+        """Mid-execution Step 1: detect if another SG's help is needed.
+
+        Two-track design:
+
+        1. **Structured fast-path** (P10): scan ``own_results`` for
+           ``structured_control.unfulfilled_needs`` (P3 contract) and resolve
+           target SGs via the local owner index over ``collaborator_cards``.
+           Deterministic, LLM-free, precise.
+        2. **LLM fallback** (original behaviour): when no structured signal is
+           present, ask the LLM to reason over the natural-language outputs
+           and pick collaborator SGs.
+
+        Returns:
+            ``None`` if no delegation is needed.
+            ``dict`` with ``synthesized_query``, ``target_sgs``, ``reason``,
+            and optionally ``source`` / ``structured_unfulfilled_needs`` when
+            the fast-path triggered.
+        """
+        if not collaborator_cards:
+            logger.info("[Cross-SG][CollabMidExecDetect] no collaborator cards available, skip detection")
+            return None
+
+        # Track 1: structured signal (deterministic, free).  Gated by env so
+        # operators can fall back to LLM-only behaviour if needed.
+        # ``delegated_results`` is forwarded so the fast-path can skip peer
+        # SGs already attempted in earlier mid-exec rounds — if every owner
+        # has been tried we deliberately yield to Track 2 (LLM), which sees
+        # both own + delegated context and can judge whether we are done or
+        # truly stuck.
+        if os.getenv("ENABLE_STRUCTURED_DELEGATION_DETECT", "true").strip().lower() not in ("false", "0", "no"):
+            structured = self._detect_delegation_via_structured(
+                query=query,
+                own_results=own_results,
+                collaborator_cards=collaborator_cards,
+                delegated_results=delegated_results,
+            )
+            if structured:
+                logger.info(
+                    "[Cross-SG][CollabMidExecDetect] structured fast-path matched | targets=%s skipped=%s reason=%s",
+                    structured.get("target_sgs"),
+                    structured.get("skipped_owners") or [],
+                    (structured.get("reason") or "")[:120],
+                )
+                return structured
+            logger.info(
+                "[Cross-SG][CollabMidExecDetect] structured fast-path produced no actionable target — falling back to LLM Track 2 | own_results=%d delegated_results=%d",
+                len(own_results),
+                len(delegated_results),
+            )
+
+        own_text = "\n".join(
+            f"[Task#{tid}]: {res}" for tid, res in own_results.items() if res
+        )
+        del_text = "\n".join(
+            f"[{name}]: {res}" for name, res in delegated_results.items() if res
+        )
+        sg_options = "\n".join(
+            f"- {c.name}: {c.description or ''}"
+            for c in collaborator_cards
+        )
+
+        prompt = (
+            "你是一个多 agent 协作的数据缺口检测器。基于已有的执行结果和原始问题，"
+            "判断是否还需要其他领域的补充数据。\n\n"
+            "核心判断逻辑：\n"
+            "1）首先分析本层自身执行结果是否包含可供下游使用的具体关联数据"
+            "（如 user_id、订单号、支付流水号等标识符列表）。\n"
+            "2）如果本层结果明确表示未查询到任何有效记录（如 'not found records'、"
+            "'查询结果为空'、'0 条记录'、'no records found' 等），"
+            "则不得推荐任何委派——因为没有可传递的关联键，下游无法进行有效查询。\n"
+            "3）只有当本层结果确实返回了可供下游使用的具体标识符列表，"
+            "且当前结果不足以完整回答原始问题时，才返回 needs_help = true。\n\n"
+            "注意: 如果已有结果已经能完整回答原始问题，应返回 needs_help=false。"
+            "只有当确实存在具体的数据缺口，且某个 SG 可以填补时，才返回需要帮助。\n\n"
+            f"原始问题：{query}\n\n"
+            f"本层自身执行结果：\n{own_text}\n\n"
+            f"已完成委托结果：\n{del_text}\n\n"
+            f"可委托的 SG 领域列表：\n{sg_options}\n\n"
+            "请输出 JSON:\n"
+            '{"needs_help": bool, "synthesized_query": "给下游 SG 的完整、具体子问题（含必要上下文）", '
+            '"target_sgs": ["SG名称"], "reason": "为什么需要这些 SG 的数据"}\n'
+            "只输出 JSON，不要 Markdown："
+        )
+
+        logger.info(
+            "[Cross-SG][CollabMidExecDetect] invoking detection LLM | own_results=%d delegated_results=%d coll_sgs=%d prompt_chars=%d",
+            len(own_results),
+            len(delegated_results),
+            len(collaborator_cards),
+            len(prompt),
+        )
+
+        # Lightweight PlannerAgent solely for format_llm_output
+        _planner = PlannerAgent(
+            provider=self.provider,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            stream=False,
+            temperature=self.temperature,
+            data_services_url=self.data_services_url,
+            metadata=self.metadata,
+            enable_history=self.enable_history,
+            agent_id=self.agent_id,
+            semantic_group_id=self.semantic_group_id,
+        )
+
+        try:
+            with langfuse.start_as_current_span(
+                name="cross-sg-detect-delegation-needs",
+                trace_context={"trace_id": trace_id},
+            ) as span:
+                span.update_trace(
+                    user_id=user_id,
+                    session_id=run_id,
+                    input={"query": query, "own_task_count": len(own_results)},
+                )
+                response = await self.llm.ainvoke(
+                    [HumanMessage(content=prompt)],
+                    config={"callbacks": [langfuse_handler]},
+                )
+                span.update_trace(
+                    output={"raw_response_chars": len(str(response.content or ""))},
+                )
+            langfuse.flush()
+        except Exception as e:
+            logger.error("[Cross-SG][CollabMidExecDetect] LLM invocation failed: %s", e)
+            return None
+
+        logger.info(
+            "[Cross-SG][CollabMidExecDetect] LLM response received | content_chars=%d preview=%s",
+            len(str(response.content or "")),
+            str(response.content or "")[:1000],
+        )
+
+        data_dict = _planner.format_llm_output(response)
+        if data_dict is None or not isinstance(data_dict, dict):
+            logger.warning(
+                "[Cross-SG][CollabMidExecDetect] format_llm_output returned None or non-dict, skip mid-exec delegation"
+            )
+            return None
+
+        if not data_dict.get("needs_help", False):
+            logger.info("[Cross-SG][CollabMidExecDetect] LLM decided no additional delegation needed")
+            return None
+
+        result = {
+            "synthesized_query": data_dict.get("synthesized_query", ""),
+            "target_sgs": data_dict.get("target_sgs", []),
+            "reason": data_dict.get("reason", ""),
+            "source": "llm_detection",
+        }
+        logger.info(
+            "[Cross-SG][CollabMidExecDetect] LLM recommends delegation | source=llm_detection targets=%s reason=%s synth_query_len=%d",
+            result["target_sgs"],
+            result["reason"][:100],
+            len(str(result["synthesized_query"] or "")),
+        )
+        return result
+
+    async def _plan_mid_exec_delegation(
+        self,
+        synthesized_query: str,
+        target_cards: list[AgentCard],
+        group_memory: str = "",
+        agent=None,
+        skill_runner=None,
+    ) -> Optional[TaskList]:
+        """Mid-execution Step 2: plan tasks based on the detection result.
+
+        Calls the Planner with the synthesised sub-query and the target
+        SG cards so the Planner can produce single or multi-task plans.
+        """
+        if not target_cards or not synthesized_query:
+            return None
+        try:
+            logger.info(
+                "[Cross-SG][CollabMidExecPlan] invoking planner for mid-exec | targets=%s synth_query_len=%d group_memory_chars=%d",
+                [c.name for c in target_cards],
+                len(synthesized_query or ""),
+                len(group_memory or ""),
+            )
+            _agent = agent or OrchestratorAgent(
+                provider=self.provider,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
+                stream=self.stream,
+                temperature=self.temperature,
+                semantic_group_id=self.semantic_group_id,
+                debug=self.debug,
+                data_services_url=self.data_services_url,
+                metadata=self.metadata,
+                enable_history=self.enable_history,
+                agent_id=self.agent_id,
+                max_loops=self.max_loops,
+                agent_card=self.agent_card,
+                skill_runner=skill_runner,
+            )
+            _agent._init_routing_pool_from_metadata()
+            planner_cards, _, _ = await _agent._resolve_planner_agent_pool(synthesized_query)
+            plan = await _agent.planner_agent.make_plan(
+                synthesized_query,
+                planner_cards,
+                group_memory=group_memory,
+            )
+            return plan
+        except Exception as e:
+            logger.warning("Cross-SG: mid-exec plan failed: %s", e)
+            return None
+
+    async def _dispatch_mid_exec_delegation(
+        self,
+        plan: TaskList,
+        target_cards: list[AgentCard],
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+        current_hop: int,
+        delegation_chain: list[str],
+        upstream_context: dict,
+        is_delegated: bool,
+        agent,
+        progress_updater: Optional[Any] = None,
+        collaboration_original_query: str = "",
+    ) -> dict[str, str]:
+        """Mid-execution Step 3: dispatch plan tasks to target SGs.
+
+        Iterates the plan's tasks, maps each to its target card, and calls
+        ``delegate_to_collaborator_sg``.  Returns ``{sg_name: result}``.
+        """
+        results: dict[str, str] = {}
+        name_to_card = {c.name: c for c in target_cards}
+        mid_exec_round = int((upstream_context or {}).get("mid_exec_round") or 0)
+
+        logger.info(
+            "[Cross-SG][CollabMidExecDispatch] dispatching mid-exec tasks | task_count=%d targets=%s hop=%d",
+            len(plan.tasks),
+            [t.agent for t in plan.tasks],
+            current_hop,
+        )
+
+        for task in plan.tasks:
+            agent_name = (task.agent or "").strip()
+            target_card = name_to_card.get(agent_name)
+            if target_card is None:
+                logger.warning(
+                    "Cross-SG: mid-exec dispatch, no card for agent=%s", agent_name,
+                )
+                continue
+
+            can_delegate = (not is_delegated) or (current_hop > 0)
+            if not can_delegate:
+                results[agent_name] = NONE_TASK_DESCRIPTION
+                continue
+
+            # Every delegation edge (including mid-exec dispatch) consumes 1 hop.
+            # The receiver will further decrement when it delegates onward.
+            next_hop = current_hop - 1
+            new_chain = delegation_chain + [agent.agent_name]
+            ctx = dict(upstream_context or {})
+            tid_map = self._task_results_from_upstream_ctx(ctx)
+
+            task_desc_for_delegate = task.description or ""
+            if self._llm_dependent_query_refine_enabled() and task.depends_on:
+                _deps = list(task.depends_on)
+                if all(tid in tid_map and (tid_map.get(tid) or "").strip() for tid in _deps):
+                    _blob = "\n\n".join(
+                        f"=== Task #{tid} （上游已成功执行的结果）===\n{(tid_map.get(tid) or '').strip()}"
+                        for tid in sorted(_deps)
+                    )
+                    task_desc_for_delegate = await self._llm_refine_dependent_task_query(
+                        original_query=(collaboration_original_query or "").strip(),
+                        planned_downstream_description=task.description or "",
+                        downstream_agent_name=task.agent or "",
+                        upstream_results_blob=_blob,
+                        user_id=user_id,
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        refine_stage="mid_exec_delegate",
+                    )
+                    # --- 上游数据无效：跳过当前委托任务 ---
+                    if task_desc_for_delegate.startswith(DEPENDENT_TASK_SKIP_MARKER):
+                        logger.info(
+                            "[Cross-SG][MidExecDependRefine] task_id=%s skipped — "
+                            "upstream data invalid, cancelling mid-exec delegation to %s",
+                            task.id,
+                            agent_name,
+                        )
+                        results[agent_name] = task_desc_for_delegate
+                        continue
+                else:
+                    logger.info(
+                        "[Cross-SG][MidExecDependRefine] skip refine agent=%s missing deps in ctx deps=%s",
+                        agent_name,
+                        _deps,
+                    )
+
+            _mid_delegate_desc = self._truncate_progress_message(task_desc_for_delegate, 120)
+            if progress_updater is not None:
+                await self.emit_progress(
+                    progress_updater,
+                    "collaboration-progress",
+                    event="collab_mid_delegating",
+                    message=(
+                        f"Mid-exec delegating Task #{task.id} to [{agent_name}] "
+                        f"(round {mid_exec_round or '?'}): {_mid_delegate_desc}"
+                    ),
+                    status="running",
+                    task_id=task.id,
+                    extra={
+                        "target_sg": agent_name,
+                        "task_id": task.id,
+                        "mid_exec_round": mid_exec_round,
+                        "remaining_hop": next_hop,
+                        "desc_preview": _mid_delegate_desc,
+                    },
+                )
+
+            result = await agent.delegate_to_collaborator_sg(
+                target_card=target_card,
+                task_description=task_desc_for_delegate,
+                user_id=user_id,
+                run_id=run_id,
+                trace_id=trace_id,
+                hop_remaining=next_hop,
+                delegation_chain=new_chain,
+                upstream_context=ctx,
+                progress_updater=progress_updater,
+                progress_artifact_name="collaboration-progress",
+            )
+            results[agent_name] = result
+            if progress_updater is not None:
+                await self.emit_progress(
+                    progress_updater,
+                    "collaboration-progress",
+                    event="collab_mid_dispatched",
+                    message=(
+                        f"Mid-exec Task #{task.id} done via [{agent_name}]: {_mid_delegate_desc} "
+                        f"({len(result or '')} chars)"
+                    ),
+                    status="done",
+                    task_id=task.id,
+                    extra={
+                        "target_sg": agent_name,
+                        "task_id": task.id,
+                        "mid_exec_round": mid_exec_round,
+                        "desc_preview": _mid_delegate_desc,
+                        "result_chars": len(result or ""),
+                    },
+                )
+
+        return results
+
+    async def _summarize_delegated_result(
+        self,
+        query: str,
+        own_results: dict[int, str],
+        delegated_results: dict[str, str],
+        upstream_context: dict,
+        user_id: str = "",
+        run_id: str = "",
+        trace_id: str = "",
+    ) -> str:
+        """Summarise own results + downstream delegated results + upstream context.
+
+        Pure LLM summarisation — no data processing.
+        """
+        own_text = "\n".join(
+            f"[Task#{tid}] {res}" for tid, res in own_results.items() if res
+        )
+        del_text = "\n".join(
+            f"[{name}] {res}" for name, res in delegated_results.items() if res
+        )
+        upstream_text = json.dumps(upstream_context, ensure_ascii=False) if upstream_context else "无"
+
+        prompt = (
+            "请基于以下各层执行结果，综合回答用户的原始问题。\n\n"
+            "输出要求：\n"
+            "1. 直接输出答案正文，从实质内容开始。\n"
+            "2. 不要自我介绍，不要说明你是汇总器或 agent，不要描述协作/整合过程。\n"
+            "3. 不要使用「好的，作为…」「我已收到/整合了…」「以下是针对…的完整/综合回答」等开场白。\n"
+            "4. 下游结果中若含类似套话，请忽略并只提取实质信息，不要在输出中重复。\n"
+            "5. 信息冲突时简要说明；缺信息时说明缺什么，勿编造。\n\n"
+            f"原始问题：{query}\n\n"
+            f"上游传入上下文：{upstream_text}\n\n"
+            f"本层自身执行结果：\n{own_text}\n\n"
+            f"委托给下游 SG 的返回结果（可能已包含多级汇总）：\n{del_text}\n\n"
+            "请直接输出答案："
+        )
+
+        logger.info(
+            "[Cross-SG][CollabSummary] invoking summary LLM | own_results=%d delegated_results=%d prompt_chars=%d",
+            len(own_results),
+            len(delegated_results),
+            len(prompt),
+        )
+
+        try:
+            with langfuse.start_as_current_span(
+                name="cross-sg-summarize-delegated-result",
+                trace_context={"trace_id": trace_id},
+            ) as span:
+                span.update_trace(
+                    user_id=user_id,
+                    session_id=run_id,
+                    input={
+                        "query": query,
+                        "own_task_count": len(own_results),
+                        "delegated_sg_count": len(delegated_results),
+                    },
+                )
+                response = await self.llm.ainvoke(
+                    [HumanMessage(content=prompt)],
+                    config={"callbacks": [langfuse_handler]},
+                )
+                span.update_trace(
+                    output={"result_chars": len(str(response.content or ""))},
+                )
+            langfuse.flush()
+        except Exception as e:
+            logger.error("[Cross-SG][CollabSummary] LLM invocation failed: %s", e)
+            return (
+                "由于汇总阶段出错，未能生成综合答案。以下为各协作 SG 返回的原始结果：\n\n"
+                f"{own_text}\n\n"
+                f"{del_text}"
+            )
+
+        result = str(response.content or "").strip()
+        logger.info(
+            "[Cross-SG][CollabSummary] summary generated | result_chars=%d preview=%s",
+            len(result),
+            result[:1000],
+        )
+        return result
+
     @override
     async def execute(
         self,
@@ -4749,10 +8377,41 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 "[Execute][SemanticGroupOrchestrator] prior_task_results: (metadata key absent)",
             )
 
+        if isinstance(metadata, dict) and metadata.get(sg_broadcast.ROUTING_AGENT_POOL_KEY):
+            sg_broadcast.log_routing_agent_pool_received(metadata)
+
         # ---- Capability Check: respond quickly if this is a broadcast routing probe ----
+        # Must run before Cross-SG collaborative mode — otherwise probes are mis-handled as
+        # full execute_collaborative and RoutingAgent receives non-JSON / wrong-shaped replies.
         if metadata and metadata.get("message_type") == CAPABILITY_CHECK_MESSAGE_TYPE:
             logger.info(f"[Capability] Received capability check request, query: {query[:100]}...")
             await self.handle_capability_check(context, event_queue, query)
+            return
+
+        # ---- Cross-SG Collaborative Mode ----
+        if os.getenv("ENABLE_CROSS_SG_COLLABORATION", "true").strip().lower() in ("true", "1", "yes"):
+            try:
+                await self.execute_collaborative(context, event_queue)
+            except Exception as e:  # noqa: BLE001
+                # execute_collaborative 内部已对 make_plan 的 ValueError 做了
+                # 优雅降级（updater.failed）。这里再兜一层是为了防止其它
+                # 未预期异常（网络抖动 / 下游 SG 不可达等）冒泡到 ASGI
+                # TaskGroup 而被记成未处理异常。
+                logger.error(
+                    "[Execute] execute_collaborative raised unhandled exception: %s",
+                    e, exc_info=True,
+                )
+                try:
+                    task = context.current_task
+                    if task is not None:
+                        updater = TaskUpdater(event_queue, task.id, task.context_id)
+                        await updater.failed(
+                            message=new_agent_text_message(
+                                f"协同执行失败：{e}", context_id=task.context_id,
+                            ),
+                        )
+                except Exception as inner:  # noqa: BLE001
+                    logger.error("[Execute] failed to send failure status: %s", inner)
             return
 
         legacy_route_paths = []

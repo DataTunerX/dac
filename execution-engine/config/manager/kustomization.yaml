@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: registry.cn-shanghai.aliyuncs.com/jamesxiong/execution-engine
-  newTag: v0.9.0-amd64
+  newTag: v0.10.0-amd64

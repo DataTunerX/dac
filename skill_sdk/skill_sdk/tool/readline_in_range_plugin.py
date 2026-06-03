@@ -118,7 +118,15 @@ class ReadlineInRangePlugin(ToolPlugin):
     args_schema = ReadlineInRangeInput
 
     def execute(self, **kwargs: Any) -> str:
-        inp = ReadlineInRangeInput.model_validate(kwargs)
+        from pydantic import ValidationError
+
+        try:
+            inp = ReadlineInRangeInput.model_validate(kwargs)
+        except ValidationError as exc:
+            return json.dumps(
+                {"error": f"Invalid input: {exc}", "error_code": 400},
+                ensure_ascii=False,
+            )
 
         try:
             content, actual_start, actual_end = readline_in_range(

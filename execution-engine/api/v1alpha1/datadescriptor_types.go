@@ -129,6 +129,10 @@ type DataDescriptorSpec struct {
 	Sources        []DataSource `json:"sources,omitempty"`
 	// SyncPolicy enables periodic observation of data source changes for re-sync
 	SyncPolicy *SyncPolicy `json:"syncPolicy,omitempty"`
+	// GPUEnabled indicates whether GPU resources should be allocated to the pod.
+	// Valid values: "yes" or "no". Defaults to "no" if not set.
+	// When set to "yes", nvidia.com/gpu: "1" will be added to resource limits and requests.
+	GPUEnabled string `json:"gpuEnabled,omitempty"`
 }
 
 // DataDescriptorStatus defines the observed state of DataDescriptor.

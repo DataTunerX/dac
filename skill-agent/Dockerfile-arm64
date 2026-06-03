@@ -1,14 +1,14 @@
-# Build stage with explicit platform specification
-#FROM ghcr.io/astral-sh/uv:python3.13-alpine AS uv
+# Build stage — same Ubuntu base so native .so (pydantic-core, PyMuPDF) are glibc-compatible
+FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-ubuntu-timezone-arm64 AS uv
 
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/uv:python3.13-alpine-arm64 AS uv
+# Install uv (pip package)
+RUN pip install uv && \
+    uv --version
 
-# 与 amd64 一致：保证 PyMuPDF 在 builder 内可 ``import``（不依赖 build-base 是否已带全 runtime）
-RUN apk add --no-cache libstdc++
-
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk add --no-cache build-base cargo openssl-dev && \
-    sed -i 's/mirrors.aliyun.com/dl-cdn.alpinelinux.org/g' /etc/apk/repositories
+# PyMuPDF ``_extra.so`` 需要 ``libstdc++.so.6``
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install the project into /app
 WORKDIR /app
@@ -42,15 +42,39 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /app/.venv/bin/python "pymupdf>=1.24.0"
 RUN /app/.venv/bin/python -c "import fitz; print('PyMuPDF OK')"
 
-# Final stage with explicit platform specification
-#FROM docker.m.daocloud.io/python:3.13-alpine
+# Final stage — Ubuntu base
+FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-ubuntu-timezone-arm64
 
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-alpine-timezone-arm64
+# Ensure app user exists (Ubuntu base image may not have it)
+RUN id -u app &>/dev/null || (groupadd -r app && useradd -r -g app -d /app -s /sbin/nologin app)
 
-RUN apk add --no-cache \
-    fd \
-    ripgrep \
-    libstdc++
+# Install runtimes + LSP servers (single layer, clean up build deps afterwards)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git gh \
+    fd-find ripgrep libstdc++6 wget curl ca-certificates \
+    golang-go nodejs npm openjdk-21-jre-headless clangd cargo \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+    # gopls — Go language server (keep Go SDK: gopls needs 'go' at runtime)
+    && go install golang.org/x/tools/gopls@latest \
+    && cp /root/go/bin/gopls /usr/local/bin/ \
+    && rm -rf /root/go \
+    # basedpyright — Python type checker & language server (superset, replaces pyright)
+    && npm install -g basedpyright \
+    # vtsls support typescript and javascript
+    && npm install -g @vtsls/language-server typescript \
+    && npm cache clean --force \
+    # jdtls — Eclipse JDT LS (latest snapshot)
+    && wget -q "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz" -O /tmp/jdtls.tar.gz \
+    && mkdir -p /opt/jdtls && tar xzf /tmp/jdtls.tar.gz -C /opt/jdtls \
+    && ln -s /opt/jdtls/bin/jdtls /usr/local/bin/jdtls \
+    && rm /tmp/jdtls.tar.gz \
+    # rust-analyzer — Rust language server (via rustup)
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal \
+    && /root/.cargo/bin/rustup component add rust-analyzer \
+    && cp /root/.cargo/bin/rust-analyzer /usr/local/bin/ \
+    && cp /root/.cargo/bin/rustup /usr/local/bin/ \
+    && rm -rf /root/.cargo /root/.rustup \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=uv --chown=app:app /app/.venv /app/.venv
 

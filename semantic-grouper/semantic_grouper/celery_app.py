@@ -11,7 +11,11 @@ from semantic_grouper.distributed_lock import get_semantic_group_lock
 from semantic_grouper.client.vector_client import VectorClient
 from semantic_grouper.client.semantic_group_client import SemanticGroupClient
 from semantic_grouper.client.semantic_domain_client import SemanticDomainClient
-from semantic_grouper.client.k8s_client import notify_dd_reconcile
+from semantic_grouper.client.k8s_client import (
+    get_semantic_group_ids_from_dd,
+    notify_dd_reconcile,
+    patch_semantic_group_ids,
+)
 from semantic_grouper.semantic_group import SemanticGrouper
 
 logging.basicConfig(level=logging.INFO)
@@ -151,6 +155,108 @@ def incremental_semantic_group(descriptor: dict) -> Dict[str, Any]:
     return result
 
 
+def _persist_group_membership_on_dd(
+    dd_namespace: str, dd_name: str, result: Dict[str, Any]
+) -> None:
+    """Write semantic-group-ids on the DD when it joins or creates a group."""
+    if not isinstance(result, dict) or result.get("status") != "success":
+        return
+    group_id = result.get("group_id")
+    if not group_id:
+        return
+    try:
+        patch_semantic_group_ids(dd_namespace, dd_name, [group_id])
+    except Exception as e:
+        logger.warning(
+            "Failed to persist semantic-group-ids on DD %s/%s (non-fatal): %s",
+            dd_namespace,
+            dd_name,
+            e,
+        )
+
+
+_NO_RELATION_MESSAGE = "语义域没有关联的语义组"
+
+
+def _reconcile_groups_from_dd_annotation(
+    dd_namespace: str,
+    dd_name: str,
+    sd_id: str,
+    reconciled_group_ids: set,
+) -> Dict[str, Any]:
+    """
+    When dd_group_relation is already gone, read group ids from the deleting DD's
+    K8s annotation and reconcile group metadata via data-services.
+    """
+    logger.info(
+        "annotation fallback: sd=%s dd=%s/%s has no live relation, reading semantic-group-ids",
+        sd_id,
+        dd_namespace,
+        dd_name,
+    )
+    try:
+        group_ids = get_semantic_group_ids_from_dd(dd_namespace, dd_name)
+    except Exception as e:
+        logger.warning(
+            "annotation fallback: failed to read semantic-group-ids from DD %s/%s: %s",
+            dd_namespace,
+            dd_name,
+            e,
+        )
+        return {
+            "status": "success",
+            "action": "REMOVED",
+            "message": _NO_RELATION_MESSAGE,
+            "remaining_member_count": 0,
+            "semantic_domain_id": sd_id,
+        }
+
+    if not group_ids:
+        logger.warning(
+            "annotation fallback: DD %s/%s has no semantic-group-ids; "
+            "group metadata will not be reconciled",
+            dd_namespace,
+            dd_name,
+        )
+        return {
+            "status": "success",
+            "action": "REMOVED",
+            "message": _NO_RELATION_MESSAGE,
+            "remaining_member_count": 0,
+            "semantic_domain_id": sd_id,
+        }
+
+    last_result: Dict[str, Any] = {
+        "status": "success",
+        "action": "REMOVED",
+        "message": _NO_RELATION_MESSAGE,
+        "semantic_domain_id": sd_id,
+    }
+    for group_id in group_ids:
+        if group_id in reconciled_group_ids:
+            logger.info(
+                "annotation fallback: group %s already reconciled for dd=%s/%s, skipping",
+                group_id,
+                dd_namespace,
+                dd_name,
+            )
+            continue
+        logger.info(
+            "annotation fallback: reconciling group %s via data-services (sd=%s, dd=%s/%s)",
+            group_id,
+            sd_id,
+            dd_namespace,
+            dd_name,
+        )
+        recon = semantic_grouper.reconcile_group_metadata(group_id)
+        reconciled_group_ids.add(group_id)
+        last_result = recon
+        if isinstance(recon, dict) and recon.get("status") == "error":
+            raise ValueError(recon.get("message", f"annotation fallback reconcile 失败: {group_id}"))
+
+    return last_result
+
+
 def decremental_semantic_group(descriptor: dict) -> Dict[str, Any]:
     """
     删除 DD 对应的所有语义域与语义组的关联。
@@ -168,6 +274,7 @@ def decremental_semantic_group(descriptor: dict) -> Dict[str, Any]:
     domain_list = _parse_domain_data_all(semantic_domain, dd_namespace, dd_name)
 
     last_result = None
+    reconciled_group_ids: set = set()
     for domain_data in domain_list:
         if not isinstance(domain_data, dict):
             logger.warning("跳过无效的 domain_data，类型: %s", type(domain_data))
@@ -178,6 +285,13 @@ def decremental_semantic_group(descriptor: dict) -> Dict[str, Any]:
             continue
         logger.info("对语义域 %s 执行 decremental: %s/%s", sd_id, dd_namespace, dd_name)
         result = semantic_grouper.decremental_semantic_group_analyse(sd_id)
+        if isinstance(result, dict) and result.get("message") == _NO_RELATION_MESSAGE:
+            result = _reconcile_groups_from_dd_annotation(
+                dd_namespace,
+                dd_name,
+                sd_id,
+                reconciled_group_ids,
+            )
         last_result = result
         if isinstance(result, dict) and result.get("status") == "error":
             raise ValueError(result.get("message", "删除语义域失败"))
@@ -232,6 +346,8 @@ def semantic_group_task(self, data: Dict[str, Any]) -> Dict[str, Any]:
                 "Successfully incremental semantic domain for %s/%s, result: %s",
                 dd_namespace, dd_name, result,
             )
+
+            _persist_group_membership_on_dd(dd_namespace, dd_name, result)
 
             # Notify execution-engine to reconcile the DD so it can detect
             # agent_card changes and perform blue-green DAC replacement.

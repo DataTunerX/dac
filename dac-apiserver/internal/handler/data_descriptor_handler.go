@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
+	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
 	"github.com/lvyanru/dac-apiserver/internal/handler/dto"
 )
 
@@ -24,6 +25,15 @@ func isValidDescriptorType(t string) bool {
 	t = strings.TrimSpace(t)
 	_, ok := allowedDescriptorTypes[t]
 	return ok
+}
+
+func isValidGPUEnabled(v string) bool {
+	v = strings.TrimSpace(v)
+	return v == "" || v == "yes" || v == "no"
+}
+
+func normalizeGPUEnabled(v string) string {
+	return entity.NormalizeGPUEnabled(strings.TrimSpace(v))
 }
 
 func normalizeDataSourceType(t string) string {
@@ -61,6 +71,11 @@ func (h *DataDescriptorHandler) Create(ctx context.Context, c *app.RequestContex
 		ErrorResponse(c, domain.ErrInvalidInput)
 		return
 	}
+	if !isValidGPUEnabled(req.GPUEnabled) {
+		h.logger.Error("invalid gpuEnabled", "gpuEnabled", req.GPUEnabled)
+		ErrorResponse(c, domain.ErrInvalidInput)
+		return
+	}
 
 	// Normalize source types to match execution-engine conventions.
 	for i := range req.Sources {
@@ -73,6 +88,7 @@ func (h *DataDescriptorHandler) Create(ctx context.Context, c *app.RequestContex
 		Namespace:      namespace,
 		Labels:         req.Labels,
 		DescriptorType: req.DescriptorType,
+		GPUEnabled:     normalizeGPUEnabled(req.GPUEnabled),
 		Sources:        req.Sources,
 	}
 
@@ -103,7 +119,7 @@ func (h *DataDescriptorHandler) Get(ctx context.Context, c *app.RequestContext) 
 	}
 
 	resp := dto.ToDataDescriptorResponse(descriptor)
-	
+
 	SuccessResponse(c, resp)
 }
 
@@ -250,6 +266,11 @@ func (h *DataDescriptorHandler) Update(ctx context.Context, c *app.RequestContex
 		ErrorResponse(c, domain.ErrInvalidInput)
 		return
 	}
+	if !isValidGPUEnabled(req.GPUEnabled) {
+		h.logger.Error("invalid gpuEnabled", "gpuEnabled", req.GPUEnabled)
+		ErrorResponse(c, domain.ErrInvalidInput)
+		return
+	}
 
 	for i := range req.Sources {
 		req.Sources[i].Type = normalizeDataSourceType(req.Sources[i].Type)
@@ -260,10 +281,16 @@ func (h *DataDescriptorHandler) Update(ctx context.Context, c *app.RequestContex
 	if req.DescriptorType != "" {
 		descriptorType = &req.DescriptorType
 	}
+	var gpuEnabled *string
+	if req.GPUEnabled != "" {
+		normalized := normalizeGPUEnabled(req.GPUEnabled)
+		gpuEnabled = &normalized
+	}
 
 	domainReq := &domain.UpdateDataDescriptorRequest{
 		Labels:         req.Labels,
 		DescriptorType: descriptorType,
+		GPUEnabled:     gpuEnabled,
 		Sources:        req.Sources,
 	}
 
@@ -305,7 +332,7 @@ func (h *DataDescriptorHandler) Delete(ctx context.Context, c *app.RequestContex
 func (h *DataDescriptorHandler) SearchKnowledge(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
-	
+
 	type searchReq struct {
 		Query string `json:"query" query:"query"`
 	}
@@ -328,7 +355,7 @@ func (h *DataDescriptorHandler) SearchKnowledge(ctx context.Context, c *app.Requ
 
 	SuccessResponse(c, map[string]any{
 		"results": results,
-		"total": len(results),
+		"total":   len(results),
 	})
 }
 

@@ -197,6 +197,7 @@ export type DataDescriptorResponse = {
   namespace: string
   labels?: Record<string, string>
   descriptor_type: string
+  gpuEnabled: "yes" | "no"
   sources: DataSourceResponse[]
   overall_phase?: string
   source_statuses?: SourceStatusResponse[]

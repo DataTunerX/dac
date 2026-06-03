@@ -44,6 +44,12 @@ spec:
                   INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
                   Important: Run "make" to regenerate code after modifying this file
                 type: string
+              gpuEnabled:
+                description: |-
+                  GPUEnabled indicates whether GPU resources should be allocated to the pod.
+                  Valid values: "yes" or "no". Defaults to "no" if not set.
+                  When set to "yes", nvidia.com/gpu: "1" will be added to resource limits and requests.
+                type: string
               sources:
                 items:
                   description: DataSource defines a data source configuration

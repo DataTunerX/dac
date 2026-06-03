@@ -431,6 +431,9 @@ class PlannerStep(BaseModel):
 # ==================== Capability Check Protocol (Broadcast Routing) ====================
 # Message type flag used in A2A metadata to indicate a capability check request
 CAPABILITY_CHECK_MESSAGE_TYPE = "capability_check"
+ROUTING_AGENT_POOL_KEY = "routing_agent_pool"
+ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY = "routing_skip_broadcast_eligible"
+ROUTING_SELECTED_ROOT_KEY = "routing_selected_root"
 
 
 class CapabilityCheckResponse(BaseModel):
@@ -509,6 +512,41 @@ def _is_non_actionable_contribution_text(text: str) -> bool:
         r"auxiliary information",
     )
     return any(re.search(pattern, normalized) for pattern in generic_patterns)
+
+
+def _agent_card_to_pool_dict(card: AgentCard) -> dict:
+    dump = getattr(card, "model_dump", None) or getattr(card, "dict", None)
+    if dump:
+        return dump()
+    return {"name": getattr(card, "name", ""), "url": getattr(card, "url", "")}
+
+
+def _build_routing_agent_pool_from_capable(
+    capable_agents: list[tuple[AgentCard, "CapabilityCheckResponse"]],
+) -> list[dict]:
+    pool: list[dict] = []
+    for card, resp in capable_agents:
+        name = getattr(card, "name", "") or getattr(resp, "agent_name", "")
+        if not name:
+            continue
+        role = "handle" if getattr(resp, "can_handle", False) else "contribute"
+        contribution = str(getattr(resp, "contribution", "") or "")
+        reason = str(getattr(resp, "reason", "") or "")
+        if len(contribution) > 300:
+            contribution = contribution[:300] + "..."
+        if len(reason) > 200:
+            reason = reason[:200] + "..."
+        pool.append(
+            {
+                "agent": _agent_card_to_pool_dict(card),
+                "agent_name": name,
+                "role": role,
+                "confidence": float(getattr(resp, "confidence", 0.0) or 0.0),
+                "contribution": contribution,
+                "reason": reason,
+            }
+        )
+    return pool
 
 
 def _nonredundant_root_plan_routes_summary(root_plans: list) -> str:
@@ -2546,6 +2584,76 @@ class RoutingAgent(BaseAgent):
         )
         return step, None, [selected_card], (rps if rps else None), exec_meta
 
+    async def get_best_agent_by_broadcast(
+        self,
+        query: str,
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+        propagated_history: Optional[dict] = None,
+    ) -> tuple[Optional[PlannerStep], Optional[list[dict]], dict]:
+        """Broadcast capability check and pick the single best agent.
+
+        Minimal version of get_plan_by_broadcast: always returns a single-root
+        decision, never enters multi-root task planning.
+        """
+        logger.info("[RoutePlan] ========== Simple Route Planning Start ==========")
+
+        history_payload = {}
+        if os.getenv('Enable_History', "enable") == "enable":
+            history_payload = await self.planner_agent.get_history_payload(
+                user_id=user_id,
+                run_id=run_id,
+                propagated_history=propagated_history,
+            )
+
+        capable_agents = await self.broadcast_capability_check(
+            query,
+            user_id,
+            run_id,
+            trace_id,
+            propagated_history=history_payload,
+        )
+
+        if not capable_agents:
+            logger.info("[RoutePlan] Simple route: no capable agent found")
+            return None, None, {}
+
+        selected_card, selected_resp = capable_agents[0]
+        self.agent_cards = [selected_card]
+
+        step = PlannerStep(original_query=query, agent=selected_card.name)
+
+        rps = getattr(selected_resp, "route_paths", None) or []
+        if not rps and selected_resp.route_path:
+            rps = [{"path": selected_resp.route_path, "confidence": selected_resp.confidence}]
+
+        exec_meta = {
+            "execution_strategy": "single",
+            PROPAGATED_HISTORY_KEY: history_payload,
+            ROUTING_AGENT_POOL_KEY: _build_routing_agent_pool_from_capable(capable_agents),
+            ROUTING_SELECTED_ROOT_KEY: selected_card.name,
+        }
+
+        path_str = (
+            " -> ".join(selected_resp.route_path)
+            if selected_resp.route_path
+            else selected_card.name
+        )
+        logger.info(
+            "[RoutePlan] ========== Simple Route Result ==========\n"
+            "  Selected: %s | can_handle=%s | confidence=%.2f | path=%s\n"
+            "  routing_agent_pool size=%d\n"
+            "==========================================",
+            selected_card.name,
+            selected_resp.can_handle,
+            selected_resp.confidence,
+            path_str,
+            len(exec_meta.get(ROUTING_AGENT_POOL_KEY) or []),
+        )
+
+        return step, (rps if rps else None), exec_meta
+
     async def _pick_best_root_for_fallback(
         self,
         query: str,
@@ -3405,7 +3513,7 @@ class RoutingAgentExecutor(AgentExecutor):
         updater = TaskUpdater(event_queue, task.id, task.context_id)
 
         # Determine routing mode: "broadcast" (default, new) or "vector" (legacy)
-        routing_mode = os.getenv("ROUTING_MODE", "broadcast").strip().lower()
+        routing_mode = os.getenv("ROUTING_MODE", "simple").strip().lower()
         logger.info(f"===== RoutingAgentExecutor, routing_mode={routing_mode}")
 
         step = None
@@ -3414,7 +3522,37 @@ class RoutingAgentExecutor(AgentExecutor):
         execution_meta: dict = {}
         self._history_progress_frames = []
 
-        if routing_mode == "broadcast":
+        if routing_mode == "simple":
+            # ---- Simple Mode: pick the single best agent, forward original query ----
+            # Controlled by env ROUTING_MODE=simple.
+            # No multi-root task planning — Routing Agent only selects, does not decompose.
+            logger.info("===== RoutingAgentExecutor, using SIMPLE routing mode")
+
+            for attempt in range(self.max_retries):
+                step, route_paths, execution_meta = await self.agent.get_best_agent_by_broadcast(
+                    query,
+                    user_id,
+                    run_id,
+                    trace_id,
+                    propagated_history=propagated_history,
+                )
+                logger.info(
+                    "===== RoutingAgentExecutor (simple), attempt %d, step=%s",
+                    attempt + 1, step,
+                )
+
+                if step is not None and step.agent and step.agent != "":
+                    break
+
+                if attempt < self.max_retries - 1:
+                    logger.warning(
+                        "===== Simple routing: no capable agent found, retrying "
+                        "(%d/%d)...",
+                        attempt + 1, self.max_retries,
+                    )
+                    await asyncio.sleep(self.retry_delay * (2 ** attempt))
+
+        elif routing_mode == "broadcast":
             # ---- Broadcast Mode: ask ALL agents, supports single-root fast path + multi-root task plan ----
             logger.info("===== RoutingAgentExecutor, using BROADCAST routing mode")
 
@@ -3760,6 +3898,18 @@ class RoutingAgentExecutor(AgentExecutor):
                         'skip_history_write': True,
                     },
                 }
+                routing_pool = (execution_meta or {}).get(ROUTING_AGENT_POOL_KEY)
+                if routing_pool:
+                    send_message_payload['metadata'][ROUTING_AGENT_POOL_KEY] = routing_pool
+                    send_message_payload['metadata'][ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY] = True
+                    selected_root = (execution_meta or {}).get(ROUTING_SELECTED_ROOT_KEY)
+                    if selected_root:
+                        send_message_payload['metadata'][ROUTING_SELECTED_ROOT_KEY] = selected_root
+                    logger.info(
+                        "Routing forward: routing_agent_pool size=%d skip_broadcast_eligible=true root=%s",
+                        len(routing_pool),
+                        selected_root or step.agent,
+                    )
 
                 # build a2a client from agent_card.url
                 async with httpx.AsyncClient() as httpx_client:

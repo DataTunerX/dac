@@ -25,6 +25,8 @@ func Setup(
 	probeHandler *handler.DataSourceProbeHandler,
 	chatHandler *handler.ChatHandler,
 	configMapHandler *handler.ConfigMapHandler,
+	systemConfigHandler *handler.SystemConfigHandler,
+	agentRegistryHandler *handler.AgentRegistryHandler,
 	namespaceHandler *handler.NamespaceHandler,
 	semanticGroupHandler *handler.SemanticGroupHandler,
 	ddGroupRelationHandler *handler.DDGroupRelationHandler,
@@ -50,9 +52,9 @@ func Setup(
 	if err != nil {
 		panic(err)
 	}
-	
+
 	// Custom Casbin Middleware for Path/Method Authorization
-	// Note: We use a custom middleware because hertz-contrib/casbin does not support 
+	// Note: We use a custom middleware because hertz-contrib/casbin does not support
 	// automatic RoutePermission (Path/Method matching) out of the box like Fiber's middleware.
 	authzMiddleware := func(ctx context.Context, c *app.RequestContext) {
 		path := string(c.Request.URI().Path())
@@ -74,7 +76,7 @@ func Setup(
 			c.AbortWithStatusJSON(403, map[string]string{"message": "forbidden"})
 			return
 		}
-		
+
 		c.Next(ctx)
 	}
 
@@ -92,13 +94,14 @@ func Setup(
 		// ============ Protected routes (JWT authentication required) ============
 		authorized := apiV1.Group("")
 		authorized.Use(userHandler.AuthMiddleware())
-		
+
 		// Use custom middleware
 		authorized.Use(authzMiddleware)
 
 		{
 			// Namespaces (cluster-scoped)
 			authorized.GET("/namespaces", namespaceHandler.List)
+			authorized.GET("/environment/gpu", healthHandler.GPUAvailability)
 
 			// User management
 			users := authorized.Group("/users")
@@ -168,6 +171,26 @@ func Setup(
 				configmaps.DELETE("/:name", configMapHandler.Delete)
 			}
 
+			// System configuration (cluster-wide dac-configuration / dd-configuration)
+			systemConfigs := authorized.Group("/system/configurations")
+			{
+				systemConfigs.GET("", systemConfigHandler.List)
+				systemConfigs.GET("/:name/versions/:version", systemConfigHandler.GetVersion)
+				systemConfigs.GET("/:name/versions", systemConfigHandler.ListVersions)
+				systemConfigs.GET("/:name", systemConfigHandler.Get)
+				systemConfigs.PUT("/:name", systemConfigHandler.Update)
+			}
+
+			// Observability: agent registries
+			observability := authorized.Group("/observability")
+			{
+				agentRegistries := observability.Group("/agent-registries")
+				{
+					agentRegistries.GET("", agentRegistryHandler.ListRegistries)
+					agentRegistries.GET("/:registry/agents", agentRegistryHandler.ListAgents)
+				}
+			}
+
 			// Chat History routes
 			chat := authorized.Group("/chat")
 			{
@@ -199,24 +222,22 @@ func Setup(
 				semanticGroups.POST("/batch", semanticGroupHandler.BatchCreate)
 				semanticGroups.GET("", semanticGroupHandler.List)
 				semanticGroups.GET("/roots", semanticGroupHandler.ListRoots)
+				semanticGroups.GET("/member-tasks/:taskId", semanticGroupHandler.GetMemberTask)
 				semanticGroups.GET("/status/count", semanticGroupHandler.Count)
 				semanticGroups.GET("/:id/with-members", semanticGroupHandler.GetWithMembers)
 				semanticGroups.GET("/:id", semanticGroupHandler.Get)
 				semanticGroups.GET("/:id/exists", semanticGroupHandler.Exists)
 				semanticGroups.PUT("/:id", semanticGroupHandler.Update)
 				semanticGroups.DELETE("/:id", semanticGroupHandler.Delete)
+				semanticGroups.POST("/:id/members", semanticGroupHandler.AddMember)
+				semanticGroups.POST("/:id/members/remove", semanticGroupHandler.RemoveMember)
 			}
 
-			// DD Group Relation routes (data-services integration)
+			// DD Group Relation routes (read-only; mutations go through semantic-grouper)
 			ddGroupRelations := authorized.Group("/dd-group-relations")
 			{
-				ddGroupRelations.POST("", ddGroupRelationHandler.Create)
-				ddGroupRelations.POST("/batch", ddGroupRelationHandler.BatchCreate)
 				ddGroupRelations.GET("/group/:group_id", ddGroupRelationHandler.ListByGroup)
 				ddGroupRelations.GET("/sd/:sd_id", ddGroupRelationHandler.ListBySD)
-				ddGroupRelations.DELETE("/:id", ddGroupRelationHandler.DeleteByID)
-				ddGroupRelations.DELETE("/group/:group_id", ddGroupRelationHandler.DeleteByGroup)
-				ddGroupRelations.DELETE("/sd/:sd_id", ddGroupRelationHandler.DeleteBySD)
 			}
 
 			// Knowledge Graph routes (data-services integration)

@@ -2,7 +2,7 @@ import aiohttp
 import json
 import logging
 import os
-from typing import Dict, Any, Optional, List, AsyncGenerator, Union
+from typing import Callable, Dict, Any, Optional, List, AsyncGenerator, Union, Tuple
 from dataclasses import dataclass
 import asyncio
 from contextlib import asynccontextmanager
@@ -246,33 +246,117 @@ class MetadataValuesResult:
 
         return batches
 
-    def get_text_by_ids(self, knowledge_ids: List[str], text_key: str = "text", id_key: str = "id") -> str:
+    def get_blocks_by_ids(
+        self,
+        knowledge_ids: List[str],
+        text_key: str = "text",
+        id_key: str = "id",
+        metadata_key: str = "metadata_value",
+    ) -> List[Dict[str, Any]]:
         """
-        根据知识块 ID 列表获取对应的完整知识内容（text 字段）。
-
-        Args:
-            knowledge_ids: 要获取的知识块 ID 列表
-            text_key: 完整知识内容的字段名 (default: "text")
-            id_key: ID 字段名 (default: "id")
+        根据知识块 ID 列表获取完整知识块（保持块完整性，按 knowledge_ids 顺序返回）。
 
         Returns:
-            str: 拼接后的完整知识内容，用换行符分隔
+            List[Dict]: 每项含 id / text / metadata_value
         """
-        texts = []
-        knowledge_ids_set = set(knowledge_ids)
+        id_to_block: Dict[str, Dict[str, Any]] = {}
 
-        for collection_name, values in self.data.items():
+        for _collection_name, values in self.data.items():
             if not isinstance(values, list):
                 continue
             for item in values:
-                if isinstance(item, dict):
-                    item_id = item.get(id_key, "")
-                    if item_id in knowledge_ids_set:
-                        text = item.get(text_key, "")
-                        if text:
-                            texts.append(text)
+                if not isinstance(item, dict):
+                    continue
+                item_id = item.get(id_key, "")
+                text = item.get(text_key, "")
+                if not item_id or not text:
+                    continue
+                id_to_block[item_id] = {
+                    "id": item_id,
+                    "text": text,
+                    "metadata_value": item.get(metadata_key, "") or "",
+                }
 
-        return "\n".join(texts)
+        blocks: List[Dict[str, Any]] = []
+        for knowledge_id in knowledge_ids:
+            block = id_to_block.get(knowledge_id)
+            if block:
+                blocks.append(block)
+        return blocks
+
+    async def get_text_by_ids(
+        self,
+        knowledge_ids: List[str],
+        *,
+        query: str = "",
+        llm: Any = None,
+        parse_output: Optional[Callable[[Any], Dict[str, Any]]] = None,
+        text_key: str = "text",
+        id_key: str = "id",
+        trace: Any = None,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """
+        根据知识块 ID 获取完整内容并拼接。
+
+        当总字符数超过 ``DOC_KNOWLEDGE_SCORE_TRIGGER_CHARS`` 时，对完整知识块进行
+        LLM 批量打分，再按分数与长度预算选取最优块（保持块完整性，不截断块内文本）。
+        """
+        from .tools.knowledge_context_budget import (
+            join_knowledge_blocks,
+            log_selection_report,
+            score_trigger_chars,
+            select_blocks_by_score,
+            should_score_and_select,
+            total_block_chars,
+        )
+        from .tools.knowledge_llm_score import score_knowledge_blocks_batch_parallel
+
+        meta: Dict[str, Any] = {
+            "score_select_applied": False,
+            "score_select_report": {},
+            "total_chars_before_select": 0,
+            "score_trigger_chars": score_trigger_chars(),
+        }
+
+        blocks = self.get_blocks_by_ids(
+            knowledge_ids,
+            text_key=text_key,
+            id_key=id_key,
+        )
+        if not blocks:
+            return "", meta
+
+        total_chars = total_block_chars(blocks)
+        trigger_chars = score_trigger_chars()
+        meta["total_chars_before_select"] = total_chars
+
+        if llm and query and should_score_and_select(blocks):
+            meta["score_select_applied"] = True
+            logger.info(
+                "[DOC KNOWLEDGE GATE] total_chars=%d > trigger=%d → LLM score + select",
+                total_chars,
+                trigger_chars,
+            )
+            blocks = await score_knowledge_blocks_batch_parallel(
+                blocks,
+                query=query,
+                llm=llm,
+                parse_output=parse_output,
+                trace=trace,
+            )
+            blocks, select_report = select_blocks_by_score(blocks)
+            meta["score_select_report"] = select_report
+            log_selection_report(logger, report=select_report)
+        else:
+            log_selection_report(
+                logger,
+                report={},
+                skipped=True,
+                total_chars=total_chars,
+                trigger_chars=trigger_chars,
+            )
+
+        return join_knowledge_blocks(blocks), meta
 
     def get_all_items(self) -> List[Dict[str, Any]]:
         """

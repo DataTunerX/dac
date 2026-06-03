@@ -187,3 +187,37 @@ NEXT_STEP_PROMPT_ZH = """
 **注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
 
 """
+
+BATCH_KNOWLEDGE_SCORE_PROMPT = """
+# Task
+用户提出了一个文档/知识问答问题。下面是一批**完整的知识块**（每个 block_id 对应一个完整知识块，请勿拆分理解）。
+请为**每一个** block_id 评估与用户问题的相关程度。
+
+# 用户问题
+{query}
+
+# 知识块列表
+{knowledge_blocks}
+
+# 评分标准（relevance_score 0-10）
+- 9-10：直接包含回答用户问题所需的核心信息
+- 7-8：强相关背景、流程说明或关键定义
+- 4-6：间接相关，可作上下文参考
+- 0-3：主题无关、重复或噪声内容
+
+# 输出要求
+- 必须为列表中**每个** block_id 返回一条结果
+- description：1-2 句话说明该知识块与用户问题的关系
+- 仅返回标准 JSON，不要 markdown 代码块包裹
+
+# Output Format (JSON)
+{{
+  "scores": [
+    {{
+      "block_id": 0,
+      "relevance_score": 9.0,
+      "description": "该知识块与用户问题的关系说明"
+    }}
+  ]
+}}
+"""

@@ -1,0 +1,77 @@
+[
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/main.cpp -o src/main.o",
+    "file": "src/main.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/core/DefaultProcessor.cpp -o src/core/DefaultProcessor.o",
+    "file": "src/core/DefaultProcessor.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/core/Handler.cpp -o src/core/Handler.o",
+    "file": "src/core/Handler.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/core/Helper.cpp -o src/core/Helper.o",
+    "file": "src/core/Helper.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/models.cpp -o src/shop/models.o",
+    "file": "src/shop/models.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/cart.cpp -o src/shop/cart.o",
+    "file": "src/shop/cart.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/PercentageDiscount.cpp -o src/shop/PercentageDiscount.o",
+    "file": "src/shop/PercentageDiscount.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/FixedAmountDiscount.cpp -o src/shop/FixedAmountDiscount.o",
+    "file": "src/shop/FixedAmountDiscount.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/BogoDiscount.cpp -o src/shop/BogoDiscount.o",
+    "file": "src/shop/BogoDiscount.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/InMemoryRepository.cpp -o src/shop/InMemoryRepository.o",
+    "file": "src/shop/InMemoryRepository.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/PostgresRepository.cpp -o src/shop/PostgresRepository.o",
+    "file": "src/shop/PostgresRepository.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/StripeGateway.cpp -o src/shop/StripeGateway.o",
+    "file": "src/shop/StripeGateway.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/PayPalGateway.cpp -o src/shop/PayPalGateway.o",
+    "file": "src/shop/PayPalGateway.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/MockGateway.cpp -o src/shop/MockGateway.o",
+    "file": "src/shop/MockGateway.cpp"
+  },
+  {
+    "directory": "/Users/james/daocloud/code/dac/skill_sdk/tests/fixtures/cpp-project",
+    "command": "clang++ -std=c++17 -I src -c src/shop/OrderService.cpp -o src/shop/OrderService.o",
+    "file": "src/shop/OrderService.cpp"
+  }
+]

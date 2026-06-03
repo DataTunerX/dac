@@ -236,9 +236,13 @@ func (h *DataDescriptorGenerator) generateDataSinkerJobEnvs(dd *dacv1alpha1.Data
 		Name:  "MINERU_MODEL_SOURCE",
 		Value: "local",
 	})
+	mineruDeviceMode := "cpu"
+	if strings.EqualFold(dd.Spec.GPUEnabled, "yes") {
+		mineruDeviceMode = "cuda"
+	}
 	envs = append(envs, corev1.EnvVar{
 		Name:  "MINERU_DEVICE_MODE",
-		Value: "cpu",
+		Value: mineruDeviceMode,
 	})
 	envs = append(envs, corev1.EnvVar{
 		Name:  "regroup_batch_size",
@@ -475,6 +479,19 @@ func (h *DataDescriptorGenerator) GenerateDataDescriptorDeployment(ctx context.C
 				},
 			},
 		},
+	}
+
+	// Add GPU resources for data-sinker-job container if GPUEnabled is set to "yes"
+	if strings.EqualFold(dd.Spec.GPUEnabled, "yes") {
+		for i := range podSpec.Containers {
+			if podSpec.Containers[i].Name == "data-sinker-job" {
+				podSpec.Containers[i].Resources.Limits["nvidia.com/gpu"] = resource.MustParse("1")
+				podSpec.Containers[i].Resources.Requests["nvidia.com/gpu"] = resource.MustParse("1")
+				// Increase memory for CUDA: mineru with GPU needs more memory for model loading and processing
+				podSpec.Containers[i].Resources.Limits[corev1.ResourceMemory] = resource.MustParse("16Gi")
+				podSpec.Containers[i].Resources.Requests[corev1.ResourceMemory] = resource.MustParse("8Gi")
+			}
+		}
 	}
 
 	deployment := &appsv1.Deployment{

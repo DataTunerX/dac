@@ -70,11 +70,12 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
             agent_card.skills = agent_skills
         else:
             agent_card.skills = []
-        
-        logger.info(f"agent_card is: {agent_card}")
 
         data_source_type = os.getenv('DataSourceType',"SemanticGroup")
         logger.info(f"DataSourceType is: {data_source_type}")
+
+
+        logger.info(f"agent_card is: {agent_card}")
         logger.info(
             "[VersionMarker][ExpertServer] build_marker=%s, app_version=%s, image_tag=%s, git_sha=%s, "
             "agent_registry_url=%s, agent_registry=%s, leaf_agent_registry=%s",

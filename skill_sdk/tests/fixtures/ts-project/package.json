@@ -1,0 +1,14 @@
+{
+  "name": "ts-project",
+  "version": "1.0.0",
+  "description": "Fixture TypeScript Project for LSP testing",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^5.4.0"
+  }
+}

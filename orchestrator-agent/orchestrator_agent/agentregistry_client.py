@@ -1,5 +1,6 @@
 import json
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -150,16 +151,25 @@ class AgentRegistryClient:
             result=result_items
         )
 
-    async def alist_all_agents(self) -> List[Dict[str, Any]]:
+    async def alist_all_agents(
+        self,
+        collection: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         List ALL registered agents from the registry service.
 
         Unlike asearch() which uses vector search, this retrieves every agent
         in the registry without filtering.
 
+        Args:
+            collection: When set, passed as ``?collection=`` query parameter
+                (registry API parity with RoutingAgent list calls).
+
         Returns:
             List of agent data dicts (agent_cards from response)
         """
         endpoint = "/agents"
+        if collection:
+            endpoint = f"/agents?collection={quote(collection, safe='')}"
         response = await self._amake_request("GET", endpoint)
         return response.get("agent_cards", [])

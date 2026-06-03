@@ -26,6 +26,7 @@ setup(
         "langchain-openai>=1.0.0",
         "openai>=1.104.2",
         "pymupdf>=1.24.0",
+        "python-lsp-jsonrpc==1.1.2",
     ],
     python_requires=">=3.12",  # 降低Python版本要求以增加兼容性
     author="james",

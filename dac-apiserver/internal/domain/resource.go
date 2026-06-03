@@ -45,12 +45,12 @@ type ListOptions struct {
 
 // CreateAgentContainerRequest represents a request to create an agent container
 type CreateAgentContainerRequest struct {
-	Namespace           string
-	Name                string
-	Labels              map[string]string
-	DACType             string
-	DataPolicy          entity.DataPolicy
-	AgentCard           entity.AgentCard
+	Namespace                 string
+	Name                      string
+	Labels                    map[string]string
+	DACType                   string
+	DataPolicy                entity.DataPolicy
+	AgentCard                 entity.AgentCard
 	Model                     entity.ModelSpec
 	ExpertAgentMaxSteps       string
 	OrchestratorAgentMaxLoops string
@@ -73,6 +73,7 @@ type CreateDataDescriptorRequest struct {
 	Name           string
 	Labels         map[string]string
 	DescriptorType string
+	GPUEnabled     string
 	Sources        []entity.DataSource
 }
 
@@ -80,5 +81,6 @@ type CreateDataDescriptorRequest struct {
 type UpdateDataDescriptorRequest struct {
 	Labels         map[string]string
 	DescriptorType *string
+	GPUEnabled     *string
 	Sources        []entity.DataSource
 }

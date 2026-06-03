@@ -340,6 +340,7 @@ export default function InfraDiscoveryDetailPage() {
   const handleCreate = async (data: DataSourceFormValues & { enableCodeRepo?: boolean }) => {
     const namespace = String(data.namespace || "default").trim() || "default"
     const t = String(data.type || "").trim()
+    const gpuEnabled = data.gpuEnabled === "yes" ? "yes" : "no"
     const isStructuredDB = t === "mysql" || t === "postgres"
 
     const promptsName = String(data.promptsConfigMapName || "").trim()
@@ -370,6 +371,7 @@ export default function InfraDiscoveryDetailPage() {
         name,
         namespace,
         descriptorType,
+        gpuEnabled,
         sources: [
           {
             name: name + "-source",
@@ -460,6 +462,7 @@ export default function InfraDiscoveryDetailPage() {
       name,
       namespace,
       descriptorType,
+      gpuEnabled,
       sources,
     }
 

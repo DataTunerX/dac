@@ -4,6 +4,7 @@ p, user, /api/v1/chat/conversations, GET
 p, user, /api/v1/chat/conversations/*, GET
 p, user, /api/v1/agents, GET
 p, user, /api/v1/descriptors, GET
+p, user, /api/v1/environment/gpu, GET
 p, user, /api/v1/namespaces, GET
 p, user, /api/v1/namespaces/*/agents, GET
 p, user, /api/v1/namespaces/*/agents/*, GET
@@ -11,6 +12,12 @@ p, user, /api/v1/namespaces/*/descriptors, GET
 p, user, /api/v1/namespaces/*/descriptors/*, GET
 p, user, /api/v1/namespaces/*/configmaps, GET
 p, user, /api/v1/namespaces/*/configmaps/*, GET
+p, user, /api/v1/system/configurations, GET
+p, user, /api/v1/system/configurations/*, GET
+p, user, /api/v1/system/configurations/*/versions, GET
+p, user, /api/v1/system/configurations/*/versions/*, GET
+p, user, /api/v1/observability/agent-registries, GET
+p, user, /api/v1/observability/agent-registries/*/agents, GET
 p, user, /api/v1/semantic-groups, GET
 p, user, /api/v1/semantic-groups/*, GET
 p, user, /api/v1/discovery/scans, GET

@@ -357,6 +357,17 @@ class DocAgent(BaseAgent):
         # agent_name 历史为 ExpertAgent；进度里的 id 用部署/请求显式值，否则回退 DocAgent
         self.agent_id = agent_id or (metadata or {}).get("agent_id") or "DocAgent"
 
+    def _langfuse_trace_context(self):
+        from .tools.knowledge_llm_score import LangfuseTraceContext
+
+        md = self.metadata or {}
+        return LangfuseTraceContext(
+            user_id=md.get("user_id", ""),
+            run_id=md.get("run_id", ""),
+            trace_id=md.get("trace_id", ""),
+            agent_id=self.agent_id,
+        )
+
     @staticmethod
     def _step_query_preview(text: str, limit: int = 420) -> str:
         """Single-line preview of the step query for DAC_PROGRESS."""
@@ -364,6 +375,20 @@ class DocAgent(BaseAgent):
         if len(raw) <= limit:
             return raw
         return raw[: limit - 3] + "..."
+
+    @staticmethod
+    def _text_head_tail_preview(
+        text: str,
+        *,
+        head: int = 1000,
+        tail: int = 1000,
+    ) -> str:
+        """Log preview: keep head and tail; collapse middle with '...' when too long."""
+        if not text:
+            return "None"
+        if len(text) <= head + tail + 5:
+            return text
+        return f"{text[:head]}\n...\n{text[-tail:]}"
 
     @staticmethod
     def build_progress_frame(
@@ -577,7 +602,13 @@ class DocAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": self.query}
+                input={
+                    "query": self.query,
+                    "agent_id": self.agent_id,
+                    "run_id": run_id,
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                },
             )
 
             answer = await chain.ainvoke(
@@ -655,7 +686,13 @@ class DocAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": self.query}
+                input={
+                    "query": self.query,
+                    "agent_id": self.agent_id,
+                    "run_id": run_id,
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                },
             )
 
             answer = await chain.ainvoke(
@@ -725,7 +762,13 @@ class DocAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": query}
+                input={
+                    "query": query,
+                    "agent_id": self.agent_id,
+                    "run_id": run_id,
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                },
             )
 
             llm_answer = await chain.ainvoke(
@@ -831,7 +874,13 @@ class DocAgent(BaseAgent):
             span.update_trace(
                 user_id=user_id,
                 session_id=run_id,
-                input={"query": self.query}
+                input={
+                    "query": self.query,
+                    "agent_id": self.agent_id,
+                    "run_id": run_id,
+                    "trace_id": trace_id,
+                    "user_id": user_id,
+                },
             )
 
             answer = await chain.ainvoke(
@@ -904,10 +953,26 @@ class DocAgent(BaseAgent):
                 unique_ids = [kid for kid in all_selected_ids if not (kid in seen or seen.add(kid))]
                 logger.info(f"get_knowledge: Total unique selected knowledge IDs: {len(unique_ids)}")
 
-                # 第二阶段：根据 ID 获取完整知识内容，用换行符拼接
+                # 第二阶段：根据 ID 获取完整知识内容；超长时 LLM 打分并按预算选取
                 if unique_ids:
-                    knowledge_str = knowledge_blocks.get_text_by_ids(unique_ids)
-                    logger.info(f"get_knowledge: Retrieved full knowledge content, length: {len(knowledge_str)}")
+                    knowledge_str, score_meta = await knowledge_blocks.get_text_by_ids(
+                        unique_ids,
+                        query=self.query,
+                        llm=self.llm,
+                        parse_output=self.format_llm_output,
+                        trace=self._langfuse_trace_context(),
+                    )
+                    logger.info(
+                        "get_knowledge: Retrieved full knowledge content, length=%d, "
+                        "score_select_applied=%s",
+                        len(knowledge_str),
+                        score_meta.get("score_select_applied"),
+                    )
+                    if score_meta.get("score_select_applied"):
+                        logger.info(
+                            "get_knowledge: score_select_report=%s",
+                            score_meta.get("score_select_report"),
+                        )
 
         except Exception as e:
             logger.error(f'An error occurred during two-stage knowledge retrieval: {e}')
@@ -926,8 +991,9 @@ class DocAgent(BaseAgent):
             else:
                 knowledge_str = extra_context
 
-        logger.debug(f"get knowledge: {knowledge_str}")
-        logger.info(f"get knowledge: {knowledge_str[:100] if knowledge_str else 'None'}")
+        preview = self._text_head_tail_preview(knowledge_str)
+        logger.debug(f"get knowledge (full, len={len(knowledge_str)}): {knowledge_str}")
+        logger.info("get knowledge: len=%d preview:\n%s", len(knowledge_str), preview)
         return knowledge_str
 
     def parse_descriptor_types_json(self, descriptor_types_json_string: str) -> List[Dict[str, Any]]:

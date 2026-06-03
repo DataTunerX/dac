@@ -23,7 +23,7 @@ from .api.base import SignatureCreateRequest, SignatureUpdateRequest, SignatureR
 from .api.base import SemanticDomainCreateRequest, SemanticDomainUpdateRequest, SemanticDomainResponse, SemanticDomainSearchByDDRequest, SemanticDomainListResponse
 from .api.base import CodebaseIndexer, CodebaseIndexerCreateRequest, CodebaseIndexerUpdateRequest, CodebaseIndexerResponse, CodebaseIndexerSearchByDDRequest, CodebaseIndexerSearchByFilepathRequest, CodebaseIndexerListResponse
 from .api.base import UnstructuredFileUpsertRequest, UnstructuredFileBatchUpsertRequest, UnstructuredFileDeleteByObjectRequest, UnstructuredFileDeleteByDdRequest, UnstructuredFileResponse, UnstructuredFileListResponse
-from .api.base import SemanticGroupCreateRequest, SemanticGroupUpdateRequest, SemanticGroupResponse, SemanticGroupListResponse, DDGroupRelationCreateRequest, DDGroupRelationUpdateRequest, DDGroupRelationListResponse, SemanticGroupWithMembersResponse
+from .api.base import SemanticGroupCreateRequest, SemanticGroupUpdateRequest, SemanticGroupResponse, SemanticGroupListResponse, DDGroupRelationCreateRequest, DDGroupRelationUpdateRequest, DDGroupRelationListResponse, SemanticGroupWithMembersResponse, TableOwnershipIndexResponse
 from .api.base import CreateHistoryRequest, CreateHistoryResponse, SearchHistoryRequest, SearchHistoryResponse, HistoryRecordResponse, HistoryRecord, HistoryMessage,SearchHistoryRequestByUserAndRun
 from .api.base import KnowledgeGraphAddRequest, KnowledgeGraphSearchRequest, KnowledgeGraphDeleteRequest, KnowledgeGraphGetGraphRequest, KnowledgeGraphResponse
 from .api.base import Signature, SemanticDomain, SemanticGroup, DDGroupRelation
@@ -159,7 +159,7 @@ async def proxy_request(
         actual_path = request.url.path
         
         # 跳过健康检查等不需要验证的端点
-        skip_validation_paths = ["/", "/info"]
+        skip_validation_paths = ["/", "/info", "/table-ownership-index"]
         if actual_path not in skip_validation_paths:
             # 从请求的 Header 中提取 Data-Descriptor 并验证
             header_value = await extract_data_descriptor_from_request(request)
@@ -695,6 +695,11 @@ async def get_all_semantic_groups(http_request: Request, page: Optional[int] = N
     """代理请求到后端服务，保留原有的 request 类型用于验证和文档"""
     # FastAPI 会自动注入 Request 对象
     return await proxy_request("GET", "/semantic_groups", http_request)
+
+@app.get("/table-ownership-index", response_model=TableOwnershipIndexResponse)
+async def get_table_ownership_index(http_request: Request):
+    """table -> SG agent name reverse index, proxied to backend."""
+    return await proxy_request("GET", "/table-ownership-index", http_request)
 
 @app.put("/semantic_groups/{group_id}", response_model=SemanticGroupResponse)
 async def update_semantic_group(group_id: str, _request: SemanticGroupUpdateRequest, http_request: Request):

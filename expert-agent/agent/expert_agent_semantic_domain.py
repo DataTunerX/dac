@@ -668,6 +668,17 @@ class ExpertAgent(BaseAgent):
         self._last_sql_execution_error: bool = False
         self._last_stuck_reason: str = ""
         self._selected_table_whitelist: List[str] = []
+        # Snapshot of the full set of tables enumerated from the DD's DB on the
+        # last ``invoke_structured_with_table_selector`` call.  Used by the
+        # SQL-stage self-heal path to distinguish "the table selector LLM
+        # dropped a same-DB table" (recoverable: expand whitelist & retry)
+        # from "the DD's DB genuinely doesn't have that table" (real
+        # sovereignty gap → keep P3 unfulfilled_needs flow).
+        self._cached_available_tables: List[str] = []
+        # Selector-stage drops (tables the LLM chose but were not in the DB
+        # whitelist) carried forward to enrich structured_control on the SQL
+        # execution-error branch — see P3 unfulfilled_needs contract.
+        self._selector_invalid_tables_with_intent: List[Dict[str, Any]] = []
 
     @staticmethod
     def _extract_db_error_code(error_text: str) -> str:
@@ -901,6 +912,7 @@ class ExpertAgent(BaseAgent):
         error_stage: str = "",
         retryable: bool = True,
         sql_failure_kind: str = "",
+        unfulfilled_needs: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         d: Dict[str, Any] = {
             "reason_code": str(reason_code or ""),
@@ -912,6 +924,29 @@ class ExpertAgent(BaseAgent):
         }
         if str(sql_failure_kind or "").strip():
             d["sql_failure_kind"] = str(sql_failure_kind).strip()
+        if unfulfilled_needs:
+            # Structured "what this DD could not reach" payload so upstream
+            # planners (SG Orchestrator / mid-exec detector) can do precise
+            # cross-SG delegation without LLM guesswork.  Schema:
+            #   [{"missing_table": "order_shipping",
+            #     "reason": "outside_whitelist" | "selector_filtered",
+            #     "intent_fragment": "判断是否超期未发货",
+            #     "stage": "sql_validation" | "table_selection"}]
+            cleaned: List[Dict[str, Any]] = []
+            for item in unfulfilled_needs:
+                if not isinstance(item, dict):
+                    continue
+                missing = str(item.get("missing_table") or "").strip()
+                if not missing:
+                    continue
+                cleaned.append({
+                    "missing_table": missing,
+                    "reason": str(item.get("reason") or "").strip(),
+                    "intent_fragment": str(item.get("intent_fragment") or "").strip(),
+                    "stage": str(item.get("stage") or "").strip(),
+                })
+            if cleaned:
+                d["unfulfilled_needs"] = cleaned
         return d
 
     @staticmethod
@@ -928,6 +963,49 @@ class ExpertAgent(BaseAgent):
             if isinstance(data, dict):
                 return data
         return {}
+
+    def _collect_recent_unfulfilled_needs(self) -> List[Dict[str, Any]]:
+        """Aggregate unique ``unfulfilled_needs`` items across recent steps.
+
+        Used when emitting the ``repeated_failure_non_retryable`` marker so the
+        upstream SG Orchestrator can route the gap precisely — every retried
+        step that hit the SQL_WHITELIST validator contributed an
+        ``unfulfilled_needs`` payload via :meth:`_build_structured_control`.
+        Also folds in the selector-stage drops captured by
+        :meth:`invoke_structured_with_table_selector`.
+        """
+        seen: set = set()
+        aggregated: List[Dict[str, Any]] = []
+
+        def _add(item: Dict[str, Any]) -> None:
+            missing = str(item.get("missing_table") or "").strip()
+            if not missing:
+                return
+            key = missing.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            aggregated.append({
+                "missing_table": missing,
+                "reason": str(item.get("reason") or "").strip(),
+                "intent_fragment": str(item.get("intent_fragment") or "").strip(),
+                "stage": str(item.get("stage") or "").strip(),
+            })
+
+        for step in reversed(self.step_status_list or []):
+            answer = str(getattr(step, "answer", "") or "")
+            sc = self._extract_structured_control_from_text(answer)
+            if not isinstance(sc, dict):
+                continue
+            for need in sc.get("unfulfilled_needs") or []:
+                if isinstance(need, dict):
+                    _add(need)
+
+        for need in getattr(self, "_selector_invalid_tables_with_intent", []) or []:
+            if isinstance(need, dict):
+                _add(need)
+
+        return aggregated
 
     @staticmethod
     def _extract_structured_control_from_text(text: str) -> Dict[str, Any]:
@@ -1514,8 +1592,27 @@ class ExpertAgent(BaseAgent):
         source_metadata = self.analyze_descriptor_source_metadata()
         db_connect_config = source_metadata[ddname]
         available_tables = await self._get_available_table_names(db_connect_config, db_type)
+        # Cache for SQL-stage self-heal: if the SQL generator later picks a
+        # table the selector skipped but is still in the DD's own DB, the
+        # validator can auto-expand the selected whitelist instead of
+        # bouncing through a is_stuck / non-retryable cycle.
+        self._cached_available_tables = list(available_tables or [])
         valid_tables, invalid_tables = self._filter_tables_by_whitelist(tables, available_tables)
         self._selected_table_whitelist = valid_tables
+        # Stash selector-stage drops as structured "unfulfilled_needs" candidates
+        # so the SQL-failure path can include them in structured_control even
+        # when the LLM does not re-emit those table names in the SQL itself.
+        intent_hint = (self.original_query or self.query or "").strip()
+        self._selector_invalid_tables_with_intent = [
+            {
+                "missing_table": str(t or "").strip(),
+                "reason": "selector_filtered",
+                "intent_fragment": intent_hint,
+                "stage": "table_selection",
+            }
+            for t in (invalid_tables or [])
+            if str(t or "").strip()
+        ]
 
         if invalid_tables:
             logger.warning(
@@ -2188,10 +2285,13 @@ class ExpertAgent(BaseAgent):
         data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
-            data_dict = {
-                "query": "System error: Unable to process model response",
-                "conclusion": "error"
-            }
+            data_dict = {}
+
+        # Ensure required fields exist with defaults (json_repair may return incomplete dicts).
+        if 'requery' not in data_dict and 'query' in data_dict:
+            data_dict['requery'] = data_dict.pop('query')
+        data_dict.setdefault('requery', None)
+        data_dict.setdefault('conclusion', None)
 
         llm_result = RequeryResult(**data_dict)
 
@@ -2262,10 +2362,13 @@ class ExpertAgent(BaseAgent):
         data_dict = self.format_llm_output(answer)
 
         if data_dict is None:
-            data_dict = {
-                "query": "System error: Unable to process model response",
-                "conclusion": "error"
-            }
+            data_dict = {}
+
+        # Ensure required fields exist with defaults (json_repair may return incomplete dicts).
+        if 'requery' not in data_dict and 'query' in data_dict:
+            data_dict['requery'] = data_dict.pop('query')
+        data_dict.setdefault('requery', None)
+        data_dict.setdefault('conclusion', None)
 
         llm_result = RequeryResult(**data_dict)
 
@@ -2689,12 +2792,40 @@ class ExpertAgent(BaseAgent):
             logger.info(f"get_knowledge: 发现 extra_context ({len(extra_context)} 字)，合并到 knowledge")
             if knowledge_str:
                 knowledge_str = (
-                    f"{knowledge_str}\n\n"
-                    f"--- 以下是来自其他智能体的额外上下文，可能是相关的业务逻辑的代码，也有可能是相关的文档 ---\n\n"
+                    f"========================================\n"
+                    f"【参考上下文 — 仅供理解数据结构与业务逻辑，不作为事实数据】\n"
+                    f"========================================\n"
+                    f"重要提示：以下内容来自上游其他智能体的分析结果，可能是相关的业务逻辑的代码、"
+                    f"接口文档或设计文档等参考材料。其中的示例数据（如示例用户名、示例邮箱、"
+                    f"示例订单号等）仅用于说明接口格式和字段含义，不代表数据库中真实存在的数据。\n"
+                    f"生成 SQL 时，WHERE 条件中的具体值必须严格来自用户问题原文或维度数据，"
+                    f"严禁将以下参考上下文中的示例数据作为查询条件。\n"
+                    f"========================================\n\n"
                     f"{extra_context}"
                 )
             else:
                 knowledge_str = extra_context
+
+        # 合并 code_contexts（代码业务逻辑，作为理解数据含义的重要参考）
+        code_contexts = (self.metadata or {}).get('code_contexts', [])
+        if code_contexts and isinstance(code_contexts, list):
+            code_text = "\n\n".join(code_contexts)
+            logger.info(f"get_knowledge: 发现 code_contexts (共{len(code_contexts)}个, {len(code_text)}字)，合并到 knowledge")
+            if knowledge_str:
+                knowledge_str = f"{knowledge_str}\n\n{code_text}"
+            else:
+                knowledge_str = code_text
+
+        # doc_contexts（文档内容，含示例数据，可能导致幻觉，不合并到 knowledge）
+        doc_contexts = (self.metadata or {}).get('doc_contexts', [])
+        if doc_contexts and isinstance(doc_contexts, list):
+            doc_total = len(doc_contexts)
+            doc_chars = sum(len(str(d)) for d in doc_contexts)
+            logger.info(
+                "get_knowledge: 忽略 doc_contexts (共%d个, %d字)，"
+                "文档内容含示例数据可能导致 SQL 生成幻觉，已跳过",
+                doc_total, doc_chars,
+            )
 
         logger.debug(f"get knowledge: {knowledge_str}")
         logger.info(f"get knowledge: {knowledge_str[:100] if knowledge_str else 'None'}")
@@ -2859,16 +2990,77 @@ class ExpertAgent(BaseAgent):
                             db_connect_config = source_metadata[ddname]
                             sql_result: Union[List[Dict[str, Any]], Dict[str, Any]] = []
                             # Execute the SQL statement generated by the large model.
+                            unfulfilled_needs_for_error: List[Dict[str, Any]] = []
                             try:
                                 sql_tables_valid, unknown_tables = self._validate_sql_table_whitelist(
                                     llm_result.answer,
                                     self._selected_table_whitelist,
                                 )
                                 if not sql_tables_valid:
-                                    raise ValueError(
-                                        "SQL references table(s) outside the selected whitelist: "
-                                        f"{', '.join(unknown_tables)}. allowed_tables={self._selected_table_whitelist}"
-                                    )
+                                    intent_hint = (self.original_query or self.query or "").strip()
+                                    normalized_available = {
+                                        self._normalize_db_object_name(t)
+                                        for t in (self._cached_available_tables or [])
+                                        if str(t or "").strip()
+                                    }
+                                    recoverable = [
+                                        t for t in (unknown_tables or [])
+                                        if t in normalized_available
+                                    ]
+                                    truly_missing = [
+                                        t for t in (unknown_tables or [])
+                                        if t not in normalized_available
+                                    ]
+                                    auto_expand_enabled = os.getenv(
+                                        "ENABLE_SELECTOR_AUTO_EXPAND", "true"
+                                    ).strip().lower() not in ("false", "0", "no")
+                                    if auto_expand_enabled and recoverable and not truly_missing:
+                                        current_normalized = {
+                                            self._normalize_db_object_name(t)
+                                            for t in (self._selected_table_whitelist or [])
+                                        }
+                                        expanded = list(self._selected_table_whitelist or [])
+                                        added: List[str] = []
+                                        for t in recoverable:
+                                            if t in current_normalized:
+                                                continue
+                                            expanded.append(t)
+                                            current_normalized.add(t)
+                                            added.append(t)
+                                        logger.warning(
+                                            "[SelectorAutoExpand] selector dropped same-DB tables that the SQL generator needs — "
+                                            "expanding _selected_table_whitelist | added=%s before=%s after=%s sql_preview=%s",
+                                            added,
+                                            self._selected_table_whitelist,
+                                            expanded,
+                                            str(llm_result.answer or "")[:200],
+                                        )
+                                        self._selected_table_whitelist = expanded
+                                        sql_tables_valid, unknown_tables = self._validate_sql_table_whitelist(
+                                            llm_result.answer,
+                                            self._selected_table_whitelist,
+                                        )
+                                    if not sql_tables_valid:
+                                        unfulfilled_needs_for_error = []
+                                        for t in (unknown_tables or []):
+                                            tt = str(t or "").strip()
+                                            if not tt:
+                                                continue
+                                            in_db = tt in normalized_available
+                                            unfulfilled_needs_for_error.append({
+                                                "missing_table": tt,
+                                                "reason": (
+                                                    "selector_filtered_recoverable"
+                                                    if in_db
+                                                    else "outside_whitelist"
+                                                ),
+                                                "intent_fragment": intent_hint,
+                                                "stage": "sql_validation",
+                                            })
+                                        raise ValueError(
+                                            "SQL references table(s) outside the selected whitelist: "
+                                            f"{', '.join(unknown_tables)}. allowed_tables={self._selected_table_whitelist}"
+                                        )
                                 sql_result = await self.execute_db_query(db_connect_config, db_type, llm_result.answer)
                                 logger.info(f"sql execute sql: {llm_result.answer}")
                             except Exception as e:
@@ -2884,6 +3076,16 @@ class ExpertAgent(BaseAgent):
                                     error_text=error_message,
                                     db_type=db_type,
                                 )
+                                selector_unfulfilled = getattr(
+                                    self, "_selector_invalid_tables_with_intent", []
+                                )
+                                if selector_unfulfilled:
+                                    existing_tables = {
+                                        n["missing_table"] for n in unfulfilled_needs_for_error
+                                    }
+                                    for need in selector_unfulfilled:
+                                        if need.get("missing_table") not in existing_tables:
+                                            unfulfilled_needs_for_error.append(need)
                                 structured_control = self._build_structured_control(
                                     reason_code="execution_error",
                                     non_retryable=False,
@@ -2892,6 +3094,7 @@ class ExpertAgent(BaseAgent):
                                     error_stage="execute_db_query",
                                     retryable=True,
                                     sql_failure_kind=sql_failure_kind,
+                                    unfulfilled_needs=unfulfilled_needs_for_error or None,
                                 )
                                 self._last_sql_execution_error = True
                                 llm_result.reason_code = "execution_error"
@@ -3514,11 +3717,17 @@ class ExpertAgent(BaseAgent):
                     stop_notice = (
                         f"{NON_RETRYABLE_REPEAT_MARKER} | repeated_failure_non_retryable | {stuck_reason}"
                     )
+                    # Carry forward the last-seen unfulfilled_needs (P3): when
+                    # repeated SQL_WHITELIST failures are what triggered
+                    # is_stuck, this is exactly the signal upstream needs to
+                    # delegate to a different SG that owns the missing tables.
+                    repeat_unfulfilled = self._collect_recent_unfulfilled_needs()
                     structured_control = json.dumps(
                         self._build_structured_control(
                             reason_code="repeated_failure_non_retryable",
                             non_retryable=True,
                             retryable=False,
+                            unfulfilled_needs=repeat_unfulfilled or None,
                         ),
                         ensure_ascii=False,
                     )

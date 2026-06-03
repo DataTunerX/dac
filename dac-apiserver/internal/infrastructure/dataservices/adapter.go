@@ -327,20 +327,6 @@ func (a *DataServicesAdapter) ListSemanticGroupRoots(ctx context.Context) ([]dom
 	return out, total, nil
 }
 
-// CreateDDGroupRelation implements domain.DataServicesClient.
-func (a *DataServicesAdapter) CreateDDGroupRelation(ctx context.Context, req map[string]any) (*domain.DDGroupRelation, error) {
-	r, err := a.client.CreateDDGroupRelation(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return toDomainDDGroupRelation(r), nil
-}
-
-// BatchCreateDDGroupRelations implements domain.DataServicesClient.
-func (a *DataServicesAdapter) BatchCreateDDGroupRelations(ctx context.Context, req []map[string]any) (int, error) {
-	return a.client.BatchCreateDDGroupRelations(ctx, req)
-}
-
 // ListDDGroupRelationsByGroup implements domain.DataServicesClient.
 func (a *DataServicesAdapter) ListDDGroupRelationsByGroup(ctx context.Context, groupID string) ([]domain.DDGroupRelation, int, error) {
 	list, total, err := a.client.ListDDGroupRelationsByGroup(ctx, groupID)
@@ -365,28 +351,6 @@ func (a *DataServicesAdapter) ListDDGroupRelationsBySD(ctx context.Context, sdID
 		out[i] = *toDomainDDGroupRelation(&list[i])
 	}
 	return out, total, nil
-}
-
-// DeleteDDGroupRelationByID implements domain.DataServicesClient.
-func (a *DataServicesAdapter) DeleteDDGroupRelationByID(ctx context.Context, id int64) error {
-	err := a.client.DeleteDDGroupRelationByID(ctx, id)
-	if err != nil {
-		if he, ok := err.(*HTTPError); ok && he.StatusCode == 404 {
-			return domain.NewNotFoundError("dd group relation", fmt.Sprintf("%d", id))
-		}
-		return err
-	}
-	return nil
-}
-
-// DeleteDDGroupRelationsByGroup implements domain.DataServicesClient.
-func (a *DataServicesAdapter) DeleteDDGroupRelationsByGroup(ctx context.Context, groupID string) error {
-	return a.client.DeleteDDGroupRelationsByGroup(ctx, groupID)
-}
-
-// DeleteDDGroupRelationsBySD implements domain.DataServicesClient.
-func (a *DataServicesAdapter) DeleteDDGroupRelationsBySD(ctx context.Context, sdID string) error {
-	return a.client.DeleteDDGroupRelationsBySD(ctx, sdID)
 }
 
 // GetSemanticDomain implements domain.DataServicesClient.
@@ -504,4 +468,34 @@ func (a *DataServicesAdapter) KnowledgeGraphGetGraphBySource(ctx context.Context
 // KnowledgeGraphDeleteWithSource implements domain.DataServicesClient.
 func (a *DataServicesAdapter) KnowledgeGraphDeleteWithSource(ctx context.Context, req map[string]any) (map[string]any, error) {
 	return a.client.KnowledgeGraphDeleteWithSource(ctx, req)
+}
+
+// DeleteVectorDocumentsByMetadataField implements domain.DataServicesClient.
+func (a *DataServicesAdapter) DeleteVectorDocumentsByMetadataField(ctx context.Context, collectionName, key, value string) error {
+	return a.client.DeleteVectorByMetadataField(ctx, collectionName, key, value)
+}
+
+// GetVectorDocumentIDsByMetadataField implements domain.DataServicesClient.
+func (a *DataServicesAdapter) GetVectorDocumentIDsByMetadataField(ctx context.Context, collectionName, key, value string) ([]string, error) {
+	return a.client.GetVectorDocumentIDsByMetadataField(ctx, collectionName, key, value)
+}
+
+// DeleteVectorDocumentsByIDs implements domain.DataServicesClient.
+func (a *DataServicesAdapter) DeleteVectorDocumentsByIDs(ctx context.Context, collectionName string, documentIDs []string) error {
+	return a.client.DeleteVectorDocumentsByIDs(ctx, collectionName, documentIDs)
+}
+
+// AddVectorDocuments implements domain.DataServicesClient.
+func (a *DataServicesAdapter) AddVectorDocuments(ctx context.Context, collectionName string, documents []domain.VectorDocumentInput) error {
+	if len(documents) == 0 {
+		return nil
+	}
+	infraDocs := make([]VectorDocument, len(documents))
+	for i, doc := range documents {
+		infraDocs[i] = VectorDocument{
+			PageContent: doc.PageContent,
+			Metadata:    doc.Metadata,
+		}
+	}
+	return a.client.AddVectorDocuments(ctx, collectionName, infraDocs)
 }

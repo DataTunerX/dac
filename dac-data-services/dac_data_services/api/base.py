@@ -419,6 +419,13 @@ class SemanticGroupWithMembersResponse(BaseModel):
     message: Optional[str] = None
 
 
+class TableOwnershipIndexResponse(BaseModel):
+    status: str
+    data: Optional[Dict[str, List[str]]] = None
+    message: Optional[str] = None
+    count: Optional[int] = None
+
+
 # conversation history
 class HistoryRecord(BaseModel):
     hid: str = Field(..., description="Primary key")

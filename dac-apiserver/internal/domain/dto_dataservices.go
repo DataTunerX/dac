@@ -86,3 +86,9 @@ type KnowledgeDocument struct {
 	Provider    string                 `json:"provider,omitempty"`
 	Children    any                    `json:"children,omitempty"`
 }
+
+// VectorDocumentInput is a document payload for data-services vector add_documents.
+type VectorDocumentInput struct {
+	PageContent string
+	Metadata    map[string]any
+}

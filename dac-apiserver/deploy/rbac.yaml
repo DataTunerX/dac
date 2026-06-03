@@ -20,6 +20,14 @@ rules:
       - list
       - watch
 
+  # Node 资源权限（用于判断集群是否可调度 GPU 工作负载）
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs:
+      - get
+      - list
+      - watch
+
   # ConfigMap 资源权限（用于 LLM / Prompts 配置管理）
   - apiGroups: [""]
     resources: ["configmaps"]

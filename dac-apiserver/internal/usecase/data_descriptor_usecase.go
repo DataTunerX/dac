@@ -41,6 +41,7 @@ func (u *dataDescriptorUsecase) Create(ctx context.Context, req *domain.CreateDa
 		Namespace:      req.Namespace,
 		Labels:         req.Labels,
 		DescriptorType: req.DescriptorType,
+		GPUEnabled:     req.GPUEnabled,
 		Sources:        req.Sources,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
@@ -73,6 +74,9 @@ func (u *dataDescriptorUsecase) Update(ctx context.Context, namespace, name stri
 	}
 	if req.DescriptorType != nil && *req.DescriptorType != "" {
 		existing.DescriptorType = *req.DescriptorType
+	}
+	if req.GPUEnabled != nil {
+		existing.GPUEnabled = *req.GPUEnabled
 	}
 	if req.Sources != nil {
 		existing.Sources = req.Sources

@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -19,6 +23,10 @@ type Client struct {
 	dynamicClient dynamic.Interface
 	// REST 配置
 	config *rest.Config
+
+	gpuCacheMu      sync.Mutex
+	gpuCache        *GPUAvailability
+	gpuCacheExpires time.Time
 }
 
 // GroupVersionResource definitions for DAC CRDs
@@ -35,6 +43,16 @@ var (
 		Resource: "datadescriptors",
 	}
 )
+
+const NVIDIAResourceKey corev1.ResourceName = "nvidia.com/gpu"
+
+// GPUAvailability describes whether the current Kubernetes cluster can schedule NVIDIA GPU workloads.
+type GPUAvailability struct {
+	Available   bool
+	NodeCount   int
+	TotalGPUs   int64
+	ResourceKey string
+}
 
 // NewClient createnewof Kubernetes client，使用 in-cluster 配置
 func NewClient() (*Client, error) {
@@ -96,4 +114,48 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("kubernetes health check failed: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) GPUAvailability(ctx context.Context) (*GPUAvailability, error) {
+	c.gpuCacheMu.Lock()
+	if c.gpuCache != nil && time.Now().Before(c.gpuCacheExpires) {
+		cached := *c.gpuCache
+		c.gpuCacheMu.Unlock()
+		return &cached, nil
+	}
+	c.gpuCacheMu.Unlock()
+
+	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list kubernetes nodes: %w", err)
+	}
+
+	var total int64
+	gpuNodes := 0
+	for i := range nodes.Items {
+		qty, ok := nodes.Items[i].Status.Allocatable[NVIDIAResourceKey]
+		if !ok {
+			continue
+		}
+		count := qty.Value()
+		if count <= 0 {
+			continue
+		}
+		gpuNodes++
+		total += count
+	}
+
+	availability := &GPUAvailability{
+		Available:   total > 0,
+		NodeCount:   gpuNodes,
+		TotalGPUs:   total,
+		ResourceKey: string(NVIDIAResourceKey),
+	}
+
+	c.gpuCacheMu.Lock()
+	c.gpuCache = availability
+	c.gpuCacheExpires = time.Now().Add(30 * time.Second)
+	c.gpuCacheMu.Unlock()
+
+	return availability, nil
 }

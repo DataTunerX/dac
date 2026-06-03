@@ -9,6 +9,7 @@ from .base import CodeAnalyzer
 from .code_caller import CodebaseIndexer, convert_to_code_analyzer_format
 from ..readers.code.github_reader import GitHubReader
 from ..readers.code.gitlab_reader import GitLabReader
+from .code_analysis_runtime import CodeAnalysisRuntime
 from model_sdk import ModelManager
 import logging
 
@@ -51,9 +52,11 @@ def extract_code(reader, descriptor, repo_type) -> List[DocumentModel]:
     
     local_repo_dir = reader.query_inner()
     logger.info(f"===========local_repo_dir = {local_repo_dir}")
+
+    runtime = CodeAnalysisRuntime.from_env()
     
     # 只执行一次代码分析：使用 CodebaseIndexer（更详细的分析）
-    codebase_indexer = CodebaseIndexer(llm, max_workers=50, batch_size=50)
+    codebase_indexer = CodebaseIndexer(llm, runtime=runtime)
 
     try:
         codebase_index_result = codebase_indexer.index_codebase(local_repo_dir)
@@ -67,7 +70,7 @@ def extract_code(reader, descriptor, repo_type) -> List[DocumentModel]:
     logger.info(f"Converted {len(analysis_results)} files to CodeAnalyzer format")
 
     # 使用转换后的结果进行 DDD 分析和模块分组
-    code_analyzer = CodeAnalyzer(llm, max_workers=50, batch_size=50)
+    code_analyzer = CodeAnalyzer(llm, runtime=runtime)
     # 直接使用转换后的 analysis_results，跳过第一阶段分析
     code_analyzer.analysis_results = analysis_results
     

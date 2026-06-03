@@ -30,6 +30,7 @@ import signal
 from .orchestrator_agent_semantic_domain import OrchestratorAgentExecutorSemanticDomain
 from .orchestrator_agent_semantic_group import OrchestratorAgentExecutorSemanticGroup
 from .skill_download import download_skills
+from .data_inventory import get_sd_inventory_description
 
 logging.basicConfig(
     level=logging.INFO,
@@ -282,6 +283,59 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
             agent_card.skills = agent_skills
         else:
             agent_card.skills = []
+
+        data_source_type_for_inventory = os.getenv('DataSourceType', "SemanticGroup")
+        if os.getenv("ENABLE_DATA_INVENTORY", "true").strip().lower() not in ("false", "0", "no"):
+            try:
+                data_services_url = os.getenv(
+                    'DataServicesURL',
+                    "http://data-services.dac.svc.cluster.local:8000",
+                )
+                inventory_text = ""
+                if data_source_type_for_inventory == "SemanticGroup":
+                    inventory_text = ""
+                elif data_source_type_for_inventory == "SemanticDomain":
+                    dd_namespace = os.getenv('DD_NAMESPACE', "").strip()
+                    # Extract dd_name from DescriptorTypes JSON (first item)
+                    descriptor_types_str = os.getenv('DescriptorTypes') or ""
+                    dd_name = ""
+                    if descriptor_types_str:
+                        try:
+                            items_raw = descriptor_types_str.split(";")[0].strip()
+                            items = json.loads(items_raw)
+                            if isinstance(items, list) and items:
+                                dd_name = (items[0].get("name") or "").strip()
+                        except Exception:
+                            pass
+                    # Fallback: use Data_Descriptor first item
+                    if not dd_name:
+                        dd_descriptor_str = os.getenv('Data_Descriptor', "")
+                        if dd_descriptor_str:
+                            dd_name = dd_descriptor_str.split(",")[0].strip()
+                    if dd_namespace and dd_name:
+                        # Build Data-Descriptor header for dac-data-services proxy auth
+                        req_headers: Optional[Dict[str, str]] = None
+                        data_descriptor_val = os.getenv('Data_Descriptor', "").split(",")[0].strip()
+                        if data_descriptor_val and dd_namespace:
+                            req_headers = {
+                                "Data-Descriptor": f"{dd_namespace}_{data_descriptor_val}".replace("-", "_"),
+                            }
+                        inventory_text = get_sd_inventory_description(
+                            dd_namespace, dd_name,
+                            data_services_url=data_services_url,
+                            headers=req_headers,
+                        )
+                if inventory_text:
+                    separator = "\n\n" if agent_card.description else ""
+                    agent_card.description = (agent_card.description or "") + separator + inventory_text
+                    logger.info(
+                        "[DataInventory] appended inventory to agent_card.description (length=%d)",
+                        len(inventory_text),
+                    )
+                else:
+                    logger.info("[DataInventory] no inventory derived; description unchanged")
+            except Exception:  # noqa: BLE001
+                logger.exception("[DataInventory] failed to build inventory — continuing")
 
         logger.info(f"agent_card is: {agent_card}")
         logger.info(

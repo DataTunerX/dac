@@ -473,3 +473,82 @@ spec:
       prompts:
         prompts:
           name: ""
+
+
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dianshang-mysql
+  namespace: default
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "mysql-production"
+      metadata:
+        host: "mysql-server.dac"
+        port: "3306"
+        user: "root"
+        password: "123"
+        database: "test1"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "3m"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dianshang-code
+  namespace: default
+spec:
+  descriptorType: "code"
+  sources:
+    - type: gitee
+      name: "dianshang-code"
+      metadata:
+        codeRepoPath: "https://gitee.com/jamesxiong888/test-code.git"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dianshang-file
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  sources:
+    - type: minio
+      name: "dianshang-file"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "dactest"
+      extract:
+        files: ["dianshang.docx"]
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+

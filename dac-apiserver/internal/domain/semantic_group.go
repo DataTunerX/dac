@@ -17,10 +17,3 @@ type UpdateSemanticGroupRequest struct {
 	Version     *string
 }
 
-// CreateDDGroupRelationRequest creates a relation between semantic domain and group.
-type CreateDDGroupRelationRequest struct {
-	SemanticDomainID  string
-	GroupID           string
-	AssociationReason string
-}
-
