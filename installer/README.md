@@ -2,7 +2,7 @@
 
 [DAC](https://github.com/James-Dao/dac) 本 Chart 用于在 Kubernetes 集群中一键部署全部平台组件。
 
-> Chart 版本 `0.1.0` · App 版本 `0.9.0`
+> Chart 版本 `0.1.0` · App 版本 `0.11.0`
 
 ## 前置条件
 
@@ -273,8 +273,8 @@ apiserver:
   # -- Enable apiserver deployment
   enabled: true
   image:
-    repository: apiserver
-    tag: "v0.9.0"
+    repository: dac-apiserver
+    tag: "v0.11.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -333,8 +333,9 @@ frontend:
   # -- Enable frontend deployment
   enabled: true
   image:
+    registry: release.daocloud.io/dac
     repository: frontend
-    tag: "v0.9.0"
+    tag: "v0.11.0"
   # -- Number of replicas
   replicas: 1
   service:
@@ -377,7 +378,7 @@ dataServices:
   enabled: true
   image:
     repository: data-services
-    tag: "v0.9.0-amd64"
+    tag: "v0.11.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -434,7 +435,7 @@ executionEngine:
   enabled: true
   image:
     repository: execution-engine
-    tag: "v0.9.0-amd64"
+    tag: "v0.11.0-amd64"
   replicas: 1
   resources:
     requests:
@@ -450,19 +451,19 @@ executionEngine:
   #    dac-data-services, data-sinkers-job and data-sinkers-status containers.
   agentImages:
     orchestratorAgent:
-      tag: "v0.9.0-amd64"
+      tag: "v0.11.0-amd64"
     expertAgent:
-      tag: "v0.9.0-amd64"
+      tag: "v0.11.0-amd64"
     codeAgent:
-      tag: "v0.9.0-amd64"
+      tag: "v0.11.0-amd64"
     docAgent:
-      tag: "v0.9.0-amd64"
+      tag: "v0.11.0-amd64"
     dacDataServices:
-      tag: "v0.9.0-amd64"
+      tag: "v0.11.0-amd64"
     dataSinkerJob:
-      tag: "v0.9.0-amd64"
+      tag: "v0.11.0-amd64"
     dataSinkerStatus:
-      tag: "v0.9.0-amd64"
+      tag: "v0.11.0-amd64"
 
   # -- dac-configuration ConfigMap values (read by DAC controller)
   dacConfig:
@@ -497,7 +498,7 @@ semanticGrouper:
   enabled: true
   image:
     repository: semantic-grouper
-    tag: "v0.9.0-amd64"
+    tag: "v0.11.0-amd64"
   api:
     replicas: 1
     resources:
@@ -546,7 +547,7 @@ orchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.9.0-amd64"
+    tag: "v0.11.0-amd64"
   replicas: 1
   config:
     # -- Vector collection name for agent cards
@@ -572,7 +573,7 @@ bizOrchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.9.0-amd64"
+    tag: "v0.11.0-amd64"
   replicas: 1
   config:
     collectionName: "biz_orchestrator_agent_cards"
@@ -600,7 +601,7 @@ bizRoutingAgent:
   enabled: true
   image:
     repository: routing-agent
-    tag: "v0.9.0-amd64"
+    tag: "v0.11.0-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state
@@ -629,7 +630,7 @@ bizChartAgent:
   enabled: true
   image:
     repository: chart-agent
-    tag: "v0.9.0-amd64"
+    tag: "v0.11.0-amd64"
   replicas: 1
   config:
     redisDb: "2"
@@ -735,6 +736,7 @@ helm status dac -n dac
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `global.imageRegistry` | 镜像仓库前缀 | `registry.cn-shanghai.aliyuncs.com/jamesxiong` |
+| `frontend.image.registry` | 前端仓库（覆盖 global） | `release.daocloud.io/dac` |
 | `global.imagePullPolicy` | 拉取策略 | `IfNotPresent` |
 | `global.imagePullSecrets` | 私有仓库认证 Secret | `[]` |
 

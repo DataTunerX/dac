@@ -35,3 +35,10 @@ func (u *ddGroupRelationUsecase) ListBySemanticDomain(ctx context.Context, seman
 	}
 	return u.dsClient.ListDDGroupRelationsBySD(ctx, semanticDomainID)
 }
+
+func (u *ddGroupRelationUsecase) DeleteByID(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return domain.NewInvalidInputError("id is required")
+	}
+	return u.dsClient.DeleteDDGroupRelationByID(ctx, id)
+}

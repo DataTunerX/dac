@@ -7,6 +7,7 @@ import { api } from "@/lib/api"
 import { listDescriptorsAll } from "@/lib/descriptors-api"
 import type { DataDescriptorListResponse } from "@/lib/api-types"
 import {
+  detachDataDescriptorFromSemanticGroups,
   getDataDescriptorDependencyKindLabel,
   listDataDescriptorDependencies,
   type DataDescriptorDependency,
@@ -119,9 +120,11 @@ export default function DataSourcesPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   // Delete + dependency check state (same pattern as 配置管理)
   const [deleteTarget, setDeleteTarget] = useState<{ namespace: string; name: string } | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<{ namespace: string; name: string } | null>(null)
   const [dependentResources, setDependentResources] = useState<DataDescriptorDependency[]>([])
   const [showDependencyDialog, setShowDependencyDialog] = useState(false)
   const [checkingDependency, setCheckingDependency] = useState(false)
+  const [detachingGroupId, setDetachingGroupId] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deletingKeys, setDeletingKeys] = useState<Set<string>>(new Set())
 
@@ -193,13 +196,50 @@ export default function DataSourcesPage() {
   }
 
   const handleDeleteClick = async (namespace: string, name: string) => {
+    const target = { namespace, name }
+    setPendingDelete(target)
     const deps = await checkDependencies(namespace, name)
     if (deps.length > 0) {
       setDependentResources(deps)
       setShowDependencyDialog(true)
       return
     }
-    setDeleteTarget({ namespace, name })
+    setDeleteTarget(target)
+  }
+
+  const refreshPendingDeleteDependencies = async () => {
+    if (!pendingDelete) return []
+    const deps = await checkDependencies(pendingDelete.namespace, pendingDelete.name)
+    setDependentResources(deps)
+    if (deps.length === 0) {
+      setShowDependencyDialog(false)
+      setDeleteTarget(pendingDelete)
+    }
+    return deps
+  }
+
+  const handleDetachFromGroup = async (groupId: string) => {
+    if (!pendingDelete || detachingGroupId) return
+    setDetachingGroupId(groupId)
+    try {
+      const count = await detachDataDescriptorFromSemanticGroups(
+        pendingDelete.namespace,
+        pendingDelete.name,
+        { groupIds: [groupId] }
+      )
+      if (count === 0) {
+        toast.error("未找到可移除的语义组关联")
+        return
+      }
+      toast.success("已从语义组移除")
+      await refreshPendingDeleteDependencies()
+    } catch (err) {
+      console.error("detach from semantic group failed", err)
+      const e = err as { response?: { data?: { message?: string } } }
+      toast.error(e.response?.data?.message || "从语义组移除失败")
+    } finally {
+      setDetachingGroupId(null)
+    }
   }
 
   const handleDelete = async () => {
@@ -554,7 +594,7 @@ export default function DataSourcesPage() {
                   <TableRow className="bg-surface-muted">
                     <TableHead className="w-auto">资源</TableHead>
                     <TableHead className="w-28">命名空间</TableHead>
-                    <TableHead className="w-28 text-right">操作</TableHead>
+                    <TableHead className="w-44 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -565,30 +605,45 @@ export default function DataSourcesPage() {
                       </TableCell>
                       <TableCell className="text-content-muted">{r.namespace}</TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setShowDependencyDialog(false)
-                            if (r.kind === "agent") {
-                              router.push(`/agents/${encodeURIComponent(r.namespace)}/${encodeURIComponent(r.name)}`)
-                            } else if (r.kind === "group") {
-                              router.push(`/semantic-groups/${encodeURIComponent(r.id ?? r.name)}`)
-                            } else if (r.kind === "dac") {
-                              router.push(`/agents/${encodeURIComponent(r.namespace)}/${encodeURIComponent(r.name)}`)
-                            }
-                          }}
-                          className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"
-                        >
-                          查看详情 →
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          {r.kind === "group" && r.id ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={Boolean(detachingGroupId)}
+                              onClick={() => void handleDetachFromGroup(r.id!)}
+                              className="text-red-600 hover:text-red-700 whitespace-nowrap cursor-pointer"
+                            >
+                              {detachingGroupId === r.id ? "移除中…" : "从语义组移除"}
+                            </Button>
+                          ) : null}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setShowDependencyDialog(false)
+                              if (r.kind === "agent") {
+                                router.push(`/agents/${encodeURIComponent(r.namespace)}/${encodeURIComponent(r.name)}`)
+                              } else if (r.kind === "group") {
+                                router.push(`/semantic-groups/${encodeURIComponent(r.id ?? r.name)}`)
+                              } else if (r.kind === "dac") {
+                                router.push(`/agents/${encodeURIComponent(r.namespace)}/${encodeURIComponent(r.name)}`)
+                              }
+                            }}
+                            className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"
+                          >
+                            查看详情 →
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
-            <div className="text-sm text-content">请先解除这些资源对该数据源的依赖，然后再删除。</div>
+            <div className="text-sm text-content">
+              若仅被语义组引用，可先「从语义组移除」再删除；若还被智能体引用，请先处理智能体依赖。
+            </div>
           </div>
 
           <AlertDialogFooter>

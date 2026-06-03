@@ -1,16 +1,16 @@
 "use client"
 
-import { useEffect, useMemo, useState, Fragment, type ReactNode } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
 import useSWR from "swr"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
-import { getAgent } from "@/lib/agents-api"
+import { getAgent, listAllAgentContainers } from "@/lib/agents-api"
 import { getSemanticGroupWithMembers } from "@/lib/semantic-groups-api"
 import type {
+  AgentContainerResponse,
   SemanticGroupResponse,
-  SemanticGroupInfoResponse,
   DDGroupRelationResponse,
 } from "@/lib/api-types"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
@@ -32,119 +32,418 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { ArrowLeft, Loader2, Trash2, RefreshCw, Server, Database, Shield, Sparkles, ChevronRight, ChevronDown, Info, Wrench, Layers, Maximize2, X } from "lucide-react"
+import { ArrowLeft, Loader2, Trash2, RefreshCw, Server, Database, Shield, Sparkles, ChevronRight, ChevronDown, Info, Wrench, Briefcase, Maximize2, X } from "lucide-react"
 
-/** 单个根（语义组）及其子节点；多根时横向排列，风格与数据管理详情页「血缘关系」一致。 */
-type DataSourceLineageRootItem = {
-  group: SemanticGroupResponse
-  childGroups: SemanticGroupInfoResponse[]
-  memberDescriptors: Array<{ key: string; dd_namespace: string; dd_name: string; sdCount: number; hasDD: boolean; isLoading: boolean }>
+type MemberDescriptorBucket = {
+  key: string
+  dd_namespace: string
+  dd_name: string
+  hasDD: boolean
 }
 
-function DataSourceLineageBlock({
-  root,
-  onNavigateToGroup,
-  onNavigateToDataSource,
+type CompositionDataAgent = {
+  key: string
+  namespace: string
+  name: string
+  displayName: string
+  coveredDescriptors: Array<{ namespace: string; name: string }>
+}
+
+function isBusinessAgentContainer(a: AgentContainerResponse): boolean {
+  const dp = a.dataPolicy
+  if (!dp) return false
+  const type = dp.dataSourceType ?? ""
+  const sgId = dp.semanticGroupID ?? ""
+  return type === "SemanticGroup" || (Boolean(sgId) && type !== "SemanticDomain")
+}
+
+function agentCoversDescriptor(a: AgentContainerResponse, ddNamespace: string, ddName: string): boolean {
+  const ans = a.namespace ?? "default"
+  const sel = a.dataPolicy?.sourceNameSelector ?? []
+  if (ans === ddNamespace && sel.some((s) => s === ddName)) return true
+  return (a.activeDataDescriptors ?? []).some(
+    (d) => d.name === ddName && (d.namespace ?? "default") === ddNamespace,
+  )
+}
+
+function buildCompositionDataAgents(
+  allAgents: AgentContainerResponse[],
+  members: MemberDescriptorBucket[],
+  exclude: { namespace: string; name: string },
+): CompositionDataAgent[] {
+  const resolvedMembers = members.filter((m) => m.hasDD)
+  if (resolvedMembers.length === 0) return []
+
+  const byKey = new Map<string, CompositionDataAgent>()
+  for (const container of allAgents) {
+    const an = container.name ?? ""
+    const ans = container.namespace ?? "default"
+    if (!an || isBusinessAgentContainer(container)) continue
+    if (ans === exclude.namespace && an === exclude.name) continue
+
+    const covered: Array<{ namespace: string; name: string }> = []
+    for (const m of resolvedMembers) {
+      if (agentCoversDescriptor(container, m.dd_namespace, m.dd_name)) {
+        covered.push({ namespace: m.dd_namespace, name: m.dd_name })
+      }
+    }
+    if (covered.length === 0) continue
+
+    const key = `${ans}/${an}`
+    const displayName =
+      (typeof container.agentCard?.name === "string" && container.agentCard.name) || an
+    const existing = byKey.get(key)
+    if (existing) {
+      const seen = new Set(existing.coveredDescriptors.map((d) => `${d.namespace}/${d.name}`))
+      for (const d of covered) {
+        const dk = `${d.namespace}/${d.name}`
+        if (!seen.has(dk)) {
+          seen.add(dk)
+          existing.coveredDescriptors.push(d)
+        }
+      }
+    } else {
+      byKey.set(key, {
+        key,
+        namespace: ans,
+        name: an,
+        displayName,
+        coveredDescriptors: covered,
+      })
+    }
+  }
+
+  return Array.from(byKey.values()).sort((a, b) => a.displayName.localeCompare(b.displayName))
+}
+
+/** 语义关系图：每行 = 智能体卡片 + 虚线 + 右侧资源（flex 一体，避免绝对定位被裁切） */
+const COMPOSITION_AGENT_W = 280
+const COMPOSITION_ROW_GAP = 12
+/** 虚线 + 资源框（与 CompositionResourceBox 结构一致） */
+const COMPOSITION_RESOURCE_SLOT = 204
+const COMPOSITION_ROW_W = COMPOSITION_AGENT_W + COMPOSITION_ROW_GAP + COMPOSITION_RESOURCE_SLOT
+const COMPOSITION_BRANCH_GAP = 32
+const COMPOSITION_AGENT_CARD =
+  "box-border grid h-[188px] w-[280px] shrink-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-xl border border-line bg-surface px-5 py-4 text-center shadow-sm"
+const COMPOSITION_RESOURCE_BOX =
+  "box-border flex h-[72px] w-[156px] shrink-0 flex-col justify-center overflow-hidden rounded-lg border border-dashed border-line/90 bg-surface-muted/40 px-3 py-2 text-left"
+
+type CompositionResourceItem = { key: string; label: string; href: string }
+
+function compositionBranchWidth(agentCount: number): number {
+  if (agentCount <= 0) return COMPOSITION_ROW_W
+  return agentCount * COMPOSITION_ROW_W + (agentCount - 1) * COMPOSITION_BRANCH_GAP
+}
+
+function compositionAgentCenterX(index: number): number {
+  const rowStart = index * (COMPOSITION_ROW_W + COMPOSITION_BRANCH_GAP)
+  return rowStart + COMPOSITION_AGENT_W / 2
+}
+
+/** 主干 X：与智能体卡片中心对齐（不用整行含资源框的宽度中点） */
+function compositionSpineX(childCount: number): number {
+  if (childCount <= 1) return compositionAgentCenterX(0)
+  const first = compositionAgentCenterX(0)
+  const last = compositionAgentCenterX(childCount - 1)
+  return (first + last) / 2
+}
+
+/** 业务 → 数据智能体的实线树形连接（单条 SVG，避免错位与多余线段） */
+function CompositionTreeLines({
+  branchWidth,
+  childCount,
 }: {
-  root: DataSourceLineageRootItem
-  onNavigateToGroup: (id: string) => void
-  onNavigateToDataSource: (namespace: string, name: string) => void
+  branchWidth: number
+  childCount: number
 }) {
-  const { group, childGroups, memberDescriptors } = root
-  const groupId = group.id ?? ""
-  const hasChildren = childGroups.length > 0 || memberDescriptors.length > 0
+  if (childCount <= 0) return null
+
+  const height = childCount === 1 ? 40 : 36
+  const busY = childCount === 1 ? height : 20
+  const stroke = "var(--color-line)"
+  const strokeWidth = 2
+
+  const spineX = compositionSpineX(childCount)
+
+  if (childCount === 1) {
+    const x = spineX
+    return (
+      <svg
+        width={branchWidth}
+        height={height}
+        className="block shrink-0"
+        aria-hidden
+      >
+        <line
+          x1={x}
+          y1={0}
+          x2={x}
+          y2={height}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+        />
+      </svg>
+    )
+  }
+
+  const centers = Array.from({ length: childCount }, (_, i) => compositionAgentCenterX(i))
+  const busLeft = centers[0]!
+  const busRight = centers[centers.length - 1]!
 
   return (
-    <div className="min-w-0 flex-1 flex flex-col items-center p-6">
-      {/* 当前节点（根语义组）— 与血缘关系页「Current Node」一致 */}
-      <div className="relative z-10 bg-surface border border-cta/30 rounded-xl shadow-sm p-4 w-64 text-center">
-        <div className="flex items-center justify-center w-9 h-9 bg-cta/10 text-cta rounded-full mx-auto mb-2">
-          <Layers className="w-5 h-5" />
-        </div>
-        <div className="font-semibold text-content text-sm truncate" title={group.group_name || groupId}>
-          {group.group_name || groupId || "-"}
-        </div>
-        {groupId ? (
-          <Link
-            href={`/semantic-groups/${encodeURIComponent(groupId)}`}
-            className="mt-3 inline-flex items-center justify-center h-8 w-full rounded-md px-3 text-xs font-medium border border-line bg-surface shadow-sm hover:bg-surface-muted text-content"
-          >
-            查看
-          </Link>
+    <svg width={branchWidth} height={height} className="block shrink-0" aria-hidden>
+      <line
+        x1={spineX}
+        y1={0}
+        x2={spineX}
+        y2={busY}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+      />
+      <line
+        x1={Math.min(busLeft, spineX)}
+        y1={busY}
+        x2={Math.max(busRight, spineX)}
+        y2={busY}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+      />
+      {centers.map((x, i) => (
+        <line
+          key={i}
+          x1={x}
+          y1={busY}
+          x2={x}
+          y2={height}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+        />
+      ))}
+    </svg>
+  )
+}
+
+/** 智能体 + 右侧资源：同一行整体布局（与 relation-graph 节点并排思路一致） */
+function CompositionGraphRow({ agent, resource }: { agent: ReactNode; resource: ReactNode }) {
+  return (
+    <div
+      className="flex shrink-0 items-center gap-3"
+      style={{ minWidth: COMPOSITION_ROW_W, width: COMPOSITION_ROW_W }}
+    >
+      {agent}
+      {resource}
+    </div>
+  )
+}
+
+function CompositionResourceBox({
+  label,
+  items,
+  emptyText,
+  onLinkClick,
+}: {
+  label: string
+  items: CompositionResourceItem[]
+  emptyText?: string
+  onLinkClick?: () => void
+}) {
+  return (
+    <div className="flex shrink-0 items-center pl-1">
+      <div className="mx-2 h-px w-7 shrink-0 border-t border-dashed border-line" aria-hidden />
+      <div className={COMPOSITION_RESOURCE_BOX}>
+        <div className="text-[10px] font-medium tracking-wide text-content-muted">{label}</div>
+        {items.length === 0 ? (
+          <span className="mt-1 block truncate text-xs text-content-muted">{emptyText ?? "-"}</span>
         ) : (
-          <Button type="button" variant="outline" size="sm" className="mt-3 w-full" disabled>
-            查看
-          </Button>
+          <ul className="mt-1 space-y-0.5 overflow-hidden">
+            {items.map((item) => (
+              <li key={item.key} className="min-w-0">
+                <Link
+                  href={item.href}
+                  className="block truncate text-xs font-medium text-cta hover:underline"
+                  title={item.label}
+                  onClick={() => onLinkClick?.()}
+                >
+                  {item.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
+    </div>
+  )
+}
 
-      {/* 连接竖线 */}
-      {hasChildren && <div className="h-16 w-0.5 bg-surface-active my-2 shrink-0" aria-hidden />}
+function AgentNodeCard({
+  kind,
+  displayName,
+  viewHref,
+  onLinkClick,
+}: {
+  kind: "business" | "data"
+  displayName: string
+  viewHref: string
+  onLinkClick?: () => void
+}) {
+  const isBusiness = kind === "business"
+  return (
+    <div className={COMPOSITION_AGENT_CARD}>
+      <div
+        className={`mx-auto flex h-10 w-10 items-center justify-center rounded-full ${
+          isBusiness ? "bg-cta/10 text-cta" : "bg-indigo-50 text-indigo-600"
+        }`}
+      >
+        {isBusiness ? <Briefcase className="h-5 w-5" /> : <Database className="h-5 w-5" />}
+      </div>
+      <p className="mt-2.5 text-[10px] font-medium uppercase tracking-wider text-content-muted">
+        {isBusiness ? "业务智能体" : "数据智能体"}
+      </p>
+      <p
+        className="mt-2 overflow-hidden text-sm font-medium leading-[1.35] text-content break-words line-clamp-3"
+        title={displayName}
+      >
+        {displayName || "-"}
+      </p>
+      <Link
+        href={viewHref}
+        className="mt-3 inline-flex h-8 w-full items-center justify-center self-end rounded-md border border-line bg-surface text-xs font-medium text-content hover:bg-surface-muted"
+        onClick={() => onLinkClick?.()}
+      >
+        查看
+      </Link>
+    </div>
+  )
+}
 
-      {/* 子节点卡片横向排列（子分组 + 数据源）— 与血缘关系「Consumers」一致 */}
-      {hasChildren && (
-        <div className="flex flex-wrap gap-6 justify-center">
-          {childGroups.map((cg) => (
-            <div
-              key={cg.id}
-              className="relative z-10 bg-surface border border-line rounded-xl shadow-sm p-4 w-64 text-center hover:border-cta/30 hover:shadow-md transition-all cursor-pointer"
-              onClick={() => onNavigateToGroup(cg.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => e.key === "Enter" && onNavigateToGroup(cg.id)}
-              title="查看语义组"
-            >
-              <div className="flex items-center justify-center w-9 h-9 bg-cta/10 text-cta rounded-full mx-auto mb-2">
-                <Layers className="w-4 h-4" />
-              </div>
-              <div className="font-medium text-content text-sm truncate" title={cg.group_name || cg.id}>
-                {cg.group_name || cg.id}
-              </div>
-              <Link
-                href={`/semantic-groups/${encodeURIComponent(cg.id)}`}
-                className="mt-3 inline-flex items-center justify-center h-8 w-full rounded-md px-3 text-xs font-medium border border-line bg-surface shadow-sm hover:bg-surface-muted text-content"
-                onClick={(e) => e.stopPropagation()}
-              >
-                查看
-              </Link>
-            </div>
-          ))}
-          {memberDescriptors.map((b) => (
-            <div
-              key={b.key}
-              className={`relative z-10 bg-surface border border-line rounded-xl shadow-sm p-4 w-64 text-center transition-all ${b.hasDD ? "hover:border-cta/30 hover:shadow-md cursor-pointer" : ""}`}
-              onClick={() => b.hasDD && onNavigateToDataSource(b.dd_namespace, b.dd_name)}
-              role={b.hasDD ? "button" : undefined}
-              tabIndex={b.hasDD ? 0 : undefined}
-              onKeyDown={b.hasDD ? (e) => e.key === "Enter" && onNavigateToDataSource(b.dd_namespace, b.dd_name) : undefined}
-              title={b.hasDD ? "查看数据源" : undefined}
-            >
-              <div className="flex items-center justify-center w-9 h-9 bg-indigo-50 text-indigo-600 rounded-full mx-auto mb-2">
-                <Database className="w-4 h-4" />
-              </div>
-              <div className="font-medium text-content text-sm truncate" title={b.hasDD ? `${b.dd_namespace}/${b.dd_name}` : ""}>
-                {b.hasDD ? b.dd_name : b.isLoading ? "加载中…" : "-"}
-              </div>
-              <div className="text-xs text-content-muted mt-1">
-                <span className="bg-surface-muted px-1.5 py-0.5 rounded text-[10px]">Data Source</span>
-              </div>
-              {b.hasDD ? (
-                <Link
-                  href={`/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`}
-                  className="mt-3 inline-flex items-center justify-center h-8 w-full rounded-md px-3 text-xs font-medium border border-line bg-surface shadow-sm hover:bg-surface-muted text-content"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  查看
-                </Link>
-              ) : (
-                <Button type="button" variant="outline" size="sm" className="mt-3 w-full" disabled>
-                  查看
-                </Button>
-              )}
-            </div>
-          ))}
+/** 业务智能体下方的数据智能体：横向并排，连线由 CompositionTreeLines 统一绘制 */
+function DataAgentsBranch({
+  dataAgents,
+  onLinkClick,
+}: {
+  dataAgents: CompositionDataAgent[]
+  onLinkClick?: () => void
+}) {
+  return (
+    <div className="flex flex-row flex-nowrap items-start gap-8">
+      {dataAgents.map((da) => {
+        const viewHref = `/agents/${encodeURIComponent(da.namespace)}/${encodeURIComponent(da.name)}`
+        const dataSources: CompositionResourceItem[] = da.coveredDescriptors.map((d) => ({
+          key: `${d.namespace}/${d.name}`,
+          label: d.name,
+          href: `/datasources/${encodeURIComponent(d.namespace)}/${encodeURIComponent(d.name)}`,
+        }))
+        return (
+          <CompositionGraphRow
+            key={da.key}
+            agent={
+              <AgentNodeCard
+                kind="data"
+                displayName={da.displayName}
+                viewHref={viewHref}
+                onLinkClick={onLinkClick}
+              />
+            }
+            resource={
+              <CompositionResourceBox
+                label="数据源"
+                items={dataSources}
+                emptyText="未绑定"
+                onLinkClick={onLinkClick}
+              />
+            }
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function BizAgentCompositionGraph({
+  bizDisplayName,
+  bizNamespace,
+  bizName,
+  semanticGroup,
+  dataAgents,
+  isLoading,
+  onLinkClick,
+}: {
+  bizDisplayName: string
+  bizNamespace: string
+  bizName: string
+  semanticGroup: SemanticGroupResponse | null
+  dataAgents: CompositionDataAgent[]
+  isLoading: boolean
+  onLinkClick?: () => void
+}) {
+  const groupId = semanticGroup?.id ?? ""
+  const groupName = semanticGroup?.group_name || groupId || "-"
+  const bizViewHref = `/agents/${encodeURIComponent(bizNamespace)}/${encodeURIComponent(bizName)}`
+  const semanticResources: CompositionResourceItem[] = groupId
+    ? [
+        {
+          key: groupId,
+          label: groupName,
+          href: `/semantic-groups/${encodeURIComponent(groupId)}`,
+        },
+      ]
+    : []
+
+  const branchCount = isLoading ? 1 : Math.max(dataAgents.length, 1)
+  const branchWidth = compositionBranchWidth(isLoading ? 1 : dataAgents.length)
+  const showConnector = isLoading || dataAgents.length > 0
+  const spineX = compositionSpineX(branchCount)
+  const bizRowPadLeft = branchCount > 1 ? spineX - COMPOSITION_AGENT_W / 2 : 0
+
+  return (
+    <div className="w-full overflow-x-auto overflow-y-visible py-8 px-4 sm:px-6">
+      <div
+        className="mx-auto flex shrink-0 flex-col overflow-visible"
+        style={{ width: showConnector ? branchWidth : "max-content" }}
+      >
+        <div
+          className="flex w-full justify-start overflow-visible"
+          style={bizRowPadLeft > 0 ? { paddingLeft: bizRowPadLeft } : undefined}
+        >
+          <CompositionGraphRow
+            agent={
+              <AgentNodeCard
+                kind="business"
+                displayName={bizDisplayName || bizName}
+                viewHref={bizViewHref}
+                onLinkClick={onLinkClick}
+              />
+            }
+            resource={
+              <CompositionResourceBox
+                label="语义组"
+                items={semanticResources}
+                emptyText="未绑定"
+                onLinkClick={onLinkClick}
+              />
+            }
+          />
         </div>
-      )}
+
+        {showConnector ? (
+          <CompositionTreeLines branchWidth={branchWidth} childCount={branchCount} />
+        ) : null}
+
+        {isLoading ? (
+          <div className="flex items-center gap-2 py-3 text-xs text-content-muted">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            加载数据智能体…
+          </div>
+        ) : dataAgents.length === 0 ? (
+          <p className="py-3 text-center text-sm text-content-muted">暂无关联的数据智能体</p>
+        ) : (
+          <DataAgentsBranch dataAgents={dataAgents} onLinkClick={onLinkClick} />
+        )}
+      </div>
     </div>
   )
 }
@@ -220,11 +519,12 @@ export default function AgentDetailPage() {
     dataSourceType === "SemanticGroup" || (Boolean(semanticGroupID) && dataSourceType !== "SemanticDomain")
 
   const [semanticGroup, setSemanticGroup] = useState<SemanticGroupResponse | null>(null)
-  const [childGroups, setChildGroups] = useState<SemanticGroupInfoResponse[]>([])
   const [relations, setRelations] = useState<DDGroupRelationResponse[]>([])
   const [sdMeta, setSdMeta] = useState<Record<string, { dd_namespace: string; dd_name: string }>>({})
+  const [compositionDataAgents, setCompositionDataAgents] = useState<CompositionDataAgent[]>([])
   const [isLoadingSg, setIsLoadingSg] = useState(false)
   const [isLoadingRelations, setIsLoadingRelations] = useState(false)
+  const [isLoadingCompositionAgents, setIsLoadingCompositionAgents] = useState(false)
 
   const sourceSelector = useMemo(() => {
     const raw = dataPolicy?.sourceNameSelector
@@ -297,60 +597,26 @@ export default function AgentDetailPage() {
     })
   }, [skills, skillQuery])
 
-  const memberDescriptors = useMemo(() => {
-    type Bucket = {
-      key: string
-      dd_namespace: string
-      dd_name: string
-      sdCount: number
-      hasDD: boolean
-      isLoading: boolean
-    }
-    const map = new Map<string, Bucket>()
+  const memberDescriptors = useMemo((): MemberDescriptorBucket[] => {
+    const map = new Map<string, MemberDescriptorBucket>()
     for (const r of relations) {
       const meta = sdMeta[r.sd_id]
-      const isLoading = !meta
       const hasDD = Boolean(meta?.dd_namespace && meta?.dd_name)
       const dd_namespace = meta?.dd_namespace || ""
       const dd_name = meta?.dd_name || ""
       const key = hasDD ? `${dd_namespace}/${dd_name}` : "__unknown__"
-      const b = map.get(key) || {
-        key,
-        dd_namespace,
-        dd_name,
-        sdCount: 0,
-        hasDD,
-        isLoading: false,
-      }
-      b.sdCount += 1
-      if (isLoading) b.isLoading = true
-      if (hasDD) {
-        b.dd_namespace = dd_namespace
-        b.dd_name = dd_name
-        b.hasDD = true
-      }
-      map.set(key, b)
+      if (!hasDD) continue
+      map.set(key, { key, dd_namespace, dd_name, hasDD: true })
     }
-    const arr = Array.from(map.values())
-    arr.sort((a, b) => {
-      if (a.key === "__unknown__" && b.key !== "__unknown__") return 1
-      if (b.key === "__unknown__" && a.key !== "__unknown__") return -1
-      return a.key.localeCompare(b.key)
-    })
-    return arr
+    return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key))
   }, [relations, sdMeta])
-
-  const dataSourceLineageRoots = useMemo((): DataSourceLineageRootItem[] => {
-    if (!semanticGroup) return []
-    return [{ group: semanticGroup, childGroups, memberDescriptors }]
-  }, [semanticGroup, childGroups, memberDescriptors])
 
   useEffect(() => {
     if (!isSemanticGroupAgent || !semanticGroupID) {
       setSemanticGroup(null)
-      setChildGroups([])
       setRelations([])
       setSdMeta({})
+      setCompositionDataAgents([])
       return
     }
 
@@ -363,13 +629,12 @@ export default function AgentDetailPage() {
         if (cancelled) return
         if (!data?.group) {
           setSemanticGroup(null)
-          setChildGroups([])
           setRelations([])
           setSdMeta({})
+          setCompositionDataAgents([])
           return
         }
         setSemanticGroup(data.group)
-        setChildGroups(data.child_groups ?? [])
         const mems = data.members ?? []
         const adapted: DDGroupRelationResponse[] = mems
           .map((m) => m.relation)
@@ -387,8 +652,8 @@ export default function AgentDetailPage() {
       } catch {
         if (!cancelled) {
           setSemanticGroup(null)
-          setChildGroups([])
           setRelations([])
+          setCompositionDataAgents([])
         }
       } finally {
         if (!cancelled) {
@@ -440,6 +705,35 @@ export default function AgentDetailPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relations, isSemanticGroupAgent])
+
+  useEffect(() => {
+    if (!isSemanticGroupAgent) {
+      setCompositionDataAgents([])
+      return
+    }
+    let cancelled = false
+    setIsLoadingCompositionAgents(true)
+    const run = async () => {
+      try {
+        const all = await listAllAgentContainers()
+        if (cancelled) return
+        setCompositionDataAgents(
+          buildCompositionDataAgents(all, memberDescriptors, { namespace, name }),
+        )
+      } catch {
+        if (!cancelled) setCompositionDataAgents([])
+      } finally {
+        if (!cancelled) setIsLoadingCompositionAgents(false)
+      }
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [isSemanticGroupAgent, memberDescriptors, namespace, name])
+
+  const showCompositionGraph =
+    isSemanticGroupAgent && (semanticGroup || isLoadingRelations || isLoadingCompositionAgents)
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6">
@@ -577,19 +871,17 @@ export default function AgentDetailPage() {
           <div className="space-y-3">
             <div className="text-sm font-medium text-content flex items-center gap-2">
               {isSemanticGroupAgent ? (
-                <Layers className="w-4 h-4 text-content-muted" />
+                <Briefcase className="w-4 h-4 text-content-muted" />
               ) : (
                 <Database className="w-4 h-4 text-content-muted" />
               )}
               {isSemanticGroupAgent ? "语义关系" : "数据源"}
             </div>
-            <Card className="rounded-lg border border-line relative">
-              <CardContent className="pt-6 space-y-4">
+            <Card className="rounded-lg border border-line relative overflow-visible">
+              <CardContent className="overflow-visible pt-6 space-y-4">
               {isSemanticGroupAgent ? (
                 <>
-                  {isLoadingRelations && !semanticGroup ? (
-                    <div className="text-sm text-content-muted">加载中…</div>
-                  ) : dataSourceLineageRoots.length === 0 ? (
+                  {!showCompositionGraph ? (
                     <div className="text-sm text-content-muted">暂无语义关系数据</div>
                   ) : (
                     <>
@@ -606,19 +898,15 @@ export default function AgentDetailPage() {
                           <Maximize2 className="w-3.5 h-3.5" />
                         </Button>
                       </div>
-                      <div className="min-h-[280px] flex flex-wrap items-start justify-center gap-6">
-                      {dataSourceLineageRoots.map((root, i) => (
-                        <Fragment key={root.group.id ?? i}>
-                          {i > 0 && (
-                            <div className="w-px self-stretch min-h-[200px] border-l border-dashed border-line" aria-hidden />
-                          )}
-                          <DataSourceLineageBlock
-                            root={root}
-                            onNavigateToGroup={(id) => router.push(`/semantic-groups/${encodeURIComponent(id)}`)}
-                            onNavigateToDataSource={(ns, name) => router.push(`/datasources/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)}
-                          />
-                        </Fragment>
-                      ))}
+                      <div className="min-h-[280px] w-full overflow-x-auto overflow-y-visible">
+                        <BizAgentCompositionGraph
+                          bizDisplayName={displayName}
+                          bizNamespace={namespace}
+                          bizName={name}
+                          semanticGroup={semanticGroup}
+                          dataAgents={compositionDataAgents}
+                          isLoading={isLoadingRelations || isLoadingCompositionAgents}
+                        />
                       </div>
                     </>
                   )}
@@ -814,25 +1102,16 @@ export default function AgentDetailPage() {
             </Button>
           </DialogHeader>
           <div className="p-6 overflow-auto flex-1 min-h-0">
-            <div className="min-h-[400px] flex flex-wrap items-start justify-center gap-6">
-              {dataSourceLineageRoots.map((root, i) => (
-                <Fragment key={root.group.id ?? i}>
-                  {i > 0 && (
-                    <div className="w-px self-stretch min-h-[280px] border-l border-dashed border-line" aria-hidden />
-                  )}
-                  <DataSourceLineageBlock
-                    root={root}
-                    onNavigateToGroup={(id) => {
-                      setIsLineageZoomOpen(false)
-                      router.push(`/semantic-groups/${encodeURIComponent(id)}`)
-                    }}
-                    onNavigateToDataSource={(ns, name) => {
-                      setIsLineageZoomOpen(false)
-                      router.push(`/datasources/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)
-                    }}
-                  />
-                </Fragment>
-              ))}
+            <div className="min-h-[400px] w-full">
+              <BizAgentCompositionGraph
+                bizDisplayName={displayName}
+                bizNamespace={namespace}
+                bizName={name}
+                semanticGroup={semanticGroup}
+                dataAgents={compositionDataAgents}
+                isLoading={isLoadingRelations || isLoadingCompositionAgents}
+                onLinkClick={() => setIsLineageZoomOpen(false)}
+              />
             </div>
           </div>
         </DialogContent>

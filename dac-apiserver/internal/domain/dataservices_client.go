@@ -7,6 +7,8 @@ import "context"
 type DataServicesClient interface {
 	// Run history (chat)
 	GetRunHistory(ctx context.Context, userID, runID string) ([]HistoryRecord, error)
+	// GetRunHistoryForTitle loads a small earliest slice for conversation list titles.
+	GetRunHistoryForTitle(ctx context.Context, userID, runID string) ([]HistoryRecord, error)
 
 	// Signature & semantic domain (data descriptor)
 	GetSignatureByDD(ctx context.Context, namespace, name string) (*Signature, error)
@@ -27,9 +29,10 @@ type DataServicesClient interface {
 	SemanticGroupExists(ctx context.Context, id string) (bool, error)
 	SemanticGroupCount(ctx context.Context) (int, error)
 
-	// DD group relation (read-only in apiserver; writes go through semantic-grouper)
+	// DD group relation (list + delete relation row; member sync via semantic-grouper)
 	ListDDGroupRelationsByGroup(ctx context.Context, groupID string) ([]DDGroupRelation, int, error)
 	ListDDGroupRelationsBySD(ctx context.Context, sdID string) ([]DDGroupRelation, int, error)
+	DeleteDDGroupRelationByID(ctx context.Context, id int64) error
 
 	// Semantic domain
 	GetSemanticDomain(ctx context.Context, id string) (*SemanticDomain, error)

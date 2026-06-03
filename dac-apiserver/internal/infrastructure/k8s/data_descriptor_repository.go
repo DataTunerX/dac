@@ -8,6 +8,7 @@ import (
 	"github.com/bytedance/sonic"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
@@ -130,6 +131,28 @@ func (r *dataDescriptorRepository) UpdateStatus(ctx context.Context, descriptor 
 	return r.fromUnstructured(updated)
 }
 
+// PatchAnnotation merges a single metadata annotation on the DataDescriptor CR.
+func (r *dataDescriptorRepository) PatchAnnotation(ctx context.Context, namespace, name, key, value string) error {
+	patch := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"annotations": map[string]string{
+				key: value,
+			},
+		},
+	}
+	patchBytes, err := sonic.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("marshal annotation patch: %w", err)
+	}
+	_, err = r.client.Resource(k8s.DataDescriptorGVR).
+		Namespace(namespace).
+		Patch(ctx, name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return handleK8sError(err, "data descriptor", name)
+	}
+	return nil
+}
+
 // Delete deletes a data descriptor
 func (r *dataDescriptorRepository) Delete(ctx context.Context, namespace, name string) error {
 	err := r.client.Resource(k8s.DataDescriptorGVR).
@@ -213,6 +236,7 @@ func k8sDataDescriptorToEntity(k8sDesc *K8sDataDescriptor) *entity.DataDescripto
 		Name:           k8sDesc.Metadata.Name,
 		Namespace:      k8sDesc.Metadata.Namespace,
 		Labels:         k8sDesc.Metadata.Labels,
+		Annotations:    k8sDesc.Metadata.Annotations,
 		DescriptorType: k8sDesc.Spec.DescriptorType,
 		GPUEnabled:     entity.NormalizeGPUEnabled(k8sDesc.Spec.GPUEnabled),
 		Sources:        mapK8sSourcesToEntity(k8sDesc.Spec.Sources),

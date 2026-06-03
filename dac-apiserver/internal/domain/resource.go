@@ -31,6 +31,7 @@ type DataDescriptorRepository interface {
 	List(ctx context.Context, namespace string, opts ListOptions) ([]*entity.DataDescriptor, error)
 	Update(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error)
 	UpdateStatus(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error)
+	PatchAnnotation(ctx context.Context, namespace, name, key, value string) error
 	Delete(ctx context.Context, namespace, name string) error
 }
 

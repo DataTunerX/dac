@@ -34,6 +34,82 @@ type DDGroupRelationListResponse = {
   items?: DDGroupRelationResponse[]
 }
 
+export type DescriptorGroupRelation = {
+  relationId: number
+  groupId: string
+  groupName: string
+  sdId: string
+}
+
+export async function listDescriptorGroupRelations(
+  namespace: string,
+  name: string
+): Promise<DescriptorGroupRelation[]> {
+  const semanticDomainRes = await api.post<SemanticDomainSearchResponse>("/semantic-domains/search/by-dd", {
+    dd_namespace: namespace,
+    dd_name: name,
+  })
+  const semanticDomains = semanticDomainRes.data?.items ?? []
+  if (semanticDomains.length === 0) return []
+
+  const groupNameCache = new Map<string, string>()
+  const out: DescriptorGroupRelation[] = []
+  const seen = new Set<number>()
+
+  for (const sd of semanticDomains) {
+    const sdId = sd.semantic_domain_id
+    if (!sdId) continue
+    const res = await api.get<DDGroupRelationListResponse>(
+      `/dd-group-relations/sd/${encodeURIComponent(sdId)}`
+    )
+    for (const relation of res.data?.items ?? []) {
+      if (!relation.id || !relation.group_id) continue
+      if (seen.has(relation.id)) continue
+      seen.add(relation.id)
+
+      let groupName = groupNameCache.get(relation.group_id)
+      if (!groupName) {
+        try {
+          const groupRes = await api.get<SemanticGroupResponse>(
+            `/semantic-groups/${encodeURIComponent(relation.group_id)}`
+          )
+          groupName = groupRes.data?.group_name || relation.group_id
+        } catch {
+          groupName = relation.group_id
+        }
+        groupNameCache.set(relation.group_id, groupName)
+      }
+
+      out.push({
+        relationId: relation.id,
+        groupId: relation.group_id,
+        groupName,
+        sdId,
+      })
+    }
+  }
+
+  return out
+}
+
+/** Detach a descriptor from semantic groups by deleting dd_group_relation rows (path D). */
+export async function detachDataDescriptorFromSemanticGroups(
+  namespace: string,
+  name: string,
+  options?: { groupIds?: string[] }
+): Promise<number> {
+  let relations = await listDescriptorGroupRelations(namespace, name)
+  if (options?.groupIds?.length) {
+    const allowed = new Set(options.groupIds)
+    relations = relations.filter((relation) => allowed.has(relation.groupId))
+  }
+
+  for (const relation of relations) {
+    await api.delete(`/dd-group-relations/${encodeURIComponent(String(relation.relationId))}`)
+  }
+  return relations.length
+}
+
 export async function listAllAgentContainers(): Promise<AgentContainerResponse[]> {
   const limit = 200
   let offset = 0

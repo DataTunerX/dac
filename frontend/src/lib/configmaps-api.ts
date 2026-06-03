@@ -27,3 +27,25 @@ export async function getConfigMap(
   )
   return res.data
 }
+
+/** Paginate through all configmaps in a namespace (for client-side search). */
+export async function listAllConfigMaps(
+  namespace: string,
+  params?: { type?: string }
+): Promise<ConfigMapListResponse["items"]> {
+  const limit = 200
+  let offset = 0
+  const out: NonNullable<ConfigMapListResponse["items"]> = []
+
+  for (;;) {
+    const page = await listConfigMaps(namespace, { ...params, limit, offset })
+    const items = page.items ?? []
+    out.push(...items)
+
+    const total = Number(page.totalCount ?? 0)
+    if (items.length === 0 || out.length >= total || items.length < limit) {
+      return out
+    }
+    offset += limit
+  }
+}

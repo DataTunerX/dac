@@ -176,7 +176,7 @@ export function CreateAgentDialog({
       dataSourceId: "",
       description: "",
       expertAgentMaxSteps: "1",
-      orchestratorAgentMaxLoops: "1",
+      orchestratorAgentMaxLoops: "0",
     },
   })
   const resetAll = () => {
@@ -204,7 +204,7 @@ export function CreateAgentDialog({
       dataSourceId: "",
       description: "",
       expertAgentMaxSteps: "1",
-      orchestratorAgentMaxLoops: "1",
+      orchestratorAgentMaxLoops: "0",
     })
   }
 
@@ -220,6 +220,17 @@ export function CreateAgentDialog({
   const name = useWatch({ control: form.control, name: "name" })
   const description = useWatch({ control: form.control, name: "description" })
   const dataSourceId = useWatch({ control: form.control, name: "dataSourceId" })
+
+  useEffect(() => {
+    if (!open) return
+    if (dataSourceType === "descriptor") {
+      form.setValue("orchestratorAgentMaxLoops", "0", { shouldDirty: false, shouldTouch: false })
+      form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
+    } else {
+      form.setValue("orchestratorAgentMaxLoops", "1", { shouldDirty: false, shouldTouch: false })
+      form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
+    }
+  }, [open, dataSourceType, form])
 
   const selectedPlannerModel: string = String(llmConfigs.find((c) => c.name === plannerModel)?.data?.model ?? "")
   const selectedExpertModel: string = String(llmConfigs.find((c) => c.name === expertModel)?.data?.model ?? "")
@@ -595,7 +606,7 @@ export function CreateAgentDialog({
             namespace: ns,
             skills,
             expertAgentMaxSteps: values.expertAgentMaxSteps || "1",
-            orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "1",
+            orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "0",
         })
       } else {
         // Semantic Group
@@ -930,7 +941,7 @@ export function CreateAgentDialog({
                           <FormLabel>编排最大循环数</FormLabel>
                           <FormControl>
                             <Input
-                              placeholder="默认 2"
+                              placeholder="默认 0"
                               {...field}
                               disabled={isSubmitting}
                             />
@@ -998,7 +1009,7 @@ export function CreateAgentDialog({
                           <FormLabel>专家最大步数</FormLabel>
                           <FormControl>
                             <Input
-                              placeholder="默认 5"
+                              placeholder="默认 1"
                               {...field}
                               disabled={isSubmitting}
                             />

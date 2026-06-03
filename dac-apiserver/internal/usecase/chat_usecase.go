@@ -6,10 +6,14 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
+	"github.com/lvyanru/dac-apiserver/internal/pkg/markdownprepare"
 )
 
 type chatUsecase struct {
@@ -72,7 +76,7 @@ func (u *chatUsecase) Chat(ctx context.Context, req *domain.ChatRequest) (*domai
 	return &domain.ChatResponse{
 		UserID:   req.UserID,
 		RunID:    run.ID,
-		Response: finalResponse,
+		Response: markdownprepare.Prepare(finalResponse),
 	}, nil
 }
 
@@ -172,24 +176,46 @@ func (u *chatUsecase) ListConversations(
 		return nil, err
 	}
 
-	summaries := make([]domain.ConversationSummary, 0, len(runs))
-	for _, run := range runs {
-		title := ""
-		if u.dsClient != nil {
-			records, err := u.dsClient.GetRunHistory(ctx, userID, run.ID)
+	summaries := make([]domain.ConversationSummary, len(runs))
+	if u.dsClient == nil {
+		for i, run := range runs {
+			summaries[i] = domain.ConversationSummary{
+				ID:        run.ID,
+				Title:     "",
+				CreatedAt: run.CreatedAt,
+				UpdatedAt: run.UpdatedAt,
+			}
+		}
+		return summaries, nil
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(10)
+	var mu sync.Mutex
+
+	for i, run := range runs {
+		g.Go(func() error {
+			title := ""
+			records, err := u.dsClient.GetRunHistoryForTitle(gctx, userID, run.ID)
 			if err != nil {
+				mu.Lock()
 				u.logger.Warn("failed to load run history for conversation title", "run_id", run.ID, "error", err)
+				mu.Unlock()
 			} else {
 				title = conversationTitleFromHistory(records)
 			}
-		}
-
-		summaries = append(summaries, domain.ConversationSummary{
-			ID:        run.ID,
-			Title:     title,
-			CreatedAt: run.CreatedAt,
-			UpdatedAt: run.UpdatedAt,
+			summaries[i] = domain.ConversationSummary{
+				ID:        run.ID,
+				Title:     title,
+				CreatedAt: run.CreatedAt,
+				UpdatedAt: run.UpdatedAt,
+			}
+			return nil
 		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	return summaries, nil
@@ -221,6 +247,9 @@ func (u *chatUsecase) GetConversation(ctx context.Context, userID, runID string)
 			}
 			if msg.Content == "" && msg.Think == "" {
 				continue
+			}
+			if msg.Role == "assistant" && msg.Content != "" {
+				msg.Content = markdownprepare.Prepare(msg.Content)
 			}
 			messages = append(messages, msg)
 		}

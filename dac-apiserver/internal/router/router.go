@@ -233,11 +233,12 @@ func Setup(
 				semanticGroups.POST("/:id/members/remove", semanticGroupHandler.RemoveMember)
 			}
 
-			// DD Group Relation routes (read-only; mutations go through semantic-grouper)
+			// DD Group Relation routes (list + delete relation row in data-services)
 			ddGroupRelations := authorized.Group("/dd-group-relations")
 			{
 				ddGroupRelations.GET("/group/:group_id", ddGroupRelationHandler.ListByGroup)
 				ddGroupRelations.GET("/sd/:sd_id", ddGroupRelationHandler.ListBySD)
+				ddGroupRelations.DELETE("/:id", ddGroupRelationHandler.DeleteByID)
 			}
 
 			// Knowledge Graph routes (data-services integration)

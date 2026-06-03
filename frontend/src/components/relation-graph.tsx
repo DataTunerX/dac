@@ -56,6 +56,7 @@ export type RelationGraphProps = {
   markerId: string
   onOpenReason: (r: DDGroupRelationResponse) => void
   onDeleteRel: (r: DDGroupRelationResponse) => void
+  onRemoveDDFromGroup?: (bucket: RelationGraphDDBucket) => void
   onNavigateToGroup: (id: string) => void
   onNavigateToDataSource: (namespace: string, name: string) => void
 }
@@ -70,6 +71,7 @@ export function RelationGraph({
   markerId,
   onOpenReason,
   onDeleteRel,
+  onRemoveDDFromGroup,
   onNavigateToGroup,
   onNavigateToDataSource,
 }: RelationGraphProps) {
@@ -259,7 +261,7 @@ export function RelationGraph({
                 ].join(" ")}
                 style={{ top: centerY, left: REL_GRAPH.ddX, width: ddCardW, height: h }}
               >
-                <div className="px-4 py-3 border-b border-line">
+                <div className="px-4 py-3 border-b border-line flex items-start justify-between gap-2">
                   <button
                     type="button"
                     disabled={!b.hasDD}
@@ -271,7 +273,7 @@ export function RelationGraph({
                       onNavigateToDataSource(b.dd_namespace, b.dd_name)
                     }}
                     className={[
-                      "relative w-full flex items-center gap-2 text-left rounded-lg",
+                      "relative min-w-0 flex-1 flex items-center gap-2 text-left rounded-lg",
                       "focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200",
                       b.hasDD ? "cursor-pointer" : "cursor-default",
                     ].join(" ")}
@@ -298,6 +300,21 @@ export function RelationGraph({
                       </div>
                     </div>
                   </button>
+                  {b.hasDD && b.items.length > 0 && onRemoveDDFromGroup ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-red-600 hover:text-red-700"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onRemoveDDFromGroup(b)
+                      }}
+                      title={`将 ${ddFull} 移出语义组`}
+                      aria-label={`将 ${ddFull} 移出语义组`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  ) : null}
                 </div>
                 <div className="flex-1 min-h-0 overflow-auto divide-y divide-line">
                   {b.items.map((r) => (

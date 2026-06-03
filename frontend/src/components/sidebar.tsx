@@ -11,21 +11,51 @@ import {
   Plus,
   Network,
   Layers,
+  Globe,
+  ChevronRight,
   X,
   Menu
 } from "lucide-react"
-import React, { Suspense, useEffect, useMemo, useRef, useState } from "react"
+import type { LucideIcon } from "lucide-react"
+import React, { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import useSWR from "swr"
 import { listConversations } from "@/lib/chat-api"
 import type { ConversationResponse } from "@/lib/api-types"
 import { format, startOfDay, subDays } from "date-fns"
 import { REFRESH_CHAT_LIST_EVENT, NewChatEventDetail } from "@/lib/events"
 
-const sidebarItems = [
-  { icon: Bot, label: "智能体", href: "/agents" },
-  { icon: Database, label: "数据管理", href: "/datasources" },
-  { icon: Layers, label: "语义组", href: "/semantic-groups" },
-  { icon: Network, label: "资产探测", href: "/infra" },
-  { icon: Settings2, label: "配置管理", href: "/configmaps" },
+type SidebarLinkItem = {
+  type: "link"
+  icon: LucideIcon
+  label: string
+  href: string
+}
+
+type SidebarGroupItem = {
+  type: "group"
+  icon: LucideIcon
+  label: string
+  /** Paths that keep this group expanded / in-section (supports multiple route roots). */
+  sectionPaths: string[]
+  children: { label: string; href: string; icon?: LucideIcon }[]
+}
+
+const sidebarNav: Array<SidebarLinkItem | SidebarGroupItem> = [
+  { type: "link", icon: Bot, label: "智能体", href: "/agents" },
+  { type: "link", icon: Database, label: "数据管理", href: "/datasources" },
+  { type: "link", icon: Layers, label: "语义组", href: "/semantic-groups" },
+  { type: "link", icon: Network, label: "资产探测", href: "/infra" },
+  { type: "link", icon: Settings2, label: "配置管理", href: "/configmaps" },
+  {
+    type: "group",
+    icon: Globe,
+    label: "全局管理",
+    sectionPaths: ["/system-config", "/observability"],
+    children: [
+      { label: "注册中心", href: "/observability/registry" },
+      { label: "模版中心", href: "/system-config/templates" },
+    ],
+  },
 ]
 
 /** Shared base and selected styles for sidebar nav + history so they stay in sync (white raised). */
@@ -38,9 +68,61 @@ const sidebarLinkDefault =
 
 type ConversationWithDate = ConversationResponse & { createdAt: Date }
 
+const CONVERSATION_WINDOW_DAYS = 10
+const CONVERSATIONS_SWR_KEY = ["/chat/conversations", CONVERSATION_WINDOW_DAYS] as const
+
 function isValidDate(d: Date) {
   return Number.isFinite(d.getTime())
 }
+
+function readStoredTitles(ids: readonly string[]): Map<string, string> {
+  const m = new Map<string, string>()
+  if (typeof window === "undefined") return m
+  for (const id of ids) {
+    const t = localStorage.getItem(`dac_title_${id}`)
+    if (t) m.set(id, t)
+  }
+  return m
+}
+
+function mergeConversationTitles(
+  items: ConversationResponse[],
+  prevById: Map<string, ConversationResponse>
+): ConversationResponse[] {
+  const stored = readStoredTitles(items.map((i) => i.id))
+  return items.map((newItem) => {
+    if (newItem.title?.trim()) return newItem
+    const existing = prevById.get(newItem.id)
+    if (existing?.title) return { ...newItem, title: existing.title }
+    const storedTitle = stored.get(newItem.id)
+    if (storedTitle) return { ...newItem, title: storedTitle }
+    return newItem
+  })
+}
+
+const ConversationLink = memo(function ConversationLink({
+  conv,
+  isActive,
+}: {
+  conv: ConversationWithDate
+  isActive: boolean
+}) {
+  const label = conv.title || format(conv.createdAt, "MM-dd HH:mm")
+  return (
+    <Link
+      href={`/?run_id=${conv.id}`}
+      prefetch={false}
+      className={cn(
+        sidebarLinkBase,
+        "w-full text-left truncate [content-visibility:auto]",
+        isActive ? sidebarLinkSelected : sidebarLinkDefault
+      )}
+    >
+      <MessageSquare className={cn("w-4 h-4 shrink-0", isActive && "text-brand")} />
+      <span className="truncate">{label}</span>
+    </Link>
+  )
+})
 
 function groupConversationsByTime(conversations: ConversationResponse[]) {
   const now = new Date()
@@ -95,67 +177,155 @@ function groupConversationsByTime(conversations: ConversationResponse[]) {
   return groups
 }
 
+function SidebarNavGroup({
+  item,
+  pathname,
+  onNavigate,
+}: {
+  item: SidebarGroupItem
+  pathname: string
+  onNavigate: () => void
+}) {
+  const inSection = item.sectionPaths.some(
+    (p) => pathname === p || pathname.startsWith(p + "/")
+  )
+  const hasActiveChild = item.children.some(
+    (child) => pathname === child.href || pathname.startsWith(child.href + "/")
+  )
+  const [open, setOpen] = useState(inSection)
+
+  useEffect(() => {
+    if (inSection) setOpen(true)
+  }, [inSection])
+
+  // 子项选中时父级仅展开，不占用选中态（避免双高亮）
+  const parentSelected = inSection && !hasActiveChild
+
+  return (
+    <div className="space-y-0.5">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          sidebarLinkBase,
+          "w-full",
+          parentSelected ? sidebarLinkSelected : sidebarLinkDefault,
+          hasActiveChild && "text-content"
+        )}
+      >
+        <item.icon
+          className={cn(
+            "w-4 h-4 shrink-0",
+            parentSelected && "text-brand",
+            hasActiveChild && "text-content-muted"
+          )}
+        />
+        <span className="flex-1 min-w-0 text-left truncate">{item.label}</span>
+        <ChevronRight
+          aria-hidden
+          className={cn(
+            "w-4 h-4 shrink-0 text-content-muted/70 transition-transform duration-150",
+            open && "rotate-90",
+            parentSelected && "text-brand"
+          )}
+        />
+      </button>
+      {open ? (
+        <div className="space-y-0.5 pt-0.5">
+          {item.children.map((child) => {
+            const childActive =
+              pathname === child.href || pathname.startsWith(child.href + "/")
+            return (
+              <Link
+                key={child.href}
+                href={child.href}
+                prefetch={true}
+                onClick={onNavigate}
+                className={cn(
+                  sidebarLinkBase,
+                  "pl-10",
+                  childActive ? sidebarLinkSelected : sidebarLinkDefault
+                )}
+              >
+                <span className="flex-1 min-w-0 truncate">{child.label}</span>
+              </Link>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function ConversationList() {
-  const conversationWindowDays = 10
   const searchParams = useSearchParams()
   const currentRunId = searchParams.get("run_id")
   const [conversations, setConversations] = useState<ConversationResponse[]>([])
-  const groupedConversations = useMemo(() => groupConversationsByTime(conversations), [conversations])
+
+  const { data, error, isLoading, mutate } = useSWR(
+    CONVERSATIONS_SWR_KEY,
+    () => listConversations({ days: CONVERSATION_WINDOW_DAYS }),
+    { revalidateOnFocus: false, dedupingInterval: 30_000 }
+  )
 
   useEffect(() => {
-    const fetchConversations = async () => {
-      try {
-        const res = await listConversations({ days: conversationWindowDays })
-        if (res.items?.length) {
-          setConversations(prev => {
-            const newItems = res.items
-            return newItems.map((newItem: ConversationResponse) => {
-              if (!newItem.title) {
-                const existing = prev.find(p => p.id === newItem.id)
-                if (existing && existing.title) {
-                  return { ...newItem, title: existing.title }
-                }
-                const storedTitle = localStorage.getItem(`dac_title_${newItem.id}`)
-                if (storedTitle) {
-                  return { ...newItem, title: storedTitle }
-                }
-              }
-              return newItem
-            })
-          })
-        }
-      } catch (error) {
-        console.error("Failed to fetch conversations", error)
-      }
-    }
-    fetchConversations()
+    if (!data) return
+    const items = data.items ?? []
+    setConversations((prev) => {
+      const prevById = new Map(prev.map((p) => [p.id, p]))
+      return mergeConversationTitles(items, prevById)
+    })
+  }, [data])
 
+  useEffect(() => {
+    if (error) console.error("Failed to fetch conversations", error)
+  }, [error])
+
+  const applyOptimistic = useCallback((detail: NewChatEventDetail) => {
+    setConversations((prev) => {
+      let next = prev
+      if (detail.replace_id) {
+        next = next.filter((c) => c.id !== detail.replace_id)
+      }
+      if (next.some((c) => c.id === detail.id)) return next
+      return [
+        {
+          id: detail.id,
+          title: detail.title,
+          created_at: detail.created_at,
+          updated_at: detail.created_at,
+        },
+        ...next,
+      ]
+    })
+  }, [])
+
+  useEffect(() => {
     const handleRefresh = (e: Event) => {
       if (e instanceof CustomEvent && e.detail) {
-        const detail = e.detail as NewChatEventDetail
-        setConversations(prev => {
-          let next = prev
-          if (detail.replace_id) {
-            next = next.filter(c => c.id !== detail.replace_id)
-          }
-          if (next.some(c => c.id === detail.id)) return next
-          return [{
-            id: detail.id,
-            title: detail.title,
-            created_at: detail.created_at,
-            updated_at: detail.created_at,
-          }, ...next]
-        })
+        applyOptimistic(e.detail as NewChatEventDetail)
         return
       }
-      fetchConversations()
+      void mutate()
     }
 
     window.addEventListener(REFRESH_CHAT_LIST_EVENT, handleRefresh)
     return () => {
       window.removeEventListener(REFRESH_CHAT_LIST_EVENT, handleRefresh)
     }
-  }, [conversationWindowDays])
+  }, [applyOptimistic, mutate])
+
+  const groupedConversations = useMemo(
+    () => groupConversationsByTime(conversations),
+    [conversations]
+  )
+
+  if (isLoading && conversations.length === 0) {
+    return (
+      <div className="px-3 py-2 text-xs text-content-muted">加载历史记录…</div>
+    )
+  }
 
   if (conversations.length === 0) {
     return (
@@ -172,28 +342,15 @@ function ConversationList() {
           <div className="px-3 mb-1 text-xs font-medium text-content-muted">
             {group.label}
           </div>
-           <div className="space-y-1">
-             {group.items.map((conv) => {
-               const isActive = conv.id === currentRunId
-               return (
-                 <Link
-                   key={conv.id}
-                   href={`/?run_id=${conv.id}`}
-                   prefetch={false}
-                   className={cn(
-                     sidebarLinkBase,
-                     "w-full text-left truncate",
-                     isActive ? sidebarLinkSelected : sidebarLinkDefault
-                   )}
-                 >
-                   <MessageSquare className={cn("w-4 h-4 shrink-0", isActive && "text-brand")} />
-                   <span className="truncate">
-                     {conv.title || format(conv.createdAt, "MM-dd HH:mm")}
-                   </span>
-                 </Link>
-               )
-             })}
-           </div>
+          <div className="space-y-1">
+            {group.items.map((conv) => (
+              <ConversationLink
+                key={conv.id}
+                conv={conv}
+                isActive={conv.id === currentRunId}
+              />
+            ))}
+          </div>
         </div>
       ))}
     </>
@@ -254,22 +411,30 @@ export function Sidebar() {
 
       <div className="flex-1 py-5 px-3 flex flex-col min-h-0">
         <div className="space-y-1">
-          {sidebarItems.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(item.href + "/")
+          {sidebarNav.map((item) => {
+            if (item.type === "link") {
+              const active = pathname === item.href || pathname.startsWith(item.href + "/")
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  prefetch={true}
+                  onClick={() => setIsMobileOpen(false)}
+                  className={cn(sidebarLinkBase, active ? sidebarLinkSelected : sidebarLinkDefault)}
+                >
+                  <item.icon className={cn("w-4 h-4 shrink-0", active && "text-brand")} />
+                  {item.label}
+                </Link>
+              )
+            }
+
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                prefetch={true}
-                onClick={() => setIsMobileOpen(false)}
-                className={cn(
-                  sidebarLinkBase,
-                  active ? sidebarLinkSelected : sidebarLinkDefault
-                )}
-              >
-                <item.icon className={cn("w-4 h-4 shrink-0", active && "text-brand")} />
-                {item.label}
-              </Link>
+              <SidebarNavGroup
+                key={item.sectionPaths.join("|")}
+                item={item}
+                pathname={pathname}
+                onNavigate={() => setIsMobileOpen(false)}
+              />
             )
           })}
         </div>

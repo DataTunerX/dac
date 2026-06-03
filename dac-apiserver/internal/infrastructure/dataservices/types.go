@@ -114,6 +114,13 @@ type VectorDocument struct {
 	Metadata    map[string]any
 }
 
+type SemanticGroupMemberTaskStatus struct {
+	TaskID string         `json:"task_id"`
+	Status string         `json:"status"`
+	Result map[string]any `json:"result,omitempty"`
+	Error  string         `json:"error,omitempty"`
+}
+
 // HTTPError represents a non-2xx response from data-services.
 type HTTPError struct {
 	StatusCode int

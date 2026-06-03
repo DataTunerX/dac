@@ -159,6 +159,42 @@ export type ConfigMapListResponse = {
   offset?: number
 }
 
+// ----- System configuration (internal/handler/dto/system_config.go) -----
+
+export type SystemConfigurationResponse = {
+  name: string
+  namespace: string
+  data: Record<string, string>
+  resourceVersion?: string
+  exists: boolean
+  createdAt?: string
+}
+
+export type SystemConfigurationListResponse = {
+  items: SystemConfigurationResponse[]
+  totalCount: number
+}
+
+export type SystemConfigurationVersionResponse = {
+  name: string
+  version: string
+  namespace: string
+  data: Record<string, string>
+  createdAt: string
+}
+
+export type SystemConfigurationVersionListResponse = {
+  items: SystemConfigurationVersionResponse[]
+  totalCount: number
+  limit?: number
+  offset?: number
+}
+
+export type UpdateSystemConfigurationRequest = {
+  data: Record<string, string>
+  resourceVersion?: string
+}
+
 // ----- Data descriptors (internal/handler/dto/data_descriptor.go) -----
 
 export type CodeRepoConfigResponse = {
@@ -288,4 +324,30 @@ export type ConversationResponse = {
 export type ListConversationsResponse = {
   items: ConversationResponse[]
   total: number
+}
+
+// ----- Agent registry (internal/handler/dto/agent_registry.go) -----
+
+export type AgentRegistrySummaryResponse = {
+  name: string
+  base_url: string
+  agent_count: number
+  reachable: boolean
+  error?: string
+}
+
+export type AgentRegistryListResponse = {
+  items: AgentRegistrySummaryResponse[]
+  totalCount: number
+}
+
+export type RegisteredAgentCardResponse = {
+  registry: string
+  card: Record<string, unknown>
+}
+
+export type RegisteredAgentListResponse = {
+  items: RegisteredAgentCardResponse[]
+  totalCount: number
+  registry: string
 }

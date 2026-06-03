@@ -330,6 +330,14 @@ func (c *Client) ListDDGroupRelationsByGroup(ctx context.Context, groupID string
 	return resp.Data, resp.Count, nil
 }
 
+func (c *Client) DeleteDDGroupRelationByID(ctx context.Context, id int64) error {
+	u, err := c.buildURL(fmt.Sprintf("/dd_group_relations/%d", id))
+	if err != nil {
+		return err
+	}
+	return c.doJSON(ctx, http.MethodDelete, u, nil, nil)
+}
+
 func (c *Client) ListDDGroupRelationsBySD(ctx context.Context, sdID string) ([]DDGroupRelation, int, error) {
 	u, err := c.buildURL("/dd_group_relations/sd/" + url.PathEscape(sdID))
 	if err != nil {
@@ -346,9 +354,23 @@ func (c *Client) ListDDGroupRelationsBySD(ctx context.Context, sdID string) ([]D
 	return resp.Data, resp.Count, nil
 }
 
+const (
+	runHistoryFullLimit  = 1000
+	runHistoryTitleLimit = 8
+)
+
 // GetRunHistory loads conversation history records for a run.
 // Uses /history/search_user_run so we can retrieve the whole run without pinning agent_id.
 func (c *Client) GetRunHistory(ctx context.Context, userID, runID string) ([]HistoryRecord, error) {
+	return c.searchUserRunHistory(ctx, userID, runID, runHistoryFullLimit)
+}
+
+// GetRunHistoryForTitle loads a small slice of history for sidebar titles (existing API: limit only).
+func (c *Client) GetRunHistoryForTitle(ctx context.Context, userID, runID string) ([]HistoryRecord, error) {
+	return c.searchUserRunHistory(ctx, userID, runID, runHistoryTitleLimit)
+}
+
+func (c *Client) searchUserRunHistory(ctx context.Context, userID, runID string, limit int) ([]HistoryRecord, error) {
 	u, err := c.buildURL("/history/search_user_run")
 	if err != nil {
 		return nil, err
@@ -362,7 +384,7 @@ func (c *Client) GetRunHistory(ctx context.Context, userID, runID string) ([]His
 	req := map[string]any{
 		"user_id": userID,
 		"run_id":  runID,
-		"limit":   1000,
+		"limit":   limit,
 	}
 	if err := c.doJSON(ctx, http.MethodPost, u, req, &resp); err != nil {
 		return nil, err

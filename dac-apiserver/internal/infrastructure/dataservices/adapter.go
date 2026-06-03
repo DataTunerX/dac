@@ -136,7 +136,15 @@ func toDomainHistoryRecord(h HistoryRecord) domain.HistoryRecord {
 
 // GetRunHistory implements domain.DataServicesClient.
 func (a *DataServicesAdapter) GetRunHistory(ctx context.Context, userID, runID string) ([]domain.HistoryRecord, error) {
-	list, err := a.client.GetRunHistory(ctx, userID, runID)
+	return a.mapRunHistory(a.client.GetRunHistory(ctx, userID, runID))
+}
+
+// GetRunHistoryForTitle implements domain.DataServicesClient.
+func (a *DataServicesAdapter) GetRunHistoryForTitle(ctx context.Context, userID, runID string) ([]domain.HistoryRecord, error) {
+	return a.mapRunHistory(a.client.GetRunHistoryForTitle(ctx, userID, runID))
+}
+
+func (a *DataServicesAdapter) mapRunHistory(list []HistoryRecord, err error) ([]domain.HistoryRecord, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -351,6 +359,11 @@ func (a *DataServicesAdapter) ListDDGroupRelationsBySD(ctx context.Context, sdID
 		out[i] = *toDomainDDGroupRelation(&list[i])
 	}
 	return out, total, nil
+}
+
+// DeleteDDGroupRelationByID implements domain.DataServicesClient.
+func (a *DataServicesAdapter) DeleteDDGroupRelationByID(ctx context.Context, id int64) error {
+	return a.client.DeleteDDGroupRelationByID(ctx, id)
 }
 
 // GetSemanticDomain implements domain.DataServicesClient.

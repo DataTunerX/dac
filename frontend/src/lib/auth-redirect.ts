@@ -1,7 +1,15 @@
 const LOGIN_PATH = "/login"
 const ROOT_PATH = "/"
 
-const AUTH_REQUIRED_PREFIXES = ["/agents", "/semantic-groups", "/datasources", "/configmaps", "/infra"] as const
+const AUTH_REQUIRED_PREFIXES = [
+  "/agents",
+  "/semantic-groups",
+  "/datasources",
+  "/configmaps",
+  "/system-config",
+  "/observability",
+  "/infra",
+] as const
 const PUBLIC_PATH_PREFIXES = [LOGIN_PATH, "/register"] as const
 
 type RequestUrlLike = Pick<URL, "pathname" | "search" | "protocol" | "host">

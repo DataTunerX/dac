@@ -16,7 +16,8 @@ type DataDescriptor struct {
 	// Metadata
 	Name      string
 	Namespace string
-	Labels    map[string]string
+	Labels      map[string]string
+	Annotations map[string]string
 
 	// Spec
 	DescriptorType string

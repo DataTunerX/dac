@@ -307,6 +307,12 @@ class SemanticGrouper:
         return fallback_normalized or "UnnamedGroup"
 
     @staticmethod
+    def _is_http_not_found_error(exc: BaseException) -> bool:
+        """True when data-services indicates the semantic group row is gone."""
+        msg = str(exc).lower()
+        return "404" in msg or "not found" in msg
+
+    @staticmethod
     def _bump_semantic_group_version(current: Any) -> str:
         """
         Next semantic group version for data-services (opaque string; monotonic for common forms).
@@ -3668,7 +3674,24 @@ class SemanticGrouper:
                 group_id,
             )
         except Exception as e:
-            logger.error("reconcile_group_metadata: failed to load group %s: %s", group_id, e, exc_info=True)
+            if self._is_http_not_found_error(e):
+                logger.warning(
+                    "reconcile_group_metadata: group %s not found (404), skip reconcile",
+                    group_id,
+                )
+                return {
+                    "status": "success",
+                    "action": "SKIPPED",
+                    "group_id": group_id,
+                    "remaining_member_count": 0,
+                    "message": "组已不存在，跳过 metadata reconcile",
+                }
+            logger.error(
+                "reconcile_group_metadata: failed to load group %s: %s",
+                group_id,
+                e,
+                exc_info=True,
+            )
             return {
                 "status": "error",
                 "action": "REMOVED",

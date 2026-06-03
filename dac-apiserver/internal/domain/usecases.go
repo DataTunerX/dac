@@ -48,10 +48,11 @@ type SemanticGroupUsecase interface {
 	GetMemberTask(ctx context.Context, taskID string) (*SemanticGrouperTaskStatus, error)
 }
 
-// DDGroupRelationUsecase defines read-only DD<->semantic-group relation queries.
+// DDGroupRelationUsecase defines DD<->semantic-group relation queries and relation-row deletes.
 type DDGroupRelationUsecase interface {
 	ListByGroup(ctx context.Context, groupID string) ([]DDGroupRelation, int, error)
 	ListBySemanticDomain(ctx context.Context, semanticDomainID string) ([]DDGroupRelation, int, error)
+	DeleteByID(ctx context.Context, id int64) error
 }
 
 // SemanticDomainUsecase provides semantic domain read operations backed by data-services.

@@ -11,6 +11,7 @@ import { getDescriptor } from "@/lib/descriptors-api";
 import { getConfigMap } from "@/lib/configmaps-api";
 import type { DataSourceResponse, DataDescriptorResponse, ObjectReferenceResponse } from "@/lib/api-types";
 import {
+  detachDataDescriptorFromSemanticGroups,
   getDataDescriptorDependencyKindLabel,
   listAllAgentContainers,
   listDataDescriptorDependencies,
@@ -336,6 +337,7 @@ export function DataSourceDetailView() {
   const [showDependencyDialog, setShowDependencyDialog] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [checkingDependency, setCheckingDependency] = useState(false);
+  const [detachingGroupId, setDetachingGroupId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const [tab, setTab] = useState<DataSourceTabKey>("overview");
@@ -762,6 +764,36 @@ export function DataSourceDetailView() {
       return;
     }
     setIsDeleteOpen(true);
+  };
+
+  const refreshDeleteDependencies = async () => {
+    const deps = await checkDependencies();
+    setDependentResources(deps);
+    if (deps.length === 0) {
+      setShowDependencyDialog(false);
+      setIsDeleteOpen(true);
+    }
+    return deps;
+  };
+
+  const handleDetachFromGroup = async (groupId: string) => {
+    if (!name || detachingGroupId) return;
+    setDetachingGroupId(groupId);
+    try {
+      const count = await detachDataDescriptorFromSemanticGroups(namespace, name, { groupIds: [groupId] });
+      if (count === 0) {
+        toast.error("未找到可移除的语义组关联");
+        return;
+      }
+      toast.success("已从语义组移除");
+      await refreshDeleteDependencies();
+    } catch (err) {
+      console.error("detach from semantic group failed", err);
+      const e = err as { response?: { data?: { message?: string } } };
+      toast.error(e.response?.data?.message || "从语义组移除失败");
+    } finally {
+      setDetachingGroupId(null);
+    }
   };
 
   const handleDelete = async () => {
@@ -1616,7 +1648,7 @@ export function DataSourceDetailView() {
                   <TableRow className="bg-surface-muted">
                     <TableHead className="w-auto">资源</TableHead>
                     <TableHead className="w-28">命名空间</TableHead>
-                    <TableHead className="w-28 text-right">操作</TableHead>
+                    <TableHead className="w-44 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1627,30 +1659,45 @@ export function DataSourceDetailView() {
                       </TableCell>
                       <TableCell className="text-content-muted">{resource.namespace}</TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setShowDependencyDialog(false);
-                            if (resource.kind === "agent") {
-                              router.push(`/agents/${encodeURIComponent(resource.namespace)}/${encodeURIComponent(resource.name)}`);
-                            } else if (resource.kind === "group") {
-                              router.push(`/semantic-groups/${encodeURIComponent(resource.id ?? resource.name)}`);
-                            } else if (resource.kind === "dac") {
-                              router.push(`/agents/${encodeURIComponent(resource.namespace)}/${encodeURIComponent(resource.name)}`);
-                            }
-                          }}
-                          className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"
-                        >
-                          查看详情 →
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          {resource.kind === "group" && resource.id ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={Boolean(detachingGroupId)}
+                              onClick={() => void handleDetachFromGroup(resource.id!)}
+                              className="text-red-600 hover:text-red-700 whitespace-nowrap cursor-pointer"
+                            >
+                              {detachingGroupId === resource.id ? "移除中…" : "从语义组移除"}
+                            </Button>
+                          ) : null}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setShowDependencyDialog(false);
+                              if (resource.kind === "agent") {
+                                router.push(`/agents/${encodeURIComponent(resource.namespace)}/${encodeURIComponent(resource.name)}`);
+                              } else if (resource.kind === "group") {
+                                router.push(`/semantic-groups/${encodeURIComponent(resource.id ?? resource.name)}`);
+                              } else if (resource.kind === "dac") {
+                                router.push(`/agents/${encodeURIComponent(resource.namespace)}/${encodeURIComponent(resource.name)}`);
+                              }
+                            }}
+                            className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"
+                          >
+                            查看详情 →
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
-            <div className="text-sm text-content">请先解除这些资源对该数据源的依赖，然后再删除。</div>
+            <div className="text-sm text-content">
+              若仅被语义组引用，可先「从语义组移除」再删除；若还被智能体引用，请先处理智能体依赖。
+            </div>
           </div>
           <AlertDialogFooter>
             <AlertDialogAction onClick={() => setShowDependencyDialog(false)}>知道了</AlertDialogAction>

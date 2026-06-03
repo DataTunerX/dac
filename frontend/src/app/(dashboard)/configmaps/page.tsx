@@ -1,11 +1,13 @@
 "use client"
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { Suspense, useEffect, useMemo, useRef, useState, useDeferredValue } from "react"
 import useSWR from "swr"
 import { useRouter, useSearchParams } from "next/navigation"
 import { api } from "@/lib/api"
-import { listConfigMaps, getConfigMap } from "@/lib/configmaps-api"
+import { listConfigMaps, getConfigMap, listAllConfigMaps } from "@/lib/configmaps-api"
 import { listAgentsAll } from "@/lib/agents-api"
+import { ListPageSearch } from "@/components/list-page-search"
+import { filterListByQuery } from "@/lib/filter-list-by-query"
 import { listDescriptorsAll } from "@/lib/descriptors-api"
 import { apiFetcher } from "@/lib/swr"
 import { Button } from "@/components/ui/button"
@@ -151,6 +153,9 @@ function ConfigMapsContent() {
   const [isLoading, setIsLoading] = useState(false)
   const [pageSize, setPageSize] = useState(20)
   const [page, setPage] = useState(1)
+  const [searchQuery, setSearchQuery] = useState("")
+  const deferredSearch = useDeferredValue(searchQuery)
+  const isSearchMode = searchQuery.trim() !== ""
   const [open, setOpen] = useState(false)
   const [editingName, setEditingName] = useState<string | null>(null)
   const [dialogMode, setDialogMode] = useState<DialogMode>("create")
@@ -169,7 +174,50 @@ function ConfigMapsContent() {
   const [showDependencyDialog, setShowDependencyDialog] = useState(false)
   const [checkingDependency, setCheckingDependency] = useState(false)
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+  const allCmKey = isSearchMode
+    ? (["configmaps-all", namespace, type] as const)
+    : null
+  const { data: allCmRaw, isLoading: isLoadingAllCm } = useSWR(
+    allCmKey,
+    async ([, ns, t]: readonly ["configmaps-all", string, ConfigMapType]) =>
+      listAllConfigMaps(ns, { type: t })
+  )
+
+  const allCmItems = useMemo(
+    () => safeItems(allCmRaw ?? []),
+    [allCmRaw]
+  )
+
+  const sourceItems = isSearchMode ? allCmItems : items
+
+  const displayedItems = useMemo(
+    () =>
+      filterListByQuery(sourceItems, deferredSearch, (cm) => {
+        const data = cm.data ?? {}
+        return [
+          cm.name,
+          cm.namespace,
+          data.provider,
+          data.model,
+          data["base-url"],
+        ]
+          .filter(Boolean)
+          .join(" ")
+      }),
+    [sourceItems, deferredSearch]
+  )
+
+  const paginationTotal = isSearchMode ? displayedItems.length : totalCount
+  const totalPages = Math.max(1, Math.ceil(paginationTotal / pageSize))
+
+  const tableItems = useMemo(() => {
+    if (!isSearchMode) return displayedItems
+    const start = (page - 1) * pageSize
+    return displayedItems.slice(start, start + pageSize)
+  }, [isSearchMode, displayedItems, page, pageSize])
+
+  const tableLoading = isSearchMode ? isLoadingAllCm : isLoading
+
   useEffect(() => {
     if (page > totalPages) setPage(totalPages)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -180,6 +228,10 @@ function ConfigMapsContent() {
     setPage(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [namespace, type])
+
+  useEffect(() => {
+    setPage(1)
+  }, [deferredSearch])
 
   // form state (shared)
   const [name, setName] = useState("")
@@ -258,12 +310,13 @@ function ConfigMapsContent() {
   }
 
   useEffect(() => {
+    if (isSearchMode) return
     // Clear stale rows immediately when filters change to avoid "UI shows Prompts but rows are LLM" confusion.
     setItems([])
     setTotalCount(0)
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [namespace, type, page, pageSize])
+  }, [namespace, type, page, pageSize, isSearchMode])
 
   const openCreate = () => {
     setDialogMode("create")
@@ -548,7 +601,12 @@ function ConfigMapsContent() {
           <span className="text-content font-semibold">配置管理</span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <ListPageSearch
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="搜索名称…"
+          />
           {/* Filters (move to top bar for better aesthetics) */}
           <div className="hidden md:flex items-center gap-2 mr-2">
             <div className="flex items-center gap-2">
@@ -627,14 +685,20 @@ function ConfigMapsContent() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.length === 0 ? (
+            {tableItems.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="text-center text-content-muted py-10">
-                  {isLoading ? "加载中…" : "暂无数据"}
+                  {tableLoading
+                    ? "加载中…"
+                    : sourceItems.length === 0
+                      ? "暂无数据"
+                      : deferredSearch.trim()
+                        ? "未找到匹配的配置"
+                        : "暂无数据"}
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((cm) => (
+              tableItems.map((cm) => (
                 <TableRow
                   key={`${cm.namespace}/${cm.name}`}
                   className="cursor-pointer hover:bg-surface-muted"
@@ -718,11 +782,11 @@ function ConfigMapsContent() {
       </div>
 
       <PaginationBar
-        total={totalCount}
+        total={paginationTotal}
         page={page}
         pageSize={pageSize}
         pageSizeOptions={[10, 20, 50, 100]}
-        isLoading={isLoading}
+        isLoading={tableLoading}
         onPageChange={setPage}
         onPageSizeChange={(n) => {
           setPageSize(n)

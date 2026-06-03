@@ -252,7 +252,27 @@ def _reconcile_groups_from_dd_annotation(
         reconciled_group_ids.add(group_id)
         last_result = recon
         if isinstance(recon, dict) and recon.get("status") == "error":
-            raise ValueError(recon.get("message", f"annotation fallback reconcile 失败: {group_id}"))
+            err_msg = recon.get("message", f"annotation fallback reconcile 失败: {group_id}")
+            # Stale DD annotation pointing at a manually deleted group must not block SD delete.
+            if "404" in err_msg or "not found" in err_msg.lower():
+                logger.warning(
+                    "annotation fallback: group %s missing in data-services, "
+                    "continuing DD delete (sd=%s dd=%s/%s)",
+                    group_id,
+                    sd_id,
+                    dd_namespace,
+                    dd_name,
+                )
+                last_result = {
+                    "status": "success",
+                    "action": "SKIPPED",
+                    "group_id": group_id,
+                    "message": err_msg,
+                    "semantic_domain_id": sd_id,
+                    "remaining_member_count": 0,
+                }
+                continue
+            raise ValueError(err_msg)
 
     return last_result
 

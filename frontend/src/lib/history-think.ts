@@ -1,4 +1,5 @@
 import type { ChatProgressPayload } from "@/lib/api-types"
+import { stripModelLeakTags } from "@/lib/strip-model-leak-tags"
 
 const DAC_PROGRESS_PREFIX = "[[DAC_PROGRESS]] "
 
@@ -39,7 +40,7 @@ export function parseHistoryThink(rawThink: string | undefined | null): ParsedHi
   }
 
   return {
-    reasoning: reasoningLines.join("\n").trim(),
+    reasoning: stripModelLeakTags(reasoningLines.join("\n").trim()),
     progressList,
   }
 }
