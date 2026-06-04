@@ -5,7 +5,7 @@
 # 构建上下文必须是 sandbox/ 根目录:
 #   docker build -t release.daocloud.io/dac/sandbox-minio-seed:v0.10.0 -f images/minio-seed/Dockerfile .
 
-FROM release.daocloud.io/dac/mc:latest
+FROM minio/mc:latest
 
 # mc 镜像基于 distroless，没法 apt，所以直接 COPY 进去
 COPY seed/files     /seed/files

@@ -7,7 +7,7 @@
 # 运行:
 #   docker run -d -p 5432:5432 release.daocloud.io/dac/sandbox-postgres:v0.10.0
 
-FROM release.daocloud.io/dac/postgres:16
+FROM postgres:16
 
 # 默认账号 + 默认 db (entrypoint 会自动建; postgres/dacpass，业务账号 dac/dacpass 在 00-create-databases.sql)
 ENV POSTGRES_PASSWORD=dacpass \

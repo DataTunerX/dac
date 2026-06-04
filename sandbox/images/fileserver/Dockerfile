@@ -5,7 +5,7 @@
 # 构建上下文必须是 sandbox/ 根目录:
 #   docker build -t release.daocloud.io/dac/sandbox-fileserver:v0.10.0 -f images/fileserver/Dockerfile .
 
-FROM release.daocloud.io/dac/nginx:1.27-alpine
+FROM nginx:1.27-alpine
 
 # 默认 nginx 监听 80 + 不开 autoindex，覆盖成 8000 + autoindex on
 COPY images/fileserver/default.conf /etc/nginx/conf.d/default.conf

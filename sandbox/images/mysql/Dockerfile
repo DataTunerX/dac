@@ -7,7 +7,7 @@
 # 运行:
 #   docker run -d -p 3306:3306 release.daocloud.io/dac/sandbox-mysql:v0.10.0
 
-FROM release.daocloud.io/dac/mysql:8.0
+FROM mysql:8.0
 
 # 默认账号: root/dacpass (超级用户), dac/dacpass (业务账号在 00-create-databases.sql 里创建)
 # sandbox 内所有服务统一使用 dacpass 作为业务密码，方便记忆

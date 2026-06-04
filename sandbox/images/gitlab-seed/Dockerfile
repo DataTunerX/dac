@@ -10,7 +10,7 @@
 # 构建上下文必须是 sandbox/ 根目录:
 #   docker build -t release.daocloud.io/dac/sandbox-gitlab-seed:v0.10.0 -f images/gitlab-seed/Dockerfile .
 
-FROM release.daocloud.io/dac/alpine:3.20
+FROM alpine:3.20
 
 RUN apk add --no-cache git curl jq bash ca-certificates
 

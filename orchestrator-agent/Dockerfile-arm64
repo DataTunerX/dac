@@ -2,7 +2,7 @@
 # Build stage with explicit platform specification
 #FROM ghcr.io/astral-sh/uv:python3.13-alpine AS uv
 
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/uv:python3.13-alpine-arm64 AS uv
+FROM ghcr.io/astral-sh/uv:python3.13-alpine AS uv
 
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
     apk add --no-cache build-base cargo openssl-dev && \
@@ -32,9 +32,13 @@ RUN uv sync --frozen --no-dev --no-editable
 
 
 # stage 2
-#FROM docker.m.daocloud.io/python:3.13-alpine
 
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-alpine-timezone-arm64
+FROM python:3.13-alpine
+
+RUN apk add --no-cache tzdata && \
+    ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime && \
+    echo "America/New_York" > /etc/timezone
+ENV TZ="America/New_York"
 
 RUN apk add --no-cache \
     fd \

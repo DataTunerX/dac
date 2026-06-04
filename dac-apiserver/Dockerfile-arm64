@@ -1,7 +1,7 @@
 # 多阶段构建 Dockerfile (arm64)
 
 # 构建阶段
-FROM --platform=linux/arm64 docker.m.daocloud.io/golang:1.25-alpine AS builder
+FROM --platform=linux/arm64 golang:1.25-alpine AS builder
 
 # 设置工作目录
 WORKDIR /app
@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
     go build -ldflags="-w -s" -o bin/dac-apiserver ./cmd/server
 
 # 运行阶段
-FROM --platform=linux/arm64 docker.m.daocloud.io/alpine:latest
+FROM --platform=linux/arm64 alpine:latest
 
 # 安装运行时依赖
 RUN apk --no-cache add ca-certificates tzdata

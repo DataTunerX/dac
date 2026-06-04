@@ -1,6 +1,6 @@
 # stage 1
 # Build stage with explicit platform specification
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-ubuntu-timezone-arm64 AS uv
+FROM python:3.13-slim AS uv
 
 # Install the project into /app
 WORKDIR /app
@@ -20,7 +20,15 @@ RUN uv sync --frozen --no-dev --no-editable
 
 
 # stage 2
-FROM registry.cn-shanghai.aliyuncs.com/jamesxiong/python:3.13-ubuntu-timezone-arm64
+FROM python:3.13-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tzdata && \
+    ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime && \
+    echo "America/New_York" > /etc/timezone && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+ENV TZ="America/New_York"
 
 COPY --from=uv --chown=app:app /app/.venv /app/.venv
 
