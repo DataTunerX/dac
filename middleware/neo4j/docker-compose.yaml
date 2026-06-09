@@ -1,6 +1,6 @@
 services:
   neo4j:
-    image: docker.m.daocloud.io/neo4j:5.18.0
+    image: neo4j:5.18.0
     container_name: neo4j
     ports:
       - "7474:7474"

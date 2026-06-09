@@ -218,7 +218,7 @@ apiserver:
   enabled: true
   image:
     repository: dac-apiserver
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -279,7 +279,7 @@ frontend:
   image:
     registry: release.daocloud.io/dac
     repository: frontend
-    tag: "v0.11.0"
+    tag: "12"
   # -- Number of replicas
   replicas: 1
   service:
@@ -322,7 +322,7 @@ dataServices:
   enabled: true
   image:
     repository: data-services
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -381,7 +381,7 @@ executionEngine:
   enabled: true
   image:
     repository: execution-engine
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   replicas: 1
   resources:
     requests:
@@ -399,34 +399,34 @@ executionEngine:
     orchestratorAgent:
       # -- Repository name under global.imageRegistry
       repository: "orchestrator-agent"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     expertAgent:
       # -- Repository name under global.imageRegistry
       repository: "expert-agent"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     codeAgent:
       # -- Repository name under global.imageRegistry
       repository: "code-agent"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     docAgent:
       # -- Repository name under global.imageRegistry
       repository: "doc-agent"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     dacDataServices:
       # -- Repository name under global.imageRegistry
       repository: "dac-data-services"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     dataSinkerJob:
       # -- Repository name under global.imageRegistry (image = registry/repository:tag)
       repository: "data-sinkers-job"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     dataSinkerStatus:
       # -- Repository name under global.imageRegistry
       repository: "data-sinkers-status"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     dataSinkersObserver:
       repository: "data-sinkers-observer"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
 
   # -- dac-configuration ConfigMap values (read by DAC controller)
   dacConfig:
@@ -462,7 +462,7 @@ semanticGrouper:
   enabled: true
   image:
     repository: semantic-grouper
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   api:
     replicas: 1
     resources:
@@ -511,7 +511,7 @@ orchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   replicas: 1
   config:
     # -- Vector collection name for agent cards
@@ -537,7 +537,7 @@ bizOrchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   replicas: 1
   config:
     collectionName: "biz_orchestrator_agent_cards"
@@ -565,7 +565,7 @@ bizRoutingAgent:
   enabled: true
   image:
     repository: routing-agent
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state
@@ -594,7 +594,7 @@ bizChartAgent:
   enabled: true
   image:
     repository: chart-agent
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   replicas: 1
   config:
     redisDb: "2"
@@ -623,7 +623,7 @@ bizSkillAgent:
   enabled: true
   image:
     repository: skill-agent
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state / registration
@@ -681,7 +681,7 @@ skillHub:
   enabled: true
   image:
     repository: skill-hub
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   replicas: 1
   config:
     # -- Silence the transitive langfuse "client disabled" log from skill_sdk.

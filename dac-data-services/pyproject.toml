@@ -64,4 +64,4 @@ target-version = "py313"
 
 [tool.uv]
 dev-dependencies = []
-index-url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
+index-url = "https://pypi.org/simple/"

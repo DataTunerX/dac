@@ -24,47 +24,47 @@ global:
 apiserver:
   image:
     repository: "dac-apiserver"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
 
 frontend:
   image:
     repository: "frontend"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
 
 dataServices:
   image:
     repository: "data-services"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
 
 executionEngine:
   image:
     repository: "execution-engine"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   agentImages:
     orchestratorAgent:
       repository: "orchestrator-agent"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     expertAgent:
       repository: "expert-agent"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     codeAgent:
       repository: "code-agent"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     docAgent:
       repository: "doc-agent"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     dacDataServices:
       repository: "dac-data-services"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     dataSinkerJob:
       repository: "data-sinkers-job"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     dataSinkerStatus:
       repository: "data-sinkers-status"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
     dataSinkersObserver:
       repository: "data-sinkers-observer"
-      tag: "v0.11.0-amd64"
+      tag: "12-amd64"
   llmConfigs:
     - name: "llm-default"
       provider: "openai_compatible"
@@ -75,7 +75,7 @@ executionEngine:
 semanticGrouper:
   image:
     repository: "semantic-grouper"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
   config:
     llm:
       model: "google/gemma-4-31B-it"
@@ -83,32 +83,32 @@ semanticGrouper:
 orchestratorRegistry:
   image:
     repository: "agent-registry"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
 
 bizOrchestratorRegistry:
   image:
     repository: "agent-registry"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
 
 bizRoutingAgent:
   image:
     repository: "routing-agent"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
 
 bizChartAgent:
   image:
     repository: "chart-agent"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
 
 bizSkillAgent:
   image:
     repository: "skill-agent"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
 
 skillHub:
   image:
     repository: "skill-hub"
-    tag: "v0.11.0-amd64"
+    tag: "12-amd64"
 
 mysql:
   image:

@@ -4,9 +4,7 @@
 
 FROM ghcr.io/astral-sh/uv:python3.13-alpine AS uv
 
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk add --no-cache build-base cargo openssl-dev && \
-    sed -i 's/mirrors.aliyun.com/dl-cdn.alpinelinux.org/g' /etc/apk/repositories
+RUN apk add --no-cache build-base cargo openssl-dev
 
 # Install the project into /app
 WORKDIR /app

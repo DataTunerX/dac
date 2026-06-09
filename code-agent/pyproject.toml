@@ -78,4 +78,4 @@ target-version = "py313"
 
 [tool.uv]
 dev-dependencies = []
-index-url = "https://mirrors.aliyun.com/pypi/simple/"
+index-url = "https://pypi.org/simple/"
