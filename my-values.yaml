@@ -11,7 +11,7 @@ global:
   embedding:
     provider: "openai_compatible"
     apiKey: "sk-youre-real-key-123"
-    baseUrl: "http://10.124.48.50:8000/v1"
+    baseUrl: "http://10.124.48.181:11434/api/embed"
     model: "bge-m3"
     dims: "1024"
 

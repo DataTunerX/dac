@@ -277,7 +277,6 @@ frontend:
   # -- Enable frontend deployment
   enabled: true
   image:
-    registry: release.daocloud.io/dac
     repository: frontend
     tag: "12"
   # -- Number of replicas
