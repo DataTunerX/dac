@@ -1197,7 +1197,7 @@ class CodebaseIndexer:
         )
     
     def _analyze_file_chunked(self, file_info: Dict, original_content: str) -> Dict:
-        """分块分析大型代码文件：分割 → 并行逐块分析 → 合并结果"""
+        """分块分析大型代码文件：分割 → 顺序逐块分析 → 合并结果"""
         file_path = file_info['file_path']
         file_type = file_info['file_type']
 
@@ -1297,7 +1297,7 @@ class CodebaseIndexer:
         merged = self._correct_line_numbers(merged, original_content, file_path)
 
         logger.info(f"CodebaseIndexer 完成分块分析: {file_path} "
-                     f"({num_chunks} 块并行, 总耗时: {total_time:.2f}s)")
+                     f"({num_chunks} 块顺序分析, 累计耗时: {total_time:.2f}s)")
 
         return {
             'file_path': file_path,
@@ -2089,9 +2089,33 @@ class CodebaseIndexer:
 
         self.analyze_files(all_code_files, concurrent=True)
 
-        formatted_code_analyse_result = json.dumps(self.analysis_results, ensure_ascii=False, indent=4)
-
-        logger.info(f"index_codebase result: {formatted_code_analyse_result}")
+        if self.analysis_results:
+            first = self.analysis_results[0]
+            ar = first.get("analysis_result") if isinstance(first, dict) else None
+            if not isinstance(ar, dict):
+                ar = {}
+            # 只预览数组第 1 项的结构（不 dump entities 等深层字段）
+            preview_item = {
+                "file_path": first.get("file_path") if isinstance(first, dict) else None,
+                "file_type": first.get("file_type") if isinstance(first, dict) else None,
+                "status": first.get("status") if isinstance(first, dict) else None,
+                "analysis_time": first.get("analysis_time") if isinstance(first, dict) else None,
+                "analysis_result": {
+                    "file_summary": (ar.get("file_summary") or "")[:160],
+                    "has_api_endpoints": ar.get("has_api_endpoints"),
+                    "entities_count": len(ar.get("entities") or []),
+                    "global_functions_count": len(ar.get("global_functions") or []),
+                    "api_endpoints_count": len(ar.get("api_endpoints") or []),
+                },
+            }
+            preview = json.dumps([preview_item], ensure_ascii=False, separators=(",", ":"))
+            logger.info(
+                "index_codebase result: total_files=%d, array_preview_first_only=%s",
+                len(self.analysis_results),
+                preview,
+            )
+        else:
+            logger.info("index_codebase result: total_files=0, array_preview_first_only=[]")
 
         return self.analysis_results
 

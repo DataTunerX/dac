@@ -18,7 +18,30 @@ from collections import defaultdict
 from langchain_text_splitters import CharacterTextSplitter
 from .code_caller import CodeSplitter
 from .code_analysis_runtime import CodeAnalysisRuntime
+from .context_budget import (
+    chunk_entries_by_budget,
+    chunk_file_paths_by_budget,
+    chunk_groups_by_budget,
+    chunk_semantic_results_by_budget,
+    estimate_groups_merge_chars,
+    estimate_semantic_domains_merge_chars,
+    format_entries_for_group_llm,
+    format_groups_for_merge_llm,
+    format_semantic_domains_for_merge_llm,
+    module_files_group_max_files_per_batch,
+    module_files_group_max_input_chars,
+    parse_file_summary_content,
+    parse_semantic_files_content,
+    premerge_groups_by_exact_name,
+    premerge_semantic_domains_results,
+    semantic_domains_max_files_per_batch,
+    semantic_domains_max_input_chars,
+    total_entries_chars,
+    total_file_paths_chars,
+)
 from ..llm_output_json import parse_llm_output_string
+from ..llm_invoke_retry import invoke_llm_with_json_retry, llm_json_parse_max_retries
+from ..llm_config import llm_request_timeout_seconds
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +52,18 @@ DEFAULT_CODE_DOWNLOAD_DIR = "/app/download_dir"
 # file_summary 递归 refine 合并时每轮并发调用 LLM 的最大线程数
 FILE_SUMMARY_REFINE_MAX_WORKERS = int(os.getenv("FILE_SUMMARY_REFINE_MAX_WORKERS", "20"))
 
+
+def _validate_agent_card_payload(parsed: Any) -> Optional[str]:
+    """Validate parsed JSON can instantiate AgentCard (used by invoke retry)."""
+    if not isinstance(parsed, dict):
+        return f"expected dict, got {type(parsed).__name__}"
+    try:
+        AgentCard(**parsed)
+    except (TypeError, ValueError, KeyError) as exc:
+        return str(exc)
+    return None
+
+
 manager = ModelManager()
 
 llm = manager.get_llm(
@@ -37,6 +72,7 @@ llm = manager.get_llm(
     base_url=os.getenv("BASE_URL"),
     model=os.getenv("Model"),
     temperature=0.01,
+    timeout=llm_request_timeout_seconds(),
     extra_body={
         "enable_thinking": False
     },
@@ -810,37 +846,146 @@ class CodeAnalyzer:
         }
         return type_mapping.get(rel_type, rel_type)
 
-    def module_files_group(self, content, batch_size:int = 30) -> dict:
-        """
-        return:
+    # -------------------------------------------------------------------------
+    # module_files_group 分批分组（Map-Reduce）
+    #
+    # 大仓库全量 file_summary 一次送入 LLM 会超 context；此处实现：
+    #   Map: chunk_entries_by_budget → 每批 _invoke_group_files_llm
+    #   Reduce: _merge_groups_recursive → _invoke_merge_groups_llm
+    #   校验: _ensure_file_coverage
+    # 预算与切分工具见 context_budget.py；主编排入口 module_files_group_entries。
+    # -------------------------------------------------------------------------
 
-        {
-            "group_with_files": [
-                {
-                    "module_name": "数据存储与管理服务",
-                    "business_description": "提供多种数据存储和管理功能，包括内存数据、向量数据、历史记录、指纹数据和知识金字塔文档的管理",
-                    "files": [
-                        "data_services/memory/memory.py",
-                        "data_services/vector/vector.py",
-                        "data_services/history/history.py",
-                        "data_services/fingerprint/fingerprint.py",
-                        "data_services/knowledge_pyramid/knowledge_pyramid.py"
-                    ],
-                    "file_count": 5
-                },
-                {
-                    "module_name": "数据服务API与服务器",
-                    "business_description": "提供数据服务的API基础模型和服务器实现，整合各种数据存储与管理服务",
-                    "files": [
-                        "data_services/api/base.py",
-                        "data_services/server.py"
-                    ],
-                    "file_count": 2
-                }
-            ]
-        }
+    def _log_module_files_group_begin(
+        self,
+        *,
+        mode: str,
+        file_count: int,
+        total_chars: int,
+        budget: int,
+        max_files_per_batch: int,
+        batch_count: int = 1,
+    ) -> None:
+        """打印文件分组（轻量 summary）开始横幅。"""
+        logger.info(
+            "[文件分组|ModuleFilesGroup] ▶ 开始 | 路径=%s | 输入=%d文件(轻量summary) | "
+            "summary字符=%d | 预算=%d字/%d文件每批 | 切批=%d",
+            mode,
+            file_count,
+            total_chars,
+            budget,
+            max_files_per_batch,
+            batch_count,
+        )
+
+    def _log_module_files_group_groups_preview(
+        self,
+        groups: List[Dict[str, Any]],
+        *,
+        prefix: str,
+    ) -> None:
+        """打印各业务模块组名与文件数摘要（不 dump 全量 files 列表）。"""
+        if not groups:
+            logger.info("[文件分组|ModuleFilesGroup] %s: （无业务模块组）", prefix)
+            return
+        parts = []
+        for i, g in enumerate(groups, 1):
+            name = (g.get("module_name") or "未命名").replace("\n", " ")
+            if len(name) > 48:
+                name = name[:45] + "..."
+            n = len(g.get("files") or [])
+            parts.append(f"#{i}「{name}」{n}文件")
+        logger.info(
+            "[文件分组|ModuleFilesGroup] %s: 共%d个业务模块组 | %s",
+            prefix,
+            len(groups),
+            " | ".join(parts),
+        )
+
+    def _log_module_files_group_end(
+        self,
+        *,
+        mode: str,
+        elapsed_s: float,
+        input_file_count: int,
+        groups: List[Dict[str, Any]],
+        coverage_missing: int = 0,
+        coverage_duplicates: int = 0,
+    ) -> None:
+        """打印文件分组结束横幅与覆盖率摘要。"""
+        assigned = sum(len(g.get("files") or []) for g in groups)
+        logger.info(
+            "[文件分组|ModuleFilesGroup] ■ 完成 | 路径=%s | 耗时=%.1fs | "
+            "输入%d文件 -> 输出%d个业务模块组/%d文件 | 补缺=%d | 去重=%d",
+            mode,
+            elapsed_s,
+            input_file_count,
+            len(groups),
+            assigned,
+            coverage_missing,
+            coverage_duplicates,
+        )
+        self._log_module_files_group_groups_preview(groups, prefix="业务模块组预览")
+
+    def _collect_file_summary_entries(self) -> List[Dict[str, str]]:
+        """从 ``self.analysis_results`` 提取分组所需的结构化文件条目。
+
+        遍历 CodebaseIndexer / CodeAnalyzer 产出的逐文件分析结果，去重后收集
+        含 ``file_summary`` 的条目，供 ``module_files_group_entries`` 直接消费，
+        避免先拼大字符串再解析的开销。
+
+        Returns:
+            ``[{"file_path": str, "file_summary": str}, ...]``
+            无 summary 或重复路径的条目会被跳过。
         """
-        prompt = f"""
+        seen_files: set[str] = set()
+        entries: List[Dict[str, str]] = []
+
+        for result in self.analysis_results:
+            file_path = result.get("file_path")
+            if not file_path or file_path in seen_files:
+                continue
+            seen_files.add(file_path)
+
+            analysis_result = result.get("analysis_result") or {}
+            file_summary = analysis_result.get("file_summary")
+            if not file_summary:
+                continue
+
+            entries.append({
+                "file_path": file_path,
+                "file_summary": file_summary,
+            })
+
+        return entries
+
+    def _build_module_files_group_prompt(
+        self,
+        batch_size: int,
+        batch_hint: str | None = None,
+    ) -> str:
+        """构建 Map 阶段（按文件 summary 分组）的 system prompt。
+
+        Args:
+            batch_size: 约束 LLM **输出**每组最多包含的文件数（默认 30）。
+            batch_hint: 非空时表示当前为分批调用，会追加「只对本批文件分组」说明；
+                例如 ``当前为第 2/5 批，只对本批文件分组。``
+
+        Returns:
+            完整的 system prompt 字符串，由 ``_invoke_group_files_llm`` 使用。
+        """
+        batch_notice = ""
+        if batch_hint:
+            batch_notice = f"""
+
+        ## 分批说明 ##
+        {batch_hint}
+        - 只对本批提供的文件进行分组
+        - files 数组不得包含本批以外的文件路径
+        - 本批内的每个文件必须恰好出现在一个组中
+        """
+
+        return f"""
         你是一个AI系统架构分析专家，负责分析项目文件结构并进行智能分组。请仔细分析每个文件的详细描述，理解其业务功能，然后进行专业分组。
 
         ## 核心任务 ##
@@ -899,30 +1044,108 @@ class CodeAnalyzer:
            - 通用工具类文件可以单独成组，命名为"通用工具与基础设施"
            - 配置和启动文件可以单独成组，命名为"应用启动与配置"
            - 如果某个业务模块文件过多，可以按子功能进一步细分
-
+        {batch_notice}
 
         请基于提供的文件描述进行专业分析，确保分组既符合业务逻辑，又满足处理规模要求。
 
         **【注意：请严格遵循JSON格式输出，不要包含任何额外的解释或文本。】**
         """
 
-        system_message = SystemMessage(content=prompt)
+    def _build_merge_module_groups_prompt(self, batch_size: int) -> str:
+        """构建 Reduce 阶段（跨批次组合并）的 system prompt。
 
+        与 Map prompt 不同：输入是各批已产出的组元数据（组名 + 路径），
+        任务是合并语义相同的组、保证每个文件恰好出现一次，
+        且合并后单组文件数不超过 ``batch_size``。
+
+        Args:
+            batch_size: 合并后单组文件数上限，与 Map 阶段一致。
+        """
+        return f"""
+        你是一个AI系统架构分析专家。你将收到多个批次已经分好的业务模块组（JSON 数组）。
+        这些批次来自同一代码仓库的不同切片，可能存在语义相同但名称不同的组。
+
+        ## 任务 ##
+        1. 合并语义相同/同业务的组（例如「订单管理」与「订单服务」）
+        2. 合并后每个 file_path 必须恰好出现一次
+        3. 合并后单组文件数不得超过 {batch_size}；若超过，按子功能拆分为多个组
+        4. 保留清晰的 module_name 与 business_description
+
+        ## 输出要求 ##
+        只输出以下 JSON，不要包含额外文本：
+
+        {{
+            "group_with_files": [
+                {{
+                    "module_name": "业务模块名称",
+                    "business_description": "该模块的核心业务功能简述（1-2句话）",
+                    "files": ["path/to/file1.go", "path/to/file2.go"],
+                    "file_count": 2
+                }}
+            ]
+        }}
+        """
+
+    def _singleton_module_group(self, entry: Dict[str, str]) -> Dict[str, Any]:
+        """为仅含 1 个文件的批次构造占位组，跳过 LLM 调用。
+
+        用于：全仓库仅 1 个文件、或某批切分后只剩 1 条、或某批 LLM 失败时的 fallback。
+        ``business_description`` 截取 summary 前 200 字作为简要描述。
+        """
+        return {
+            "module_name": "单文件模块",
+            "business_description": entry.get("file_summary", "")[:200],
+            "files": [entry["file_path"]],
+            "file_count": 1,
+        }
+
+    def _invoke_group_files_llm(
+        self,
+        content: str,
+        batch_size: int,
+        *,
+        label: str = "code-module-files-group",
+        batch_hint: str | None = None,
+    ) -> dict:
+        """执行一次 Map 阶段 LLM 调用：根据文件 summary 划分业务模块组。
+
+        Args:
+            content: human 消息正文，通常为 ``format_entries_for_group_llm`` 的输出
+                或历史兼容的 ``tables schema: {大段文本}`` 中的大段文本。
+            batch_size: 输出每组最大文件数。
+            label: 传给 ``runtime.invoke_llm`` 的可观测标签（如 ``code-module-files-group-b2``）。
+            batch_hint: 分批上下文说明，非空时写入 system prompt。
+
+        Returns:
+            解析后的 dict，含 ``group_with_files`` 列表。
+            格式校验失败时最多重试 1 次（轻量 correction，不带完整前序 response）；
+            仍失败则 ``_normalize_module_files_group`` 兜底。
+        """
+        prompt = self._build_module_files_group_prompt(batch_size, batch_hint)
+        system_message = SystemMessage(content=prompt)
         human_message = HumanMessage(content=f"tables schema: {content}")
+
+        logger.info(
+            "[文件分组|ModuleFilesGroup] Map-轻量分组 label=%s input_chars=%d",
+            label,
+            len(content),
+        )
 
         response = self.runtime.invoke_llm(
             self.llm,
             [system_message, human_message],
-            label="code-module-files-group",
+            label=label,
         )
-
         llm_result = self.format_llm_output(response)
 
         validation_error = self._validate_module_files_group(llm_result)
         if validation_error is None:
             return llm_result
 
-        logger.warning(f"module_files_group format invalid: {validation_error}, retrying with correction prompt...")
+        logger.warning(
+            "module_files_group format invalid: %s, retrying with correction prompt...",
+            validation_error,
+        )
         correction_prompt = HumanMessage(content=(
             f"你上次的输出格式不正确: {validation_error}\n"
             f"你的输出是: {json.dumps(llm_result, ensure_ascii=False)}\n\n"
@@ -933,8 +1156,8 @@ class CodeAnalyzer:
         ))
         retry_response = self.runtime.invoke_llm(
             self.llm,
-            [system_message, human_message, response, correction_prompt],
-            label="code-module-files-group-retry",
+            [system_message, human_message, correction_prompt],
+            label=f"{label}-retry",
         )
         retry_result = self.format_llm_output(retry_response)
 
@@ -942,8 +1165,443 @@ class CodeAnalyzer:
         if retry_validation_error is None:
             return retry_result
 
-        logger.error(f"module_files_group retry still invalid: {retry_validation_error}, falling back to normalization")
+        logger.error(
+            "module_files_group retry still invalid: %s, falling back to normalization",
+            retry_validation_error,
+        )
         return self._normalize_module_files_group(llm_result)
+
+    def _invoke_merge_groups_llm(
+        self,
+        groups: List[Dict[str, Any]],
+        batch_size: int,
+        *,
+        label: str = "code-module-files-merge",
+    ) -> List[Dict[str, Any]]:
+        """执行一次 Reduce 阶段 LLM 调用：合并跨批次的语义相同组。
+
+        输入仅为组元数据 JSON（``module_name`` / ``business_description`` / ``files``），
+        **不包含** ``file_summary``，避免合并阶段再次撑爆 context。
+
+        Args:
+            groups: 待合并的组列表（可能来自多批 Map 或上一轮 Reduce 的部分结果）。
+            batch_size: 合并后单组文件数上限。
+            label: LLM 调用可观测标签。
+
+        Returns:
+            合并后的 ``group_with_files`` 列表。
+            若 LLM 输出格式非法且重试仍失败，**原样返回入参 groups** 作为降级，
+            由后续 ``_ensure_file_coverage`` 保证文件不丢。
+        """
+        merge_content = format_groups_for_merge_llm(groups)
+        prompt = self._build_merge_module_groups_prompt(batch_size)
+        system_message = SystemMessage(content=prompt)
+        human_message = HumanMessage(
+            content=f"请合并以下各批次的模块组：\n\n{merge_content}"
+        )
+
+        logger.info(
+            "[文件分组|ModuleFilesGroup] Reduce-合并模块组 label=%s groups=%d input_chars=%d",
+            label,
+            len(groups),
+            len(merge_content),
+        )
+
+        response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message],
+            label=label,
+        )
+        llm_result = self.format_llm_output(response)
+
+        validation_error = self._validate_module_files_group(llm_result)
+        if validation_error is None:
+            return llm_result.get("group_with_files", [])
+
+        logger.warning(
+            "merge_module_groups format invalid: %s, retrying...",
+            validation_error,
+        )
+        correction_prompt = HumanMessage(content=(
+            f"输出格式不正确: {validation_error}\n"
+            f"请重新输出合法 JSON，字段为 group_with_files。"
+        ))
+        retry_response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message, correction_prompt],
+            label=f"{label}-retry",
+        )
+        retry_result = self.format_llm_output(retry_response)
+        if self._validate_module_files_group(retry_result) is None:
+            return retry_result.get("group_with_files", [])
+
+        logger.error("merge_module_groups retry failed, returning pre-merge groups")
+        return groups
+
+    def _merge_groups_recursive(
+        self,
+        groups: List[Dict[str, Any]],
+        batch_size: int,
+        budget: int,
+        depth: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """递归合并多批 Map 产出的组列表，超预算时先切分再逐片合并。
+
+        流程:
+
+        1. ``premerge_groups_by_exact_name``：组名完全相同则先确定性合并
+        2. 若合并 JSON 字符数 ``<= budget``：单次 ``_invoke_merge_groups_llm``
+        3. 否则 ``chunk_groups_by_budget`` 切为多片，每片独立调合并 LLM
+        4. 多片结果摊平后若仍多于 1 组，**递归**本函数（``depth + 1``）
+
+        Args:
+            groups: 各 Map 批次 ``group_with_files`` 摊平后的列表。
+            batch_size: 合并后单组文件数上限。
+            budget: 单次合并 LLM human 内容的字符预算（通常 60000）。
+            depth: 递归深度，仅用于日志与 label 区分。
+
+        Returns:
+            合并后的扁平 ``group_with_files`` 列表（尚未做覆盖率校验）。
+        """
+        groups = premerge_groups_by_exact_name(groups)
+        if not groups:
+            return []
+        if len(groups) == 1:
+            return groups
+
+        merge_chars = estimate_groups_merge_chars(groups)
+        if merge_chars <= budget:
+            return self._invoke_merge_groups_llm(
+                groups,
+                batch_size,
+                label=f"code-module-files-merge-d{depth}",
+            )
+
+        chunks = chunk_groups_by_budget(groups, budget)
+        logger.info(
+            "[文件分组|ModuleFilesGroup] Reduce-合并模块组 depth=%d groups=%d input_chars=%d "
+            "budget=%d split_into=%d",
+            depth,
+            len(groups),
+            merge_chars,
+            budget,
+            len(chunks),
+        )
+
+        partial: List[Dict[str, Any]] = []
+        for idx, chunk in enumerate(chunks):
+            if len(chunk) == 1:
+                partial.extend(chunk)
+                continue
+            merged_chunk = self._invoke_merge_groups_llm(
+                chunk,
+                batch_size,
+                label=f"code-module-files-merge-d{depth}-c{idx + 1}",
+            )
+            partial.extend(merged_chunk)
+
+        if len(partial) <= 1:
+            return partial
+        return self._merge_groups_recursive(
+            partial, batch_size, budget, depth=depth + 1
+        )
+
+    def _ensure_file_coverage(
+        self,
+        entries: List[Dict[str, str]],
+        groups: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """校验并修复分组结果，保证「每个输入文件有且仅有一个组」。
+
+        在 Map + Reduce 全部完成后调用，作为最终输出的硬约束：
+
+        - 剥离 ``files`` 中误带的 ``File N. `` 前缀
+        - **去重**：同一 ``file_path`` 出现在多个组时，保留首次出现的组
+        - **补缺**：LLM 漏分的文件归入 ``未分组文件`` 组
+        - 重算每组的 ``file_count``
+
+        Args:
+            entries: 本次分组的全部输入文件条目（期望覆盖的全集）。
+            groups: LLM 产出的组列表（可能含重复或遗漏）。
+
+        Returns:
+            清洗后的 ``group_with_files`` 列表，可直接交给 ``module_files_regroup``。
+        """
+        expected = {entry["file_path"] for entry in entries}
+        seen: set[str] = set()
+        cleaned_groups: List[Dict[str, Any]] = []
+        duplicate_count = 0
+
+        for group in groups:
+            files: List[str] = []
+            for raw_path in group.get("files") or []:
+                path = re.sub(r"^File\s+\d+\.\s*", "", str(raw_path).strip())
+                if not path or path in seen:
+                    if path in seen:
+                        duplicate_count += 1
+                        logger.warning(
+                            "[文件分组|ModuleFilesGroup] 覆盖率校验: 重复文件 %s，保留首次所在组",
+                            path,
+                        )
+                    continue
+                files.append(path)
+                seen.add(path)
+
+            if not files:
+                continue
+
+            cleaned_groups.append({
+                "module_name": group.get("module_name") or "未命名模块",
+                "business_description": group.get("business_description", ""),
+                "files": files,
+                "file_count": len(files),
+            })
+
+        missing = expected - seen
+        if missing:
+            logger.warning(
+                "[文件分组|ModuleFilesGroup] 覆盖率校验: LLM 漏分 %d 个文件，归入「未分组文件」组",
+                len(missing),
+            )
+            cleaned_groups.append({
+                "module_name": "未分组文件",
+                "business_description": "分组阶段未覆盖的文件",
+                "files": sorted(missing),
+                "file_count": len(missing),
+            })
+
+        logger.info(
+            "[文件分组|ModuleFilesGroup] 覆盖率校验: 期望=%d 已分配=%d 补缺=%d 去重=%d",
+            len(expected),
+            len(seen),
+            len(missing),
+            duplicate_count,
+        )
+        return cleaned_groups
+
+    def module_files_group_entries(
+        self,
+        entries: List[Dict[str, str]],
+        batch_size: int = 30,
+    ) -> dict:
+        """按业务模块对文件进行分组（支持大仓库分批 + 跨批合并）。
+
+        主编排入口，解决全仓库 ``file_summary`` 一次性送入 LLM 导致 context 超限的问题。
+
+        **短路路径**（与小仓库 / 改前行为一致）:
+
+        - ``entries`` 为空 → 返回空 ``group_with_files``
+        - 仅 1 个文件 → singleton 组，不调 LLM
+        - 文件数 ``<= max_files_per_batch`` 且总字符 ``<= max_input_chars``
+          → 单次 ``_invoke_group_files_llm``
+
+        **分批路径**（大仓库）:
+
+        1. ``chunk_entries_by_budget`` 切批
+        2. 每批 ``_invoke_group_files_llm``（``map_unordered`` 并行）
+        3. 摊平各批结果 → ``_merge_groups_recursive`` 跨批合并
+        4. ``_ensure_file_coverage`` 保证文件全覆盖、无重复
+
+        Args:
+            entries: ``[{"file_path": str, "file_summary": str}, ...]``
+            batch_size: LLM 输出每组最大文件数（默认 30）。
+
+        Returns:
+            ``{"group_with_files": [{module_name, business_description, files, file_count}, ...]}``
+        """
+        t0 = time.perf_counter()
+        budget = module_files_group_max_input_chars()
+        max_files = module_files_group_max_files_per_batch()
+
+        if not entries:
+            self._log_module_files_group_begin(
+                mode="EMPTY",
+                file_count=0,
+                total_chars=0,
+                budget=budget,
+                max_files_per_batch=max_files,
+                batch_count=0,
+            )
+            self._log_module_files_group_end(
+                mode="EMPTY",
+                elapsed_s=0.0,
+                input_file_count=0,
+                groups=[],
+            )
+            return {"group_with_files": []}
+
+        total_chars = total_entries_chars(entries)
+
+        if len(entries) == 1:
+            self._log_module_files_group_begin(
+                mode="SINGLETON",
+                file_count=1,
+                total_chars=total_chars,
+                budget=budget,
+                max_files_per_batch=max_files,
+                batch_count=0,
+            )
+            groups = [self._singleton_module_group(entries[0])]
+            groups = self._ensure_file_coverage(entries, groups)
+            self._log_module_files_group_end(
+                mode="SINGLETON",
+                elapsed_s=time.perf_counter() - t0,
+                input_file_count=1,
+                groups=groups,
+            )
+            return {"group_with_files": groups}
+
+        formatted_all = format_entries_for_group_llm(entries)
+        if len(entries) <= max_files and len(formatted_all) <= budget:
+            self._log_module_files_group_begin(
+                mode="SINGLE_BATCH",
+                file_count=len(entries),
+                total_chars=total_chars,
+                budget=budget,
+                max_files_per_batch=max_files,
+                batch_count=1,
+            )
+            logger.info(
+                "[文件分组|ModuleFilesGroup] 未超预算，单次 LLM 轻量分组 | input_chars=%d",
+                len(formatted_all),
+            )
+            result = self._invoke_group_files_llm(formatted_all, batch_size)
+            groups = result.get("group_with_files", [])
+            groups = self._ensure_file_coverage(entries, groups)
+            self._log_module_files_group_end(
+                mode="SINGLE_BATCH",
+                elapsed_s=time.perf_counter() - t0,
+                input_file_count=len(entries),
+                groups=groups,
+            )
+            return {"group_with_files": groups}
+
+        chunks = chunk_entries_by_budget(entries, budget, max_files)
+        self._log_module_files_group_begin(
+            mode="MULTI_BATCH",
+            file_count=len(entries),
+            total_chars=total_chars,
+            budget=budget,
+            max_files_per_batch=max_files,
+            batch_count=len(chunks),
+        )
+        for i, chunk in enumerate(chunks, 1):
+            chunk_chars = len(format_entries_for_group_llm(chunk))
+            logger.info(
+                "[文件分组|ModuleFilesGroup] Map-轻量切批 | 第%d/%d批 | files=%d | summary字符=%d",
+                i,
+                len(chunks),
+                len(chunk),
+                chunk_chars,
+            )
+
+        def _group_one_batch(item: Tuple[int, List[Dict[str, str]]]) -> List[Dict[str, Any]]:
+            # 闭包内单批处理函数，供 map_unordered 并行调用；失败时由外层 fallback 为 singleton。
+            batch_idx, chunk = item
+            if len(chunk) == 1:
+                return [self._singleton_module_group(chunk[0])]
+
+            chunk_content = format_entries_for_group_llm(chunk)
+            batch_hint = (
+                f"当前为第 {batch_idx + 1}/{len(chunks)} 批，只对本批文件分组。"
+            )
+            logger.info(
+                "[文件分组|ModuleFilesGroup] Map-轻量分组 | 第%d/%d批 | files=%d | input_chars=%d",
+                batch_idx + 1,
+                len(chunks),
+                len(chunk),
+                len(chunk_content),
+            )
+            result = self._invoke_group_files_llm(
+                chunk_content,
+                batch_size,
+                label=f"code-module-files-group-b{batch_idx + 1}",
+                batch_hint=batch_hint,
+            )
+            return result.get("group_with_files", [])
+
+        partial_groups: List[Dict[str, Any]] = []
+        batch_items = list(enumerate(chunks))
+        for item, result, exc in self.runtime.map_unordered(
+            batch_items,
+            _group_one_batch,
+            label="code-module-files-group-batches",
+            max_workers=self.runtime.module_max_workers,
+        ):
+            batch_idx, chunk = item
+            if exc is not None:
+                logger.error(
+                    "[文件分组|ModuleFilesGroup] Map-轻量分组 第%d批失败: %s，降级 singleton",
+                    batch_idx + 1,
+                    exc,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                for entry in chunk:
+                    partial_groups.append(self._singleton_module_group(entry))
+                continue
+            partial_groups.extend(result or [])
+
+        self._log_module_files_group_groups_preview(
+            partial_groups, prefix="Map各批局部模块组"
+        )
+        logger.info(
+            "[文件分组|ModuleFilesGroup] Map-轻量分组完成 | 批次数=%d | 局部模块组=%d | 进入 Reduce-合并模块组",
+            len(chunks),
+            len(partial_groups),
+        )
+
+        merged_groups = self._merge_groups_recursive(
+            partial_groups, batch_size, budget
+        )
+        self._log_module_files_group_groups_preview(
+            merged_groups, prefix="Reduce合并后模块组"
+        )
+
+        final_groups = self._ensure_file_coverage(entries, merged_groups)
+        self._log_module_files_group_end(
+            mode="MULTI_BATCH",
+            elapsed_s=time.perf_counter() - t0,
+            input_file_count=len(entries),
+            groups=final_groups,
+        )
+        return {"group_with_files": final_groups}
+
+    def module_files_group(self, content, batch_size: int = 30) -> dict:
+        """按业务模块对文件分组（legacy 字符串入参，兼容旧调用方）。
+
+        优先尝试将 ``content`` 解析为结构化条目并委托 ``module_files_group_entries``
+        （自动启用分批逻辑）。解析失败时：
+
+        - 空内容 → 空结果
+        - 字符数未超预算 → 单次 ``_invoke_group_files_llm``（与历史行为一致）
+        - 超预算且无法解析 → 打 warning 后仍单次调用（无法安全切批时的最后手段）
+
+        Args:
+            content: ``format_file_analysis_with_file_summary()`` 产出的大段文本，
+                或任意 ``File N. path，summary`` 块拼接字符串。
+            batch_size: 每组最大文件数。
+
+        Returns:
+            ``{"group_with_files": [...]}``，结构同 ``module_files_group_entries``。
+        """
+        entries = parse_file_summary_content(content)
+        if entries:
+            return self.module_files_group_entries(entries, batch_size=batch_size)
+
+        if not content or not str(content).strip():
+            return {"group_with_files": []}
+
+        budget = module_files_group_max_input_chars()
+        if len(content) <= budget:
+            result = self._invoke_group_files_llm(content, batch_size)
+            return result
+
+        logger.warning(
+            "[文件分组|ModuleFilesGroup] legacy 内容无法解析切批; "
+            "invoking single LLM call anyway (input_chars=%d)",
+            len(content),
+        )
+        return self._invoke_group_files_llm(content, batch_size)
 
     def _validate_module_files_group(self, result) -> str | None:
         """校验 module_files_group 的返回格式，返回 None 表示合法，否则返回错误描述"""
@@ -1514,14 +2172,25 @@ class CodeAnalyzer:
                 logger.warning(f"模块 【{module_name}】 文件列表为空，跳过处理。")
                 return None
 
-            files_summary = self.format_file_analysis_with_summary_functions_business_concepts(file_list)
-            logger.info(f"files_summary...: [{index}]. length:{len(files_summary)}")
+            logger.info(
+                "[语义域分析|SemanticDomains] 模块入口 | index=%d | module=%s | files=%d",
+                index,
+                module_name[:48] + ("..." if len(module_name) > 48 else ""),
+                len(file_list),
+            )
 
-            if not files_summary or not files_summary.strip():
-                logger.warning(f"模块 【{module_name}】 files_summary 为空（可能是文件名不匹配），跳过处理。file_list={file_list}")
+            semantic_domains_analyse_result = self.semantic_domains_analyse_files(
+                file_list,
+                module_name=module_name,
+            )
+
+            if not semantic_domains_analyse_result.get("semantic_domains"):
+                logger.warning(
+                    "模块 【%s】 semantic_domains 为空（可能是文件名不匹配），跳过处理。file_list=%s",
+                    module_name,
+                    file_list,
+                )
                 return None
-
-            semantic_domains_analyse_result = self.semantic_domains_analyse(files_summary)
 
             formatted_result = json.dumps(semantic_domains_analyse_result, ensure_ascii=False, indent=4)
             logger.debug(f"process_single_module, semantic_domains_analyse = {formatted_result}")
@@ -1556,6 +2225,598 @@ class CodeAnalyzer:
                     
         logger.info("\n--- 所有模块处理完毕 ---")
         return results
+
+    def _estimate_semantic_file_chars(self, file_path: str) -> int:
+        """估算单文件富文本摘要在 semantic_domains_analyse prompt 中的字符数。"""
+        formatted = self.format_file_analysis_with_summary_functions_business_concepts(
+            [file_path]
+        )
+        return len(formatted)
+
+    def _build_semantic_file_char_map(self, file_list: List[str]) -> Dict[str, int]:
+        """预计算每个文件路径的格式化字符数，供按文件切批使用。"""
+        return {path: self._estimate_semantic_file_chars(path) for path in file_list}
+
+    def _log_semantic_domains_begin(
+        self,
+        *,
+        mode: str,
+        file_count: int,
+        total_chars: int,
+        budget: int,
+        max_files_per_batch: int,
+        batch_count: int = 1,
+        module_name: str = "",
+    ) -> None:
+        module_hint = f" | 业务模块={module_name[:40]}" if module_name else ""
+        logger.info(
+            "[语义域分析|SemanticDomains] ▶ 开始 | 路径=%s | 输入=%d文件(富文本summary) | "
+            "富文本字符=%d | 预算=%d字/%d文件每批 | 切批=%d%s",
+            mode,
+            file_count,
+            total_chars,
+            budget,
+            max_files_per_batch,
+            batch_count,
+            module_hint,
+        )
+
+    def _log_semantic_domains_end(
+        self,
+        *,
+        mode: str,
+        elapsed_s: float,
+        input_file_count: int,
+        result: Dict[str, Any],
+    ) -> None:
+        domains = result.get("semantic_domains") or []
+        concepts = sum(len(d.get("core_concepts") or []) for d in domains)
+        logger.info(
+            "[语义域分析|SemanticDomains] ■ 完成 | 路径=%s | 耗时=%.1fs | "
+            "输入%d文件 -> 输出%d个语义域/%d个概念 | 域间关系=%d",
+            mode,
+            elapsed_s,
+            input_file_count,
+            len(domains),
+            concepts,
+            len(result.get("inter_domain_relations") or []),
+        )
+        if domains:
+            parts = []
+            for i, d in enumerate(domains, 1):
+                name = (d.get("domain_name") or "未命名").replace("\n", " ")
+                if len(name) > 40:
+                    name = name[:37] + "..."
+                n = len(d.get("core_concepts") or [])
+                parts.append(f"#{i}「{name}」{n}概念")
+            logger.info(
+                "[语义域分析|SemanticDomains] 语义域预览: 共%d域 | %s",
+                len(domains),
+                " | ".join(parts),
+            )
+
+    def _build_semantic_domains_analyse_prompt(
+        self,
+        batch_hint: str | None = None,
+    ) -> str:
+        hint_block = ""
+        if batch_hint:
+            hint_block = f"\n        **分批说明：** {batch_hint}\n"
+        return f"""
+        ### 系统角色设定
+
+        你是一个资深的代码架构师和领域驱动设计（DDD）专家。你的任务是分析一份大型应用程序的代码文件列表及其核心功能。你必须将这些分散的功能信息，聚合成一套清晰、逻辑严谨的**应用语义域模型（Application Semantic Domain Model）**。
+        {hint_block}
+        请严格按照以下要求进行分析和输出。
+
+        ### 核心分析要求
+
+        1.  **领域划分（Semantic Domain Grouping）：**
+
+              * 将所有文件和功能点归类到**粗粒度、高内聚**的业务语义域中。
+              * 领域名称必须是简洁、专业的**中文名词**（例如：`订单管理`、`用户认证`、`库存服务`）。
+              * 忽略纯粹的技术/基础设施文件（如：`Redis`、`Minio`、`日志`、`错误处理`等），并将它们统一归类到 `基础设施/通用服务` 域中。
+
+        2.  **概念提取（Core Business Concepts）：**
+
+              * 在每个领域内，识别出由文件功能所涉及的**核心业务实体**（名词），这些实体通常是数据库表、核心 Class 或业务 Value Object。
+              * 为每个概念提供一个简短的业务描述。
+
+        3.  **领域间关系（Inter-Domain Relations）：**
+
+              * 识别不同语义域之间存在的**业务依赖关系**（例如：`订单管理` 依赖 `用户认证`）。
+              * 关系应使用**动词**描述（例如：`调用`、`引用`、`管理`）。
+
+        ### 输出 JSON 格式要求
+
+        你必须且只能输出一个完整的 JSON 对象，结构如下。注意：所有字段值必须基于实际提供的代码文件内容来填写，不要编造或使用示例中的数据。
+
+        {{
+            "domain_model_summary": "对整个业务模块的应用领域划分的简要总结（2-3句话）",
+            "semantic_domains": [
+                {{
+                    "domain_name": "语义域名称（中文）",
+                    "domain_tag": "该域的英文简称（如ORDER_MGT）",
+                    "domain_description": "该语义域的核心业务范围和目标。",
+                    "core_concepts": [
+                        {{
+                            "name": "核心业务概念名称",
+                            "description": "该概念的业务含义和关键作用。",
+                            "details":"该业务概念包含了哪些核心的业务属性和能力",
+                            "supporting_files": [
+                                "需要包含所有的相关的文件路径"
+                            ]
+                        }}
+                    ]
+                }}
+            ],
+            "inter_domain_relations": [
+                {{
+                    "source_domain": "源语义域名称",
+                    "target_domain": "目标语义域名称",
+                    "relation_type": "关系动词（例如：调用、依赖、配置）",
+                    "reasoning": "关系存在的业务原因"
+                }}
+            ]
+        }}
+
+        **【注意：请严格遵循JSON格式输出，不要包含任何额外的解释或文本。所有输出内容必须完全基于用户提供的代码文件信息，不要虚构任何文件路径或业务概念。】**
+
+        """
+
+    def _build_merge_semantic_domains_prompt(self) -> str:
+        return """
+        ### 任务：合并多批次的应用语义域模型
+
+        你将收到多份由不同文件批次产出的 partial 语义域分析结果（JSON 数组）。
+        请将它们合并为**一份**统一、去重、逻辑一致的应用语义域模型。
+
+        ### 合并规则
+
+        1. 语义相同或高度相似的域（如「订单管理」与「订单服务」）应合并为一个域。
+        2. 合并域时，拼接 core_concepts（按 name 去重），合并 supporting_files。
+        3. 合并 domain_model_summary 为 2-3 句连贯总结。
+        4. 合并 inter_domain_relations 并去重。
+
+        ### 输出格式
+
+        只输出一个 JSON 对象，结构与单次分析相同：
+        domain_model_summary, semantic_domains, inter_domain_relations
+
+        **【严格 JSON，不要额外解释。】**
+        """
+
+    def _validate_semantic_domains_result(self, result: Any) -> str | None:
+        if not isinstance(result, dict):
+            return f"结果应为dict，实际为{type(result).__name__}"
+        domains = result.get("semantic_domains")
+        if domains is None:
+            return "缺少'semantic_domains'字段"
+        if not isinstance(domains, list):
+            return f"semantic_domains应为list，实际为{type(domains).__name__}"
+        for i, domain in enumerate(domains):
+            if not isinstance(domain, dict):
+                return f"semantic_domains[{i}]应为dict"
+            if not domain.get("domain_name"):
+                return f"semantic_domains[{i}]缺少domain_name"
+        return None
+
+    def _normalize_semantic_domains_result(self, result: Any) -> Dict[str, Any]:
+        if not isinstance(result, dict):
+            return {
+                "domain_model_summary": "",
+                "semantic_domains": [],
+                "inter_domain_relations": [],
+            }
+        domains = result.get("semantic_domains") or []
+        if not isinstance(domains, list):
+            domains = []
+        relations = result.get("inter_domain_relations") or []
+        if not isinstance(relations, list):
+            relations = []
+        return {
+            "domain_model_summary": str(result.get("domain_model_summary") or ""),
+            "semantic_domains": [d for d in domains if isinstance(d, dict)],
+            "inter_domain_relations": [r for r in relations if isinstance(r, dict)],
+        }
+
+    def _invoke_semantic_domains_llm(
+        self,
+        content: str,
+        *,
+        label: str = "code-semantic-domains-analyse",
+        batch_hint: str | None = None,
+    ) -> Dict[str, Any]:
+        prompt = self._build_semantic_domains_analyse_prompt(batch_hint)
+        system_message = SystemMessage(content=prompt)
+        human_message = HumanMessage(content=f"tables schema: {content}")
+
+        logger.info(
+            "[语义域分析|SemanticDomains] Map-富文本域分析 label=%s input_chars=%d",
+            label,
+            len(content),
+        )
+
+        response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message],
+            label=label,
+        )
+        llm_result = self.format_llm_output(response)
+        llm_result = self._normalize_semantic_domains_result(llm_result)
+
+        validation_error = self._validate_semantic_domains_result(llm_result)
+        if validation_error is None:
+            return llm_result
+
+        logger.warning(
+            "semantic_domains_analyse format invalid: %s, retrying...",
+            validation_error,
+        )
+        correction_prompt = HumanMessage(content=(
+            f"输出格式不正确: {validation_error}\n"
+            f"请重新输出合法 JSON，包含 domain_model_summary、semantic_domains、"
+            f"inter_domain_relations。"
+        ))
+        retry_response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message, correction_prompt],
+            label=f"{label}-retry",
+        )
+        retry_result = self._normalize_semantic_domains_result(
+            self.format_llm_output(retry_response)
+        )
+        if self._validate_semantic_domains_result(retry_result) is None:
+            return retry_result
+
+        logger.error(
+            "semantic_domains_analyse retry still invalid: %s, returning normalized partial",
+            validation_error,
+        )
+        return llm_result
+
+    def _invoke_merge_semantic_domains_llm(
+        self,
+        partial_results: List[Dict[str, Any]],
+        *,
+        label: str = "code-semantic-domains-merge",
+    ) -> Dict[str, Any]:
+        merge_content = format_semantic_domains_for_merge_llm(partial_results)
+        prompt = self._build_merge_semantic_domains_prompt()
+        system_message = SystemMessage(content=prompt)
+        human_message = HumanMessage(
+            content=f"请合并以下各批次的语义域分析结果：\n\n{merge_content}"
+        )
+
+        logger.info(
+            "[语义域分析|SemanticDomains] Reduce-合并语义域 label=%s partials=%d input_chars=%d",
+            label,
+            len(partial_results),
+            len(merge_content),
+        )
+
+        response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message],
+            label=label,
+        )
+        llm_result = self._normalize_semantic_domains_result(
+            self.format_llm_output(response)
+        )
+
+        if self._validate_semantic_domains_result(llm_result) is None:
+            return llm_result
+
+        logger.warning("merge_semantic_domains format invalid, retrying...")
+        correction_prompt = HumanMessage(content=(
+            "输出格式不正确，请重新输出合法 JSON，包含 domain_model_summary、"
+            "semantic_domains、inter_domain_relations。"
+        ))
+        retry_response = self.runtime.invoke_llm(
+            self.llm,
+            [system_message, human_message, correction_prompt],
+            label=f"{label}-retry",
+        )
+        retry_result = self._normalize_semantic_domains_result(
+            self.format_llm_output(retry_response)
+        )
+        if self._validate_semantic_domains_result(retry_result) is None:
+            return retry_result
+
+        logger.error(
+            "merge_semantic_domains retry failed, falling back to deterministic premerge"
+        )
+        return premerge_semantic_domains_results(partial_results)
+
+    def _merge_semantic_domains_recursive(
+        self,
+        partial_results: List[Dict[str, Any]],
+        budget: int,
+        depth: int = 0,
+    ) -> Dict[str, Any]:
+        if not partial_results:
+            return {
+                "domain_model_summary": "",
+                "semantic_domains": [],
+                "inter_domain_relations": [],
+            }
+        if len(partial_results) == 1:
+            return partial_results[0]
+
+        merge_chars = estimate_semantic_domains_merge_chars(partial_results)
+        if merge_chars <= budget:
+            return self._invoke_merge_semantic_domains_llm(
+                partial_results,
+                label=f"code-semantic-domains-merge-d{depth}",
+            )
+
+        chunks = chunk_semantic_results_by_budget(partial_results, budget)
+        logger.info(
+            "[语义域分析|SemanticDomains] Reduce-合并语义域 depth=%d partials=%d input_chars=%d "
+            "budget=%d split_into=%d",
+            depth,
+            len(partial_results),
+            merge_chars,
+            budget,
+            len(chunks),
+        )
+
+        merged_partials: List[Dict[str, Any]] = []
+        for idx, chunk in enumerate(chunks):
+            if len(chunk) == 1:
+                merged_partials.append(chunk[0])
+                continue
+            merged_partials.append(
+                self._invoke_merge_semantic_domains_llm(
+                    chunk,
+                    label=f"code-semantic-domains-merge-d{depth}-c{idx + 1}",
+                )
+            )
+
+        if len(merged_partials) == 1:
+            return merged_partials[0]
+        return self._merge_semantic_domains_recursive(
+            merged_partials, budget, depth=depth + 1
+        )
+
+    def _singleton_semantic_domain_fallback(
+        self,
+        file_path: str,
+    ) -> Dict[str, Any]:
+        """单文件降级：不调 LLM，构造最小语义域结果。"""
+        summary = ""
+        for result in self.analysis_results:
+            if result.get("file_path") == file_path:
+                ar = result.get("analysis_result") or {}
+                summary = ar.get("file_summary") or ""
+                break
+        base_name = file_path.rsplit("/", 1)[-1]
+        return {
+            "domain_model_summary": f"单文件分析：{file_path}",
+            "semantic_domains": [
+                {
+                    "domain_name": "未分类文件",
+                    "domain_tag": "UNCATEGORIZED",
+                    "domain_description": summary or "未能获取文件摘要",
+                    "core_concepts": [
+                        {
+                            "name": base_name,
+                            "description": summary or "未能获取文件摘要",
+                            "supporting_files": [file_path],
+                        }
+                    ],
+                }
+            ],
+            "inter_domain_relations": [],
+        }
+
+    def semantic_domains_analyse_files(
+        self,
+        file_list: List[str],
+        *,
+        module_name: str = "",
+    ) -> Dict[str, Any]:
+        """按文件切批的 semantic_domains_analyse（Map-Reduce）。
+
+        Map：将 file_list 按字符预算与文件数切批，每批调用一次语义域分析 LLM。
+        Reduce：跨批合并 partial 语义域结果（先确定性同名合并，再 LLM 合并）。
+
+        Args:
+            file_list: 模块内的文件路径列表。
+            module_name: 仅用于日志展示。
+
+        Returns:
+            与 ``semantic_domains_analyse`` 相同结构的 dict。
+        """
+        t0 = time.perf_counter()
+        budget = semantic_domains_max_input_chars()
+        max_files = semantic_domains_max_files_per_batch()
+
+        cleaned_files: List[str] = []
+        seen: set[str] = set()
+        for raw in file_list or []:
+            path = re.sub(r"^File\s+\d+\.\s*", "", str(raw).strip())
+            if path and path not in seen:
+                seen.add(path)
+                cleaned_files.append(path)
+
+        if not cleaned_files:
+            self._log_semantic_domains_begin(
+                mode="EMPTY",
+                file_count=0,
+                total_chars=0,
+                budget=budget,
+                max_files_per_batch=max_files,
+                batch_count=0,
+                module_name=module_name,
+            )
+            empty = {
+                "domain_model_summary": "",
+                "semantic_domains": [],
+                "inter_domain_relations": [],
+            }
+            self._log_semantic_domains_end(
+                mode="EMPTY",
+                elapsed_s=0.0,
+                input_file_count=0,
+                result=empty,
+            )
+            return empty
+
+        path_chars = self._build_semantic_file_char_map(cleaned_files)
+        analyzable = [p for p in cleaned_files if path_chars.get(p, 0) > 0]
+        if not analyzable:
+            logger.warning(
+                "[语义域分析|SemanticDomains] 无匹配 analysis_results 的文件，file_list=%s",
+                cleaned_files,
+            )
+            empty = {
+                "domain_model_summary": "",
+                "semantic_domains": [],
+                "inter_domain_relations": [],
+            }
+            return empty
+
+        total_chars = total_file_paths_chars(analyzable, path_chars)
+
+        if len(analyzable) == 1:
+            self._log_semantic_domains_begin(
+                mode="SINGLE_FILE",
+                file_count=1,
+                total_chars=total_chars,
+                budget=budget,
+                max_files_per_batch=max_files,
+                batch_count=1,
+                module_name=module_name,
+            )
+            content = self.format_file_analysis_with_summary_functions_business_concepts(
+                analyzable
+            )
+            if not content.strip():
+                result = self._singleton_semantic_domain_fallback(analyzable[0])
+            else:
+                result = self._invoke_semantic_domains_llm(content)
+            self._log_semantic_domains_end(
+                mode="SINGLE_FILE",
+                elapsed_s=time.perf_counter() - t0,
+                input_file_count=1,
+                result=result,
+            )
+            return result
+
+        if total_chars <= budget and len(analyzable) <= max_files:
+            self._log_semantic_domains_begin(
+                mode="SINGLE_BATCH",
+                file_count=len(analyzable),
+                total_chars=total_chars,
+                budget=budget,
+                max_files_per_batch=max_files,
+                batch_count=1,
+                module_name=module_name,
+            )
+            logger.info(
+                "[语义域分析|SemanticDomains] 未超预算，单次 LLM 富文本域分析 | input_chars=%d",
+                total_chars,
+            )
+            content = self.format_file_analysis_with_summary_functions_business_concepts(
+                analyzable
+            )
+            result = self._invoke_semantic_domains_llm(content)
+            self._log_semantic_domains_end(
+                mode="SINGLE_BATCH",
+                elapsed_s=time.perf_counter() - t0,
+                input_file_count=len(analyzable),
+                result=result,
+            )
+            return result
+
+        chunks = chunk_file_paths_by_budget(analyzable, path_chars, budget, max_files)
+        self._log_semantic_domains_begin(
+            mode="MULTI_BATCH",
+            file_count=len(analyzable),
+            total_chars=total_chars,
+            budget=budget,
+            max_files_per_batch=max_files,
+            batch_count=len(chunks),
+            module_name=module_name,
+        )
+        for i, chunk in enumerate(chunks, 1):
+            chunk_chars = total_file_paths_chars(chunk, path_chars)
+            logger.info(
+                "[语义域分析|SemanticDomains] Map-富文本切批 | 第%d/%d批 | files=%d | 富文本字符=%d",
+                i,
+                len(chunks),
+                len(chunk),
+                chunk_chars,
+            )
+
+        def _analyse_one_batch(
+            item: Tuple[int, List[str]],
+        ) -> Dict[str, Any]:
+            batch_idx, chunk = item
+            if len(chunk) == 1:
+                content = self.format_file_analysis_with_summary_functions_business_concepts(
+                    chunk
+                )
+                if not content.strip():
+                    return self._singleton_semantic_domain_fallback(chunk[0])
+                return self._invoke_semantic_domains_llm(content)
+
+            content = self.format_file_analysis_with_summary_functions_business_concepts(
+                chunk
+            )
+            batch_hint = (
+                f"当前为第 {batch_idx + 1}/{len(chunks)} 批，只分析本批文件；"
+                f"不要引用未提供的文件路径。"
+            )
+            return self._invoke_semantic_domains_llm(
+                content,
+                label=f"code-semantic-domains-analyse-b{batch_idx + 1}",
+                batch_hint=batch_hint,
+            )
+
+        partial_results: List[Dict[str, Any]] = []
+        batch_items = list(enumerate(chunks))
+        for item, result, exc in self.runtime.map_unordered(
+            batch_items,
+            _analyse_one_batch,
+            label="code-semantic-domains-analyse-batches",
+            max_workers=self.runtime.module_max_workers,
+        ):
+            batch_idx, chunk = item
+            if exc is not None:
+                logger.error(
+                    "[语义域分析|SemanticDomains] Map-富文本域分析 第%d批失败: %s，降级 singleton",
+                    batch_idx + 1,
+                    exc,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                for path in chunk:
+                    partial_results.append(
+                        self._singleton_semantic_domain_fallback(path)
+                    )
+                continue
+            partial_results.append(result)
+
+        logger.info(
+            "[语义域分析|SemanticDomains] Map-富文本域分析完成 | 批次数=%d | 进入 Reduce-合并语义域",
+            len(chunks),
+        )
+
+        if len(partial_results) == 1:
+            final_result = partial_results[0]
+        else:
+            final_result = self._merge_semantic_domains_recursive(
+                partial_results, budget
+            )
+
+        self._log_semantic_domains_end(
+            mode="MULTI_BATCH",
+            elapsed_s=time.perf_counter() - t0,
+            input_file_count=len(analyzable),
+            result=final_result,
+        )
+        return final_result
 
     def semantic_domains_analyse(self, content, batch_size:int = 30) -> dict:
         """
@@ -1654,82 +2915,20 @@ class CodeAnalyzer:
             logger.warning("semantic_domains_analyse called with empty content, skipping LLM call")
             return {"domain_model_summary": "", "semantic_domains": [], "inter_domain_relations": []}
 
-        prompt = f"""
-        ### 系统角色设定
+        file_paths = parse_semantic_files_content(content)
+        if file_paths:
+            return self.semantic_domains_analyse_files(file_paths)
 
-        你是一个资深的代码架构师和领域驱动设计（DDD）专家。你的任务是分析一份大型应用程序的代码文件列表及其核心功能。你必须将这些分散的功能信息，聚合成一套清晰、逻辑严谨的**应用语义域模型（Application Semantic Domain Model）**。
+        budget = semantic_domains_max_input_chars()
+        if len(content) <= budget:
+            return self._invoke_semantic_domains_llm(content)
 
-
-        请严格按照以下要求进行分析和输出。
-
-        ### 核心分析要求
-
-        1.  **领域划分（Semantic Domain Grouping）：**
-
-              * 将所有文件和功能点归类到**粗粒度、高内聚**的业务语义域中。
-              * 领域名称必须是简洁、专业的**中文名词**（例如：`订单管理`、`用户认证`、`库存服务`）。
-              * 忽略纯粹的技术/基础设施文件（如：`Redis`、`Minio`、`日志`、`错误处理`等），并将它们统一归类到 `基础设施/通用服务` 域中。
-
-        2.  **概念提取（Core Business Concepts）：**
-
-              * 在每个领域内，识别出由文件功能所涉及的**核心业务实体**（名词），这些实体通常是数据库表、核心 Class 或业务 Value Object。
-              * 为每个概念提供一个简短的业务描述。
-
-        3.  **领域间关系（Inter-Domain Relations）：**
-
-              * 识别不同语义域之间存在的**业务依赖关系**（例如：`订单管理` 依赖 `用户认证`）。
-              * 关系应使用**动词**描述（例如：`调用`、`引用`、`管理`）。
-
-        ### 输出 JSON 格式要求
-
-        你必须且只能输出一个完整的 JSON 对象，结构如下。注意：所有字段值必须基于实际提供的代码文件内容来填写，不要编造或使用示例中的数据。
-
-        {{
-            "domain_model_summary": "对整个业务模块的应用领域划分的简要总结（2-3句话）",
-            "semantic_domains": [
-                {{
-                    "domain_name": "语义域名称（中文）",
-                    "domain_tag": "该域的英文简称（如ORDER_MGT）",
-                    "domain_description": "该语义域的核心业务范围和目标。",
-                    "core_concepts": [
-                        {{
-                            "name": "核心业务概念名称",
-                            "description": "该概念的业务含义和关键作用。",
-                            "details":"该业务概念包含了哪些核心的业务属性和能力",
-                            "supporting_files": [
-                                "需要包含所有的相关的文件路径"
-                            ]
-                        }}
-                    ]
-                }}
-            ],
-            "inter_domain_relations": [
-                {{
-                    "source_domain": "源语义域名称",
-                    "target_domain": "目标语义域名称",
-                    "relation_type": "关系动词（例如：调用、依赖、配置）",
-                    "reasoning": "关系存在的业务原因"
-                }}
-            ]
-        }}
-
-        **【注意：请严格遵循JSON格式输出，不要包含任何额外的解释或文本。所有输出内容必须完全基于用户提供的代码文件信息，不要虚构任何文件路径或业务概念。】**
-
-        """
-
-        system_message = SystemMessage(content=prompt)
-
-        human_message = HumanMessage(content=f"tables schema: {content}")
-
-        response = self.runtime.invoke_llm(
-            self.llm,
-            [system_message, human_message],
-            label="code-semantic-domains-analyse",
+        logger.warning(
+            "[语义域分析|SemanticDomains] legacy 富文本无法解析文件块; "
+            "invoking single LLM call anyway (input_chars=%d)",
+            len(content),
         )
-
-        llm_result = self.format_llm_output(response)
-
-        return llm_result
+        return self._invoke_semantic_domains_llm(content)
 
     def code_ddd(self, semantic_domains_analyse_result, api_endpoints):
 
@@ -2107,17 +3306,24 @@ class CodeAnalyzer:
         logger.info(f"code analyse result: {formatted_code_analyse_result}")
 
         # 2. code group then to handle each group everytime
-        files_summary_with_file_summary = self.format_file_analysis_with_file_summary()
-        logger.info(f"files_summary_with_file_summary: length:{len(files_summary_with_file_summary)}")
+        file_summary_entries = self._collect_file_summary_entries()
+        logger.info(
+            "[文件分组|ModuleFilesGroup] 流水线入口 code_files_regroup_and_process | "
+            "file_summary_entries=%d | total_chars=%d",
+            len(file_summary_entries),
+            total_entries_chars(file_summary_entries),
+        )
 
-        module_files_group_result = self.module_files_group(files_summary_with_file_summary)
-        formatted_module_files_group_result = json.dumps(module_files_group_result, ensure_ascii=False, indent=4)
-        logger.info(f"module_files_group_result: {formatted_module_files_group_result}")
+        module_files_group_result = self.module_files_group_entries(
+            file_summary_entries, batch_size=30
+        )
 
         # 3. Merge to avoid overly fragmented grouping results.
         module_files_regroup_result = self.module_files_regroup(module_files_group_result)
-        formatted_module_files_regroup_result = json.dumps(module_files_regroup_result, ensure_ascii=False, indent=4)
-        logger.info(f"formatted_module_files_regroup_result: {formatted_module_files_regroup_result}")
+        regroup_groups = module_files_regroup_result.get("group_with_files") or []
+        self._log_module_files_group_groups_preview(
+            regroup_groups, prefix="regroup后模块组(供下游语义域分析)"
+        )
 
         # 4. foreach to summary code and then consolidate these code summary of each modules
         semantic_domains_analyse_result = self.loop_and_process_modules(module_files_regroup_result)
@@ -2175,17 +3381,24 @@ class CodeAnalyzer:
         logger.info(f"code analyse result (from existing): length={len(formatted_code_analyse_result)}")
 
         # 2. code group then to handle each group everytime
-        files_summary_with_file_summary = self.format_file_analysis_with_file_summary()
-        logger.info(f"files_summary_with_file_summary: length:{len(files_summary_with_file_summary)}")
+        file_summary_entries = self._collect_file_summary_entries()
+        logger.info(
+            "[文件分组|ModuleFilesGroup] 流水线入口 analyze_code_with_existing_results | "
+            "file_summary_entries=%d | total_chars=%d",
+            len(file_summary_entries),
+            total_entries_chars(file_summary_entries),
+        )
 
-        module_files_group_result = self.module_files_group(files_summary_with_file_summary)
-        formatted_module_files_group_result = json.dumps(module_files_group_result, ensure_ascii=False, indent=4)
-        logger.info(f"module_files_group_result: {formatted_module_files_group_result}")
+        module_files_group_result = self.module_files_group_entries(
+            file_summary_entries, batch_size=30
+        )
 
         # 3. Merge to avoid overly fragmented grouping results.
         module_files_regroup_result = self.module_files_regroup(module_files_group_result)
-        formatted_module_files_regroup_result = json.dumps(module_files_regroup_result, ensure_ascii=False, indent=4)
-        logger.info(f"formatted_module_files_regroup_result: {formatted_module_files_regroup_result}")
+        regroup_groups = module_files_regroup_result.get("group_with_files") or []
+        self._log_module_files_group_groups_preview(
+            regroup_groups, prefix="regroup后模块组(供下游语义域分析)"
+        )
 
         # 4. foreach to summary code and then consolidate these code summary of each modules
         semantic_domains_analyse_result = self.loop_and_process_modules(module_files_regroup_result)
@@ -4198,27 +5411,21 @@ class SQLAnalyzer:
         system_message = SystemMessage(content=prompt)
         human_message = HumanMessage(content=f"{content}")
 
-        MAX_RETRIES = 3
-        
-        for attempt in range(MAX_RETRIES):
-            try:
-                response = self.llm.invoke([system_message, human_message])
+        llm_result = invoke_llm_with_json_retry(
+            self.llm,
+            [system_message, human_message],
+            self.format_llm_output,
+            validate=_validate_agent_card_payload,
+            label="agent_card",
+        )
+        if not isinstance(llm_result, dict):
+            raise RuntimeError(
+                f"Failed to generate valid AgentCard after {llm_json_parse_max_retries()} attempts."
+            )
 
-                llm_result = self.format_llm_output(response)
-
-                agent_card = AgentCard(**llm_result)
-
-                logger.info(f"========== agent_card : {agent_card}")
-
-                return llm_result
-
-            except (TypeError, ValueError, KeyError) as e:
-                logging.error(f"AgentCard instantiation failed on attempt {attempt + 1}: {e}")
-
-                if attempt + 1 == MAX_RETRIES:
-                    raise RuntimeError(f"Failed to generate valid AgentCard after {MAX_RETRIES} attempts.") from e
-
-        raise RuntimeError("Unexpected failure in AgentCard generation loop.")
+        agent_card = AgentCard(**llm_result)
+        logger.info(f"========== agent_card : {agent_card}")
+        return llm_result
 
 class FileAnalyzer:
     def __init__(self, llm, max_workers: int = 50, batch_size: int = 50):
@@ -4288,12 +5495,19 @@ class FileAnalyzer:
         human_message = HumanMessage(content=f"请分析以下文本片段：\n\n{content}")
         
         try:
-            response = self.llm.invoke([system_message, human_message])
-            result = self.format_llm_output(response)
-            
+            result = invoke_llm_with_json_retry(
+                self.llm,
+                [system_message, human_message],
+                self.format_llm_output,
+                label="chunk_summary",
+            )
+
             # format_llm_output 可能返回 None 或非 dict 类型（如 list）
             if not isinstance(result, dict):
-                logger.warning(f"chunk_summary: format_llm_output 返回非 dict 类型 ({type(result).__name__}), 使用默认值")
+                logger.warning(
+                    "chunk_summary: parse failed after %d retries, using default",
+                    llm_json_parse_max_retries(),
+                )
                 result = self._get_default_result()
             
             # 添加元数据信息
@@ -4306,7 +5520,7 @@ class FileAnalyzer:
             result.setdefault("context_hints", {"start_with": "", "end_with": ""})
             result.setdefault("segment_type", "其他")
             
-            logger.info(f"chunk_summary: {result}")
+            logger.debug(f"chunk_summary: {result}")
             return result
         except Exception as e:
             logger.error(f"chunk_summary处理失败: {e}")
@@ -4327,7 +5541,12 @@ class FileAnalyzer:
             处理结果
         """
 
-        logger.info(f"======= process_chunk , index: {chunk_index}, document: {document.page_content}")
+        logger.debug(
+            "process_chunk index=%s chars=%d metadata_keys=%s",
+            chunk_index,
+            len(document.page_content or ""),
+            sorted((document.metadata or {}).keys()),
+        )
         try:
             result = self.chunk_summary(
                 content=document.page_content,
@@ -4363,7 +5582,16 @@ class FileAnalyzer:
             处理结果列表
         """
         all_results = []
-        
+        total = len(documents)
+        completed = 0
+
+        logger.info(
+            "chunk_summary 开始并行处理: total=%d max_workers=%d llm_timeout=%ss",
+            total,
+            self.max_workers,
+            llm_request_timeout_seconds(),
+        )
+
         # 使用线程池并行处理
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # 提交所有任务
@@ -4378,9 +5606,19 @@ class FileAnalyzer:
                 try:
                     result = future.result()
                     all_results.append(result)
-                    logger.debug(f"处理完成块 {idx + 1}/{len(documents)}")
+                    completed += 1
+                    if completed == total or completed % 10 == 0:
+                        logger.info(
+                            "chunk_summary 进度: %d/%d (最近完成 chunk_index=%d)",
+                            completed,
+                            total,
+                            idx,
+                        )
+                    else:
+                        logger.debug(f"处理完成块 {idx + 1}/{total}")
                 except Exception as e:
                     logger.error(f"处理块 {idx} 时发生错误: {e}")
+                    completed += 1
                     # 添加失败记录
                     result = self._get_default_result()
                     result["chunk_index"] = idx
@@ -4470,7 +5708,7 @@ class FileAnalyzer:
         CHUNK_OVERLAP = 500      # 拆分时的重叠量
         MAX_MERGED_SIZE = 80000  # 合并后超过此值则继续递归
 
-        logger.info(f"开始处理 {len(documents)} 个文档片段...")
+        logger.info("file_summary: start chunk analysis, chunks=%d", len(documents))
 
         # 1. 并行处理所有文档分片
         chunk_results = self.process_chunks_parallel(documents)
@@ -4478,15 +5716,17 @@ class FileAnalyzer:
 
         # 2. 构建初始摘要输入文本
         summary_input = self.build_summary_input(chunk_results)
-        logger.info(f"构建初始摘要输入完成，长度={len(summary_input)} 字符")
+        logger.info("file_summary: built summary input, chars=%d", len(summary_input))
 
         # 3. 递归 refine：反复 拆分→分块LLM提炼→合并，直到结果缩小到安全大小
         iteration = 0
         while len(summary_input) > MAX_MERGED_SIZE:
             iteration += 1
             logger.info(
-                f"Refine 第 {iteration} 轮：输入长度={len(summary_input)} > "
-                f"{MAX_MERGED_SIZE}，开始拆分..."
+                "file_summary: refine iteration=%d input_chars=%d max=%d",
+                iteration,
+                len(summary_input),
+                MAX_MERGED_SIZE,
             )
 
             # 3a. 按 CHUNK_SIZE 拆分
@@ -4497,7 +5737,7 @@ class FileAnalyzer:
                 is_separator_regex=False,
             )
             segments = splitter.split_text(summary_input)
-            logger.info(f"Refine 拆分为 {len(segments)} 个片段")
+            logger.debug("file_summary: refine split into %d segments", len(segments))
 
             # 3b. 并发对每个拆分片段调用 LLM，提炼为精简的结构化摘要
             refine_prompt = (
@@ -4521,11 +5761,21 @@ class FileAnalyzer:
 
             def _refine_segment(idx: int, text: str) -> dict:
                 try:
-                    resp = self.llm.invoke([
-                        refine_system,
-                        HumanMessage(content=f"请提炼整合以下片段摘要：\n\n{text}"),
-                    ])
-                    r = self.format_llm_output(resp)
+                    r = invoke_llm_with_json_retry(
+                        self.llm,
+                        [
+                            refine_system,
+                            HumanMessage(content=f"请提炼整合以下片段摘要：\n\n{text}"),
+                        ],
+                        self.format_llm_output,
+                        label=f"file_summary_refine_segment_{idx}",
+                    )
+                    if not isinstance(r, dict):
+                        r = {
+                            "core_topic": "提炼失败",
+                            "key_points": [],
+                            "segment_type": "其他",
+                        }
                     r.setdefault("core_topic", "提炼失败")
                     r.setdefault("key_points", [])
                     r.setdefault("segment_type", "其他")
@@ -4564,12 +5814,14 @@ class FileAnalyzer:
 
             # 3c. 重新拼接合并后的文本
             summary_input = self.build_summary_input(segment_results)
-            logger.info(
-                f"Refine 第 {iteration} 轮完成：合并后长度={len(summary_input)} 字符"
+            logger.debug(
+                "file_summary: refine iteration=%d merged_chars=%d",
+                iteration,
+                len(summary_input),
             )
 
         # 4. 最终整体摘要生成（summary_input 此时已安全）
-        logger.info(f"生成最终整体摘要，输入长度={len(summary_input)} 字符...")
+        logger.info("file_summary: final summary LLM call, input_chars=%d", len(summary_input))
 
         final_prompt = (
             "你是一位资深的编辑或知识架构师。以下是一份长文档所有部分的详细摘要。"
@@ -4600,9 +5852,27 @@ class FileAnalyzer:
         final_system = SystemMessage(content=final_prompt)
         final_human = HumanMessage(content=f" 文档片段摘要如下：\n\n{summary_input}")
 
+        def _validate_file_summary_final(parsed: Any) -> Optional[str]:
+            if not isinstance(parsed, dict):
+                return f"expected dict, got {type(parsed).__name__}"
+            summary_text = str(parsed.get("summary") or "").strip()
+            outline_text = str(parsed.get("outline") or "").strip()
+            if not summary_text and not outline_text:
+                return "summary and outline both empty"
+            return None
+
         try:
-            response = self.llm.invoke([final_system, final_human])
-            final_result = self.format_llm_output(response)
+            final_result = invoke_llm_with_json_retry(
+                self.llm,
+                [final_system, final_human],
+                self.format_llm_output,
+                validate=_validate_file_summary_final,
+                label="file_summary_final",
+            )
+            if not isinstance(final_result, dict):
+                raise ValueError(
+                    f"file_summary final LLM failed after {llm_json_parse_max_retries()} retries"
+                )
 
             final_result.setdefault("summary", "")
             final_result.setdefault("outline", "")
@@ -4624,7 +5894,7 @@ class FileAnalyzer:
                     themes.append(st)
             final_result["document_structure"]["main_themes"] = themes
 
-            logger.info("文档整体摘要生成完成")
+            logger.debug("file_summary: final summary LLM completed, chunks=%d", total_chunks)
             return final_result
 
         except Exception as e:
@@ -4643,6 +5913,22 @@ class FileAnalyzer:
                 "processed_chunks": total_chunks,
                 "error": str(e),
             }
+
+    def bucket_file_summary_map_reduce(self, documents: List) -> dict:
+        """L3 桶级合成：多份 per-file 富摘要 → bucket summary + outline（Map-Reduce）。
+
+        与 ``file_summary``（L2 单文件 + Refine）分层使用；本方法**不会**调用
+        ``process_chunks_parallel`` / ``chunk_summary``，避免对已摘要文件重复蒸馏。
+
+        实现见 ``extractors.bucket_summary_map_reduce``；日志前缀 ``[桶级摘要|BucketSummary]``。
+        """
+        from .bucket_summary_map_reduce import run_bucket_file_summary_map_reduce
+
+        return run_bucket_file_summary_map_reduce(
+            self.llm,
+            documents,
+            format_llm_output=self.format_llm_output,
+        )
 
     def agent_card(self, content):
         prompt = """你是一个精通领域驱动设计（DDD）和业务建模的资深架构师。你的核心任务是根据业务描述，生成一个高质量的 Agent-to-Agent (A2A) 协议 JSON。
@@ -4767,27 +6053,21 @@ class FileAnalyzer:
         system_message = SystemMessage(content=prompt)
         human_message = HumanMessage(content=f"{content}")
 
-        MAX_RETRIES = 3
-        
-        for attempt in range(MAX_RETRIES):
-            try:
-                response = self.llm.invoke([system_message, human_message])
+        llm_result = invoke_llm_with_json_retry(
+            self.llm,
+            [system_message, human_message],
+            self.format_llm_output,
+            validate=_validate_agent_card_payload,
+            label="agent_card",
+        )
+        if not isinstance(llm_result, dict):
+            raise RuntimeError(
+                f"Failed to generate valid AgentCard after {llm_json_parse_max_retries()} attempts."
+            )
 
-                llm_result = self.format_llm_output(response)
-
-                agent_card = AgentCard(**llm_result)
-
-                logger.info(f"========== agent_card : {agent_card}")
-
-                return llm_result
-
-            except (TypeError, ValueError, KeyError) as e:
-                logging.error(f"AgentCard instantiation failed on attempt {attempt + 1}: {e}")
-
-                if attempt + 1 == MAX_RETRIES:
-                    raise RuntimeError(f"Failed to generate valid AgentCard after {MAX_RETRIES} attempts.") from e
-
-        raise RuntimeError("Unexpected failure in AgentCard generation loop.")
+        agent_card = AgentCard(**llm_result)
+        logger.info(f"========== agent_card : {agent_card}")
+        return llm_result
 
 # api endpoint logic
 class SystemEntityAggregator:
@@ -4899,6 +6179,61 @@ class SystemEntityAggregator:
         # 提取业务关键词
         self._extract_keywords_from_concept(concept_data)
     
+    def _coerce_endpoint_models(self, value: Any) -> List[str]:
+        """将 LLM 输出的 request/response 规范化为可去重的模型名字符串列表。
+
+        期望为字符串（如 ``UserCreateRequest``），但模型偶发返回 dict/list；
+        ``set.add`` 需要 hashable 值，此处统一转为 str。
+        """
+        if value is None:
+            return []
+
+        if isinstance(value, list):
+            models: List[str] = []
+            for item in value:
+                models.extend(self._coerce_endpoint_models(item))
+            return self._dedupe_preserve_order(models)
+
+        normalized = self._normalize_endpoint_model_scalar(value)
+        return [normalized] if normalized else []
+
+    def _normalize_endpoint_model_scalar(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped or stripped.lower() == "none":
+                return None
+            return stripped
+
+        if isinstance(value, dict):
+            for key in ("name", "model_name", "model", "type", "schema"):
+                candidate = value.get(key)
+                if isinstance(candidate, str):
+                    stripped = candidate.strip()
+                    if stripped and stripped.lower() != "none":
+                        return stripped
+            try:
+                return json.dumps(value, ensure_ascii=False, sort_keys=True)
+            except TypeError:
+                return str(value)
+
+        stripped = str(value).strip()
+        if not stripped or stripped.lower() == "none":
+            return None
+        return stripped
+
+    @staticmethod
+    def _dedupe_preserve_order(items: List[str]) -> List[str]:
+        seen: Set[str] = set()
+        deduped: List[str] = []
+        for item in items:
+            if item not in seen:
+                seen.add(item)
+                deduped.append(item)
+        return deduped
+
     def _process_api_endpoint(self, endpoint_data: Dict, file_path: str):
         """处理API端点"""
         endpoint_key = f"{endpoint_data['method']} {endpoint_data['path']}"
@@ -4923,25 +6258,17 @@ class SystemEntityAggregator:
         endpoint_entry = self.api_endpoints[endpoint_key]
         endpoint_entry["sources"].append(file_path)
         
-        # 提取请求和响应模型
-        request_model = endpoint_data.get("request", "")
-        response_model = endpoint_data.get("response", "")
-        
-        # 记录模型使用关系
-        if request_model and request_model != "None":
+        # 提取请求和响应模型（LLM 可能返回 str / dict / list）
+        for request_model in self._coerce_endpoint_models(endpoint_data.get("request")):
             endpoint_entry["request_models"].add(request_model)
             self._add_concept_usage(request_model, endpoint_key)
-            
-            # 从业务概念中获取完整的模型信息
             self._enhance_endpoint_with_model_info(
                 endpoint_key, request_model, "request", file_path
             )
-        
-        if response_model and response_model != "None":
+
+        for response_model in self._coerce_endpoint_models(endpoint_data.get("response")):
             endpoint_entry["response_models"].add(response_model)
             self._add_concept_usage(response_model, endpoint_key)
-            
-            # 从业务概念中获取完整的模型信息
             self._enhance_endpoint_with_model_info(
                 endpoint_key, response_model, "response", file_path
             )

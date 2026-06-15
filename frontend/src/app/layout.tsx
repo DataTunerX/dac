@@ -22,7 +22,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN" className={`${firaCode.variable} ${firaSans.variable}`}>
+    <html lang="zh-CN" suppressHydrationWarning className={`${firaCode.variable} ${firaSans.variable}`}>
       <body className="min-h-screen font-sans antialiased">
         {children}
         <Toaster />

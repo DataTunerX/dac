@@ -50,6 +50,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import { PaginationBar } from "@/components/pagination-bar"
 import { toast } from "sonner"
 import { Box, History, Loader2, Pencil, RefreshCw, X } from "lucide-react"
@@ -181,6 +182,20 @@ function PageSpinner() {
     </div>
   )
 }
+
+const TEMPLATE_LIST_COLUMNS = [
+  { id: "name", size: 200 },
+  { id: "namespace", size: 140 },
+  { id: "status", size: 120 },
+  { id: "updated", size: 180 },
+  { id: "actions", size: 120 },
+] as const
+
+const TEMPLATE_HISTORY_COLUMNS = [
+  { id: "archived", size: 180 },
+  { id: "version", size: 220 },
+  { id: "actions", size: 120 },
+] as const
 
 export function TemplateManagementPanel() {
   const [mounted, setMounted] = useState(false)
@@ -432,15 +447,15 @@ export function TemplateManagementPanel() {
         </Button>
       </div>
 
-      <div className="rounded-lg border border-line bg-surface overflow-hidden">
-        <Table>
+      <TableWrapper>
+        <Table storageKey="template-management-list" columns={[...TEMPLATE_LIST_COLUMNS]}>
           <TableHeader>
             <TableRow className="bg-surface-muted">
-              <TableHead>名称</TableHead>
-              <TableHead>命名空间</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>最近更新</TableHead>
-              <TableHead className="text-right">操作</TableHead>
+              <TableHead columnId="name">名称</TableHead>
+              <TableHead columnId="namespace">命名空间</TableHead>
+              <TableHead columnId="status">状态</TableHead>
+              <TableHead columnId="updated">最近更新</TableHead>
+              <TableHead columnId="actions" className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -449,11 +464,11 @@ export function TemplateManagementPanel() {
               const inUse = Boolean(cfg?.exists)
               return (
                 <TableRow key={name} className="hover:bg-surface-muted">
-                  <TableCell className="font-medium font-mono text-content">{name}</TableCell>
-                  <TableCell className="font-mono text-sm text-content-muted">
+                  <TableCell columnId="name" className="font-medium font-mono text-content">{name}</TableCell>
+                  <TableCell columnId="namespace" className="font-mono text-sm text-content-muted">
                     {cfg?.namespace?.trim() || SYSTEM_CONFIG_NAMESPACE}
                   </TableCell>
-                  <TableCell>
+                  <TableCell columnId="status">
                     {inUse ? (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs">
                         使用中
@@ -464,10 +479,10 @@ export function TemplateManagementPanel() {
                       </span>
                     )}
                   </TableCell>
-                  <TableCell className="text-content-muted">
+                  <TableCell columnId="updated" className="text-content-muted">
                     {cfg?.createdAt ? new Date(cfg.createdAt).toLocaleString() : "—"}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell columnId="actions" className="text-right">
                     <div className="flex items-center justify-end gap-1">
                       {inUse ? (
                         <>
@@ -515,7 +530,7 @@ export function TemplateManagementPanel() {
             })}
           </TableBody>
         </Table>
-      </div>
+      </TableWrapper>
 
       {/* 查看 / 编辑 / 历史 */}
       <Dialog open={dialogOpen} onOpenChange={(v) => (!v ? closeDialog() : setDialogOpen(true))}>
@@ -639,13 +654,13 @@ export function TemplateManagementPanel() {
               </div>
             ) : (
               <div className="space-y-4">
-                <div className="rounded-lg border border-line overflow-hidden">
-                  <Table>
+                <TableWrapper>
+                  <Table storageKey="template-history-list" columns={[...TEMPLATE_HISTORY_COLUMNS]}>
                     <TableHeader>
                       <TableRow className="bg-surface-muted">
-                        <TableHead>归档时间</TableHead>
-                        <TableHead>版本 ID</TableHead>
-                        <TableHead className="text-right">操作</TableHead>
+                        <TableHead columnId="archived">归档时间</TableHead>
+                        <TableHead columnId="version">版本 ID</TableHead>
+                        <TableHead columnId="actions" className="text-right">操作</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -658,13 +673,13 @@ export function TemplateManagementPanel() {
                       ) : (
                         versions.map((v) => (
                           <TableRow key={v.version}>
-                            <TableCell className="text-content">
+                            <TableCell columnId="archived" className="text-content">
                               {formatVersionTime(v.version, v.createdAt)}
                             </TableCell>
-                            <TableCell className="font-mono text-xs text-content-muted max-w-[200px] truncate">
+                            <TableCell columnId="version" className="font-mono text-xs text-content-muted max-w-[200px] truncate">
                               {v.version}
                             </TableCell>
-                            <TableCell className="text-right">
+                            <TableCell columnId="actions" className="text-right">
                               <Button variant="ghost" size="sm" onClick={() => setViewingVersion(v)}>
                                 查看
                               </Button>
@@ -674,7 +689,7 @@ export function TemplateManagementPanel() {
                       )}
                     </TableBody>
                   </Table>
-                </div>
+                </TableWrapper>
                 <PaginationBar
                   total={versionTotal}
                   page={versionPage}

@@ -33,7 +33,7 @@ from a2a.utils import new_agent_text_message, new_task, new_text_artifact
 from .redis_registry import RedisRegistry, HeartbeatService
 from model_sdk import ModelManager
 from langchain_core.messages import SystemMessage, HumanMessage
-from .dataservices_client import DataServicesClient
+from .dataservices_client import DataServicesClient, MetadataValuesResult
 from .schema import ROLE_TYPE, Memory, Message
 from .prompts import (  
     NEXT_STEP_PROMPT_ZH,
@@ -68,6 +68,17 @@ _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
     "intent_analysis",
     "reasoning",
 )
+
+# 粗筛阶段安全兜底上限（环境变量可调，默认值足够宽松，只在 LLM 异常多选时触发截断）。
+_DOC_COARSE_MAX_IDS_PER_BATCH = int(os.getenv("DOC_COARSE_MAX_IDS_PER_BATCH", "60"))
+_DOC_COARSE_MAX_TOTAL_IDS = int(os.getenv("DOC_COARSE_MAX_TOTAL_IDS", "150"))
+
+# 向量/混合预检索配置（Step 0）。
+# 在 LLM 粗筛之前，先用 data-services 的 hybrid/vector search 召回每个 collection 中
+# 与 query 最相关的 top-N 块，大幅减少传入 LLM 的总块数。
+_DOC_KNOWLEDGE_VECTOR_ENABLED = os.getenv("DOC_KNOWLEDGE_VECTOR_ENABLED", "true").lower() not in ("false", "0", "no")
+_DOC_KNOWLEDGE_VECTOR_LIMIT = int(os.getenv("DOC_KNOWLEDGE_VECTOR_LIMIT", "10"))
+_DOC_KNOWLEDGE_VECTOR_SEARCH_TYPE = os.getenv("DOC_KNOWLEDGE_VECTOR_SEARCH_TYPE", "hybrid")
 
 def _escape_known_string_field_inner_quotes(text: str) -> str:
     """Best-effort escape of unescaped inner ``"`` inside known single-line
@@ -322,6 +333,8 @@ class DocAgent(BaseAgent):
             content_types=['text', 'text/plain'],
         )
 
+        self._knowledge_selection_summary: str = ""  # 由 get_knowledge 填充，供 sd_doc_step_finished 使用
+
         self.manager = ModelManager()
         _extra_body = {"enable_thinking": False} if os.getenv("ENABLE_THINKING_PARAM", "true").strip().lower() not in ("false", "0", "no") else {}
         self.llm = self.manager.get_llm(
@@ -439,6 +452,23 @@ class DocAgent(BaseAgent):
             task_id=task_id,
             extra=extra,
         ))
+
+    def _build_knowledge_selection_summary(self, score_meta: Dict[str, Any]) -> str:
+        """构建选中知识块的摘要文本（供 sd_doc_step_finished message 拼接）。"""
+        report = score_meta.get("score_select_report") or {}
+        blocks: List[Dict[str, Any]] = report.get("blocks") or []
+        if not blocks:
+            return ""
+
+        lines = [
+            "",
+            f"选中的知识块（共 {len(blocks)} 个）：",
+        ]
+        for i, b in enumerate(blocks):
+            score = float(b.get("score", 0))
+            summary = (b.get("summary") or "").strip()
+            lines.append(f"  {i + 1}. [{score:.1f}] {summary}")
+        return "\n".join(lines)
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
@@ -839,6 +869,77 @@ class DocAgent(BaseAgent):
         finally:
             await self.data_services_client.close()
 
+    async def _retrieve_vector(self) -> Optional[MetadataValuesResult]:
+        """
+        向量/混合补充检索：利用 data-services 的 hybrid/vector/fulltext search
+        召回与用户问题最相关的 top-N 块，转换为统一的 MetadataValuesResult 格式。
+        与语义粗筛独立运行，结果在 get_knowledge 中合并。
+        """
+        collection_names = [self.generate_collection_name(item) for item in self.data_descriptors]
+        logger.info(
+            "[VECTOR RETRIEVE] query=%r collections=%s search_type=%s limit=%d",
+            self.query[:120] if self.query else "",
+            collection_names,
+            _DOC_KNOWLEDGE_VECTOR_SEARCH_TYPE,
+            _DOC_KNOWLEDGE_VECTOR_LIMIT,
+        )
+
+        try:
+            await self.data_services_client._create_session()
+            result = await self.data_services_client.search_multiple_collections(
+                collection_names=collection_names,
+                query=self.query,
+                search_type=_DOC_KNOWLEDGE_VECTOR_SEARCH_TYPE,
+                limit=_DOC_KNOWLEDGE_VECTOR_LIMIT,
+            )
+        except Exception as e:
+            logger.error(f"[VECTOR RETRIEVE] search failed: {e}")
+            return None
+        finally:
+            await self.data_services_client.close()
+
+        if not result or not result.results:
+            logger.warning("[VECTOR RETRIEVE] returned empty results")
+            return None
+
+        # 将 VectorResult 列表转换为 MetadataValuesResult 的数据格式
+        data: Dict[str, List[Dict[str, Any]]] = {}
+        total_blocks = 0
+        for coll_name, search_result in result.results.items():
+            if search_result is None or not search_result.vector_result:
+                logger.info("[VECTOR RETRIEVE] collection=%s returned 0 items", coll_name)
+                continue
+
+            blocks = []
+            for vr in search_result.vector_result:
+                meta = vr.metadata or {}
+                # 使用 data-services 返回的 metadata.id（已有 id 字段）
+                block_id = meta.get("id", "")
+                blocks.append({
+                    "id": block_id,
+                    "text": vr.content,
+                    # metadata_value 优先取 summary，其次取 metadata_value，最后取 content 前 200 字
+                    "metadata_value": (
+                        meta.get("summary")
+                        or meta.get("metadata_value")
+                        or vr.content[:200]
+                    ),
+                })
+            if blocks:
+                data[coll_name] = blocks
+                total_blocks += len(blocks)
+                logger.info(
+                    "[VECTOR RETRIEVE] collection=%s returned %d items",
+                    coll_name, len(blocks),
+                )
+
+        if not data:
+            logger.warning("[VECTOR RETRIEVE] all collections returned 0 items")
+            return None
+
+        logger.info("[VECTOR RETRIEVE] total %d blocks from %d collections", total_blocks, len(data))
+        return MetadataValuesResult(status="success", data=data, errors=None)
+
     async def select_relevant_knowledge(self, knowledge_summaries: str) -> KnowledgeSelectionResult:
         """
         使用 LLM 从知识摘要中筛选与用户问题相关的知识 ID。
@@ -900,7 +1001,18 @@ class DocAgent(BaseAgent):
             logger.error("select_relevant_knowledge: LLM output parsing failed, returning empty result")
             return KnowledgeSelectionResult(knowledge_ids=[], intent_analysis="", reasoning="parsing failed")
 
-        return KnowledgeSelectionResult(**data_dict)
+        result = KnowledgeSelectionResult(**data_dict)
+
+        # 安全兜底：单批次返回 ID 数量异常时截断（防止 LLM 过度选择导致二阶拉取成本爆炸）
+        n_ids = len(result.knowledge_ids)
+        if n_ids > _DOC_COARSE_MAX_IDS_PER_BATCH:
+            logger.warning(
+                "select_relevant_knowledge: LLM returned %d ids (cap=%d), truncating",
+                n_ids, _DOC_COARSE_MAX_IDS_PER_BATCH,
+            )
+            result.knowledge_ids = result.knowledge_ids[:_DOC_COARSE_MAX_IDS_PER_BATCH]
+
+        return result
 
     async def get_knowledge(self) -> str:
         """
@@ -951,7 +1063,48 @@ class DocAgent(BaseAgent):
                 # 去重
                 seen = set()
                 unique_ids = [kid for kid in all_selected_ids if not (kid in seen or seen.add(kid))]
+                # 安全兜底：多批次合并后总量超过上限时截断（控制二阶拉取与打分成本）
+                if len(unique_ids) > _DOC_COARSE_MAX_TOTAL_IDS:
+                    logger.warning(
+                        "get_knowledge: total %d unique ids exceeds cap=%d, truncating",
+                        len(unique_ids), _DOC_COARSE_MAX_TOTAL_IDS,
+                    )
+                    unique_ids = unique_ids[:_DOC_COARSE_MAX_TOTAL_IDS]
                 logger.info(f"get_knowledge: Total unique selected knowledge IDs: {len(unique_ids)}")
+
+                # Step 1b: 向量补充检索（独立一路，不参与 LLM 粗筛）。
+                # 在语义粗筛完成后，用 data-services 的 hybrid search 补充召回语义粗筛可能遗漏的知识块。
+                # 向量召回的块合并到 knowledge_blocks 中（确保 get_blocks_by_ids 能找到），ID 一并加入精取阶段。
+                if _DOC_KNOWLEDGE_VECTOR_ENABLED and unique_ids:
+                    vector_result = await self._retrieve_vector()
+                    if vector_result is not None and vector_result.get_all_items():
+                        n_before = len(unique_ids)
+                        seen = set(unique_ids)
+                        vector_new_ids = []
+                        for coll_name, blocks in vector_result.data.items():
+                            if not isinstance(blocks, list):
+                                continue
+                            # 将向量召回的块也注册到 knowledge_blocks.data 中，确保第二阶段能拉到全文
+                            if coll_name not in knowledge_blocks.data:
+                                knowledge_blocks.data[coll_name] = []
+                            existing_ids = {b.get("id", "") for b in knowledge_blocks.data[coll_name]}
+                            for block in blocks:
+                                bid = block.get("id", "")
+                                if bid and bid not in existing_ids:
+                                    knowledge_blocks.data[coll_name].append(block)
+                                    existing_ids.add(bid)
+                                if bid and bid not in seen:
+                                    seen.add(bid)
+                                    vector_new_ids.append(bid)
+
+                        if vector_new_ids:
+                            unique_ids.extend(vector_new_ids)
+                            logger.info(
+                                "get_knowledge: vector supplement added %d new IDs (total %d → %d)",
+                                len(vector_new_ids), n_before, len(unique_ids),
+                            )
+                        else:
+                            logger.info("get_knowledge: vector supplement found 0 new IDs")
 
                 # 第二阶段：根据 ID 获取完整知识内容；超长时 LLM 打分并按预算选取
                 if unique_ids:
@@ -973,6 +1126,8 @@ class DocAgent(BaseAgent):
                             "get_knowledge: score_select_report=%s",
                             score_meta.get("score_select_report"),
                         )
+                        # 构建选块摘要，供 sd_doc_step_finished 的 message 使用
+                        self._knowledge_selection_summary = self._build_knowledge_selection_summary(score_meta)
 
         except Exception as e:
             logger.error(f'An error occurred during two-stage knowledge retrieval: {e}')
@@ -1266,6 +1421,7 @@ class DocAgent(BaseAgent):
                 self.current_step < self.max_steps and self.state != AgentState.FINISHED
             ):
                 self.current_step += 1
+                self._knowledge_selection_summary = ""  # 每步开始前清空，避免残留
 
                 current_task = self.metadata.get('current_task', '')
 
@@ -1303,12 +1459,15 @@ class DocAgent(BaseAgent):
                 logger.debug(f"******************** steps status: \n\n {steps_status}")
 
                 finished_query_preview = self._step_query_preview(step_query_snapshot)
+                finished_message = (
+                    f"completed step {self.current_step}/{self.max_steps}"
+                    f" | query: {finished_query_preview}"
+                )
+                if self._knowledge_selection_summary:
+                    finished_message += self._knowledge_selection_summary
                 await self.emit_progress(
                     "sd_doc_step_finished",
-                    message=(
-                        f"completed step {self.current_step}/{self.max_steps}"
-                        f" | query: {finished_query_preview}"
-                    ),
+                    message=finished_message,
                     status="done",
                     task_id=self.current_task_id,
                     extra={

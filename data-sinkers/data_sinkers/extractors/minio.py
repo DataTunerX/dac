@@ -10,6 +10,7 @@ from ..readers.minio.minio_reader import MinIOReader
 from ..api.base import DocumentModel
 from model_sdk import ModelManager
 from .base import FileAnalyzer
+from ..llm_config import llm_request_timeout_seconds
 from ..fingerprint.fingerprint import compute_minio_bucket_object_list_hash
 import logging
 
@@ -99,10 +100,18 @@ llm = manager.get_llm(
     base_url=os.getenv("BASE_URL"),
     model=os.getenv("Model"),
     temperature=0.01,
+    timeout=llm_request_timeout_seconds(),
     extra_body={
         "enable_thinking": False
     },
 )
+
+def _file_summary_max_workers() -> int:
+    raw = os.getenv("FILE_SUMMARY_MAX_WORKERS", "50")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 50
 
 def _attach_per_file_summaries_to_descriptors(
     minio_file_descriptors: List[Dict[str, Any]],
@@ -224,7 +233,8 @@ def extract_minio(
     bucket = reader.config.get("bucket")
     object_list_hash = compute_minio_bucket_object_list_hash(bucket, reader.client.conn)
 
-    file_analyzer = FileAnalyzer(llm, max_workers=50, batch_size=50)
+    workers = _file_summary_max_workers()
+    file_analyzer = FileAnalyzer(llm, max_workers=workers, batch_size=workers)
 
     per_file_summary_docs: List[Document] = []
     if objects_for_document_query is not None:
@@ -269,7 +279,12 @@ def extract_minio(
             DocumentModel(page_content=d.page_content, metadata=dict(d.metadata or {}))
             for d in bucket_summary_docs
         ]
-        file_summary = file_analyzer.file_summary(summary_inputs)
+        # L3 桶级：Map-Reduce 按 per-file 摘要合成（L2 单文件仍用 file_summary+Refine）。
+        logger.info(
+            "extract_minio L3 bucket synthesis: %d per-file summaries → bucket_file_summary_map_reduce",
+            len(summary_inputs),
+        )
+        file_summary = file_analyzer.bucket_file_summary_map_reduce(summary_inputs)
         summary = (file_summary.get("summary") if file_summary else "") or ""
         outline = (file_summary.get("outline") if file_summary else "") or ""
     else:
@@ -287,9 +302,9 @@ def extract_minio(
         len(minio_file_descriptors),
     )
 
-    logger.info(f"extract_minio, summary: {summary}")
+    logger.debug("extract_minio, summary: %s", summary)
 
-    logger.info(f"extract_minio, outline: {outline}")
+    logger.debug("extract_minio, outline: %s", outline)
 
     agent_card = file_analyzer.agent_card(outline) if outline else {}
 

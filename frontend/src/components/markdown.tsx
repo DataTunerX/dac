@@ -2,7 +2,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { prepareMarkdown } from "@/lib/prepare-markdown"
 
-export { prepareMarkdown, normalizeMarkdown, normalizeMarkdownTables } from "@/lib/prepare-markdown"
+export { prepareMarkdown } from "@/lib/prepare-markdown"
 
 type Components = Parameters<typeof ReactMarkdown>[0]["components"]
 

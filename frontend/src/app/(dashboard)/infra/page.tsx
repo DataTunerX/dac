@@ -9,6 +9,7 @@ import { RbacButton, RbacWrapper } from "@/components/rbac"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { PaginationBar } from "@/components/pagination-bar"
 import {
@@ -75,6 +76,15 @@ function getApiErrorMessage(err: unknown): string | null {
   if (err instanceof Error && err.message.trim()) return err.message.trim()
   return null
 }
+
+const INFRA_JOBS_COLUMNS = [
+  { id: "name", size: 220 },
+  { id: "target", size: 200 },
+  { id: "status", size: 120 },
+  { id: "started", size: 200 },
+  { id: "finished", size: 200 },
+  { id: "actions", size: 160 },
+] as const
 
 export default function InfraDiscoveryListPage() {
   const router = useRouter()
@@ -205,16 +215,16 @@ export default function InfraDiscoveryListPage() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-line bg-surface overflow-hidden">
-        <Table>
+      <TableWrapper>
+        <Table storageKey="infra-jobs-list" columns={[...INFRA_JOBS_COLUMNS]}>
           <TableHeader>
             <TableRow className="bg-surface-muted">
-              <TableHead className="w-[220px]">名称</TableHead>
-              <TableHead className="w-[200px]">目标</TableHead>
-              <TableHead className="w-[120px]">状态</TableHead>
-              <TableHead className="w-[200px]">开始时间</TableHead>
-              <TableHead className="w-[200px]">结束时间</TableHead>
-              <TableHead className="w-[160px] text-right">操作</TableHead>
+              <TableHead columnId="name">名称</TableHead>
+              <TableHead columnId="target">目标</TableHead>
+              <TableHead columnId="status">状态</TableHead>
+              <TableHead columnId="started">开始时间</TableHead>
+              <TableHead columnId="finished">结束时间</TableHead>
+              <TableHead columnId="actions" className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -235,7 +245,7 @@ export default function InfraDiscoveryListPage() {
             ) : (
               ordered.map((job) => (
                 <TableRow key={job.id} className="cursor-pointer hover:bg-surface-muted" onClick={() => openDetail(job.id)}>
-                  <TableCell className="text-sm text-content">
+                  <TableCell columnId="name" className="text-sm text-content">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="w-9 h-9 rounded-xl bg-cta/10 flex items-center justify-center text-cta shrink-0 mt-0.5">
                         <Target className="w-4 h-4" />
@@ -250,15 +260,15 @@ export default function InfraDiscoveryListPage() {
                       </div>
                     </div>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{job.target}</TableCell>
-                  <TableCell>
+                  <TableCell columnId="target" className="font-mono text-xs">{job.target}</TableCell>
+                  <TableCell columnId="status">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusPillClass(job.status)}`}>
                       {statusLabel(job.status)}
                     </span>
                   </TableCell>
-                  <TableCell className="text-xs text-content">{fmtTs(job.startedAt)}</TableCell>
-                  <TableCell className="text-xs text-content">{fmtTs(job.finishedAt)}</TableCell>
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                  <TableCell columnId="started" className="text-xs text-content">{fmtTs(job.startedAt)}</TableCell>
+                  <TableCell columnId="finished" className="text-xs text-content">{fmtTs(job.finishedAt)}</TableCell>
+                  <TableCell columnId="actions" className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-2">
                       <Button variant="ghost" size="icon" onClick={() => openDetail(job.id)} aria-label="查看">
                         <Eye className="w-4 h-4 text-content-muted" />
@@ -275,7 +285,7 @@ export default function InfraDiscoveryListPage() {
             )}
           </TableBody>
         </Table>
-      </div>
+      </TableWrapper>
 
       <PaginationBar
         total={total}

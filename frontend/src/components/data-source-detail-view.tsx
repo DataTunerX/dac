@@ -35,7 +35,6 @@ import {
   LayoutGrid,
   Loader2,
   RefreshCw,
-  Search,
   Table as TableIcon,
   Network,
   FileText,
@@ -45,9 +44,6 @@ import {
   ChevronDown,
   Info,
   Briefcase,
-  BookOpen,
-  Layers,
-  Maximize2,
   Trash2,
   X,
 } from "lucide-react";
@@ -59,7 +55,8 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
+} from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper";
 import {
   Dialog,
   DialogContent,
@@ -79,6 +76,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { HoverHint } from "@/components/hover-hint";
 import { KnowledgeGraphView } from "@/components/knowledge-graph-view";
+import { KnowledgeShardsPanel } from "@/components/knowledge-shards-panel";
 import {
   getDataSourceKindLabel,
   isStructuredDataSourceKind,
@@ -97,20 +95,6 @@ const DATA_SOURCE_TABS = [
 ] as const;
 type DataSourceTabKey = (typeof DATA_SOURCE_TABS)[number]["key"];
 
-function sourceBadgeClass(sourceType: string) {
-  const t = (sourceType || "").toLowerCase();
-  if (t.includes("gitee")) return "bg-red-50 text-red-700 border-red-100";
-  if (t.includes("github"))
-    return "bg-surface-muted text-content border-line";
-  if (t.includes("gitlab"))
-    return "bg-orange-50 text-orange-700 border-orange-100";
-  if (t.includes("mysql")) return "bg-sky-50 text-sky-700 border-sky-100";
-  if (t.includes("postgres"))
-    return "bg-indigo-50 text-indigo-700 border-indigo-100";
-  if (t.includes("clickhouse"))
-    return "bg-amber-50 text-amber-700 border-amber-100";
-  return "bg-cta/10 text-cta border-cta/20";
-}
 
 function getStatusColor(phase?: string) {
   const p = (phase || "").toLowerCase();
@@ -151,11 +135,6 @@ type DataDescriptor = {
 type Signature = UnknownRecord;
 type SemanticDomain = UnknownRecord;
 
-type KnowledgeResult = {
-  content?: string;
-  metadata?: UnknownRecord;
-  score?: number;
-};
 
 type LineageConsumer = {
   kind: "agent" | "unknown";
@@ -315,6 +294,19 @@ function buildOverviewFields({
   ];
 }
 
+const SCHEMA_TABLE_COLUMNS = [
+  { id: "expand", size: 60 },
+  { id: "tableName", size: 250 },
+  { id: "businessObject", size: 200 },
+  { id: "description", size: 400 },
+] as const
+
+const DATASOURCE_DEPENDENT_COLUMNS = [
+  { id: "resource", size: 240 },
+  { id: "namespace", size: 112 },
+  { id: "actions", size: 176 },
+] as const
+
 export function DataSourceDetailView() {
   const router = useRouter();
   const params = useParams<{ namespace: string; name: string }>();
@@ -345,11 +337,7 @@ export function DataSourceDetailView() {
     tableName: string;
     md: string;
   } | null>(null);
-  const [selectedKnowledge, setSelectedKnowledge] =
-    useState<KnowledgeResult | null>(null);
 
-  const [isLoadingKnowledge, setIsLoadingKnowledge] = useState(false);
-  const [results, setResults] = useState<KnowledgeResult[]>([]);
 
   const [isPromptsDialogOpen, setIsPromptsDialogOpen] = useState(false);
   const [isLoadingPromptsDetail, setIsLoadingPromptsDetail] = useState(false);
@@ -700,43 +688,6 @@ export function DataSourceDetailView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [namespace, name]);
 
-  const loadKnowledge = async () => {
-    setIsLoadingKnowledge(true);
-    try {
-      // Call GET /knowledge endpoint to retrieve all fragments
-      const res = await api.get(
-        `/namespaces/${encodeURIComponent(namespace)}/descriptors/${encodeURIComponent(name)}/knowledge`,
-      );
-      const data = res.data as unknown;
-      const r = isRecord(data) ? data : {};
-      const list = Array.isArray(r.results) ? r.results : [];
-      const adapted: KnowledgeResult[] = list.map((it) => {
-        const x = isRecord(it) ? it : {};
-        return {
-          // data-services get_all returns Document schema: page_content + metadata + provider + children
-          content:
-            typeof x.page_content === "string" ? x.page_content : undefined,
-          metadata: isRecord(x.metadata)
-            ? (x.metadata as UnknownRecord)
-            : undefined,
-          score: typeof x.score === "number" ? x.score : undefined,
-        };
-      });
-      setResults(adapted);
-    } catch (e) {
-      console.error("load knowledge failed", e);
-      toast.error("加载知识分片失败");
-    } finally {
-      setIsLoadingKnowledge(false);
-    }
-  };
-
-  useEffect(() => {
-    if (tab === "knowledge") {
-      void loadKnowledge();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, namespace, name]);
 
   const refreshAll = async () => {
     await Promise.all([load(), loadSignature(), loadSemanticDomain()]);
@@ -1060,19 +1011,13 @@ export function DataSourceDetailView() {
                   <div className="flex flex-col">
                     {/* Table List (Main Content) */}
                     <div className="flex-1 p-0 overflow-x-auto">
-                      <Table>
+                      <Table storageKey="datasource-schema-list" columns={[...SCHEMA_TABLE_COLUMNS]}>
                         <TableHeader className="sticky top-0 bg-surface-muted z-10 shadow-sm">
                           <TableRow>
-                            <TableHead className="w-[60px]"></TableHead>
-                            <TableHead className="w-[250px] min-w-[200px]">
-                              表名
-                            </TableHead>
-                            <TableHead className="w-[200px] min-w-[150px]">
-                              业务对象
-                            </TableHead>
-                            <TableHead className="min-w-[400px]">
-                              描述
-                            </TableHead>
+                            <TableHead columnId="expand" className="text-center" />
+                            <TableHead columnId="tableName">表名</TableHead>
+                            <TableHead columnId="businessObject">业务对象</TableHead>
+                            <TableHead columnId="description">描述</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -1093,7 +1038,7 @@ export function DataSourceDetailView() {
                                       setSelectedTable(isExpanded ? null : row)
                                     }
                                   >
-                                    <TableCell className="text-center py-4 pl-4 pr-2">
+                                    <TableCell columnId="expand" className="text-center py-4 pl-4 pr-2">
                                       <div
                                         className={cn(
                                           "w-6 h-6 rounded-md flex items-center justify-center transition-all duration-200",
@@ -1109,13 +1054,13 @@ export function DataSourceDetailView() {
                                         )}
                                       </div>
                                     </TableCell>
-                                    <TableCell className="font-mono text-sm font-medium text-content py-4">
+                                    <TableCell columnId="tableName" className="font-mono text-sm font-medium text-content py-4">
                                       {row.tableName}
                                     </TableCell>
-                                    <TableCell className="text-sm text-content py-4">
+                                    <TableCell columnId="businessObject" className="text-sm text-content py-4">
                                       {row.entity || "-"}
                                     </TableCell>
-                                    <TableCell className="text-sm text-content-muted py-4">
+                                    <TableCell columnId="description" className="text-sm text-content-muted py-4">
                                       <div title={row.desc}>
                                         {row.desc || "-"}
                                       </div>
@@ -1173,247 +1118,7 @@ export function DataSourceDetailView() {
             </div>
           </div>
         ) : tab === "knowledge" ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-medium text-content flex items-center gap-2">
-                <BookOpen className="w-4 h-4 text-content-muted" />
-                知识分片
-              </h3>
-              <div className="flex items-center gap-3">
-                <Badge
-                  variant="secondary"
-                  className="bg-surface border-line text-content"
-                >
-                  {results.length} Fragments
-                </Badge>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              {isLoadingKnowledge ? (
-                <div className="bg-surface rounded-xl border border-line shadow-sm p-20 flex flex-col items-center justify-center text-content-muted">
-                  <Loader2 className="w-8 h-8 animate-spin mb-4 text-cta" />
-                  <p>正在加载知识分片…</p>
-                </div>
-              ) : results.length === 0 ? (
-                <div className="bg-surface rounded-xl border border-line shadow-sm overflow-hidden">
-                  <EmptyState icon={BookOpen} message="暂无知识分片" />
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                  {results.map((r, idx) => {
-                    const moduleName =
-                      (r.metadata?.module_name as string) || "";
-                    const summary =
-                      (r.metadata?.summary as string) ||
-                      (r.content
-                        ? r.content.length > 150
-                          ? r.content.slice(0, 150) + "..."
-                          : r.content
-                        : "No summary available");
-                    const sourceType =
-                      (r.metadata?.source_type as string) || "";
-                    const { preview: summaryPreview, fileCount } =
-                      getSummaryPreview(summary);
-
-                    return (
-                      <Card
-                        key={idx}
-                        onClick={() => setSelectedKnowledge(r)}
-                        className="hover:shadow-lg hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex flex-col h-[280px] relative overflow-hidden"
-                      >
-                        {/* Decorative Background Pattern */}
-                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
-                          <Layers className="w-24 h-24 text-cta" />
-                        </div>
-
-                        {/* Header */}
-                        <div className="px-6 pt-6 pb-2 relative z-10">
-                          <div className="flex items-center justify-between mb-2">
-                            {sourceType ? (
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  "px-2 py-0.5 text-xs font-medium max-w-[9rem] truncate",
-                                  sourceBadgeClass(sourceType),
-                                )}
-                              >
-                                {sourceType}
-                              </Badge>
-                            ) : (
-                              <span />
-                            )}
-                            <div className="flex items-center gap-2">
-                              {fileCount > 0 ? (
-                                <span className="text-[11px] text-content-muted bg-surface/70 border border-line rounded px-2 py-0.5">
-                                  {fileCount} files
-                                </span>
-                              ) : null}
-                              <Maximize2 className="w-4 h-4 text-content-muted group-hover:text-cta transition-colors" />
-                            </div>
-                          </div>
-                          <CardTitle className="text-lg line-clamp-2 leading-tight group-hover:text-cta transition-colors">
-                            {moduleName ? moduleName : `分片 #${idx + 1}`}
-                          </CardTitle>
-                        </div>
-
-                        {/* Body: Summary */}
-                        <CardContent className="flex-1 relative z-10 pt-2">
-                          <p className="text-sm text-content-muted leading-relaxed line-clamp-5">
-                            {summaryPreview}
-                          </p>
-                        </CardContent>
-
-                        {/* Footer */}
-                        <CardFooter className="mt-auto border-t border-line flex items-center gap-2 text-xs text-content-muted relative z-10 bg-surface/60 backdrop-blur px-6 py-3">
-                          <div className="flex items-center gap-1.5">
-                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
-                            <span>Ready</span>
-                          </div>
-                          <div className="flex-1"></div>
-                          <span className="font-mono opacity-50">
-                            #{idx + 1}
-                          </span>
-                        </CardFooter>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Knowledge Detail Dialog */}
-            <Dialog
-              open={!!selectedKnowledge}
-              onOpenChange={(open) => !open && setSelectedKnowledge(null)}
-            >
-              <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] flex flex-col p-0 overflow-hidden">
-                <DialogHeader className="px-6 py-5 border-b border-line bg-surface-muted/50 flex-shrink-0 relative">
-                  <div className="flex items-center gap-3 mb-2">
-                    {typeof selectedKnowledge?.metadata?.source_type ===
-                      "string" &&
-                    String(selectedKnowledge.metadata.source_type).trim() ? (
-                      <Badge
-                        variant="outline"
-                        className="bg-cta/10 text-cta border-cta/20"
-                      >
-                        {String(selectedKnowledge.metadata.source_type).trim()}
-                      </Badge>
-                    ) : null}
-                    <span className="text-xs text-content-muted font-mono">
-                      #{results.indexOf(selectedKnowledge!) + 1}
-                    </span>
-                  </div>
-                  <DialogTitle className="text-xl text-content pr-8">
-                    {typeof selectedKnowledge?.metadata?.module_name ===
-                      "string" &&
-                    String(selectedKnowledge.metadata.module_name).trim()
-                      ? String(selectedKnowledge.metadata.module_name).trim()
-                      : `分片 #${results.indexOf(selectedKnowledge!) + 1}`}
-                  </DialogTitle>
-                  <button
-                    type="button"
-                    className="absolute right-4 top-4 p-2 text-content-muted hover:text-content hover:bg-surface-muted rounded-full transition-colors cursor-pointer"
-                    onClick={() => setSelectedKnowledge(null)}
-                    aria-label="关闭"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </DialogHeader>
-
-                <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                  {/* Summary Section */}
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-semibold text-content flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-cta" />
-                      Summary
-                    </h4>
-                    <div className="text-sm text-content leading-7 bg-surface-muted p-4 rounded-lg border border-line">
-                      <StructuredSummary
-                        text={
-                          (selectedKnowledge?.metadata?.summary as string) ||
-                          (selectedKnowledge?.content
-                            ? "未找到 summary，以下为原文内容。"
-                            : "暂无内容。")
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  {/* Content Section (page_content) */}
-                  {selectedKnowledge?.content ? (
-                    <div className="space-y-3 pt-4 border-t border-line">
-                      <h4 className="text-sm font-semibold text-content flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-content-muted" />
-                        Detail
-                      </h4>
-                      <div className="bg-surface p-4 rounded-lg border border-line prose prose-sm max-w-none prose-slate">
-                        <Markdown
-                          components={knowledgeDetailMarkdownComponents}
-                        >
-                          {selectedKnowledge.content}
-                        </Markdown>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {/* Detail Section (if provided by backend metadata) */}
-                  {(() => {
-                    const md = selectedKnowledge?.metadata as UnknownRecord | undefined
-                    const detail =
-                      (typeof md?.detail === "string" ? (md.detail as string) : "") ||
-                      (typeof md?.details === "string" ? (md.details as string) : "") ||
-                      (typeof md?.detail_content === "string" ? (md.detail_content as string) : "")
-                    const txt = String(detail || "").trim()
-                    if (!txt) return null
-                    return (
-                      <div className="space-y-3 pt-4 border-t border-line">
-                        <h4 className="text-sm font-semibold text-content flex items-center gap-2">
-                          <FileText className="w-4 h-4 text-content-muted" />
-                          Notes
-                        </h4>
-                        <div className="text-sm text-content leading-7 bg-surface p-4 rounded-lg border border-line">
-                          <StructuredSummary text={txt} />
-                        </div>
-                      </div>
-                    )
-                  })()}
-
-                  {/* Metadata Section */}
-                  {selectedKnowledge?.metadata && (
-                    <div className="space-y-3 pt-4 border-t border-line">
-                      <h4 className="text-sm font-semibold text-content flex items-center gap-2">
-                        <Info className="w-4 h-4 text-content-muted" />
-                        Metadata
-                      </h4>
-                      <div className="grid grid-cols-2 gap-4 bg-surface-muted rounded-lg p-4 border border-line">
-                        {Object.entries(selectedKnowledge.metadata)
-                          .filter(
-                            ([k]) =>
-                              k !== "module_name" &&
-                              k !== "summary" &&
-                              k !== "source_type",
-                          )
-                          .map(([k, v]) => (
-                            <div key={k} className="space-y-1">
-                              <div className="text-xs font-medium text-content-muted uppercase tracking-wider">
-                                {k}
-                              </div>
-                              <div
-                                className="text-sm text-content font-mono truncate"
-                                title={String(v)}
-                              >
-                                {String(v)}
-                              </div>
-                            </div>
-                          ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </DialogContent>
-            </Dialog>
-          </div>
+          <KnowledgeShardsPanel namespace={namespace} name={name} />
         ) : tab === "graph" ? (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -1642,23 +1347,23 @@ export function DataSourceDetailView() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="mt-4 space-y-3 px-6">
-            <div className="max-h-[320px] w-full overflow-auto rounded-md border border-line">
-              <Table className="w-full table-fixed">
+            <TableWrapper className="max-h-[320px] overflow-auto rounded-md">
+              <Table storageKey="datasource-dependent-resources" columns={[...DATASOURCE_DEPENDENT_COLUMNS]}>
                 <TableHeader>
                   <TableRow className="bg-surface-muted">
-                    <TableHead className="w-auto">资源</TableHead>
-                    <TableHead className="w-28">命名空间</TableHead>
-                    <TableHead className="w-44 text-right">操作</TableHead>
+                    <TableHead columnId="resource">资源</TableHead>
+                    <TableHead columnId="namespace">命名空间</TableHead>
+                    <TableHead columnId="actions" className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {dependentResources.map((resource, idx) => (
                     <TableRow key={`${resource.kind}/${resource.id ?? resource.namespace}/${resource.name}/${idx}`}>
-                      <TableCell className="font-medium whitespace-normal break-all">
+                      <TableCell columnId="resource" className="font-medium whitespace-normal break-all">
                         {getDataDescriptorDependencyKindLabel(resource.kind)} / {resource.name}
                       </TableCell>
-                      <TableCell className="text-content-muted">{resource.namespace}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell columnId="namespace" className="text-content-muted">{resource.namespace}</TableCell>
+                      <TableCell columnId="actions" className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           {resource.kind === "group" && resource.id ? (
                             <Button
@@ -1694,7 +1399,7 @@ export function DataSourceDetailView() {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </TableWrapper>
             <div className="text-sm text-content">
               若仅被语义组引用，可先「从语义组移除」再删除；若还被智能体引用，请先处理智能体依赖。
             </div>
@@ -1812,42 +1517,6 @@ function StructuredSummary({ text }: { text: string }) {
   );
 }
 
-function getSummaryPreview(text: string): {
-  preview: string;
-  fileCount: number;
-} {
-  const raw = (text || "").trim();
-  if (!raw) return { preview: "（空）", fileCount: 0 };
-
-  const re = /===\s*文件:\s*([^=]+?)\s*===/g;
-  const matches: Array<{ idx: number; end: number }> = [];
-  for (;;) {
-    const m = re.exec(raw);
-    if (!m) break;
-    matches.push({ idx: m.index, end: re.lastIndex });
-  }
-
-  const intro = (matches.length > 0 ? raw.slice(0, matches[0].idx) : raw)
-    .replace(/模块名称[:：]\s*/g, "")
-    .replace(/模块业务描述[:：]\s*/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  // Prefer intro if present; otherwise fallback to first file block's first line.
-  let preview = intro;
-  if (!preview && matches.length > 0) {
-    const start = matches[0].end;
-    const end = matches.length > 1 ? matches[1].idx : raw.length;
-    preview = raw
-      .slice(start, end)
-      .replace(/^文件摘要[:：]\s*/gm, "")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  preview = preview || raw.replace(/\s+/g, " ").trim();
-  return { preview, fileCount: matches.length };
-}
 
 function InfoItem({
   label,

@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import { PaginationBar } from "@/components/pagination-bar"
 import { toast } from "sonner"
 import { Plus, RefreshCw, Pencil, Trash2, Settings2, Loader2, Bot, FileText, X, Eye } from "lucide-react"
@@ -53,6 +54,19 @@ type DependentResource = {
   name: string
   namespace: string
 }
+const CONFIGMAPS_LIST_COLUMNS = [
+  { id: "name", size: 220 },
+  { id: "namespace", size: 140 },
+  { id: "summary", size: 220 },
+  { id: "created", size: 180 },
+  { id: "actions", size: 120 },
+] as const
+
+const CONFIGMAPS_DEPENDENT_COLUMNS = [
+  { id: "resource", size: 240 },
+  { id: "namespace", size: 112 },
+  { id: "actions", size: 112 },
+] as const
 
 function safeItems(x: unknown): ConfigMapItem[] {
   if (!Array.isArray(x)) return []
@@ -107,24 +121,40 @@ function normalizeLlmBrand(providerRaw: string, modelRaw: string): { kind: "bran
   const provider = String(providerRaw || "").trim().toLowerCase()
   const model = String(modelRaw || "").trim().toLowerCase()
 
-  if (provider.includes("anthropic") || model.includes("claude")) {
+  // 1. Model checks first (most reliable)
+  if (model.includes("claude")) {
     return { kind: "brand", slug: "anthropic", title: "Anthropic" }
   }
-  if (provider.includes("openai") || provider.includes("openai_compatible") || model.startsWith("gpt") || model.includes("gpt-")) {
+  if (model.startsWith("gpt") || model.includes("gpt-")) {
     return { kind: "brand", slug: "openai", title: "OpenAI" }
   }
-  if (provider.includes("google") || model.includes("gemini")) {
+  if (model.includes("gemini")) {
     return { kind: "brand", slug: "google", title: "Google" }
   }
-  if (provider.includes("alibaba") || provider.includes("qwen") || model.includes("qwen")) {
+  if (model.includes("qwen")) {
     return { kind: "brand", slug: "alibabacloud", title: "Alibaba Cloud" }
   }
   if (model.includes("deepseek")) {
     return { kind: "mono", text: "DS", cls: "bg-indigo-100 text-indigo-700", title: "DeepSeek" }
   }
-  if (model.includes("qwen")) {
-    return { kind: "mono", text: "QW", cls: "bg-orange-100 text-orange-700", title: "Qwen" }
+
+  // 2. Provider fallback
+  if (provider.includes("anthropic")) {
+    return { kind: "brand", slug: "anthropic", title: "Anthropic" }
   }
+  if (provider.includes("google")) {
+    return { kind: "brand", slug: "google", title: "Google" }
+  }
+  if (provider.includes("alibaba") || provider.includes("dashscope") || provider.includes("bailian")) {
+    return { kind: "brand", slug: "alibabacloud", title: "Alibaba Cloud" }
+  }
+
+  // 3. Last resort: openai (catches openai and openai_compatible)
+  if (provider.includes("openai") || provider.includes("openai_compatible")) {
+    return { kind: "brand", slug: "openai", title: "OpenAI" }
+  }
+
+  // 4. Default: generic
   return { kind: "generic" }
 }
 
@@ -160,7 +190,6 @@ function ConfigMapsContent() {
   const [editingName, setEditingName] = useState<string | null>(null)
   const [dialogMode, setDialogMode] = useState<DialogMode>("create")
   const [dialogNsSelectOpen, setDialogNsSelectOpen] = useState(false)
-  const [dialogTypeSelectOpen, setDialogTypeSelectOpen] = useState(false)
 
   // Namespaces: SWR for dedup/cache (Vercel React Best Practices 4.3)
   const { data: nsData, error: nsError, isLoading: isLoadingNs } = useSWR<{ items?: unknown; data?: { items?: unknown } }>("/namespaces", apiFetcher)
@@ -266,14 +295,12 @@ function ConfigMapsContent() {
     setPromptsFewshots("")
     setPromptsBackground("")
     setDialogNsSelectOpen(false)
-    setDialogTypeSelectOpen(false)
   }
 
   const closeDialogSafely = () => {
     // Close any open Select popovers first to avoid Radix aria-hidden warnings
     // during dialog close/unmount transitions.
     setDialogNsSelectOpen(false)
-    setDialogTypeSelectOpen(false)
     // Defer dialog close to next frame so SelectContent can unmount cleanly.
     requestAnimationFrame(() => setOpen(false))
   }
@@ -598,7 +625,7 @@ function ConfigMapsContent() {
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 sm:space-y-8">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="text-sm font-medium text-content">
-          <span className="text-content font-semibold">配置管理</span>
+          <span className="text-content font-semibold">{typeLabel(type)}</span>
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -643,18 +670,6 @@ function ConfigMapsContent() {
               )}
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-content-muted">类型</span>
-              <Select value={type} onValueChange={(v) => setType(v as ConfigMapType)}>
-                <SelectTrigger className="h-9 w-36">
-                  <SelectValue placeholder="选择类型" />
-                </SelectTrigger>
-                <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
-                  <SelectItem value="llm">模型管理</SelectItem>
-                  <SelectItem value="prompts">提示词</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
           </div>
 
           <Button variant="outline" size="icon" onClick={() => void load()} disabled={isLoading} title="刷新" aria-label="刷新">
@@ -673,16 +688,16 @@ function ConfigMapsContent() {
       </div>
 
       {/* Table card */}
-      <div className="rounded-lg border border-line bg-surface overflow-hidden">
-        <Table>
+      <TableWrapper>
+        <Table storageKey="configmaps-list" columns={[...CONFIGMAPS_LIST_COLUMNS]}>
           <TableHeader>
             <TableRow className="bg-surface-muted">
-              <TableHead>名称</TableHead>
-              <TableHead>命名空间</TableHead>
-              <TableHead>{type === "llm" ? "提供方" : "配置概览"}</TableHead>
-              <TableHead>创建时间</TableHead>
-              <TableHead className="text-right">操作</TableHead>
-            </TableRow>
+              <TableHead columnId="name">名称</TableHead>
+              <TableHead columnId="namespace">命名空间</TableHead>
+              <TableHead columnId="summary">{type === "llm" ? "提供方" : "配置概览"}</TableHead>
+              <TableHead columnId="created">创建时间</TableHead>
+              <TableHead columnId="actions" className="text-right">操作</TableHead>
+              </TableRow>
           </TableHeader>
           <TableBody>
             {tableItems.length === 0 ? (
@@ -704,7 +719,7 @@ function ConfigMapsContent() {
                   className="cursor-pointer hover:bg-surface-muted"
                   onClick={() => void openView(cm.name)}
                 >
-                  <TableCell className="font-medium flex items-center gap-3">
+                  <TableCell columnId="name" className="font-medium flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-cta/10 flex items-center justify-center text-cta">
                         {(() => {
                           if (type !== "llm") return <FileText className="w-4 h-4" />
@@ -727,8 +742,8 @@ function ConfigMapsContent() {
                       </div>
                       {cm.name}
                   </TableCell>
-                  <TableCell className="text-content-muted">{cm.namespace}</TableCell>
-                  <TableCell className="text-content">
+                  <TableCell columnId="namespace" className="text-content-muted">{cm.namespace}</TableCell>
+                  <TableCell columnId="summary" className="text-content">
                     {type === "llm"
                       ? toProviderLabel(cm.data?.provider || "", cm.data?.model || "")
                       : (() => {
@@ -747,10 +762,10 @@ function ConfigMapsContent() {
                           )
                         })()}
                   </TableCell>
-                  <TableCell className="text-content">
+                  <TableCell columnId="created" className="text-content">
                     {cm.created_at ? new Date(cm.created_at).toLocaleString() : "-"}
                   </TableCell>
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                  <TableCell columnId="actions" className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-2">
                       <Button variant="ghost" size="icon" onClick={() => void openEdit(cm.name)} title="编辑" aria-label="编辑">
                         <RbacWrapper requiredRole="admin">
@@ -779,7 +794,7 @@ function ConfigMapsContent() {
             )}
           </TableBody>
         </Table>
-      </div>
+      </TableWrapper>
 
       <PaginationBar
         total={paginationTotal}
@@ -871,24 +886,7 @@ function ConfigMapsContent() {
               </div>
               <div className="space-y-1.5">
                 <Label>类型</Label>
-                {isViewMode || editingName ? (
-                  <Input value={typeLabel(dialogType)} disabled />
-                ) : (
-                  <Select
-                    open={dialogTypeSelectOpen}
-                    onOpenChange={setDialogTypeSelectOpen}
-                    value={dialogType}
-                    onValueChange={(v) => setDialogType(v as ConfigMapType)}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="选择类型" />
-                    </SelectTrigger>
-                    <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
-                      <SelectItem value="llm">模型管理</SelectItem>
-                      <SelectItem value="prompts">提示词</SelectItem>
-                    </SelectContent>
-                  </Select>
-                )}
+                <Input value={typeLabel(dialogType)} disabled />
               </div>
             </div>
 
@@ -965,23 +963,23 @@ function ConfigMapsContent() {
           </AlertDialogHeader>
 
           <div className="mt-4 space-y-3 px-6">
-            <div className="max-h-[320px] w-full overflow-auto rounded-md border border-line">
-              <Table className="w-full table-fixed">
+            <TableWrapper className="max-h-[320px] overflow-auto rounded-md">
+              <Table storageKey="configmaps-dependent-resources" columns={[...CONFIGMAPS_DEPENDENT_COLUMNS]}>
                 <TableHeader>
                   <TableRow className="bg-surface-muted">
-                    <TableHead className="w-auto">资源</TableHead>
-                    <TableHead className="w-28">命名空间</TableHead>
-                    <TableHead className="w-28 text-right">操作</TableHead>
+                    <TableHead columnId="resource">资源</TableHead>
+                    <TableHead columnId="namespace">命名空间</TableHead>
+                    <TableHead columnId="actions" className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {dependentAgents.map((agent) => (
                     <TableRow key={`${agent.kind}/${agent.namespace}/${agent.name}`}>
-                      <TableCell className="font-medium whitespace-normal break-all">
+                      <TableCell columnId="resource" className="font-medium whitespace-normal break-all">
                         {agent.kind === "agent" ? "智能体" : "数据源"} / {agent.name}
                       </TableCell>
-                      <TableCell className="text-content-muted">{agent.namespace}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell columnId="namespace" className="text-content-muted">{agent.namespace}</TableCell>
+                      <TableCell columnId="actions" className="text-right">
                         <Button
                           variant="ghost"
                           size="sm"
@@ -1002,7 +1000,7 @@ function ConfigMapsContent() {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </TableWrapper>
 
             <div className="text-sm text-content">
               请先解除这些资源对该配置的引用，然后再删除此配置。

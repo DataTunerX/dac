@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -202,6 +203,14 @@ interface DataSourceRef {
   host: string
   port: string
 }
+
+const INFRA_SERVICES_COLUMNS = [
+  { id: "host", size: 180 },
+  { id: "port", size: 100 },
+  { id: "service", size: 200 },
+  { id: "tls", size: 100 },
+  { id: "details", size: 320 },
+] as const
 
 export default function InfraDiscoveryDetailPage() {
   const router = useRouter()
@@ -675,15 +684,15 @@ export default function InfraDiscoveryDetailPage() {
                </Badge>
              </div>
              
-             <div className="bg-surface rounded-lg border border-line shadow-sm overflow-hidden">
-             <Table>
+             <TableWrapper className="shadow-sm">
+             <Table storageKey="infra-services-list" columns={[...INFRA_SERVICES_COLUMNS]}>
                 <TableHeader>
                   <TableRow className="bg-surface-muted/50">
-                    <TableHead className="w-[180px]">地址</TableHead>
-                    <TableHead className="w-[100px]">端口</TableHead>
-                    <TableHead className="w-[200px]">服务识别</TableHead>
-                    <TableHead className="w-[100px]">TLS</TableHead>
-                    <TableHead>详细信息</TableHead>
+                    <TableHead columnId="host">地址</TableHead>
+                    <TableHead columnId="port">端口</TableHead>
+                    <TableHead columnId="service">服务识别</TableHead>
+                    <TableHead columnId="tls">TLS</TableHead>
+                    <TableHead columnId="details">详细信息</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -706,9 +715,9 @@ export default function InfraDiscoveryDetailPage() {
                       const canCreate = !!detectCreateType(s)
                       return (
                         <TableRow key={`${s.host}:${s.port}`} className="hover:bg-surface-muted">
-                          <TableCell className="font-mono text-sm">{s.host}</TableCell>
-                          <TableCell className="font-mono text-sm text-content">{s.port}</TableCell>
-                          <TableCell>
+                          <TableCell columnId="host" className="font-mono text-sm">{s.host}</TableCell>
+                          <TableCell columnId="port" className="font-mono text-sm text-content">{s.port}</TableCell>
+                          <TableCell columnId="service">
                             <div className="flex items-center gap-2 min-w-0">
                               <ServiceIconCell s={s} />
                               <Badge variant="outline" className="font-normal text-content bg-surface truncate">
@@ -716,7 +725,7 @@ export default function InfraDiscoveryDetailPage() {
                               </Badge>
                             </div>
                           </TableCell>
-                          <TableCell>
+                          <TableCell columnId="tls">
                              {s.tls ? (
                               <Badge variant="secondary" className="text-xs bg-cta/10 text-cta border-cta/20 hover:bg-cta/20">
                                 TLS
@@ -725,7 +734,7 @@ export default function InfraDiscoveryDetailPage() {
                               <span className="text-content-muted">-</span>
                             )}
                           </TableCell>
-                          <TableCell className="text-sm">
+                          <TableCell columnId="details" className="text-sm">
                              <div className="flex items-start justify-between gap-4">
                                 <div className="space-y-1 pt-1">
                                   {hints.length === 0 ? (
@@ -780,7 +789,7 @@ export default function InfraDiscoveryDetailPage() {
                   )}
                 </TableBody>
               </Table>
-             </div>
+             </TableWrapper>
             </section>
           </div>
         )}

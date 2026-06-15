@@ -124,11 +124,11 @@ class PDFProcessor:
     def _select_best_loader(self, file_path: str) -> str:
 
         file_size = os.path.getsize(file_path)
+        max_mineru_bytes = 1000 * 1024 * 1024  # 1000 MB
 
-        if file_size > 10 * 1024 * 1024:
+        if file_size >= max_mineru_bytes:
             return "pymupdf"
-        else:
-            return "mineru"
+        return "mineru"
     
     def batch_process(
         self, 

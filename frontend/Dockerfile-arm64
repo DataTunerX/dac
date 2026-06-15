@@ -12,8 +12,7 @@ RUN npm ci
 # Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
-# Do not inherit host NODE_OPTIONS (e.g. --no-opt from conda); Next.js Turbopack workers reject them.
-ENV NODE_OPTIONS=
+# BuildKit can inject host NODE_OPTIONS at RUN time; ENV alone does not clear it.
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # Ensure `public/` exists for standalone copy (Next serves static files from here when present).
@@ -23,7 +22,7 @@ RUN mkdir -p public
 # Learn more here: https://nextjs.org/telemetry
 # ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN npm run build
+RUN env -u NODE_OPTIONS npm run build
 
 # Production image: nginx listens on 3000; Next.js standalone binds 127.0.0.1:3001 (see entrypoint.sh).
 FROM base AS runner

@@ -45,7 +45,8 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
+} from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper";
 import {
   Plus,
   Trash2,
@@ -81,6 +82,14 @@ import { ListSkeleton } from "@/components/ui/skeleton";
 type UnknownRecord = Record<string, unknown>;
 
 const AGENTS_LIST_KEY = ["agents-list-all"] as const;
+const AGENTS_LIST_COLUMNS = [
+  { id: "name", size: 220 },
+  { id: "namespace", size: 140 },
+  { id: "type", size: 100 },
+  { id: "status", size: 110 },
+  { id: "binding", size: 220 },
+  { id: "actions", size: 120 },
+] as const
 
 function isRecord(v: unknown): v is UnknownRecord {
   return typeof v === "object" && v !== null;
@@ -600,16 +609,16 @@ export default function AgentsPage() {
           </div>
         </div>
       ) : viewMode === "list" ? (
-        <div className="overflow-hidden rounded-lg border border-line bg-surface">
-          <Table>
+        <TableWrapper>
+          <Table storageKey="agents-list" columns={[...AGENTS_LIST_COLUMNS]}>
             <TableHeader>
               <TableRow className="bg-surface-muted">
-                <TableHead>名称</TableHead>
-                <TableHead className="whitespace-nowrap">命名空间</TableHead>
-                <TableHead className="whitespace-nowrap">类型</TableHead>
-                <TableHead className="whitespace-nowrap">状态</TableHead>
-                <TableHead>关联</TableHead>
-                <TableHead className="text-right">操作</TableHead>
+                <TableHead columnId="name">名称</TableHead>
+                <TableHead columnId="namespace" className="whitespace-nowrap">命名空间</TableHead>
+                <TableHead columnId="type" className="whitespace-nowrap">类型</TableHead>
+                <TableHead columnId="status" className="whitespace-nowrap">状态</TableHead>
+                <TableHead columnId="binding">关联</TableHead>
+                <TableHead columnId="actions" className="text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -626,7 +635,7 @@ export default function AgentsPage() {
                     className="cursor-pointer hover:bg-surface-muted/60 [content-visibility:auto]"
                     onClick={() => openDetail(a)}
                   >
-                    <TableCell className="max-w-[14rem] font-medium">
+                    <TableCell columnId="name" className="max-w-[14rem] font-medium">
                       <div className="flex min-w-0 items-center gap-2">
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#c7d2fe] bg-[#e0e7ff] text-[#4f46e5]">
                           <Bot className="h-4 w-4" />
@@ -636,10 +645,10 @@ export default function AgentsPage() {
                         </span>
                       </div>
                     </TableCell>
-                    <TableCell className="font-mono text-sm text-content-muted">
+                    <TableCell columnId="namespace" className="font-mono text-sm text-content-muted">
                       {a.namespace}
                     </TableCell>
-                    <TableCell>
+                    <TableCell columnId="type">
                       {a.dataSourceType === "semantic-group" ? (
                         <Badge
                           variant="secondary"
@@ -653,13 +662,13 @@ export default function AgentsPage() {
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell columnId="status">
                       <StatusBadge status={a.status} />
                     </TableCell>
-                    <TableCell className="max-w-[16rem] truncate text-sm text-content" title={binding}>
+                    <TableCell columnId="binding" className="max-w-[16rem] truncate text-sm text-content" title={binding}>
                       {binding}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell columnId="actions" className="text-right">
                       <div
                         className="inline-flex items-center gap-1"
                         onClick={(e) => e.stopPropagation()}
@@ -692,7 +701,7 @@ export default function AgentsPage() {
               })}
             </TableBody>
           </Table>
-        </div>
+        </TableWrapper>
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
           {paged.map((a) => (

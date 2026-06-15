@@ -1,9 +1,9 @@
 "use client"
 
+import { Suspense } from "react"
 import { Sidebar } from "@/components/sidebar"
 import { Topbar } from "@/components/topbar"
 import { ErrorBoundary } from "@/components/error-boundary"
-
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="h-screen w-full flex flex-col">
@@ -15,7 +15,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </a>
       <Topbar />
       <div className="flex flex-1 min-h-0">
-        <Sidebar />
+        <Suspense fallback={<div className="w-64 shrink-0 hidden lg:block" />}>
+          <Sidebar />
+        </Suspense>
         <main id="main" className="flex-1 flex flex-col h-full overflow-hidden pl-14 lg:pl-0">
           <div className="flex-1 overflow-auto bg-surface-muted min-w-0">
             <ErrorBoundary>

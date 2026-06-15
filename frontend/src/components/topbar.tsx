@@ -34,7 +34,7 @@ export function Topbar() {
   }
 
   return (
-    <header className="h-14 shrink-0 bg-surface-inverse border-b border-white/5">
+    <header className="h-14 shrink-0 bg-[#0f172a] border-b border-white/5">
       <div className="h-full flex items-center w-full">
         <div className="hidden lg:flex w-64 h-full items-center px-6 gap-3">
           <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-sm font-bold bg-[#4f46e5] shadow-sm" aria-hidden="true">

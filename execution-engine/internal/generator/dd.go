@@ -432,7 +432,8 @@ func (h *DataDescriptorGenerator) GenerateDataDescriptorDeployment(ctx context.C
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("2000m"),
-						corev1.ResourceMemory: resource.MustParse("4000Mi"),
+						// MinerU PDF parsing (CPU mode) can exceed 4Gi; 16Gi avoids cgroup OOM kills.
+						corev1.ResourceMemory: resource.MustParse("16Gi"),
 					},
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -487,8 +488,7 @@ func (h *DataDescriptorGenerator) GenerateDataDescriptorDeployment(ctx context.C
 			if podSpec.Containers[i].Name == "data-sinker-job" {
 				podSpec.Containers[i].Resources.Limits["nvidia.com/gpu"] = resource.MustParse("1")
 				podSpec.Containers[i].Resources.Requests["nvidia.com/gpu"] = resource.MustParse("1")
-				// Increase memory for CUDA: mineru with GPU needs more memory for model loading and processing
-				podSpec.Containers[i].Resources.Limits[corev1.ResourceMemory] = resource.MustParse("16Gi")
+				// GPU MinerU benefits from a higher memory request for scheduling/placement.
 				podSpec.Containers[i].Resources.Requests[corev1.ResourceMemory] = resource.MustParse("8Gi")
 			}
 		}

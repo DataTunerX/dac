@@ -4,7 +4,7 @@
 // We make this page dynamic to avoid prerender failures in production builds.
 export const dynamic = "force-dynamic"
 
-import React, { useState, useRef, useEffect, useMemo, useCallback, Suspense } from "react"
+import { useState, useRef, useEffect, useMemo, useCallback, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"

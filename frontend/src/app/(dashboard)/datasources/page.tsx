@@ -33,6 +33,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import { Plus, Eye, Loader2, RefreshCw, Trash2, Box } from "lucide-react"
 import { CreateDataSourceDialog } from "@/components/data-source-forms"
 import { toast } from "sonner"
@@ -51,6 +52,21 @@ interface DataSource {
   lastUpdated: string;
   raw: unknown;
 }
+
+const DATASOURCES_LIST_COLUMNS = [
+  { id: "name", size: 220 },
+  { id: "namespace", size: 140 },
+  { id: "type", size: 120 },
+  { id: "status", size: 110 },
+  { id: "updated", size: 160 },
+  { id: "actions", size: 120 },
+] as const
+
+const DATASOURCES_DEPENDENT_COLUMNS = [
+  { id: "resource", size: 240 },
+  { id: "namespace", size: 112 },
+  { id: "actions", size: 176 },
+] as const
 
 interface CreateDataSourcePayload {
     namespace: string;
@@ -432,17 +448,16 @@ export default function DataSourcesPage() {
       </div>
 
       {/* Table */}
-      <div className="rounded-lg border border-line bg-surface overflow-hidden">
-        <div className="overflow-x-auto">
-          <Table>
+      <TableWrapper>
+          <Table storageKey="datasources-list" columns={[...DATASOURCES_LIST_COLUMNS]}>
             <TableHeader>
               <TableRow className="bg-surface-muted">
-                <TableHead className="whitespace-nowrap">名称</TableHead>
-                <TableHead className="whitespace-nowrap">命名空间</TableHead>
-                <TableHead className="whitespace-nowrap">类型</TableHead>
-                <TableHead className="whitespace-nowrap">状态</TableHead>
-                <TableHead className="whitespace-nowrap">最后更新</TableHead>
-                <TableHead className="text-right whitespace-nowrap">操作</TableHead>
+                <TableHead columnId="name" className="whitespace-nowrap">名称</TableHead>
+                <TableHead columnId="namespace" className="whitespace-nowrap">命名空间</TableHead>
+                <TableHead columnId="type" className="whitespace-nowrap">类型</TableHead>
+                <TableHead columnId="status" className="whitespace-nowrap">状态</TableHead>
+                <TableHead columnId="updated" className="whitespace-nowrap">最后更新</TableHead>
+                <TableHead columnId="actions" className="text-right whitespace-nowrap">操作</TableHead>
               </TableRow>
             </TableHeader>
           <TableBody>
@@ -483,15 +498,15 @@ export default function DataSourcesPage() {
                   navigateToDetail(ds)
                 }}
               >
-                <TableCell className="font-medium flex items-center gap-3">
+                <TableCell columnId="name" className="font-medium flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-cta/10 flex items-center justify-center text-cta">
                     <SourceIcon kind={ds.sourceType ?? "generic"} />
                   </div>
                   {ds.name}
                 </TableCell>
-                <TableCell className="text-content-muted">{ds.namespace}</TableCell>
-                <TableCell>{ds.type}</TableCell>
-                <TableCell>
+                <TableCell columnId="namespace" className="text-content-muted">{ds.namespace}</TableCell>
+                <TableCell columnId="type">{ds.type}</TableCell>
+                <TableCell columnId="status">
                   {(() => {
                     const raw = String(ds.status ?? "").trim()
                     // Normalize empty / "-" / "Unknown" into NotReady for display.
@@ -522,8 +537,8 @@ export default function DataSourcesPage() {
                     )
                   })()}
                 </TableCell>
-                <TableCell>{ds.lastUpdated}</TableCell>
-                <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                <TableCell columnId="updated">{ds.lastUpdated}</TableCell>
+                <TableCell columnId="actions" className="text-right" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-2">
                     <Button
                       variant="ghost"
@@ -555,8 +570,7 @@ export default function DataSourcesPage() {
           )}
         </TableBody>
         </Table>
-        </div>
-      </div>
+      </TableWrapper>
 
       <PaginationBar
         total={totalCount}
@@ -588,23 +602,23 @@ export default function DataSourcesPage() {
           </AlertDialogHeader>
 
           <div className="mt-4 space-y-3 px-6">
-            <div className="max-h-[320px] w-full overflow-auto rounded-md border border-line">
-              <Table className="w-full table-fixed">
+            <TableWrapper className="max-h-[320px] overflow-auto rounded-md">
+              <Table storageKey="datasources-dependent-resources" columns={[...DATASOURCES_DEPENDENT_COLUMNS]}>
                 <TableHeader>
                   <TableRow className="bg-surface-muted">
-                    <TableHead className="w-auto">资源</TableHead>
-                    <TableHead className="w-28">命名空间</TableHead>
-                    <TableHead className="w-44 text-right">操作</TableHead>
+                    <TableHead columnId="resource">资源</TableHead>
+                    <TableHead columnId="namespace">命名空间</TableHead>
+                    <TableHead columnId="actions" className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {dependentResources.map((r, idx) => (
                     <TableRow key={`${r.kind}/${r.id ?? r.namespace}/${r.name}/${idx}`}>
-                      <TableCell className="font-medium whitespace-normal break-all">
+                      <TableCell columnId="resource" className="font-medium whitespace-normal break-all">
                         {getDataDescriptorDependencyKindLabel(r.kind)} / {r.name}
                       </TableCell>
-                      <TableCell className="text-content-muted">{r.namespace}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell columnId="namespace" className="text-content-muted">{r.namespace}</TableCell>
+                      <TableCell columnId="actions" className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           {r.kind === "group" && r.id ? (
                             <Button
@@ -640,7 +654,7 @@ export default function DataSourcesPage() {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </TableWrapper>
             <div className="text-sm text-content">
               若仅被语义组引用，可先「从语义组移除」再删除；若还被智能体引用，请先处理智能体依赖。
             </div>

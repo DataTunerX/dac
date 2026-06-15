@@ -303,6 +303,7 @@ class MetadataValuesResult:
         """
         from .tools.knowledge_context_budget import (
             join_knowledge_blocks,
+            log_final_knowledge_selection,
             log_selection_report,
             score_trigger_chars,
             select_blocks_by_score,
@@ -344,9 +345,12 @@ class MetadataValuesResult:
                 parse_output=parse_output,
                 trace=trace,
             )
+            # 保存打分后的全量数据用于最终选块日志（select_blocks_by_score 会缩减）
+            scored_all = list(blocks)
             blocks, select_report = select_blocks_by_score(blocks)
             meta["score_select_report"] = select_report
             log_selection_report(logger, report=select_report)
+            log_final_knowledge_selection(logger, blocks, total_input=len(scored_all))
         else:
             log_selection_report(
                 logger,

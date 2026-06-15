@@ -370,6 +370,26 @@ spec:
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
 metadata:
+  name: asynq
+  namespace: default
+spec:
+  descriptorType: "code"
+  sources:
+    - type: gitee
+      name: "gitee-asynq"
+      metadata:
+        codeRepoPath: "https://gitee.com/jamesxiong888/asynq.git"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
   name: dianshang-code
   namespace: default
 spec:
@@ -545,6 +565,34 @@ spec:
         bucket: "dactest"
       extract:
         files: ["dianshang.docx"]
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: archaeology-file
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  gpuEnabled: "yes"
+  sources:
+    - type: minio
+      name: "archaeology-file"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "archaeology"
+      extract:
+        files: []
       prompts:
         prompts:
           name: ""

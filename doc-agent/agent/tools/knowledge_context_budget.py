@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TRIGGER_CHARS = 20000
-_DEFAULT_MAX_BLOCKS = 10
+_DEFAULT_TRIGGER_CHARS = 30000
+_DEFAULT_MAX_BLOCKS = 20
 
 
 def _env_int(name: str, default: int) -> int:
@@ -104,6 +104,16 @@ def select_blocks_by_score(
         selected.append(block)
         output_chars += block_chars
 
+    # 构建选中块详情列表（供日志与 DAC Progress 消费）
+    block_details: List[Dict[str, Any]] = []
+    for b in selected:
+        bid = b.get("id", "")
+        block_details.append({
+            "id": str(bid) if bid else "?",
+            "score": float(b.get("relevance_score") or 0),
+            "summary": _block_summary(b),
+        })
+
     report = {
         "input_count": len(blocks),
         "selected_count": len(selected),
@@ -111,6 +121,7 @@ def select_blocks_by_score(
         "max_output_chars": max_output_chars,
         "max_blocks": max_blocks,
         "dropped_limit": dropped_limit,
+        "blocks": block_details,
     }
     return selected, report
 
@@ -142,3 +153,42 @@ def log_selection_report(
         report.get("max_output_chars", 0),
         report.get("max_blocks", 0),
     )
+
+
+def _block_summary(block: Dict[str, Any]) -> str:
+    desc = (block.get("score_description") or block.get("metadata_value") or "")
+    return desc[:100] if desc else "-"
+
+
+def log_final_knowledge_selection(
+    log: logging.Logger,
+    selected_blocks: List[Dict[str, Any]],
+    *,
+    total_input: int = 0,
+) -> None:
+    """Print final selection overview: only the selected blocks."""
+    n_sel = len(selected_blocks)
+
+    log.info(
+        "[DOC KNOWLEDGE SELECT] ========== 最终选中 %d 块（共 %d 个待选）==========",
+        n_sel,
+        total_input,
+    )
+
+    sorted_selected = sorted(
+        selected_blocks, key=lambda b: float(b.get("relevance_score") or 0), reverse=True
+    )
+
+    for i, b in enumerate(sorted_selected):
+        bid = b.get("id", "?")
+        score = float(b.get("relevance_score") or 0)
+        summary = _block_summary(b)
+        log.info(
+            "[DOC KNOWLEDGE SELECT]   #%-2d id=%-36s score=%-4.1f %s",
+            i + 1,
+            bid,
+            score,
+            summary,
+        )
+
+    log.info("[DOC KNOWLEDGE SELECT] ========== 选块结果结束 ==========")

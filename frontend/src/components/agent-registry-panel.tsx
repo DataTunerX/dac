@@ -37,6 +37,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import { PaginationBar } from "@/components/pagination-bar"
 import { cn } from "@/lib/utils"
 import { Loader2, RefreshCw, Search, X } from "lucide-react"
@@ -98,6 +99,14 @@ function PageSpinner() {
     </div>
   )
 }
+
+const AGENT_REGISTRY_COLUMNS = [
+  { id: "name", size: 180 },
+  { id: "url", size: 320 },
+  { id: "version", size: 120 },
+  { id: "skills", size: 100 },
+  { id: "actions", size: 120 },
+] as const
 
 export function AgentRegistryPanel() {
   const [mounted, setMounted] = useState(false)
@@ -272,15 +281,15 @@ export function AgentRegistryPanel() {
         </div>
       ) : null}
 
-      <div className="rounded-lg border border-line bg-surface overflow-hidden">
-        <Table>
+      <TableWrapper>
+        <Table storageKey="agent-registry-list" columns={[...AGENT_REGISTRY_COLUMNS]}>
           <TableHeader>
             <TableRow className="bg-surface-muted">
-              <TableHead>名称</TableHead>
-              <TableHead>地址</TableHead>
-              <TableHead>版本</TableHead>
-              <TableHead>技能数</TableHead>
-              <TableHead className="text-right">操作</TableHead>
+              <TableHead columnId="name">名称</TableHead>
+              <TableHead columnId="url">地址</TableHead>
+              <TableHead columnId="version">版本</TableHead>
+              <TableHead columnId="skills">技能数</TableHead>
+              <TableHead columnId="actions" className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -302,15 +311,15 @@ export function AgentRegistryPanel() {
                 const rowKey = `${item.registry}-${url || name}-${index}`
                 return (
                   <TableRow key={rowKey} className="hover:bg-surface-muted">
-                    <TableCell className="font-medium font-mono text-content">{name}</TableCell>
-                    <TableCell className="font-mono text-sm text-content-muted max-w-[360px] truncate" title={url}>
+                    <TableCell columnId="name" className="font-medium font-mono text-content">{name}</TableCell>
+                    <TableCell columnId="url" className="font-mono text-sm text-content-muted max-w-[360px] truncate" title={url}>
                       {url}
                     </TableCell>
-                    <TableCell className="font-mono text-sm text-content-muted">
+                    <TableCell columnId="version" className="font-mono text-sm text-content-muted">
                       {cardString(card, "version") || "—"}
                     </TableCell>
-                    <TableCell className="font-mono text-sm text-content-muted">{skillsCount(card)}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell columnId="skills" className="font-mono text-sm text-content-muted">{skillsCount(card)}</TableCell>
+                    <TableCell columnId="actions" className="text-right">
                       <Button variant="ghost" size="sm" onClick={() => openDetail(item)}>
                         查看
                       </Button>
@@ -321,7 +330,7 @@ export function AgentRegistryPanel() {
             )}
           </TableBody>
         </Table>
-      </div>
+      </TableWrapper>
 
       <PaginationBar
         total={filteredAgents.length}

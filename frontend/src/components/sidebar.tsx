@@ -17,7 +17,7 @@ import {
   Menu
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
-import React, { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import useSWR from "swr"
 import { listConversations } from "@/lib/chat-api"
 import type { ConversationResponse } from "@/lib/api-types"
@@ -42,10 +42,19 @@ type SidebarGroupItem = {
 
 const sidebarNav: Array<SidebarLinkItem | SidebarGroupItem> = [
   { type: "link", icon: Bot, label: "智能体", href: "/agents" },
-  { type: "link", icon: Database, label: "数据管理", href: "/datasources" },
+  {
+    type: "group",
+    icon: Database,
+    label: "数据管理",
+    sectionPaths: ["/datasources", "/configmaps?type=prompts"],
+    children: [
+      { label: "数据源", href: "/datasources" },
+      { label: "提示词", href: "/configmaps?type=prompts" },
+    ],
+  },
   { type: "link", icon: Layers, label: "语义组", href: "/semantic-groups" },
   { type: "link", icon: Network, label: "资产探测", href: "/infra" },
-  { type: "link", icon: Settings2, label: "配置管理", href: "/configmaps" },
+  { type: "link", icon: Settings2, label: "模型管理", href: "/configmaps" },
   {
     type: "group",
     icon: Globe,
@@ -65,6 +74,28 @@ const sidebarLinkSelected =
   "bg-surface text-brand border border-line"
 const sidebarLinkDefault =
   "text-content-muted hover:bg-surface-active hover:text-content border border-transparent"
+function isSidebarNavActive(href: string, pathname: string, searchParams: URLSearchParams): boolean {
+  const qIndex = href.indexOf("?")
+  const hrefPath = qIndex === -1 ? href : href.slice(0, qIndex)
+  const hrefQuery = qIndex === -1 ? "" : href.slice(qIndex + 1)
+
+  if (pathname !== hrefPath && !pathname.startsWith(hrefPath + "/")) return false
+
+  if (!hrefQuery) {
+    // /configmaps without type defaults to llm (模型管理); exclude prompts sub-route.
+    if (hrefPath === "/configmaps") {
+      return searchParams.get("type") !== "prompts"
+    }
+    return true
+  }
+
+  const required = new URLSearchParams(hrefQuery)
+  for (const [key, value] of required) {
+    if (searchParams.get(key) !== value) return false
+  }
+  return true
+}
+
 
 type ConversationWithDate = ConversationResponse & { createdAt: Date }
 
@@ -186,11 +217,10 @@ function SidebarNavGroup({
   pathname: string
   onNavigate: () => void
 }) {
-  const inSection = item.sectionPaths.some(
-    (p) => pathname === p || pathname.startsWith(p + "/")
-  )
-  const hasActiveChild = item.children.some(
-    (child) => pathname === child.href || pathname.startsWith(child.href + "/")
+  const searchParams = useSearchParams()
+  const inSection = item.sectionPaths.some((p) => isSidebarNavActive(p, pathname, searchParams))
+  const hasActiveChild = item.children.some((child) =>
+    isSidebarNavActive(child.href, pathname, searchParams)
   )
   const [open, setOpen] = useState(inSection)
 
@@ -234,8 +264,7 @@ function SidebarNavGroup({
       {open ? (
         <div className="space-y-0.5 pt-0.5">
           {item.children.map((child) => {
-            const childActive =
-              pathname === child.href || pathname.startsWith(child.href + "/")
+            const childActive = isSidebarNavActive(child.href, pathname, searchParams)
             return (
               <Link
                 key={child.href}
@@ -359,6 +388,7 @@ function ConversationList() {
 
 export function Sidebar() {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const [isMobileOpen, setIsMobileOpen] = useState(false)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
 
@@ -413,7 +443,7 @@ export function Sidebar() {
         <div className="space-y-1">
           {sidebarNav.map((item) => {
             if (item.type === "link") {
-              const active = pathname === item.href || pathname.startsWith(item.href + "/")
+              const active = isSidebarNavActive(item.href, pathname, searchParams)
               return (
                 <Link
                   key={item.href}

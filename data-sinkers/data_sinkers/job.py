@@ -549,7 +549,11 @@ def send_add_documents_to_knowledge_pyramid(documents: List[Dict[str, Any]], col
             collection_name=collection_name,
             documents=document_objects
         )
-        logger.info(f"add document success: {add_documents_result}")
+        log_result = dict(add_documents_result)
+        vector_results = log_result.get("vector_results")
+        if isinstance(vector_results, list) and vector_results:
+            log_result["vector_results"] = [vector_results[0]]
+        logger.info(f"add document success: {log_result}")
         return add_documents_result
     except Exception as e:
         logger.error(f"create collection or add document fail: {str(e)}", exc_info=True)
@@ -879,8 +883,20 @@ def semantic_group_event(data):
         logger.info(f"Successfully completed semantic group event for {dd_namespace}/{dd_name}, operation: {operation}, result: {result}")
             
     except Exception as e:
-        logger.error(f"Semantic group event execution failed: {str(e)}, operation: {operation} for {dd_namespace}/{dd_name}", exc_info=True)
-        raise ValueError(f"semantic_group_event fail: {data}, error={str(e)}") from e
+        error_text = str(e)
+        if operation == "Delete" and "未找到对应的语义域数据" in error_text:
+            logger.warning(
+                "Semantic group Delete: no semantic domain for %s/%s (idempotent success): %s",
+                dd_namespace,
+                dd_name,
+                error_text,
+            )
+            return
+        logger.error(
+            f"Semantic group event execution failed: {error_text}, operation: {operation} for {dd_namespace}/{dd_name}",
+            exc_info=True,
+        )
+        raise ValueError(f"semantic_group_event fail: {data}, error={error_text}") from e
 
 
 class ProcessDataWrapper:
@@ -892,6 +908,24 @@ class ProcessDataWrapper:
     def process_data(self, data: Dict[str, Any]):
         """Wrapper method that calls the module-level process_data function"""
         return process_data(self, data)
+
+
+def _truncate_result_for_log(result: Optional[Dict[str, Any]]) -> Any:
+    """Shallow copy of process_data result with large lists truncated for logging."""
+    if not isinstance(result, dict):
+        return result
+    log_result = dict(result)
+    data = log_result.get("data")
+    if isinstance(data, list) and data:
+        log_result["data"] = [data[0]]
+    pyramid_result = log_result.get("pyramid_result")
+    if isinstance(pyramid_result, dict):
+        pyramid_log = dict(pyramid_result)
+        vector_results = pyramid_log.get("vector_results")
+        if isinstance(vector_results, list) and vector_results:
+            pyramid_log["vector_results"] = [vector_results[0]]
+        log_result["pyramid_result"] = pyramid_log
+    return log_result
 
 
 def write_status(status: str, task_id: str, error: Optional[str] = None, result: Optional[Dict[str, Any]] = None):
@@ -1007,7 +1041,7 @@ def main():
     # Call process_data with the loaded data
     try:
         result = wrapper.process_data(data)
-        logger.info(f"Process completed successfully: {result}")
+        logger.info(f"Process completed successfully: {_truncate_result_for_log(result)}")
         
         # Write success status
         write_status('success', task_id, result=result)
