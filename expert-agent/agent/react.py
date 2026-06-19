@@ -1411,6 +1411,10 @@ class ReActRunner:
                 finished_this_step = False
                 tool_calls = self._reorder_tool_calls_for_foundation(tool_calls, tool_to_agent)
                 tool_total = len(tool_calls)
+                all_tool_names = [
+                    c.get("name", "") for c in tool_calls
+                    if c.get("name") and c.get("name") != "finish"
+                ]
 
                 for idx, call in enumerate(tool_calls):
                     tool_name = call.get("name", "")
@@ -1455,7 +1459,7 @@ class ReActRunner:
                                 progress_emitter,
                                 "sg_react_tool_start",
                                 message=self._truncate_progress_message(
-                                    f"step {step_no} tool {idx + 1}/{tool_total}: {tool_name} → {agent_display_name}",
+                                    f"step {step_no}: {tool_name} → {agent_display_name}",
                                     320,
                                 ),
                                 status="running",
@@ -1464,6 +1468,7 @@ class ReActRunner:
                                     "tool_index": idx + 1,
                                     "tool_total": tool_total,
                                     "tool_name": tool_name,
+                                    "step_tool_names": all_tool_names,
                                     "agent_name": agent_display_name,
                                     "descriptor_type": dt,
                                     "query_preview": self._truncate_progress_message(agent_query, 320),
@@ -1534,7 +1539,7 @@ class ReActRunner:
                             progress_emitter,
                             "sg_react_tool_done",
                             message=self._truncate_progress_message(
-                                f"step {step_no} tool {idx + 1}/{tool_total}: {tool_name} done ({len(result_str)} chars)",
+                                f"step {step_no}: {tool_name} done ({len(result_str)} chars)",
                                 320,
                             ),
                             status="done" if not str(result_str).startswith("(error:") else "fail",
@@ -1543,6 +1548,7 @@ class ReActRunner:
                                 "tool_index": idx + 1,
                                 "tool_total": tool_total,
                                 "tool_name": tool_name,
+                                "step_tool_names": all_tool_names,
                                 "agent_name": agent_display_name if tool_name in tool_to_agent else "",
                                 "result_chars": len(result_str),
                                 "result_preview": self._truncate_progress_message(result_str, 480),
@@ -1653,13 +1659,16 @@ class ReActRunner:
                         analysis_ran=analysis_ran,
                         analysis_trigger=analysis_trigger,
                     )
+                    step_tool_names_done = [
+                        o.get("tool", "") for o in step_observations
+                        if o.get("tool") and o.get("tool") != "finish"
+                    ]
+                    tool_names_label = " + ".join(step_tool_names_done) if step_tool_names_done else "(none)"
                     await self._emit_progress(
                         progress_emitter,
                         "sg_react_step_done",
                         message=self._truncate_progress_message(
-                            f"step {step_no}/{react_max_steps} done · "
-                            f"{len(step_observations)} tool(s)"
-                            + (" · analysis ran" if analysis_ran else ""),
+                            f"step {step_no}/{react_max_steps} done · {len(step_observations)} tool(s): {tool_names_label}",
                             320,
                         ),
                         status="done",
@@ -1667,6 +1676,7 @@ class ReActRunner:
                             "step": step_no,
                             "max_steps": react_max_steps,
                             "observation_count": len(step_observations),
+                            "step_tool_names": step_tool_names_done,
                             "analysis_ran": analysis_ran,
                         },
                     )

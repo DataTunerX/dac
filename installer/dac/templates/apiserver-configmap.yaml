@@ -7,6 +7,11 @@ metadata:
     {{- include "dac.componentLabels" (dict "context" . "name" "dac-apiserver") | nindent 4 }}
 data:
   config.yaml: |
+    agent_registry:
+      orchestrator_base_url: "http://orchestrator-registry.dac.svc.cluster.local:8000"
+      biz_orchestrator_base_url: "http://biz-orchestrator-registry.dac.svc.cluster.local:8000"
+      timeout: 10s
+
     server:
       host: "0.0.0.0"
       port: {{ .Values.apiserver.service.targetPort }}
