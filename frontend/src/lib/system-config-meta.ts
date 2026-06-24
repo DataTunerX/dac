@@ -16,6 +16,11 @@ export function isLlmConfigMapFieldKey(key: string): boolean {
   )
 }
 
+/** Keys that are always read-only in the UI (pre-configured by Helm, not user-editable). */
+export function isReadonlySystemConfigKey(key: string): boolean {
+  return key === "default-planner-llm" || key === "default-expert-llm" || key === "llm-config"
+}
+
 export type SystemConfigMeta = {
   groups: { title?: string; keys: string[] }[]
 }
@@ -72,4 +77,46 @@ export function mergeFormData(
     }
   }
   return base
+}
+
+/**
+ * Validate that the LLM ConfigMaps referenced in dac-configuration and
+ * dd-configuration exist in the dac namespace. Returns human-readable
+ * error messages for any missing ConfigMaps.
+ */
+export async function validateSystemLlmConfigMaps(): Promise<string | null> {
+  const { getSystemConfiguration } = await import("@/lib/system-config-api")
+  const { listAllConfigMaps } = await import("@/lib/configmaps-api")
+
+  const allCms = await listAllConfigMaps(SYSTEM_CONFIG_NAMESPACE, { type: "llm" })
+  const existingNames = new Set(allCms.map((c) => c.name))
+
+  const missing: string[] = []
+
+  try {
+    const dacCfg = await getSystemConfiguration("dac-configuration")
+    const planner = (dacCfg.data?.["default-planner-llm"] ?? "").trim()
+    const expert = (dacCfg.data?.["default-expert-llm"] ?? "").trim()
+    if (planner && !existingNames.has(planner)) {
+      missing.push(`default-planner-llm → "${planner}"`)
+    }
+    if (expert && !existingNames.has(expert)) {
+      missing.push(`default-expert-llm → "${expert}"`)
+    }
+  } catch {
+    // dac-configuration may not exist yet; skip
+  }
+
+  try {
+    const ddCfg = await getSystemConfiguration("dd-configuration")
+    const llmConfig = (ddCfg.data?.["llm-config"] ?? "").trim()
+    if (llmConfig && !existingNames.has(llmConfig)) {
+      missing.push(`llm-config → "${llmConfig}"`)
+    }
+  } catch {
+    // dd-configuration may not exist yet; skip
+  }
+
+  if (missing.length === 0) return null
+  return `以下 LLM 配置在命名空间 ${SYSTEM_CONFIG_NAMESPACE} 中不存在，请先在 模版中心 创建对应 ConfigMap：\n${missing.join("\n")}`
 }

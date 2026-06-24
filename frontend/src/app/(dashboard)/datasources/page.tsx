@@ -39,6 +39,7 @@ import { CreateDataSourceDialog } from "@/components/data-source-forms"
 import { toast } from "sonner"
 import { BrandIcon } from "@/components/brand-icon"
 import { getDataSourceKindLabel, normalizeDataSourceKind, type DataSourceKind } from "@/lib/data-source-kind"
+import { validateSystemLlmConfigMaps } from "@/lib/system-config-meta"
 
 // --- Types ---
 interface DataSource {
@@ -286,9 +287,15 @@ export default function DataSourcesPage() {
       setIsDeleting(false)
     }
   }
-
   const handleCreate = async (data: CreateDataSourcePayload) => {
     try {
+      // Pre-flight: validate LLM ConfigMaps referenced in system config exist
+      const llmErr = await validateSystemLlmConfigMaps()
+      if (llmErr) {
+        toast.error(llmErr, { duration: 8000 })
+        return
+      }
+
       const namespace = data.namespace?.trim() || "default"
       const promptsName = data.promptsConfigMapName?.trim() || ""
       const hasPrompts = Boolean(promptsName)
@@ -338,16 +345,21 @@ export default function DataSourcesPage() {
         return
       }
 
-      const baseMetadata: Record<string, string> = {
-        host: String(data.host ?? ""),
-        port: String(data.port ?? ""),
-      }
+      const baseMetadata: Record<string, string> = {}
       if (t === "minio") {
+        // MinIO backend expects host:port combined in a single "host" field
+        const h = String(data.host ?? "").trim()
+        const p = String(data.port ?? "").trim()
+        baseMetadata.host = p ? `${h}:${p}` : h
         baseMetadata.access_key = String(data.accessKey ?? "")
         baseMetadata.secret_key = String(data.secretKey ?? "")
         baseMetadata.bucket = String(data.bucket ?? "")
-      } else if (t === "fileserver") {
-        if (data.path) baseMetadata.path = String(data.path)
+      } else {
+        baseMetadata.host = String(data.host ?? "")
+        baseMetadata.port = String(data.port ?? "")
+        if (t === "fileserver") {
+          if (data.path) baseMetadata.path = String(data.path)
+        }
       }
 
       const extractFiles = String(data.extractFiles ?? "")

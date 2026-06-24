@@ -252,9 +252,15 @@ function buildOverviewFields({
   }
 
   if (kind === "minio") {
+    const hostRaw = String(meta.host ?? "")
+    const colonIdx = hostRaw.lastIndexOf(":")
+    // MinIO stores host:port combined in metadata; split for display when
+    // no separate port field exists (backward compat with pre-separation CRDs).
+    const displayHost = colonIdx > 0 && !meta.port ? hostRaw.slice(0, colonIdx) : hostRaw
+    const displayPort = meta.port ?? (colonIdx > 0 ? hostRaw.slice(colonIdx + 1) : "")
     return [
-      overviewField("主机", meta.host, { copy: true }),
-      overviewField("端口", meta.port, { copy: true }),
+      overviewField("主机", displayHost, { copy: true }),
+      overviewField("端口", displayPort, { copy: true }),
       overviewField("Bucket", meta.bucket, { copy: true }),
       overviewField("Access Key", meta.access_key ?? meta.accessKey, { copy: true }),
       {

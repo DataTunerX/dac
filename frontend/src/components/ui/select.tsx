@@ -15,13 +15,14 @@ const SelectValue = SelectPrimitive.Value
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, suppressHydrationWarning = true, ...props }, ref) => (
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
       "flex h-9 w-full items-center justify-between rounded-md border border-line bg-surface px-3 py-2 text-sm shadow-sm ring-offset-white placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-hover disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
       className
     )}
+    suppressHydrationWarning={suppressHydrationWarning}
     {...props}
   >
     {children}

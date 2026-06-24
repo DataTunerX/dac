@@ -431,7 +431,7 @@ func (h *DataDescriptorGenerator) GenerateDataDescriptorDeployment(ctx context.C
 				},
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("2000m"),
+						corev1.ResourceCPU: resource.MustParse("2000m"),
 						// MinerU PDF parsing (CPU mode) can exceed 4Gi; 16Gi avoids cgroup OOM kills.
 						corev1.ResourceMemory: resource.MustParse("16Gi"),
 					},

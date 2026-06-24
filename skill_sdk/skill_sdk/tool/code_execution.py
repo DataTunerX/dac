@@ -68,7 +68,7 @@ _ALWAYS_DENY: Tuple[str, ...] = (
 #       常用功能会在运行时挂；
 #   (B) 我们本来就以"预加载别名"形式对 LLM 暴露的安全库——允许用户写
 #       `import json` 等冗余写法，容错但无新能力。
-# 任何不在此集合的 import（os / subprocess / socket / sys / ctypes / ...）
+# 任何不在此集合的 import（subprocess / socket / sys / ctypes / ...）
 # 都会被 `_build_safe_import` 返回的包装器直接拒绝。
 _SAFE_IMPORT_WHITELIST: frozenset = frozenset({
     # (A) stdlib 内部 lazy 依赖
@@ -88,6 +88,7 @@ _SAFE_IMPORT_WHITELIST: frozenset = frozenset({
     "_ast",             # ast 模块 C 加速
     "_opcode",          # opcode 模块 C 加速
     "_socket",          # logging 等偶尔引用但不使用，安全占位
+    "_zlib",            # zlib C 实现
 
     # (B) 预加载的安全库
     "math", "statistics", "datetime", "json", "re",
@@ -101,6 +102,8 @@ _SAFE_IMPORT_WHITELIST: frozenset = frozenset({
     "numpy", "pandas",
     "array", "struct",
     "binascii", "base64",
+    "zlib",
+    "os",
     "cmath",
     "hashlib", "hmac",
     "enum", "dataclasses", "types",
@@ -131,8 +134,8 @@ _SAFE_IMPORT_WHITELIST: frozenset = frozenset({
 def _harden_sandbox_environ() -> None:
     """在**当前解释器**内禁止对进程环境做写操作。
 
-    子进程沙箱会继承父进程完整环境（可能含 DASHCOPE_API_KEY 等）；白名单
-    已禁止用户 ``import os``，但标准库/第三方在 ``sys.modules`` 里**可能
+    子进程沙箱会继承父进程完整环境（可能含 DASHCOPE_API_KEY 等）；虽然允许
+    ``import os``，但标准库/第三方在 ``sys.modules`` 里**可能
     已经**加载了 ``os``。因此必须在执行用户代码前打补丁，确保：
 
     * ``os.environ`` 为当前快照的**只读**映射（在常见 CPython 上通过
@@ -407,8 +410,10 @@ GENERATE_CODE = """你是一位严谨的 Python 数据处理专家。你产出�
 # 硬约束（违反任何一条都会导致执行失败）
 1. 【优先用预注入名字，避免 import】下面列出的库已经以顶层名注入全局，**直接使用即可**。
    若必须 import，**仅允许**纯计算类标准库（math/statistics/datetime/json/re/collections/
-   itertools/functools/decimal/fractions 等），以及 numpy/pandas。
-   对 `os`、`subprocess`、`socket`、`sys`、`ctypes` 等 IO/系统类的 import 会被**直接拒绝**。
+   itertools/functools/decimal/fractions 等）以及图片生成常用的 zlib/struct/base64，
+   以及 numpy/pandas。
+   `os` 模块仅在容器内允许，用于文件读写等 I/O，但 `subprocess`、`socket`、`sys`、`ctypes` 等
+   仍然会被**直接拒绝**。
 2. 【白名单 builtins】禁止 `open`、`eval`、`exec`、`compile`、`input`，以及任何
    文件 / 网络 / 子进程 / 环境变量 IO。禁止用 ``os.putenv`` / ``os.unsetenv`` 或
    对 ``os.environ[...]`` 赋值来修改进程环境（沙箱内已硬拦截，代码若尝试会失败）。
@@ -437,9 +442,10 @@ grouped = collections.defaultdict(list)
 
 # 错误用法（会被沙箱拒绝）
 ```python
-import os                                      # ❌ IO 模块被白名单拒绝
-import subprocess                              # ❌ 同上
+import subprocess                              # ❌ IO 模块被白名单拒绝
 import socket                                  # ❌ 同上
+import sys                                     # ❌ 同上
+import ctypes                                  # ❌ 同上
 open("/etc/passwd")                            # ❌ 白名单 builtins 拦截
 ```
 

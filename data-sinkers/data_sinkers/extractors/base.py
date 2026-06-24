@@ -3943,7 +3943,44 @@ class SQLAnalyzer:
             
         return '\n'.join(output_lines)
 
+    def _validate_tables_group_output(self, result: Any) -> bool:
+        """Validate LLM output for tables_group conforms to the expected format:
+
+        {
+            "group_with_tables": [
+                {"业务模块A": ["table1", "table2", ...], "count": "N"},
+                ...
+            ]
+        }
+
+        Each group item must have exactly one non-"count" key whose value is a list.
+        """
+        if not isinstance(result, dict):
+            return False
+
+        groups = result.get("group_with_tables")
+        if not isinstance(groups, list) or len(groups) == 0:
+            return False
+
+        for item in groups:
+            if not isinstance(item, dict):
+                return False
+            list_keys = 0
+            for key, value in item.items():
+                if key == "count":
+                    continue
+                if isinstance(value, list):
+                    list_keys += 1
+                else:
+                    # Non-count key with non-list value (e.g., string, int) => wrong format
+                    return False
+            if list_keys != 1:
+                return False
+
+        return True
+
     def tables_group(self, content, relationships, db_and_code_ddd_summary:str = "", batch_size:int = 20) -> dict:
+        max_retries = int(os.getenv('tables_group_max_retries', '3'))
 
         prompt_no_ddd = f"""
         你是一个数据分析专家，负责将数据表按照业务相关性进行智能分组。分组需要满足以下核心要求：
@@ -4001,28 +4038,54 @@ class SQLAnalyzer:
         - 确保分组合理，便于后续批量处理
         """
 
-        prompt = ""
+        base_prompt = prompt_ddd if db_and_code_ddd_summary else prompt_no_ddd
 
-        if db_and_code_ddd_summary:
-            prompt = prompt_ddd
-        else:
-            prompt = prompt_no_ddd
+        last_raw_result = None
+        llm_result = {}
 
-        system_message = SystemMessage(content=prompt)
+        for attempt in range(1, max_retries + 1):
+            if attempt == 1:
+                prompt = base_prompt
+            else:
+                feedback = f"""
 
-        human_message = HumanMessage(content=f"tables schema: {content} \n\ntables relationships:{relationships}")
+                ## 上次输出格式需要修正 ##
+                你上次返回的 JSON 格式不符合要求，错误输出如下：
 
-        response = self.llm.invoke([system_message, human_message])
+                {json.dumps(last_raw_result, ensure_ascii=False, indent=2)}
 
-        llm_result = self.format_llm_output(response)
+                请严格按照以下要求修正：
+                1. 每个分组项的 key 必须直接是模块名称（如 "商品管理"），value 是表名列表
+                2. 不允许出现 "业务模块": "商品管理" 这种将模块名作为 value 的格式
+                3. 格式示例：{{"商品管理": ["products", "categories"], "count": 2}}
+                4. 只返回 JSON，不要包含任何额外文本
+                """
+                prompt = base_prompt + feedback
 
+            system_message = SystemMessage(content=prompt)
+            human_message = HumanMessage(content=f"tables schema: {content} \n\ntables relationships:{relationships}")
+
+            response = self.llm.invoke([system_message, human_message])
+            llm_result = self.format_llm_output(response)
+
+            if self._validate_tables_group_output(llm_result):
+                return llm_result
+
+            last_raw_result = llm_result
+            logger.warning(
+                "tables_group output validation failed (attempt %d/%d), raw_result keys: %s",
+                attempt, max_retries,
+                list(llm_result.keys()) if isinstance(llm_result, dict) else type(llm_result).__name__,
+            )
+
+        logger.error("tables_group exhausted all %d retries, returning raw result", max_retries)
         return llm_result
 
     def merge_groups(self, groups_data, max_size=30) -> dict:
         groups = []
         for group_info in groups_data["group_with_tables"]:
             for group_name, tables in group_info.items():
-                if group_name != "count":
+                if group_name != "count" and isinstance(tables, list):
                     groups.append({
                         "name": group_name,
                         "tables": tables,

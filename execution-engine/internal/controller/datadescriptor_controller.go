@@ -245,6 +245,14 @@ func (r *DataDescriptorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Add finalizer if not present
 	if !controllerutil.ContainsFinalizer(instance, dataDescriptorFinalizer) {
+		// Pre-check that required LLM ConfigMap exists before adding finalizer.
+		// If it doesn't, we reject early so the user can fix the dependency and retry,
+		// rather than adding a finalizer that will block deletion forever.
+		if err := r.Handler.PreCheckLLMConfig(ctx, instance); err != nil {
+			logger.Error(err, "Pre-check failed, will not add finalizer")
+			return ctrl.Result{}, err
+		}
+
 		logger.Info("Adding finalizer to DataDescriptor")
 		controllerutil.AddFinalizer(instance, dataDescriptorFinalizer)
 		if err := r.Client.Update(ctx, instance); err != nil {

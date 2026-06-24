@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import { api } from "@/lib/api"
 import { listDescriptorsAll } from "@/lib/descriptors-api"
 import type { DataDescriptorResponse, DataSourceResponse } from "@/lib/api-types"
+import { validateSystemLlmConfigMaps } from "@/lib/system-config-meta"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -347,10 +348,16 @@ export default function InfraDiscoveryDetailPage() {
   }
 
   const handleCreate = async (data: DataSourceFormValues & { enableCodeRepo?: boolean }) => {
+    // Pre-flight: validate LLM ConfigMaps referenced in system config exist
+    const llmErr = await validateSystemLlmConfigMaps()
+    if (llmErr) {
+      toast.error(llmErr, { duration: 8000 })
+      return
+    }
+
     const namespace = String(data.namespace || "default").trim() || "default"
     const t = String(data.type || "").trim()
     const gpuEnabled = data.gpuEnabled === "yes" ? "yes" : "no"
-    const isStructuredDB = t === "mysql" || t === "postgres"
 
     const promptsName = String(data.promptsConfigMapName || "").trim()
     const hasPrompts = Boolean(promptsName)
@@ -363,8 +370,8 @@ export default function InfraDiscoveryDetailPage() {
     // Payload normalization:
     // - structured DBs: sources[].type = mysql/postgres (+ optional source.codeRepo)
     // - object store / fileserver: sources[].type = minio/fileserver
-    // - code repo: descriptorType = "code", sources[].type = github/gitee/...（execution-engine 认 descriptorType === "code"）
     const isCodeRepo = t === "coderepo"
+    const isStructuredDB = t === "mysql" || t === "postgres"
     const descriptorType = isCodeRepo ? "code" : isStructuredDB ? `structured-${t}` : "unstructured"
 
     const name = String(data.name || "").trim()
@@ -401,16 +408,21 @@ export default function InfraDiscoveryDetailPage() {
     const hasCodeRepo =
       Boolean(data.enableCodeRepo) && Boolean(repoType || repoPath || repoBranch || repoToken)
 
-    const baseMetadata: Record<string, string> = {
-      host: String(data.host ?? ""),
-      port: String(data.port ?? ""),
-    }
+    const baseMetadata: Record<string, string> = {}
     if (t === "minio") {
+      // MinIO backend expects host:port combined in a single "host" field
+      const h = String(data.host ?? "").trim()
+      const p = String(data.port ?? "").trim()
+      baseMetadata.host = p ? `${h}:${p}` : h
       baseMetadata.access_key = String(data.accessKey ?? "")
       baseMetadata.secret_key = String(data.secretKey ?? "")
       baseMetadata.bucket = String(data.bucket ?? "")
-    } else if (t === "fileserver") {
-      if (data.path) baseMetadata.path = String(data.path)
+    } else {
+      baseMetadata.host = String(data.host ?? "")
+      baseMetadata.port = String(data.port ?? "")
+      if (t === "fileserver") {
+        if (data.path) baseMetadata.path = String(data.path)
+      }
     }
 
     const extractFiles = String(data.extractFiles ?? "")

@@ -53,6 +53,16 @@ func (r *chatRepository) GetOrCreateRun(ctx context.Context, userID, runID, agen
 		return nil, fmt.Errorf("invalid user id: %w", err)
 	}
 
+	// Verify the user exists before creating a run.
+	// This prevents FK constraint violations when a JWT token references
+	// a user_id that no longer exists in the users table (e.g. after DB recreation).
+	if _, err := r.client.User.Get(ctx, uid); err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: user not found, please login again", domain.ErrUnauthorized)
+		}
+		return nil, err
+	}
+
 	// If runID is provided, try to get it. If it doesn't exist, create a new run using the provided ID.
 	if runID != "" {
 		rid, err := uuid.Parse(runID)

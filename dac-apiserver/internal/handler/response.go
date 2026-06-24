@@ -6,6 +6,7 @@ package handler
 import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"errors"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 )
@@ -80,6 +81,11 @@ func ErrorResponse(c *app.RequestContext, err error) {
 	case domain.IsConflict(err):
 		c.JSON(consts.StatusConflict, Response{
 			Code:    "CONFLICT",
+			Message: getUserMessage(err),
+		})
+	case errors.Is(err, domain.ErrUnauthorized):
+		c.JSON(consts.StatusUnauthorized, Response{
+			Code:    "UNAUTHORIZED",
 			Message: getUserMessage(err),
 		})
 	default:

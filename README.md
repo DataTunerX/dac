@@ -16,7 +16,7 @@ Default account: admin/changeme
 
 ### Configure the Default Model
 
-Go to 【Configuration Management】, select 【Model Management】, and then click 【New Configuration】.
+select 【Model Management】, and then click 【New Configuration】.
 
 1. Name: `llm-default`
 

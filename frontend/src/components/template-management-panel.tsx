@@ -17,6 +17,7 @@ import type {
 import {
   emptyDataForConfig,
   isLlmConfigMapFieldKey,
+  isReadonlySystemConfigKey,
   mergeFormData,
   SYSTEM_CONFIG_EXCLUDED_LLM_CONFIGMAPS,
   SYSTEM_CONFIG_META,
@@ -158,19 +159,21 @@ function LlmConfigMapField({
           )}
         </SelectContent>
       </Select>
-      <p className="text-xs text-content-muted">
-        从命名空间{" "}
-        <span className="font-mono text-content">{SYSTEM_CONFIG_NAMESPACE}</span> 的 LLM ConfigMap
-        中选择；也可在{" "}
-        <Link
-          href={`/configmaps?namespace=${encodeURIComponent(SYSTEM_CONFIG_NAMESPACE)}&type=llm&create=1`}
-          className="text-btn-primary hover:underline"
-          target="_blank"
-        >
-          配置管理
-        </Link>{" "}
-        中新建。
-      </p>
+      {!disabled && (
+        <p className="text-xs text-content-muted">
+          从命名空间{" "}
+          <span className="font-mono text-content">{SYSTEM_CONFIG_NAMESPACE}</span> 的 LLM ConfigMap
+          中选择；也可在{" "}
+          <Link
+            href={`/configmaps?namespace=${encodeURIComponent(SYSTEM_CONFIG_NAMESPACE)}&type=llm&create=1`}
+            className="text-btn-primary hover:underline"
+            target="_blank"
+          >
+            配置管理
+          </Link>{" "}
+          中新建。
+        </p>
+      )}
     </div>
   )
 }
@@ -612,7 +615,7 @@ export function TemplateManagementPanel() {
                               options={llmSelectOptions}
                               isLoading={isLoadingLlmConfigMaps}
                               loadError={llmConfigMapsError}
-                              disabled={isFormReadonly}
+                              disabled={isFormReadonly || isReadonlySystemConfigKey(key)}
                               onChange={(v) => setFormData((prev) => ({ ...prev, [key]: v }))}
                             />
                           ) : (
@@ -626,7 +629,7 @@ export function TemplateManagementPanel() {
                                 onChange={(e) =>
                                   setFormData((prev) => ({ ...prev, [key]: e.target.value }))
                                 }
-                                disabled={isFormReadonly}
+                                disabled={isFormReadonly || isReadonlySystemConfigKey(key)}
                                 placeholder="registry/namespace/image:tag"
                                 className="font-mono text-sm"
                               />

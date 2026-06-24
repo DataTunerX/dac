@@ -28,6 +28,45 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// PreCheckLLMConfig validates that the LLM ConfigMap referenced by the DD's configuration
+// exists before finalizer is added. This prevents the situation where a DD gets a finalizer
+// but can never complete (and therefore can never be deleted) because the LLM ConfigMap is missing.
+func (h *DataDescriptorHandler) PreCheckLLMConfig(ctx context.Context, dd *dacv1alpha1.DataDescriptor) error {
+	// Read the global dd-configuration to find the LLM ConfigMap name
+	configMap := &corev1.ConfigMap{}
+	err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: "dd-configuration", Namespace: "dac"}, configMap)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name).
+				Info("dd-configuration ConfigMap not found in dac namespace, will check later during deployment generation")
+			return nil
+		}
+		return fmt.Errorf("failed to get dd-configuration ConfigMap: %w", err)
+	}
+
+	llmConfigName := configMap.Data["llm-config"]
+	if llmConfigName == "" {
+		h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name).
+			Info("llm-config not configured in dd-configuration, will use default during deployment generation")
+		return nil
+	}
+
+	// Validate that the referenced LLM ConfigMap exists in the DD's namespace
+	llmConfigMap := &corev1.ConfigMap{}
+	err = h.Kubeclient.Get(ctx, client.ObjectKey{Name: llmConfigName, Namespace: dd.Namespace}, llmConfigMap)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("LLM ConfigMap %q not found in namespace %q: the referenced LLM configuration does not exist. "+
+				"Please create the ConfigMap first, then retry", llmConfigName, dd.Namespace)
+		}
+		return fmt.Errorf("failed to check LLM ConfigMap %q in namespace %q: %w", llmConfigName, dd.Namespace, err)
+	}
+
+	h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name).
+		Info("LLM ConfigMap pre-check passed", "configMapName", llmConfigName)
+	return nil
+}
+
 // clearSyncRequestedAtAnnotation removes dac.dac.io/sync-requested-at using a fresh GET + merge patch.
 func (h *DataDescriptorHandler) clearSyncRequestedAtAnnotation(ctx context.Context, namespace, name string, logger logr.Logger) error {
 	fresh := &dacv1alpha1.DataDescriptor{}
