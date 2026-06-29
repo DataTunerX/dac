@@ -19,6 +19,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if not .Values.redis.external.host }}
+      initContainers:
+        {{- include "dac.initWait" (list (dict "name" "redis" "host" (printf "%s.%s.svc.cluster.local" (include "dac.redis.serviceName" .) .Release.Namespace) "port" (.Values.redis.port | toString))) | nindent 8 }}
+      {{- end }}
       containers:
         - name: biz-chart-agent
           image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.bizChartAgent.image.repository "tag" .Values.bizChartAgent.image.tag) }}
@@ -40,14 +44,7 @@ spec:
               value: {{ .Values.bizChartAgent.config.registerAgent | quote }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
           args:
-            - "--redis-host"
-            - {{ include "dac.redis.serviceName" . | quote }}
-            - "--redis-port"
-            - {{ .Values.redis.port | quote }}
-            - "--redis-db"
-            - {{ .Values.bizChartAgent.config.redisDb | quote }}
-            - "--password"
-            - {{ .Values.redis.password | quote }}
+            {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizChartAgent.config.redisDb) | nindent 12 }}
             {{- include "dac.llmArgs" . | nindent 12 }}
           resources:
             {{- toYaml .Values.bizChartAgent.resources | nindent 12 }}

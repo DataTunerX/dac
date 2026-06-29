@@ -95,6 +95,13 @@ mysql:
       cpu: 1000m
       memory: 2Gi
 
+
+  # -- External MySQL connection. Set host to use an external MySQL instance
+  #    instead of the built-in StatefulSet (mysql.enabled is ignored when set).
+  external:
+    host: ""
+    port: 3306
+    password: ""
 # ---------------------------------------------------------------------------
 # Redis 7 (used by: agents, data-sinkers-job, semantic-grouper, registries)
 # ---------------------------------------------------------------------------
@@ -122,6 +129,13 @@ redis:
     limits:
       cpu: 500m
       memory: 1Gi
+
+  # -- External Redis connection. Set host to use an external Redis instance
+  #    instead of the built-in StatefulSet (redis.enabled is ignored when set).
+  external:
+    host: ""
+    port: 6379
+    password: ""
 
 # ---------------------------------------------------------------------------
 # PostgreSQL 16 + pgvector (used by: data-services vectors and memory)
@@ -156,6 +170,13 @@ pgvector:
     limits:
       cpu: 1000m
       memory: 2Gi
+
+  # -- External PostgreSQL/pgvector connection. Set host to use an external
+  #    instance instead of the built-in StatefulSet (pgvector.enabled is ignored).
+  external:
+    host: ""
+    port: 5432
+    password: ""
 
 # ---------------------------------------------------------------------------
 # Neo4j (used by: data-services)
@@ -205,6 +226,13 @@ neo4j:
     limits:
       cpu: 1000m
       memory: 2Gi
+
+  # -- External Neo4j connection. Set host to use an external Neo4j instance
+  #    instead of the built-in StatefulSet (neo4j.enabled is ignored when set).
+  #    When using external, also set dataServices.config.neo4j.boltUrl / neo4jUrl.
+  external:
+    host: ""
+    password: ""
 
 # =============================================================================
 # Core Platform Services

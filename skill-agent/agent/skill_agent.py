@@ -290,6 +290,36 @@ class SkillAgent(BaseAgent):
         self.current_task_id = current_task_id
         self.agent_id = "SkillAgent"
 
+    def _log_propagated_history(self) -> None:
+        """以友好可读格式记录接收到的历史对话数据。"""
+        payload = _parse_propagated_history(self.metadata.get(PROPAGATED_HISTORY_KEY))
+        turns = _normalize_history_turns(payload.get("turns"))
+        if not turns:
+            logger.info("[HistoryFlow] SkillAgent 未接收到历史对话数据（propagated_history 为空或无效）。")
+            return
+        lines: list[str] = []
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("  SkillAgent 接收到的历史对话数据")
+        lines.append("=" * 60)
+        for i, item in enumerate(turns, start=1):
+            prefix = "👤 用户" if item["role"] == "user" else "🤖 助手"
+            lines.append(f"  ── 第 {i} 轮 ({prefix}) ──")
+            content_display = item["content"][:600]
+            if len(item["content"]) > 600:
+                content_display += "...（截断）"
+            lines.append(f"  {content_display}")
+            lines.append("")
+        lines.append("=" * 60)
+        logger.info("\n".join(lines))
+
+    def _build_query_with_history(self, query: str) -> str:
+        """将 propagated_history 拼入 query，供 plan_and_run 使用。"""
+        history_text = _history_text_from_metadata(self.metadata)
+        if history_text and history_text != "（无）":
+            return f"当前问题: {query}\n\n【历史对话上下文】\n{history_text}"
+        return query
+
     @staticmethod
     def build_progress_frame(
         event: str,
@@ -365,6 +395,19 @@ class SkillAgent(BaseAgent):
         user_id = self.metadata.get("user_id")
         run_id = self.metadata.get("run_id")
 
+        self._log_propagated_history()
+        effective_query = self._build_query_with_history(query)
+        if effective_query != query:
+            turn_count = len(
+                _normalize_history_turns(
+                    _parse_propagated_history(self.metadata.get(PROPAGATED_HISTORY_KEY)).get("turns")
+                )
+            )
+            logger.info(
+                "[HistoryFlow] SkillAgent 执行阶段已注入历史对话（turn_count=%d）",
+                turn_count,
+            )
+
         await self.emit_progress(
             "sd_skill_started",
             message=f"running local skill | query: {query_preview}",
@@ -381,7 +424,7 @@ class SkillAgent(BaseAgent):
 
         try:
             result = await self.skill_runner.plan_and_run(
-                query=query,
+                query=effective_query,
                 user_id=user_id,
                 run_id=run_id,
                 trace_id=trace_id,
@@ -717,15 +760,15 @@ class SkillAgentExecutor(AgentExecutor):
         "本地技能执行器。当前未加载任何技能；若被选中，将回退为不可用。"
     )
     _SKILL_LIST_HEADER = "本地技能执行器，可在本进程内直接运行以下技能："
-    _MAX_SKILL_DESC_CHARS = 140
     _MAX_DESC_PREVIEW_LINES = 30
 
     def build_dynamic_agent_card_fields(self) -> tuple[str, list[AgentSkill]]:
         """Render ``(description, skills)`` overrides from the loaded inventory.
 
         Must be called after :meth:`preload_skill_runner` (or ``_ensure_skill_runner``).
-        The returned ``description`` always carries the full skill list summary;
-        the returned ``skills`` list has one ``AgentSkill`` per loaded skill so
+        The returned ``description`` carries the full per-skill description text (no
+        character truncation) so routing / capability_check see complete boundaries.
+        The returned ``skills`` list has one ``AgentSkill`` per loaded skill so
         registries see individual capabilities rather than an umbrella entry.
 
         Fails soft: if the runner is not available or has no skills, returns a
@@ -748,18 +791,13 @@ class SkillAgentExecutor(AgentExecutor):
             desc_inline = desc_raw.replace("\n", " ").strip()
             if not name:
                 continue
-            preview = (
-                desc_inline
-                if len(desc_inline) <= self._MAX_SKILL_DESC_CHARS
-                else desc_inline[: self._MAX_SKILL_DESC_CHARS] + "..."
-            )
-            lines.append(f"- {name}: {preview}")
+            lines.append(f"- {name}: {desc_inline}")
             try:
                 agent_skills.append(
                     AgentSkill(
                         id=name,
                         name=name,
-                        description=desc_raw or preview,
+                        description=desc_raw or desc_inline,
                         tags=[name, "local skill", "skill sdk"],
                         examples=[],
                         input_modes=["text", "text/plain"],

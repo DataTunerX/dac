@@ -19,6 +19,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if not .Values.redis.external.host }}
+      initContainers:
+        {{- include "dac.initWait" (list (dict "name" "redis" "host" (printf "%s.%s.svc.cluster.local" (include "dac.redis.serviceName" .) .Release.Namespace) "port" (.Values.redis.port | toString))) | nindent 8 }}
+      {{- end }}
       containers:
         - name: semantic-grouper-api
           image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.semanticGrouper.image.repository "tag" .Values.semanticGrouper.image.tag) }}
@@ -28,9 +32,9 @@ spec:
             - containerPort: {{ .Values.semanticGrouper.service.targetPort }}
           env:
             - name: REDIS_HOST
-              value: {{ include "dac.redis.serviceName" . | quote }}
+              value: {{ include "dac.redis.host" . | quote }}
             - name: REDIS_PORT
-              value: {{ .Values.redis.port | quote }}
+              value: {{ include "dac.redis.port" . | quote }}
             - name: REDIS_DB_BROKER
               value: {{ .Values.semanticGrouper.config.redisBrokerDb | quote }}
             - name: REDIS_DB_BACKEND
@@ -38,7 +42,7 @@ spec:
             - name: REDIS_DB_LOCK
               value: {{ .Values.semanticGrouper.config.redisLockDb | quote }}
             - name: REDIS_PASSWORD
-              value: {{ .Values.redis.password | quote }}
+              value: {{ include "dac.redis.password" . | quote }}
             - name: DATA_SERVICES
               value: {{ include "dac.dataServices.url" . | quote }}
             - name: PROVIDER

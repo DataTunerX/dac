@@ -478,9 +478,77 @@ class ChartAgent(BaseAgent):
         self.current_task_id = current_task_id
         self.step_status_list: List[StepStatus] = []
         self._observe_reason_history: List[str] = []  # 多轮审核不通过的意见列表，下一轮生成时全部带入
+        self._current_data_summary: Optional[str] = None
+        self._current_suggested_chart: Optional[str] = None
         # LLM 模式：global=审核通过时仅返回 answer（默认）；agent=审核通过时带 reason 前缀
         self.start_mode: str = (os.getenv("CHART_AGENT_START_MODE", "global").strip().lower() or "global")
         self.agent_id = "ChartAgent"
+
+        self._log_propagated_history()
+
+    def _log_propagated_history(self) -> None:
+        """以友好可读格式记录接收到的历史对话数据。"""
+        payload = _parse_propagated_history((self.metadata or {}).get(PROPAGATED_HISTORY_KEY))
+        turns = _normalize_history_turns(payload.get("turns"))
+        if not turns:
+            logger.info("[HistoryFlow] ChartAgent 未接收到历史对话数据（propagated_history 为空或无效）。")
+            return
+        lines: list[str] = []
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("  ChartAgent 接收到的历史对话数据")
+        lines.append("=" * 60)
+        for i, item in enumerate(turns, start=1):
+            prefix = "👤 用户" if item["role"] == "user" else "🤖 助手"
+            lines.append(f"  ── 第 {i} 轮 ({prefix}) ──")
+            content_display = item["content"][:600]
+            if len(item["content"]) > 600:
+                content_display += "...（截断）"
+            lines.append(f"  {content_display}")
+            lines.append("")
+        lines.append("=" * 60)
+        logger.info("\n".join(lines))
+
+    def _build_history_text(self) -> str:
+        """从 metadata 中提取历史对话，返回格式化文本（与 handle_capability_check 一致）。"""
+        return _history_text_from_metadata(self.metadata or {})
+
+    def _has_task_context(self) -> bool:
+        """是否存在 orchestrator 下发的有效任务规划上下文。"""
+        tasks = getattr(self.current_tasks_status, "tasks", None) or []
+        return bool(tasks)
+
+    def _query_for_llm(self) -> str:
+        """构建供 LLM 使用的 query。
+
+        routing 直转且无任务规划时，不使用 agent_mode_query 的任务框架，
+        避免「当前无其他任务状态信息」误导模型。
+        """
+        if self.start_mode == "global" or not self._has_task_context():
+            if self.start_mode != "global" and not self._has_task_context():
+                logger.info(
+                    "[HistoryFlow] 无 orchestrator 任务上下文，使用原始用户 query: %s",
+                    (self.query or "")[:120],
+                )
+            return self.query or ""
+        return self.agent_mode_query()
+
+    def _enrich_query_with_chart_context(
+        self,
+        query: str,
+        *,
+        data_summary: Optional[str] = None,
+        suggested_chart: Optional[str] = None,
+    ) -> str:
+        """将判定阶段提取的数据摘要、建议图表类型拼入 query。"""
+        parts = [query]
+        ds = (data_summary or self._current_data_summary or "").strip()
+        if ds:
+            parts.append(f"【已识别数据摘要】\n{ds}")
+        chart = (suggested_chart or self._current_suggested_chart or "").strip()
+        if chart:
+            parts.append(f"【建议图表类型】\n{chart}")
+        return "\n\n".join(parts)
 
     @staticmethod
     def _step_query_preview(text: str, limit: int = 420) -> str:
@@ -702,6 +770,11 @@ class ChartAgent(BaseAgent):
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
+        history_text = self._build_history_text()
+        if history_text and history_text != "（无）":
+            human_template = "需要分析的数据: {query}\n\n【历史对话上下文】\n{history}"
+            human_prompt = HumanMessagePromptTemplate.from_template(human_template)
+
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
         user_id = self.metadata.get("user_id", "")
@@ -722,8 +795,11 @@ class ChartAgent(BaseAgent):
             )
             for attempt in range(max_retries):
                 try:
+                    invoke_kwargs = {"query": query}
+                    if history_text and history_text != "（无）":
+                        invoke_kwargs["history"] = history_text
                     llm_answer = await chain.ainvoke(
-                        {"query": query},
+                        invoke_kwargs,
                         config={"callbacks": [langfuse_handler]},
                     )
                     span.update_trace(output={"answer": llm_answer})
@@ -772,8 +848,7 @@ class ChartAgent(BaseAgent):
         human_template = "需要分析的数据: {query}"
 
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # 非 global 模式时使用 agent_mode_query 作为基础 query
-        base_query = self.agent_mode_query() if self.start_mode != "global" else self.query
+        base_query = self._enrich_query_with_chart_context(self._query_for_llm())
         effective_query = base_query
         if feedback:
             effective_query = base_query + "\n\n【以下为历轮审核未通过的意见，请综合调整后重新生成图表】\n\n" + feedback
@@ -786,6 +861,10 @@ class ChartAgent(BaseAgent):
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
+        history_text = self._build_history_text()
+        if history_text and history_text != "（无）":
+            human_template += "\n\n【历史对话上下文】\n{history}"
+            human_prompt = HumanMessagePromptTemplate.from_template(human_template)
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
         user_id = self.metadata.get("user_id", "")
@@ -806,8 +885,10 @@ class ChartAgent(BaseAgent):
             )
             for attempt in range(max_retries):
                 try:
-                    answer = await chain.ainvoke(
-                        {"query": effective_query, "current_time": current_time},
+                    invoke_kwargs = {"query": effective_query, "current_time": current_time}
+                    if history_text and history_text != "（无）":
+                        invoke_kwargs["history"] = history_text
+                    answer = await chain.ainvoke(invoke_kwargs,
                         config={"callbacks": [langfuse_handler]},
                     )
                     span.update_trace(output={"answer": answer})
@@ -880,6 +961,10 @@ class ChartAgent(BaseAgent):
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
+        history_text = self._build_history_text()
+        if history_text and history_text != "（无）":
+            human_template += "\n\n【历史对话上下文】\n{history}"
+            human_prompt = HumanMessagePromptTemplate.from_template(human_template)
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
         user_id = self.metadata.get("user_id", "")
@@ -900,8 +985,10 @@ class ChartAgent(BaseAgent):
             )
             for attempt in range(max_retries):
                 try:
-                    llm_answer = await chain.ainvoke(
-                        {"query": query, "answer": answer, "current_time": current_time},
+                    invoke_kwargs = {"query": query, "answer": answer, "current_time": current_time}
+                    if history_text and history_text != "（无）":
+                        invoke_kwargs["history"] = history_text
+                    llm_answer = await chain.ainvoke(invoke_kwargs,
                         config={"callbacks": [langfuse_handler]},
                     )
                     span.update_trace(output={"answer": llm_answer})
@@ -941,7 +1028,7 @@ class ChartAgent(BaseAgent):
         human_template = "需要分析的内容: {query}"
 
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        base_query = self.agent_mode_query() if self.start_mode != "global" else self.query
+        base_query = self._enrich_query_with_chart_context(self._query_for_llm())
         effective_query = base_query
         if feedback:
             effective_query = base_query + "\n\n【以下为历轮审核未通过的意见，请综合调整后重新生成图表】\n\n" + feedback
@@ -954,6 +1041,10 @@ class ChartAgent(BaseAgent):
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
+        history_text = self._build_history_text()
+        if history_text and history_text != "（无）":
+            human_template += "\n\n【历史对话上下文】\n{history}"
+            human_prompt = HumanMessagePromptTemplate.from_template(human_template)
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
         user_id = self.metadata.get("user_id", "")
@@ -974,8 +1065,10 @@ class ChartAgent(BaseAgent):
             )
             for attempt in range(max_retries):
                 try:
-                    answer = await chain.ainvoke(
-                        {"query": effective_query, "current_time": current_time},
+                    invoke_kwargs = {"query": effective_query, "current_time": current_time}
+                    if history_text and history_text != "（无）":
+                        invoke_kwargs["history"] = history_text
+                    answer = await chain.ainvoke(invoke_kwargs,
                         config={"callbacks": [langfuse_handler]},
                     )
                     span.update_trace(output={"answer": answer})
@@ -1046,6 +1139,10 @@ class ChartAgent(BaseAgent):
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
+        history_text = self._build_history_text()
+        if history_text and history_text != "（无）":
+            human_template += "\n\n【历史对话上下文】\n{history}"
+            human_prompt = HumanMessagePromptTemplate.from_template(human_template)
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
         user_id = self.metadata.get("user_id", "")
@@ -1066,8 +1163,10 @@ class ChartAgent(BaseAgent):
             )
             for attempt in range(max_retries):
                 try:
-                    llm_answer = await chain.ainvoke(
-                        {"query": query, "answer": answer, "current_time": current_time},
+                    invoke_kwargs = {"query": query, "answer": answer, "current_time": current_time}
+                    if history_text and history_text != "（无）":
+                        invoke_kwargs["history"] = history_text
+                    llm_answer = await chain.ainvoke(invoke_kwargs,
                         config={"callbacks": [langfuse_handler]},
                     )
                     span.update_trace(output={"answer": llm_answer})
@@ -1201,10 +1300,11 @@ class ChartAgent(BaseAgent):
         """Execute a single step with streaming support."""
 
         try:
-            # 非 global 模式时使用 agent_mode_query 生成带任务上下文的 query
-            query_for_llm = self.agent_mode_query() if self.start_mode != "global" else self.query
+            query_for_llm = self._query_for_llm()
             # 每次 step 都调用大模型做「是否可画图」判定，不复用缓存；retry 中任一次成功则走生成流程，不会给客户展示「无法生成图表」
             chart_related = await self.is_chart_related_query(query_for_llm)
+            self._current_data_summary = chart_related.data_summary
+            self._current_suggested_chart = chart_related.suggested_chart
             if not chart_related.can_generate:
                 msg = f"无法生成图表：{chart_related.reason}"
                 self.save_step_status(self.query, msg)
@@ -1228,10 +1328,11 @@ class ChartAgent(BaseAgent):
                 llm_result = await self.invoke_common(feedback=feedback)
             if llm_result:
                 if hasattr(llm_result, 'conclusion') and llm_result.conclusion == "terminate":
+                    observe_query = self._enrich_query_with_chart_context(query_for_llm)
                     if is_mermaid:
-                        observe_result = await self.observe_mermaid(query_for_llm, llm_result.answer)
+                        observe_result = await self.observe_mermaid(observe_query, llm_result.answer)
                     else:
-                        observe_result = await self.observe_common(query_for_llm, llm_result.answer)
+                        observe_result = await self.observe_common(observe_query, llm_result.answer)
                     if observe_result.conclusion == "continue":
                         llm_result.conclusion = "continue"
                         self.state = AgentState.IDLE

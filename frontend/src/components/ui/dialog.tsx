@@ -1,5 +1,7 @@
 "use client"
 
+import ReactDOM from "react-dom"
+
 import * as React from "react"
 import { cn } from "@/lib/utils"
 
@@ -25,7 +27,7 @@ export function Dialog({
 export function DialogContent({ className, children }: { className?: string; children: React.ReactNode }) {
   const ctx = React.useContext(Ctx)
   if (!ctx?.open) return null
-  return (
+  return ReactDOM.createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={() => ctx.onOpenChange?.(false)}>
       <div
         className={cn("w-full rounded-lg border border-line bg-surface shadow-lg", className)}
@@ -33,7 +35,8 @@ export function DialogContent({ className, children }: { className?: string; chi
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

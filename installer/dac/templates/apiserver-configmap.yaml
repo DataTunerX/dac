@@ -45,10 +45,10 @@ data:
 
     database:
       driver: "mysql"
-      host: {{ include "dac.mysql.serviceName" . | quote }}
-      port: {{ .Values.mysql.port }}
+      host: {{ include "dac.mysql.host" . | quote }}
+      port: {{ include "dac.mysql.port" . }}
       user: {{ .Values.apiserver.config.database.user | quote }}
-      password: {{ .Values.mysql.rootPassword | quote }}
+      password: {{ include "dac.mysql.password" . | quote }}
       database: {{ .Values.apiserver.config.database.database | quote }}
       max_open_conns: {{ .Values.apiserver.config.database.maxOpenConns }}
       max_idle_conns: {{ .Values.apiserver.config.database.maxIdleConns }}

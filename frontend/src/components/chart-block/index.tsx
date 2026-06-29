@@ -227,6 +227,8 @@ const ChartBlockWithECharts = memo(function ChartBlockWithECharts({
   const [ready, setReady] = useState(false)
   const [ReactECharts, setReactECharts] = useState<typeof import("echarts-for-react")["default"] | null>(null)
   const [echarts, setEcharts] = useState<typeof import("echarts") | null>(null)
+  const dialogChartContainerRef = useRef<HTMLDivElement | null>(null)
+  const [dialogChartHeight, setDialogChartHeight] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -283,21 +285,21 @@ const ChartBlockWithECharts = memo(function ChartBlockWithECharts({
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh]">
-          <DialogHeader className="flex flex-row items-center justify-between gap-3">
+        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50 flex-shrink-0 flex flex-row items-center justify-between gap-3">
             <DialogTitle>图表预览</DialogTitle>
-            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭">
+            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭" title="关闭">
               <X className="w-4 h-4" />
             </Button>
           </DialogHeader>
-          <div className="px-6 pb-6 pt-4">
-            <div className="rounded-lg border border-line bg-surface overflow-hidden">
+          <div ref={dialogChartContainerRef} className="p-6 overflow-auto flex-1 min-h-0">
+            <div className="rounded-lg border border-line bg-surface overflow-hidden" style={{ height: dialogChartHeight ? `${dialogChartHeight}px` : "400px" }}>
               <ReactECharts
                 echarts={echarts}
                 option={normalizedOption}
                 notMerge={true}
                 lazyUpdate={true}
-                style={{ width: "100%", height: "70vh" }}
+                style={{ width: "100%", height: "100%" }}
               />
             </div>
           </div>

@@ -126,6 +126,7 @@ OBSERVE_PROMPT_COMMON_ZH = """
   - 矩阵热度 -> heatmap；词频 -> wordCloud；
   - 金融OHLC -> candlestick；统计分布 -> boxplot。
 - **数据一致性（放宽准则）**：
+    - **数据来源范围**：除当前 query 外，【历史对话上下文】与【已识别数据摘要】均为有效原始数据来源，审核时需一并参考。
     - **严禁数据篡改**：如果原文说是 100，JSON 写作 200，属于致命错误。
     - **允许逻辑补全**：为了图表的美观或闭环，允许生成模型添加微量的"其他（Others）"分类或在不改变趋势的前提下进行少量数值拟合。
     - **语意化理解**：如果原文描述"大幅增长"，JSON 给出增长的数值序列，应视为通过。
@@ -184,7 +185,7 @@ CHART_GENERATION_SYSTEM_ZH = """你是一位资深的 Data Viz（数据可视化
    - 词频/关键词权重 -> `wordCloud` (data 为 name/value 对, 需引入 echarts-wordcloud)
    - 地理分布 -> `map` (需注册地图 JSON)
 
-2. **数据处理**：优先从「背景知识」提取结构化数据；若无，则基于用户语义构造**高度合理**的模拟数据。
+2. **数据处理**：优先从用户描述、【历史对话上下文】及【已识别数据摘要】提取结构化数据。若上述来源均无可用数值，conclusion 填 `"continue"` 并说明缺失项，**禁止编造占位数据或与业务无关的品类**。
 3. **视觉增强**：
    - 所有图表必须包含 `title` (text/subtext)、`tooltip`。
    - 笛卡尔坐标系图表（bar/line/scatter/boxplot/candlestick/heatmap）需包含 `xAxis`、`yAxis`、`grid` (containLabel: true)。

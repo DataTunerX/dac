@@ -155,14 +155,14 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] rounded-2xl border-line/90 shadow-xl">
-          <DialogHeader className="flex flex-row items-center justify-between gap-3 pb-2">
-            <DialogTitle className="text-content">Mermaid 图表预览</DialogTitle>
-            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭" className="rounded-lg hover:bg-surface-muted">
+        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50 flex-shrink-0 flex flex-row items-center justify-between gap-3">
+            <DialogTitle>Mermaid 图表预览</DialogTitle>
+            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭" title="关闭">
               <X className="w-4 h-4" />
             </Button>
           </DialogHeader>
-          <div className="px-6 pb-6 pt-2 overflow-auto max-h-[calc(90vh-4rem)] bg-gradient-to-br from-slate-50/80 to-white rounded-xl">
+          <div className="p-6 overflow-auto flex-1 min-h-0 bg-gradient-to-br from-slate-50/80 to-white">
             <div
               className="p-8 [&_svg]:max-w-full [&_svg]:h-auto [&_svg]:drop-shadow-sm"
               dangerouslySetInnerHTML={{ __html: svg }}

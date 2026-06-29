@@ -88,6 +88,91 @@ app.kubernetes.io/component: {{ .name }}
 {{- include "dac.componentName" (dict "context" . "name" "neo4j") -}}
 {{- end }}
 
+{{/* ==== Middleware external-or-built-in resolvers ====
+  Each helper returns the external value when <svc>.external.host is set,
+  otherwise falls back to the built-in StatefulSet Service DNS.
+*/}}
+
+{{- define "dac.mysql.host" -}}
+{{- if .Values.mysql.external.host }}
+{{- .Values.mysql.external.host }}
+{{- else }}
+{{- printf "%s.%s.svc.cluster.local" (include "dac.mysql.serviceName" .) .Release.Namespace }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.mysql.port" -}}
+{{- if .Values.mysql.external.host }}
+{{- .Values.mysql.external.port | default 3306 | toString }}
+{{- else }}
+{{- .Values.mysql.port | toString }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.mysql.password" -}}
+{{- if .Values.mysql.external.host }}
+{{- .Values.mysql.external.password }}
+{{- else }}
+{{- .Values.mysql.rootPassword }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.redis.host" -}}
+{{- if .Values.redis.external.host }}
+{{- .Values.redis.external.host }}
+{{- else }}
+{{- printf "%s.%s.svc.cluster.local" (include "dac.redis.serviceName" .) .Release.Namespace }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.redis.port" -}}
+{{- if .Values.redis.external.host }}
+{{- .Values.redis.external.port | default 6379 | toString }}
+{{- else }}
+{{- .Values.redis.port | toString }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.redis.password" -}}
+{{- if .Values.redis.external.host }}
+{{- .Values.redis.external.password }}
+{{- else }}
+{{- .Values.redis.password }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.pgvector.host" -}}
+{{- if .Values.pgvector.external.host }}
+{{- .Values.pgvector.external.host }}
+{{- else }}
+{{- printf "%s.%s.svc.cluster.local" (include "dac.pgvector.serviceName" .) .Release.Namespace }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.pgvector.port" -}}
+{{- if .Values.pgvector.external.host }}
+{{- .Values.pgvector.external.port | default 5432 | toString }}
+{{- else }}
+{{- .Values.pgvector.port | toString }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.pgvector.password" -}}
+{{- if .Values.pgvector.external.host }}
+{{- .Values.pgvector.external.password }}
+{{- else }}
+{{- .Values.pgvector.password }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.neo4j.password" -}}
+{{- if .Values.neo4j.external.host }}
+{{- .Values.neo4j.external.password }}
+{{- else }}
+{{- .Values.neo4j.password }}
+{{- end }}
+{{- end }}
+
 {{- define "dac.dataServices.serviceName" -}}
 {{- include "dac.componentName" (dict "context" . "name" "data-services") -}}
 {{- end }}
@@ -125,18 +210,18 @@ app.kubernetes.io/component: {{ .name }}
 {{- end }}
 
 {{/*
-Common Redis CLI args for agent containers
-Usage: {{ include "dac.redisArgs" . }}
+Common Redis CLI args for agent containers.
+Usage: {{ include "dac.redisArgs" (dict "context" . "redisDB" "0") }}
 */}}
 {{- define "dac.redisArgs" -}}
 - "--redis-host"
-- {{ include "dac.redis.serviceName" . | quote }}
+- {{ include "dac.redis.host" .context | quote }}
 - "--redis-port"
-- {{ .Values.redis.port | quote }}
+- {{ include "dac.redis.port" .context | quote }}
 - "--redis-db"
 - {{ .redisDB | default "0" | quote }}
 - "--password"
-- {{ .Values.redis.password | quote }}
+- {{ include "dac.redis.password" .context | quote }}
 {{- end }}
 
 {{/*
@@ -204,5 +289,28 @@ Usage: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "rep
 {{- printf "%s/%s:%s" .registry .repository .tag }}
 {{- else }}
 {{- printf "%s:%s" .repository .tag }}
+{{- end }}
+{{- end }}
+
+{{/*
+Generate initContainers that wait for TCP services to be ready.
+Usage:
+  initContainers:
+    {{- include "dac.initWait" (list (dict "name" "redis" "host" "..." "port" "6379")) | nindent 4 }}
+    {{- include "dac.initWait" (list (dict "name" "mysql" "host" "..." "port" "3306")) | nindent 4 }}
+*/}}
+{{- define "dac.initWait" }}
+{{- range . }}
+- name: wait-for-{{ .name }}
+  image: registry.cn-shanghai.aliyuncs.com/jamesxiong/busybox:1.36
+  imagePullPolicy: IfNotPresent
+  command: ["sh", "-c"]
+  args:
+    - |
+      until nc -z {{ .host }} {{ .port }}; do
+        echo "waiting for {{ .name }} at {{ .host }}:{{ .port }}..."
+        sleep 2
+      done
+      echo "{{ .name }} is ready"
 {{- end }}
 {{- end }}

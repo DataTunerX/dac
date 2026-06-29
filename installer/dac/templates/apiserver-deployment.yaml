@@ -20,6 +20,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if not .Values.mysql.external.host }}
+      initContainers:
+        {{- include "dac.initWait" (list (dict "name" "mysql" "host" (printf "%s.%s.svc.cluster.local" (include "dac.mysql.serviceName" .) .Release.Namespace) "port" (.Values.mysql.port | toString))) | nindent 8 }}
+      {{- end }}
       containers:
         - name: dac-apiserver
           image: {{ include "dac.image" (dict "registry" (.Values.apiserver.image.registry | default .Values.global.imageRegistry) "repository" .Values.apiserver.image.repository "tag" .Values.apiserver.image.tag) }}

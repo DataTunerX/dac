@@ -4,7 +4,7 @@ import dynamic from "next/dynamic"
 import { memo, useMemo } from "react"
 import type { ChatProgressPayload } from "@/lib/api-types"
 import { ChatMarkdown } from "@/components/markdown-chat"
-import { stripModelLeakTags } from "@/lib/strip-model-leak-tags"
+import { stripModelLeakTags, stripModelLeakLines } from "@/lib/strip-model-leak-tags"
 import { ChatMessage, EMPTY_PROGRESS } from "@/components/chat/chat-message-types"
 
 const ThinkingProcess = dynamic(
@@ -32,7 +32,7 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
   streamProgressList,
 }: AssistantMessageBodyProps) {
   const thinking = stripModelLeakTags((msg.reasoning_content ?? "").trim())
-  const answer = stripModelLeakTags(msg.content ?? "")
+  const answer = stripModelLeakLines(stripModelLeakTags(msg.content ?? ""))
   const isLastMessage = index === messagesLength - 1
   const hasVisibleAnswer = answer.trim().length > 0
   const isThinkingNow = isLastMessage && isStreaming && !hasVisibleAnswer

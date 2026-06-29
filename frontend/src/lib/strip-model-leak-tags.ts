@@ -22,3 +22,12 @@ export function stripModelLeakTags(input: string): string {
   if (!input) return input
   return stripOrphanTags(stripTaggedBlocks(input))
 }
+
+/** Remove model-internal markers (e.g. "reason:…") that sometimes leak into the visible answer. */
+export function stripModelLeakLines(input: string): string {
+  if (!input) return input
+  return input
+    .split("\n")
+    .filter((line) => !/^\s*reason\s*:/i.test(line))
+    .join("\n")
+}

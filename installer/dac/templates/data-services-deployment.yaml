@@ -19,6 +19,17 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- $needPg := not .Values.pgvector.external.host }}
+      {{- $needNeo := not .Values.neo4j.external.host }}
+      {{- if or $needPg $needNeo }}
+      initContainers:
+        {{- if $needPg }}
+        {{- include "dac.initWait" (list (dict "name" "pgvector" "host" (printf "%s.%s.svc.cluster.local" (include "dac.pgvector.serviceName" .) .Release.Namespace) "port" (.Values.pgvector.port | toString))) | nindent 8 }}
+        {{- end }}
+        {{- if $needNeo }}
+        {{- include "dac.initWait" (list (dict "name" "neo4j" "host" (printf "%s.%s.svc.cluster.local" (include "dac.neo4j.serviceName" .) .Release.Namespace) "port" (.Values.neo4j.httpPort | toString))) | nindent 8 }}
+        {{- end }}
+      {{- end }}
       containers:
         - name: data-services
           image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.dataServices.image.repository "tag" .Values.dataServices.image.tag) }}
@@ -46,19 +57,14 @@ spec:
               value: {{ .Values.global.llm.apiKey | quote }}
             - name: LLM_BASE_URL
               value: {{ .Values.global.llm.baseUrl | quote }}
-            - name: LLM_MODEL
-              value: {{ .Values.global.llm.model | quote }}
-            - name: LLM_TEMPERATURE
-              value: {{ .Values.global.llm.temperature | quote }}
-            # Memory pgvector
             - name: MEMORY_PGVECTOR_HOST
-              value: {{ include "dac.pgvector.serviceName" . | quote }}
+              value: {{ include "dac.pgvector.host" . | quote }}
             - name: MEMORY_PGVECTOR_PORT
-              value: {{ .Values.pgvector.port | quote }}
+              value: {{ include "dac.pgvector.port" . | quote }}
             - name: MEMORY_PGVECTOR_USER
               value: {{ .Values.pgvector.user | quote }}
             - name: MEMORY_PGVECTOR_PASSWORD
-              value: {{ .Values.pgvector.password | quote }}
+              value: {{ include "dac.pgvector.password" . | quote }}
             - name: MEMORY_DBNAME
               value: {{ .Values.dataServices.config.memory.database | quote }}
             - name: MEMORY_PGVECTOR_MIN_CONNECTION
@@ -78,7 +84,7 @@ spec:
             - name: MEMORY_GRAPH_DB_USERNAME
               value: {{ .Values.dataServices.config.neo4j.username | quote }}
             - name: MEMORY_GRAPH_DB_PASSWORD
-              value: {{ .Values.neo4j.password | quote }}
+              value: {{ include "dac.neo4j.password" . | quote }}
             - name: MEMORY_GRAPH_LLM_MODEL
               value: {{ .Values.global.llm.model | quote }}
             - name: MEMORY_GRAPH_LLM_APIKEY
@@ -87,13 +93,13 @@ spec:
               value: {{ .Values.global.llm.baseUrl | quote }}
             # Knowledge pgvector
             - name: PGVECTOR_HOST
-              value: {{ include "dac.pgvector.serviceName" . | quote }}
+              value: {{ include "dac.pgvector.host" . | quote }}
             - name: PGVECTOR_PORT
-              value: {{ .Values.pgvector.port | quote }}
+              value: {{ include "dac.pgvector.port" . | quote }}
             - name: PGVECTOR_USER
               value: {{ .Values.pgvector.user | quote }}
             - name: PGVECTOR_PASSWORD
-              value: {{ .Values.pgvector.password | quote }}
+              value: {{ include "dac.pgvector.password" . | quote }}
             - name: PGVECTOR_DATABASE
               value: {{ .Values.dataServices.config.pgvector.knowledgeDatabase | quote }}
             - name: PGVECTOR_MIN_CONNECTION
@@ -102,13 +108,13 @@ spec:
               value: {{ .Values.dataServices.config.pgvector.maxConnection | quote }}
             # MySQL
             - name: MYSQL_HOST
-              value: {{ include "dac.mysql.serviceName" . | quote }}
+              value: {{ include "dac.mysql.host" . | quote }}
             - name: MYSQL_PORT
-              value: {{ .Values.mysql.port | quote }}
+              value: {{ include "dac.mysql.port" . | quote }}
             - name: MYSQL_USER
               value: {{ .Values.dataServices.config.mysql.user | quote }}
             - name: MYSQL_PASSWORD
-              value: {{ .Values.mysql.rootPassword | quote }}
+              value: {{ include "dac.mysql.password" . | quote }}
             - name: MYSQL_FINGERPRINT_DATABASE
               value: {{ .Values.dataServices.config.mysql.fingerprintDatabase | quote }}
             - name: MYSQL_HISTORY_DATABASE
@@ -121,7 +127,7 @@ spec:
             - name: KNOWLEDGE_GRAPH_DB_USERNAME
               value: {{ .Values.dataServices.config.neo4j.username | quote }}
             - name: KNOWLEDGE_GRAPH_DB_PASSWORD
-              value: {{ .Values.neo4j.password | quote }}
+              value: {{ include "dac.neo4j.password" . | quote }}
             - name: KNOWLEDGE_GRAPH_EMBEDDING_DIMS
               value: {{ .Values.global.embedding.dims | quote }}
           resources:

@@ -38,14 +38,7 @@ spec:
               value: {{ .Values.bizRoutingAgent.config.maxRetries | quote }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
           args:
-            - "--redis-host"
-            - {{ include "dac.redis.serviceName" . | quote }}
-            - "--redis-port"
-            - {{ .Values.redis.port | quote }}
-            - "--redis-db"
-            - {{ .Values.bizRoutingAgent.config.redisDb | quote }}
-            - "--password"
-            - {{ .Values.redis.password | quote }}
+            {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizRoutingAgent.config.redisDb) | nindent 12 }}
             {{- include "dac.llmArgs" . | nindent 12 }}
           resources:
             {{- toYaml .Values.bizRoutingAgent.resources | nindent 12 }}

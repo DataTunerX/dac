@@ -8,9 +8,9 @@ metadata:
     {{- include "dac.componentLabels" (dict "context" . "name" "execution-engine") | nindent 4 }}
 data:
   {{- include "dac.observationConfigMapData" . | nindent 2 }}
-  redis-host: {{ printf "%s.%s.svc.cluster.local" (include "dac.redis.serviceName" .) .Release.Namespace | quote }}
-  redis-port: {{ .Values.redis.port | default "6379" | quote }}
-  redis-password: {{ .Values.redis.password | default "123" | quote }}
+  redis-host: {{ include "dac.redis.host" . | quote }}
+  redis-port: {{ include "dac.redis.port" . | quote }}
+  redis-password: {{ include "dac.redis.password" . | quote }}
   data-services-url: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.dataServices.serviceName" .) .Release.Namespace (.Values.dataServices.service.port | default 8000) | quote }}
   biz-orchestrator-agent-registry: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.bizOrchestratorRegistry.serviceName" .) .Release.Namespace (.Values.bizOrchestratorRegistry.service.port | default 8000) | quote }}
   orchestrator-agent-registry: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.orchestratorRegistry.serviceName" .) .Release.Namespace (.Values.orchestratorRegistry.service.port | default 8000) | quote }}
