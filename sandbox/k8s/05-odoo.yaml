@@ -1,0 +1,185 @@
+# Odoo 17 ERP + PostgreSQL + demo data
+# Odoo 17：-i 装模块时默认加载 demo（勿加 --without-demo）；--with-demo 仅 Odoo 19+ 才有
+# 初始化在 odoo Deployment 的 initContainer 内完成，与主容器共享 /var/lib/odoo filestore
+# 模块 base,sale,stock,account,point_of_sale,pos_restaurant 来自镜像内置 addons，完全离线
+# 端口 8069（DAC 资产探测已支持 odoo 指纹）
+# 资源需求：约 1Gi 内存；与 dac-sandbox 主 Pod 独立部署
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: odoo-db
+  namespace: dac-sandbox
+  labels:
+    app.kubernetes.io/name: odoo
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  selector:
+    app: odoo-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odoo-db
+  namespace: dac-sandbox
+  labels:
+    app.kubernetes.io/name: odoo
+    app.kubernetes.io/component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: odoo-db
+  template:
+    metadata:
+      labels:
+        app: odoo-db
+    spec:
+      containers:
+        - name: postgres
+          image: release.daocloud.io/dac/postgres:16
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_USER
+              value: odoo
+            - name: POSTGRES_PASSWORD
+              value: odopass
+            - name: POSTGRES_DB
+              value: postgres
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "odoo", "-h", "127.0.0.1"]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: odoo
+  namespace: dac-sandbox
+  labels:
+    app.kubernetes.io/name: odoo
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app: odoo
+  ports:
+    - name: http
+      port: 8069
+      targetPort: 8069
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odoo
+  namespace: dac-sandbox
+  labels:
+    app.kubernetes.io/name: odoo
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: odoo
+  template:
+    metadata:
+      labels:
+        app: odoo
+    spec:
+      initContainers:
+        - name: init-demo
+          image: release.daocloud.io/dac/odoo:17.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HOST
+              value: odoo-db
+            - name: PORT
+              value: "5432"
+            - name: USER
+              value: odoo
+            - name: PASSWORD
+              value: odopass
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h odoo-db -U odoo; do
+                echo "waiting for odoo-db..."
+                sleep 3
+              done
+              if [ -f /var/lib/odoo/.sandbox_init_v2 ]; then
+                echo "odoo_demo already initialized (incl. pos_restaurant)"
+                exit 0
+              fi
+              odoo -d odoo_demo -i base,sale,stock,account,point_of_sale,pos_restaurant --stop-after-init
+              touch /var/lib/odoo/.sandbox_init_v2
+          volumeMounts:
+            - name: odoo-filestore
+              mountPath: /var/lib/odoo
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1536Mi"
+      containers:
+        - name: odoo
+          image: release.daocloud.io/dac/odoo:17.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - odoo
+            - -d
+            - odoo_demo
+          env:
+            - name: HOST
+              value: odoo-db
+            - name: PORT
+              value: "5432"
+            - name: USER
+              value: odoo
+            - name: PASSWORD
+              value: odopass
+          ports:
+            - containerPort: 8069
+          volumeMounts:
+            - name: odoo-filestore
+              mountPath: /var/lib/odoo
+          readinessProbe:
+            httpGet:
+              path: /web/login
+              port: 8069
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1536Mi"
+      volumes:
+        - name: odoo-filestore
+          emptyDir: {}

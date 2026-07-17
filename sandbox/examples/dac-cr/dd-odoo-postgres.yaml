@@ -1,0 +1,25 @@
+# DAC sandbox demo: Odoo 17 demo 库（ERP 销售/库存/会计等业务表在 PostgreSQL odoo_demo 中）
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-sandbox-odoo-postgres
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-postgres"
+  sources:
+    - type: postgres
+      name: "sandbox-odoo-demo"
+      metadata:
+        host: "odoo-db.dac-sandbox.svc.cluster.local"
+        port: "5432"
+        user: "odoo"
+        password: "odopass"
+        database: "odoo_demo"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""

@@ -35,7 +35,8 @@ DAC（Data Agent Container）平台的端到端演示沙盒。在单个 Kubernet
 DAC Sandbox 在单个 Kubernetes Pod 中提供完整的 DAC 演示环境，包含：
 
 - 5 个数据服务容器：MySQL、PostgreSQL、MinIO、FileServer、GitLab CE
-- 10 个示例数据库、21 份多格式文件、MovieLens 1M 数据集、1 个示例代码仓库
+- 10 个手工/开源示例数据库、21 份多格式文件、MovieLens 1M 数据集、2 个示例代码仓库（test-code + saleor）
+- **可选企业应用栈**（`make apply-apps`）：Odoo 17 + demo data、Saleor 电商平台、Google Online Boutique 微服务演示
 - 与 `examples/dac-cr/` 完全对齐的连接信息，可直接用于 dac-apiserver 的 `DataDescriptor` / `DataAgentContainer` 自定义资源
 
 部署完成后可在 DAC 前端完成「资产探测 → 创建数据源 → 运行 Agent」的完整闭环。
@@ -62,6 +63,12 @@ DAC Sandbox 在单个 Kubernetes Pod 中提供完整的 DAC 演示环境，包�
         ▲                                                  ▲
         │                                                  │
    seed-job (导入 MinIO 数据)                  gitlab-seed-job (创建仓库)
+
+┌──────────── 企业应用栈（独立 Deployment，make apply-apps）────────────┐
+│  odoo:8069 + odoo-db:5432 (odoo_demo，含 ERP demo data)              │
+│  saleor-api:8000 + saleor-dashboard:9000 + saleor-db + saleor-cache  │
+│  online-boutique: frontend:80 + 10+ 微服务（gRPC/HTTP）               │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 部署在命名空间 `dac-sandbox` 下，由一个 StatefulSet（`dac-sandbox-0`）和两个 seed Job 组成。
@@ -101,13 +108,62 @@ DAC Sandbox 在单个 Kubernetes Pod 中提供完整的 DAC 演示环境，包�
 
 ## 快速开始
 
-> [!IMPORTANT]
-> 首次部署需先将 `mysql` / `postgres` / `nginx` / `alpine` / `minio/mc` / `minio/minio` / `gitlab/gitlab-ce` 等公共基础镜像同步到目标 registry，否则 Pod 会停留在 `ImagePullBackOff`。详见[安装 §1](#1-同步公共基础镜像)。
+### 离线演示（推荐）
 
-镜像就绪后，部署只需两条命令：
+沙盒设计为**两阶段**：有网构建机准备一次，离线集群只拉私有 registry。
+
+**阶段 A — 有网构建机（只需跑一次）**
 
 ```bash
 cd sandbox
+docker login release.daocloud.io
+make offline-prep
+```
+
+`offline-prep` 会依次完成：
+
+1. **`make vendor`** — 下载 Sakila/Pagila/Chinook/Northwind/Employees/MovieLens 等 **SQL/dump** 到 `seed/`（不提交 git，打入镜像）
+2. **`make mirror-images`** — 把 Docker Hub、GHCR Saleor、Online Boutique 共 **23 个外部镜像** pull → tag → push 到 `$(REGISTRY)`
+3. **`make build push`** — 构建 `sandbox-mysql` / `sandbox-postgres` 等 5 个镜像（**vendor SQL 已 COPY 进镜像**）并推送
+
+**阶段 B — 离线集群**
+
+```bash
+cd sandbox
+make apply-all && make verify
+```
+
+集群**不再需要**访问 docker.io / ghcr.io / google-samples / GitHub / MySQL 下载站。
+
+**离线能力一览**（阶段 B 集群内全程无需外网）：
+
+| 组件 | 运行时联网 | 说明 |
+|------|------------|------|
+| 核心 sandbox（MySQL/Postgres/MinIO/FileServer/GitLab） | 否 | SQL、文件、代码仓在 `make build` / seed Job 中已注入 |
+| Odoo 17 demo | 否 | 含 `point_of_sale` + `pos_restaurant`（餐厅）；随 `odoo:17.0` 镜像内置，init 本地安装 |
+| Saleor API + Dashboard | 否 | `saleor:3.23`、`saleor-dashboard:3.23` + `populatedb` Job |
+| Online Boutique | 否 | 10 个微服务镜像已 mirror 到 `$(REGISTRY)/boutique-*` |
+
+> **演示时注意**：Odoo 界面里从「应用商店」在线安装**额外**模块需要外网。Sandbox 已预装销售/库存/会计 + **餐厅（pos_restaurant）**，无需在线安装。若需第三方应用商店插件（如 `pos_offline_restaurant`），须在有网机下载 zip 并打入自定义镜像（见下方）。
+
+**已有 Odoo 环境升级餐厅模块**（filestore 正常、仅缺餐厅时）：
+
+```bash
+kubectl apply -f k8s/05-odoo.yaml
+kubectl -n dac-sandbox rollout restart deploy/odoo
+kubectl -n dac-sandbox logs deploy/odoo -c init-demo -f
+```
+
+若仍报 `filestore` 错误，按下方「Odoo 重新初始化」清空重来。
+
+企业应用首次启动耗时：Odoo `init-demo` 约 5–10 分钟（`kubectl -n dac-sandbox logs deploy/odoo -c init-demo -f`），Saleor `saleor-populatedb` 依赖 API ready。
+
+> [!IMPORTANT]
+> 若跳过 `offline-prep` 只跑 `make apply`，Pod 会因缺少私有 registry 中的基础镜像而 `ImagePullBackOff`。离线环境必须先完成阶段 A。
+
+### 仅核心沙盒（不含 Odoo/Saleor/Boutique）
+
+```bash
 make apply && make verify
 ```
 
@@ -117,58 +173,67 @@ make apply && make verify
 
 完整流程：同步公共镜像 → 构建沙盒镜像 → 部署 → 自检。
 
-### 1. 同步公共基础镜像
+### 1. 同步外部镜像到私有 registry
 
-`make build push` 只构建并推送 5 个 sandbox 派生镜像，**不会**同步公共基础镜像。判断方法：在能拉取目标 registry 的机器上执行 `docker pull $(REGISTRY)/gitlab-ce:17.5.0-ce.0`，能拉到说明 registry 已经直通或透明代理 Docker Hub，可以跳过本步；提示 `repository not found / unauthorized` 就必须执行：
+离线环境**必须**在有网机器执行（`make offline-prep` 已包含此步）。仅补镜像时可单独跑：
 
 ```bash
 docker login release.daocloud.io
-make mirror-public
+make mirror-images    # 等同旧名 make mirror-public
 ```
 
-`mirror-public` 会把以下公共镜像逐个 `pull → tag → push` 到 `$(REGISTRY)`，使集群离线也能拉取：
+`scripts/mirror-images.sh` 同步清单：
 
-| 镜像 | 大小（约） | 用途 |
-|------|-----------|------|
-| `mysql:8.0`、`postgres:16` | 600 MB / 400 MB | 业务数据库基础镜像 |
-| `nginx:1.25-alpine` | 50 MB | FileServer |
-| `alpine:3.20`、`minio/mc:latest` | 10 MB / 50 MB | seed Job 工具链 |
-| `minio/minio:latest` | 250 MB | 对象存储 |
-| **`gitlab/gitlab-ce:17.5.0-ce.0`** | **3 GB** | 代码仓库基础镜像，最容易遗漏，缺失会导致 Pod 停留在 `ImagePullBackOff` |
+| 来源 | 私有 registry 目标 | 用途 |
+|------|-------------------|------|
+| `docker.io/library/mysql:8.0` | `$(REGISTRY)/mysql:8.0` | MySQL 基础镜像 + sandbox-mysql 父镜像 |
+| `docker.io/library/postgres:16` | `$(REGISTRY)/postgres:16` | Postgres 基础 + Odoo/Saleor DB |
+| `docker.io/nginx:1.27-alpine` | `$(REGISTRY)/nginx:1.27-alpine` | FileServer |
+| `docker.io/alpine:3.20` | `$(REGISTRY)/alpine:3.20` | seed Job |
+| `docker.io/minio/mc:latest` | `$(REGISTRY)/mc:latest` | MinIO seed |
+| `docker.io/minio/minio:latest` | `$(REGISTRY)/minio:latest` | 对象存储 |
+| `docker.io/gitlab/gitlab-ce:17.5.0-ce.0` | `$(REGISTRY)/gitlab-ce:17.5.0-ce.0` | GitLab CE |
+| `docker.io/odoo:17.0` | `$(REGISTRY)/odoo:17.0` | Odoo ERP |
+| `docker.io/valkey/valkey:8.1-alpine` | `$(REGISTRY)/valkey:8.1-alpine` | Saleor 缓存 |
+| `docker.io/library/redis:alpine` | `$(REGISTRY)/redis:alpine` | Boutique cart Redis |
+| `ghcr.io/saleor/saleor:3.23` | `$(REGISTRY)/saleor:3.23` | Saleor API + populatedb |
+| `ghcr.io/saleor/saleor-dashboard:3.23` | `$(REGISTRY)/saleor-dashboard:3.23` | Saleor 管理后台 SPA |
+| `google-samples/.../currencyservice:v0.10.5` 等 10 个 | `$(REGISTRY)/boutique-<svc>:v0.10.5` | Online Boutique 微服务 |
 
-只补 GitLab CE 这一个镜像（不重复同步其他已就绪的镜像）：
+### 2. 下载 SQL 并打入镜像
+
+开源样本 **SQL 不单独挂载**，而是在 `make build` 时 COPY 进 `sandbox-mysql` / `sandbox-postgres` 镜像：
 
 ```bash
-docker pull gitlab/gitlab-ce:17.5.0-ce.0
-docker tag  gitlab/gitlab-ce:17.5.0-ce.0 release.daocloud.io/dac/gitlab-ce:17.5.0-ce.0
-docker push release.daocloud.io/dac/gitlab-ce:17.5.0-ce.0
+make vendor    # 下载到 seed/mysql/*.sql、seed/postgres/*.sql、employees-dumps/
+make build     # vendor 为 build-mysql/build-postgres 的前置依赖
+make push
 ```
 
-### 2. 构建沙盒镜像
+离线集群拉 `sandbox-mysql:v0.11.0` 即已含 northwind/sakila/employees 等全部库，**无需再下载 SQL**。
+
+### 3. 构建沙盒镜像
 
 ```bash
-make all
+make all          # vendor + build + push（不含 mirror-images，离线前请用 offline-prep）
 ```
 
-等价于：
+等价于 `make vendor && make build && make push`。`gitlab-seed` 构建期 git clone `test-code` + `saleor` 进镜像，离线无需再访问 Gitee/GitHub。
+
+### 4. 部署到 Kubernetes
 
 ```bash
-make vendor   # 下载 Sakila / Pagila / Chinook / MovieLens 1M 到 seed/
-# （无需 make prep；gitlab-seed 镜像构建期会自动 git clone 示例仓库）
-make build    # 构建 5 个 sandbox-* 镜像
-make push     # 推送到 $(REGISTRY)
-```
-
-### 3. 部署到 Kubernetes
-
-```bash
-make apply
+make apply          # 仅核心 sandbox
+# 或
+make apply-all      # 核心 + Odoo / Saleor / Online Boutique
 kubectl -n dac-sandbox get pods -w
 ```
 
 Pod 通常需要 3–5 分钟进入 `Running` 状态（5/5 容器就绪）—— 其中 GitLab CE 首次启动会执行 reconfigure + 数据库迁移，单容器就要 3 分钟左右。`gitlab-seed-job` 内置最长 600 秒等待 GitLab Ready 的逻辑。
 
-### 4. 自检
+企业应用栈额外耗时：Odoo `init-demo` initContainer 约 5–10 分钟灌入 demo data；`saleor-populatedb` 在 API ready 后灌演示商品。全部镜像应已在私有 registry（`make offline-prep`）。
+
+### 5. 自检
 
 ```bash
 make verify
@@ -182,9 +247,97 @@ make verify
 - PostgreSQL 数据库列表（应有 4 个）
 - MinIO bucket 列表（应有 `dac-files`、`dac-datasets`）
 - FileServer 目录索引（前 10 项）
-- GitLab 项目列表（应有 `root/test-code`）
+- GitLab 项目列表（应有 `root/test-code` 和 `root/saleor`）
+- 企业应用栈 Deployment/Job 状态（`make apply-apps` 后应有 odoo / saleor-api / saleor-dashboard / frontend 等）
 
-## 配置
+## 企业应用栈
+
+在**保留原有 sandbox** 的前提下，通过独立 Deployment 叠加三套可运行的企业业务应用（不塞进单 Pod StatefulSet，避免与 GitLab 争抢内存）。
+
+| 应用 | 部署文件 | 入口 Service | 端口 | 业务数据 |
+|------|----------|--------------|------|----------|
+| **Odoo 17 + demo** | `k8s/05-odoo.yaml` | `odoo` | 8069 | PostgreSQL `odoo_demo`（`init-demo`：`-i base,sale,stock,account,point_of_sale,pos_restaurant`；含**餐厅 POS** demo，完全离线） |
+| **Saleor API** | `k8s/06-saleor.yaml` | `saleor-api` | 8000 | PostgreSQL `saleor`（Job `saleor-populatedb` 灌演示商品） |
+| **Saleor Dashboard** | `k8s/06-saleor.yaml` | `saleor-dashboard` | 9000（→ 容器 80，`/dashboard/`） | 管理后台 SPA；nginx 反代 `/graphql/` → API；登录 `admin@example.com` / `admin` |
+| **Online Boutique** | `k8s/apps/online-boutique.yaml`（`make vendor-apps` 生成，镜像已改写为 `$(REGISTRY)/boutique-*`） | `frontend` | 80 | 11 个微服务 gRPC/HTTP 电商链路 |
+
+```bash
+make apply-apps     # kubectl apply（离线集群直接跑，无需外网）
+make delete-apps    # 仅卸应用栈
+make delete-all     # 应用栈 + 核心 sandbox
+```
+
+有网机更新 Boutique manifest 时：`REGISTRY=... make vendor-apps`
+
+**DAC 资产探测**：企业应用栈**故意拆成多个 Pod**（模拟真实环境里不同主机上的服务），供一次扫描发现多种指纹。不必扫多次——**一次扫描填多个 Pod IP** 即可（见 `make scan-targets`）。
+
+### 资产探测演示（推荐流程）
+
+```bash
+make apply-all && make verify          # 等 Odoo init / Saleor populatedb 完成
+make scan-targets                      # 复制「目标」和「端口」到前端
+```
+
+| 字段 | 取值 |
+|------|------|
+| **目标** | `make scan-targets` 输出的逗号分隔 IP 列表 |
+| **端口** | `3306,5432,8069,8000,80,8929,9000,9001` |
+| **并发 / 超时** | 默认即可 |
+
+扫描完成后，**发现的服务** 里应出现（分布在不同 IP 上）：
+
+| Pod | 端口 | 指纹 / 类型 | 演示用途 |
+|-----|------|-------------|----------|
+| `dac-sandbox-0` | 3306 | MYSQL | 多库 fan-out（northwind、sakila…） |
+| `dac-sandbox-0` | 5432 | POSTGRES | pagila、chinook… |
+| `dac-sandbox-0` | 9000 | MinIO | 对象存储 |
+| `dac-sandbox-0` | 8929 | GitLab | 代码仓 |
+| `dac-sandbox-0` | 8000 | HTTP 通用 | FileServer（手动建数据源） |
+| `odoo-*` | **8069** | **product `odoo`** | ERP + 餐厅 POS |
+| `odoo-db-*` | 5432 | POSTGRES | `odoo_demo` 业务库 |
+| `saleor-api-*` | 8000 | HTTP / GraphQL | 电商 API |
+| `saleor-dashboard-*` | 80 | HTTP 通用 | 管理后台 |
+| `saleor-db-*` | 5432 | POSTGRES | `saleor` 业务库 |
+| `frontend-*` | 80 | HTTP 通用 | Online Boutique 店面 |
+
+> 端口 **8000** 会出现在 `dac-sandbox-0`（FileServer）和 `saleor-api-*`（GraphQL）两个不同 IP 上，靠 **host 区分**，这是多主机扫描演示的正常结果。
+
+**Saleor Dashboard 浏览器访问**（扫描与登录无关）：
+
+```bash
+# 方式 A：Pod IP（DAC 扫描后常用）
+# http://<saleor-dashboard-pod-ip>:80/dashboard/
+
+# 方式 B：port-forward
+kubectl -n dac-sandbox port-forward svc/saleor-dashboard 9000:9000
+# http://127.0.0.1:9000/dashboard/
+```
+
+登录前确认 `saleor-populatedb` Job 已成功（`kubectl -n dac-sandbox get job saleor-populatedb`）。
+
+**Odoo 重新初始化**（若日志出现 `filestore/... FileNotFoundError` 或仪表盘 `JSONDecodeError`，说明 DB 与附件目录不一致，需清空重来）：
+
+```bash
+kubectl -n dac-sandbox delete job odoo-init-demo --ignore-not-found
+kubectl -n dac-sandbox delete deploy odoo odoo-db
+kubectl apply -f k8s/05-odoo.yaml
+kubectl -n dac-sandbox logs deploy/odoo -c init-demo -f   # 等 init 完成（约 5–10 分钟）
+```
+
+**示例 CR**（需先 `make apply-apps`）：
+
+| 文件 | 说明 |
+|------|------|
+| `dd-odoo-postgres.yaml` | 直连 `odoo-db`，库 `odoo_demo` |
+| `dd-saleor-postgres.yaml` | 直连 `saleor-db`，库 `saleor` |
+| `dd-saleor.yaml` | GitLab 内 `root/saleor` 代码仓（与运行时 API 互补） |
+| `dd-online-boutique.yaml` | 上游 `microservices-demo` GitHub 代码仓 |
+
+| 服务 | 用户名 | 密码 |
+|------|--------|------|
+| Odoo DB (`odoo-db`) | `odoo` | `odopass` |
+| Saleor DB (`saleor-db`) | `saleor` | `saleor` |
+| Saleor 管理后台 | `admin@example.com` | `admin` |
 
 ### 环境变量
 
@@ -193,7 +346,7 @@ make verify
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `REGISTRY` | `release.daocloud.io/dac` | 沙盒镜像目标 registry |
-| `TAG` | `v0.10.0` | 沙盒镜像标签 |
+| `TAG` | `v0.11.0` | 沙盒镜像标签 |
 | `PLATFORM` | `linux/amd64` | Docker buildx 目标平台 |
 | `NAMESPACE` | `dac-sandbox` | 部署命名空间，修改时需同步调整 Kubernetes manifest |
 
@@ -231,11 +384,11 @@ make all REGISTRY=harbor.example.com/dac TAG=v0.10.1
 #### 1. 发起资产探测
 
 1. 进入 **资产探测**（路由 `/infra`），点击 **新建扫描**。
-2. 填写扫描参数：
-   - **目标**：`make verify` 输出的 Pod IP（例如 `10.244.1.23`）。也支持 CIDR（`10.244.1.0/24`）或区间（`10.244.1.10-20`），多目标以逗号或空格分隔。
-   - **端口范围**（可选）：留空表示扫 `1-65535`。快速演示可填 `3306,5432,9000,9001,8000,8929`。
-   - **并发** / **超时**：默认 `256` / `30000ms`，单 Pod 沙盒无需修改。
-3. 点击 **开始扫描**，等待状态变为 **已完成**。
+2. 在 sandbox 目录执行 `make scan-targets`，复制输出的 **目标** 与 **端口**。
+3. **目标**：多个 Pod IP 逗号分隔（一次扫描覆盖核心沙盒 + Odoo + Saleor + Boutique）。也支持 CIDR（`10.244.1.0/24`）。
+4. **端口范围**：`3306,5432,8069,8000,80,8929,9000,9001`（留空则扫全端口，较慢）。
+5. **并发** / **超时**：默认 `256` / `30000ms`。
+6. 点击 **开始扫描**，等待状态变为 **已完成**。
 
 #### 2. 按端口创建数据源
 
@@ -247,7 +400,9 @@ make all REGISTRY=harbor.example.com/dac TAG=v0.10.1
 | 5432 | POSTGRES | 是 | 跳转到 `postgres` 类型表单 |
 | 9000 | HTTP（MinIO product） | 是 | 通过 product banner 识别 |
 | 8929 | HTTP（GitLab product） | 是 | 通过端口与 product 联合识别 |
-| 8000 | HTTP（通用） | 否 | FileServer 无业务指纹，需手动创建（见步骤 3） |
+| 8069 | HTTP（**odoo** product） | 是 | 企业应用 Pod，`make apply-apps` 后 |
+| 8000 | HTTP（通用） | 部分 | FileServer / Saleor API；靠 **IP** 区分，Saleor 需手动或示例 CR |
+| 80 | HTTP（通用） | 否 | Dashboard / Boutique 店面，演示发现即可 |
 | 9001 | HTTP（MinIO Console） | 否 | 管理 UI，不作为业务端口 |
 
 点击 **创建数据源** 时，前端按以下规则预填表单：
@@ -288,7 +443,7 @@ kubectl apply -f examples/dac-cr/
 
 将一次性创建：
 
-- 7 个 `DataDescriptor`：`dd-00`、`dd-01`、`dd-02`、`dd-postgres`、`dd-minio`、`dd-fileserver`、`dd-gitlab`
+- 7 个 `DataDescriptor`：`dd-00`、`dd-01`、`dd-02`、`dd-postgres`、`dd-minio`、`dd-fileserver`、`dd-gitlab`，以及追加的 `dd-northwind`、`dd-classicmodels`、`dd-saleor`、`dd-odoo-postgres`、`dd-saleor-postgres`、`dd-online-boutique`（后三者需 `make apply-apps`）
 - 3 个 `DataAgentContainer`：`dac-00`、`dac-01`、`dac-02`（金融问答 Agent 示例）
 
 随后在前端 **数据源** / **Agent** 页面可直接看到。
@@ -306,7 +461,7 @@ kubectl apply -f examples/dac-cr/
 | host | `mysql-server.dac-sandbox.svc.cluster.local` 或 Pod IP |
 | port | `3306` |
 | user / password | `dac` / `dacpass`（推荐）或 `root` / `dacpass` |
-| 数据库（可多选） | `dac_sandbox` / `dactest` / `test1` / `corporate_hr` / `online_edu_bi_test` / `sakila` 任选一个或多个 |
+| 数据库（可多选） | 手工库：`dac_sandbox` / `dactest` / `test1` / `corporate_hr` / `online_edu_bi_test`；开源库：`sakila` / `northwind` / `classicmodels` / `chinook` / `employees` / `world` |
 | extract.tables | 留空表示扫整库；或对每个库指定表名数组 |
 
 参考样例：`examples/dac-cr/dd-00.yaml`、`dd-01.yaml`、`dd-02.yaml`（`dd-02.yaml` 演示多库写法）。
@@ -320,7 +475,7 @@ kubectl apply -f examples/dac-cr/
 | host | `postgres-server.dac-sandbox.svc.cluster.local` 或 Pod IP |
 | port | `5432` |
 | user / password | `dac` / `dacpass`（推荐）或 `postgres` / `dacpass` |
-| 数据库（可多选） | `dac_sandbox` / `relationship` / `pagila` / `chinook` 任选一个或多个 |
+| 数据库（可多选） | 手工库：`dac_sandbox` / `relationship`；开源库：`pagila` / `chinook` / `northwind` |
 | extract.tables | 同上 |
 
 参考样例：`examples/dac-cr/dd-postgres.yaml`。
@@ -385,6 +540,11 @@ kubectl apply -f examples/dac-cr/
 | `corporate_hr` | 企业 HR | 完整模型 | 跨表 join、聚合 |
 | `online_edu_bi_test` | 在线教育 BI | 多事实 / 维度表 | 复杂 BI 查询 |
 | `sakila` | DVD 租赁（开源） | 16 张表，约 47k 行 | 业界标准 demo schema |
+| `northwind` | 贸易公司（开源） | 客户/订单/采购/库存/员工 | ERP 业务问答 |
+| `classicmodels` | 制造企业（开源） | 客户/订单/产品/销售代表 | 销售与订单分析 |
+| `chinook` | 音乐零售（开源） | 发票/客户/曲目 | 跨方言（PG 也有 chinook） |
+| `employees` | 企业员工（开源） | 部门/薪资/任职历史 | HR 分析（补充 corporate_hr） |
+| `world` | 国家与城市（开源） | 地理维度数据 | 区域统计（可选，需 `make vendor` 能下载） |
 
 ### PostgreSQL（端口 5432）
 
@@ -394,6 +554,7 @@ kubectl apply -f examples/dac-cr/
 | `relationship` | 关系网络 | 含外键的 schema 解析 |
 | `pagila` | DVD 租赁（PostgreSQL 版 Sakila） | 业界标准 demo schema |
 | `chinook` | 音乐商店 | 跨表 join、销售统计 |
+| `northwind` | 贸易公司 | 采购/库存/供应商分析 |
 
 ### MinIO（端口 9000）
 
@@ -410,7 +571,8 @@ kubectl apply -f examples/dac-cr/
 
 | 项目 | 内容 | 演示用途 |
 |------|------|----------|
-| `root/test-code` | `gitee.com/jamesxiong888/test-code.git` 的快照（构建期 `git clone` + seed Job `git push`） | 资产探测 + 集群内 Git 服务可视化 + `code` 类型 DDD 抓取 |
+| `root/test-code` | `gitee.com/jamesxiong888/test-code.git` 的快照 | 原有 DAC 代码演示 |
+| `root/saleor` | `github.com/saleor/saleor.git` 的快照 | 开源电商后端，企业业务代码分析 |
 
 > [!NOTE]
 > data-sinkers 中的 `GitLabReader` 支持自托管 GitLab 实例，因此该项目可直接被 `examples/dac-cr/dd-gitlab.yaml` 引用作为 `code` 类型 DDD 的真实数据源。
@@ -419,14 +581,16 @@ kubectl apply -f examples/dac-cr/
 
 | DAC 能力 | 来源 | 沙盒覆盖 |
 |----------|------|----------|
-| `descriptorType: structured-mysql` | dac-apiserver | 是（MySQL × 6 库） |
-| `descriptorType: structured-postgres` | dac-apiserver | 是（PostgreSQL × 4 库） |
+| `descriptorType: structured-mysql` | dac-apiserver | 是（MySQL × 11 库） |
+| `descriptorType: structured-postgres` | dac-apiserver | 是（PostgreSQL × 5 库） |
 | `descriptorType: unstructured` | dac-apiserver | 是（MinIO + FileServer 双路径） |
 | `descriptorType: code` | dac-apiserver | 是（GitLabReader 直连集群内 GitLab CE，或回退到外部 GitHub / Gitee） |
 | `DataSourceType: mysql / postgres / minio / fileserver / coderepo` | execution-engine CRD | 是 |
 | 探测指纹：mysql / postgres / minio / gitlab | apiserver/discovery/scanner | 是 |
 | 探测指纹：通用 HTTP | 同上 | 是（FileServer / GitLab / MinIO Console 均会被识别） |
-| 探测指纹：redis / nextcloud / trino / odoo | 同上 | 否（与 DAC 业务无关） |
+| 探测指纹：redis / nextcloud / trino | 同上 | 否（与 DAC 业务无关） |
+| 探测指纹：odoo | 同上 | 是（`make apply-apps` 后 8069） |
+| 企业应用：Odoo / Saleor / Online Boutique | 独立 Deployment | 是（`make apply-apps`） |
 
 ## 故障排查
 
@@ -438,6 +602,11 @@ kubectl apply -f examples/dac-cr/
 | `gitlab-seed-job` 失败 | `kubectl -n dac-sandbox logs job/dac-sandbox-gitlab-seed`。常见原因为 GitLab 启动慢（可达 5 分钟），Job 已配置 `backoffLimit: 10` 自动重试 |
 | GitLab 容器长时间处于 `Running 0/1` | 属于正常现象，首次启动需 reconfigure + 数据库迁移；通过 `kubectl -n dac-sandbox logs dac-sandbox-0 -c gitlab -f` 观察 |
 | 前端探测无结果 | 通过 `make verify` 确认 Pod IP；从 dac-apiserver Pod 内执行 `curl <pod-ip>:<port>` 验证网络连通性 |
+| Odoo / Saleor Job 失败 | 多为内存不足；确认 `make mirror-images` 已把 `saleor:3.23`、`saleor-dashboard:3.23`、`odoo:17.0` 推入私有 registry |
+| Odoo `filestore` / `JSONDecodeError`（仪表盘） | 旧版 Job 初始化与 Odoo Pod 不共享附件目录；删除 `odoo`/`odoo-db` Deployment 后重新 `apply`（见下方） |
+| Saleor Dashboard 登录后 API 报错 | 确认 `saleor-populatedb` Job 已完成；访问路径为 `/dashboard/`；Pod IP 用容器口 **80** |
+| Online Boutique 镜像拉取失败 | 确认 `boutique-*:v0.10.5` 与 `redis:alpine` 已在 `$(REGISTRY)`；manifest 由 `make vendor-apps` 自动改写 |
+| 离线集群 ImagePullBackOff | 在有网机重跑 `make offline-prep`，或单独 `make mirror-images` + `make push` |
 | 查看容器日志 | `kubectl -n dac-sandbox logs dac-sandbox-0 -c <mysql\|postgres\|minio\|fileserver\|gitlab>` |
 
 ## 运维操作
@@ -453,8 +622,10 @@ make restart
 ### 卸载
 
 ```bash
-make delete   # 删除 namespace 下全部资源
-make clean    # 清理本地 vendor 缓存与派生 SQL（仅本机）
+make delete       # 仅核心 sandbox
+make delete-apps  # 仅企业应用栈
+make delete-all   # 全部
+make clean        # 清理本地 vendor 缓存与派生 SQL（仅本机）
 ```
 
 ## 项目结构
@@ -468,20 +639,27 @@ sandbox/
 │   ├── postgres/Dockerfile           FROM postgres:16 + COPY seed/postgres/*.sql → initdb.d
 │   ├── minio-seed/                   seed Job 镜像：mc + COPY seed/files + seed/datasets
 │   ├── fileserver/                   nginx + autoindex + COPY seed/files
-│   └── gitlab-seed/                  seed Job 镜像：git/curl/jq + 构建期 git clone test-code.git
+│   └── gitlab-seed/                  seed Job 镜像：git clone test-code + saleor
 ├── seed/
-│   ├── mysql/                        6 份 SQL 初始化脚本
-│   ├── postgres/                     3 份 SQL + vendor 下载的 pagila / chinook
+│   ├── mysql/                        手工 SQL + vendor 企业样本库
+│   ├── postgres/                     手工 SQL + vendor 企业样本库
 │   ├── files/                        21 份多格式文件
 │   └── datasets/                     vendor 数据：ml-1m/
 ├── scripts/
-│   └── download-vendor.sh            下载并加工 Sakila / Pagila / Chinook / MovieLens
+│   ├── download-vendor.sh            下载 SQL/datasets 到 seed/（build 时打入镜像）
+│   ├── vendor-apps.sh                下载 Boutique manifest 并改写镜像为 $(REGISTRY)
+│   ├── mirror-images.sh              外部镜像 pull/tag/push 到私有 registry
+│   └── offline-prep.sh               有网机一站式离线准备
 ├── k8s/
 │   ├── 00-namespace.yaml
 │   ├── 01-statefulset.yaml           单 Pod 五容器
 │   ├── 02-services.yaml              主 Service + 别名 Service
 │   ├── 03-seed-job.yaml              MinIO 数据导入
-│   └── 04-gitlab-seed-job.yaml       GitLab 项目初始化
+│   ├── 04-gitlab-seed-job.yaml       GitLab 项目初始化
+│   ├── 05-odoo.yaml                  Odoo 17 + demo（独立 Deployment）
+│   ├── 06-saleor.yaml                Saleor API + Dashboard + populatedb
+│   └── apps/
+│       └── online-boutique.yaml      vendor 生成（make vendor-apps）
 └── examples/
     └── dac-cr/                       DataDescriptor / DataAgentContainer 样例
         ├── dd-00.yaml ~ dd-02.yaml
@@ -489,7 +667,13 @@ sandbox/
         ├── dd-postgres.yaml
         ├── dd-minio.yaml
         ├── dd-fileserver.yaml
-        └── dd-gitlab.yaml
+        ├── dd-gitlab.yaml
+        ├── dd-northwind.yaml
+        ├── dd-classicmodels.yaml
+        ├── dd-saleor.yaml
+        ├── dd-odoo-postgres.yaml
+        ├── dd-saleor-postgres.yaml
+        └── dd-online-boutique.yaml
 ```
 
 ## 设计说明
@@ -499,7 +683,7 @@ sandbox/
 - **不依赖 PV**：使用 emptyDir 使沙盒可在最小化集群（kind / minikube / CI）部署。需持久化时将 `01-statefulset.yaml` 的 `volumes` 改为 `volumeClaimTemplates`。
 - **单 Pod 多容器**：使探测器能通过单一 IP 发现全部服务，更贴近真实演示场景。
 - **服务别名**：`examples/dac-cr/` 中 `host` 字段使用 `mysql-server` / `fileserver` / `gitlab` 等稳定别名，独立 Service 保证示例 YAML 无需修改即可运行。
-- **seed Job 解耦**：MinIO / GitLab 数据由独立 Job 注入，主服务容器仅负责常驻进程，失败可单独重试。`gitlab-seed-job` 通过 OAuth ROPC 流程获取 root token，创建 `root/test-code` 项目并 `git push` 镜像内预克隆的代码。
+- **seed Job 解耦**：MinIO / GitLab 数据由独立 Job 注入，主服务容器仅负责常驻进程，失败可单独重试。`gitlab-seed-job` 通过 OAuth ROPC 流程获取 root token，依次创建 `root/test-code` 与 `root/saleor` 并 `git push`。
 - **凭据对齐**：超级用户密码统一为 `123`，与历史 `examples/dac-cr/dd-*.yaml` 保持一致，避免维护多套连接串。
 
 ## 第三方数据集与许可
@@ -508,7 +692,14 @@ sandbox/
 |--------|------|------|------|
 | Sakila | MySQL `sakila` | New BSD-style | https://dev.mysql.com/doc/sakila/en/ |
 | Pagila | PostgreSQL `pagila` | New BSD-style | https://github.com/devrimgunduz/pagila |
-| Chinook | PostgreSQL `chinook` | MIT | https://github.com/lerocha/chinook-database |
+| Chinook | PostgreSQL `chinook` / MySQL `chinook` | MIT | https://github.com/lerocha/chinook-database |
+| Northwind | MySQL `northwind` / PostgreSQL `northwind` | MIT | https://github.com/dalers/mywind / https://github.com/pthom/northwind_psql |
+| ClassicModels | MySQL `classicmodels` | MIT | https://www.mysqltutorial.org/mysql-sample-database.aspx |
+| Employees | MySQL `employees` | CC BY-SA 3.0 | https://github.com/datacharmer/test_db |
+| World | MySQL `world` | GPL | https://dev.mysql.com/doc/index-other.html |
+| Saleor | GitLab `root/saleor` + 运行时 `saleor-api` | BSD-3-Clause | https://github.com/saleor/saleor |
+| Odoo | `odoo_demo` 库 + HTTP 8069 | LGPL-3 | https://www.odoo.com |
+| Online Boutique | `frontend` 微服务栈 | Apache-2.0 | https://github.com/GoogleCloudPlatform/microservices-demo |
 | MovieLens 1M | MinIO `dac-datasets/ml-1m/` | CC BY 4.0 | https://grouplens.org/datasets/movielens/1m/ |
 
 `make vendor` 自动下载并加工至 `seed/`，加工产物已加入 `.gitignore`。

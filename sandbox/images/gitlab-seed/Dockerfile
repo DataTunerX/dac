@@ -1,24 +1,25 @@
 # DAC sandbox gitlab seeder — 一次性 Job 镜像
-# 等 GitLab ready 后:
-#   1. 用 root + GITLAB_ROOT_PASSWORD 走 OAuth password grant (ROPC) 拿 access token
-#   2. 在 root 命名空间下创建 project: test-code
-#   3. 把镜像里 /seed/code/test-code 推到该 project (作为 DAC code descriptor 演示语料)
-#
-# 种子内容来源：构建期从 https://gitee.com/jamesxiong888/test-code.git clone，
-# 这样运行时无需访问公网，并且镜像内容确定可复现。
+# 等 GitLab ready 后，把 /seed/code/ 下所有仓库依次 push 到 root/<project>
+#   - test-code  (原有 DAC 演示代码)
+#   - saleor     (开源电商后端，企业业务代码样本)
 #
 # 构建上下文必须是 sandbox/ 根目录:
-#   docker build -t release.daocloud.io/dac/sandbox-gitlab-seed:v0.10.0 -f images/gitlab-seed/Dockerfile .
+#   docker build -t release.daocloud.io/dac/sandbox-gitlab-seed:v0.11.0 -f images/gitlab-seed/Dockerfile .
 
 FROM release.daocloud.io/dac/alpine:3.20
 
 RUN apk add --no-cache git curl jq bash ca-certificates
 
-# 构建期把外部示例仓库克隆到镜像里 (--depth 1 减小体积；保留 .git 由 entrypoint 处理)
-ARG SEED_REPO_URL=https://gitee.com/jamesxiong888/test-code.git
-ARG SEED_REPO_REF=master
-RUN git clone --depth 1 --branch "$SEED_REPO_REF" "$SEED_REPO_URL" /seed/code/test-code \
-    || git clone --depth 1 "$SEED_REPO_URL" /seed/code/test-code
+ARG TEST_CODE_REPO_URL=https://gitee.com/jamesxiong888/test-code.git
+ARG TEST_CODE_REPO_REF=master
+ARG SALEOR_REPO_URL=https://github.com/saleor/saleor.git
+ARG SALEOR_REPO_REF=main
+
+RUN git clone --depth 1 --branch "$TEST_CODE_REPO_REF" "$TEST_CODE_REPO_URL" /seed/code/test-code \
+    || git clone --depth 1 "$TEST_CODE_REPO_URL" /seed/code/test-code
+
+RUN git clone --depth 1 --branch "$SALEOR_REPO_REF" "$SALEOR_REPO_URL" /seed/code/saleor \
+    || git clone --depth 1 "$SALEOR_REPO_URL" /seed/code/saleor
 
 COPY images/gitlab-seed/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

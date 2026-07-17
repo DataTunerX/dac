@@ -1,0 +1,25 @@
+# DAC sandbox demo: Saleor 开源电商后端代码（GitLab 内 root/saleor 项目）
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-sandbox-saleor
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "code"
+  sources:
+    - type: coderepo
+      name: "sandbox-saleor"
+      metadata:
+        host: "gitlab.dac-sandbox.svc.cluster.local"
+        port: "8929"
+      codeRepo:
+        codeRepoType: "gitlab"
+        codeRepoPath: "http://gitlab.dac-sandbox.svc.cluster.local:8929/root/saleor.git"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""

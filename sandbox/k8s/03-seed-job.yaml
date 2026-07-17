@@ -16,7 +16,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: seed
-          image: release.daocloud.io/dac/sandbox-minio-seed:v0.10.0
+          image: release.daocloud.io/dac/sandbox-minio-seed:v0.11.0
           imagePullPolicy: Always
           env:
             - name: MINIO_ENDPOINT

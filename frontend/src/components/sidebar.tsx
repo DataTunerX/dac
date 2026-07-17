@@ -14,7 +14,8 @@ import {
   Globe,
   ChevronRight,
   X,
-  Menu
+  Menu,
+  Loader2,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -23,6 +24,7 @@ import { listConversations } from "@/lib/chat-api"
 import type { ConversationResponse } from "@/lib/api-types"
 import { format, startOfDay, subDays } from "date-fns"
 import { REFRESH_CHAT_LIST_EVENT, NewChatEventDetail } from "@/lib/events"
+import { selectStreamingRunIds, useChatStore } from "@/lib/chat-store"
 
 type SidebarLinkItem = {
   type: "link"
@@ -134,9 +136,11 @@ function mergeConversationTitles(
 const ConversationLink = memo(function ConversationLink({
   conv,
   isActive,
+  isStreaming,
 }: {
   conv: ConversationWithDate
   isActive: boolean
+  isStreaming: boolean
 }) {
   const label = conv.title || format(conv.createdAt, "MM-dd HH:mm")
   return (
@@ -149,8 +153,12 @@ const ConversationLink = memo(function ConversationLink({
         isActive ? sidebarLinkSelected : sidebarLinkDefault
       )}
     >
-      <MessageSquare className={cn("w-4 h-4 shrink-0", isActive && "text-brand")} />
-      <span className="truncate">{label}</span>
+      {isStreaming ? (
+        <Loader2 className={cn("w-4 h-4 shrink-0 animate-spin", isActive && "text-brand")} aria-hidden />
+      ) : (
+        <MessageSquare className={cn("w-4 h-4 shrink-0", isActive && "text-brand")} />
+      )}
+      <span className="truncate flex-1 min-w-0">{label}</span>
     </Link>
   )
 })
@@ -291,6 +299,7 @@ function ConversationList() {
   const searchParams = useSearchParams()
   const currentRunId = searchParams.get("run_id")
   const [conversations, setConversations] = useState<ConversationResponse[]>([])
+  const streamingRunIds = useChatStore(selectStreamingRunIds)
 
   const { data, error, isLoading, mutate } = useSWR(
     CONVERSATIONS_SWR_KEY,
@@ -377,6 +386,7 @@ function ConversationList() {
                 key={conv.id}
                 conv={conv}
                 isActive={conv.id === currentRunId}
+                isStreaming={streamingRunIds.has(conv.id)}
               />
             ))}
           </div>

@@ -71,6 +71,36 @@ neo4j:
   password: "changeme"
 ```
 
+### 1.1 使用外部中间件（可选）
+
+如果已有 MySQL / Redis / PGVector / Neo4j 实例，可配置 `external` 字段跳过内置 StatefulSet：
+
+```yaml
+mysql:
+  external:
+    host: "192.168.1.100"
+    port: 3306
+    password: "your-mysql-password"
+
+redis:
+  external:
+    host: "redis-ha.example.com"
+    port: 6379
+    password: "your-redis-password"
+
+pgvector:
+  external:
+    host: "pg.example.com"
+    port: 5432
+    password: "your-pg-password"
+
+neo4j:
+  external:
+    host: "neo4j.example.com"
+    password: "your-neo4j-password"
+```
+
+> **说明**：配置 `external.host` 后自动跳过对应中间件的内置部署（无需额外设 `enabled: false`）。不指定端口时回退到默认值（MySQL 3306、Redis 6379、PGVector 5432）。
 ### 2. 安装
 
 #### 2.1 预先pull 镜像

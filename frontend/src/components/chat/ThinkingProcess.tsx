@@ -69,12 +69,18 @@ export const ThinkingProcess = ({
   isThinking,
   isLive,
   progressList = EMPTY_PROGRESS,
+  startedAt,
+  elapsedSec,
 }: {
   content: string
   isThinking?: boolean
   isLive?: boolean
   /** Progress events shown under "思考中" (cards with event · agent · message). */
   progressList?: readonly ChatProgressPayload[]
+  /** Session-level stream start (ms); survives conversation switches. */
+  startedAt?: number | null
+  /** Frozen duration (seconds) after stream ends. */
+  elapsedSec?: number | null
 }) => {
   const [userExpanded, setUserExpanded] = useState(false)
   const wasThinkingOrLiveRef = useRef(false)
@@ -83,8 +89,9 @@ export const ThinkingProcess = ({
     if (now && !wasThinkingOrLiveRef.current) setUserExpanded(true)
     wasThinkingOrLiveRef.current = now
   }, [isThinking, isLive])
-  const startedAtRef = useRef<number | null>(null)
-  const [duration, setDuration] = useState(0)
+  const [duration, setDuration] = useState(() =>
+    elapsedSec != null && elapsedSec > 0 ? elapsedSec : 0
+  )
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null)
   const [openProgressSteps, setOpenProgressSteps] = useState<string[]>([])
   const previousProgressCountRef = useRef(0)
@@ -537,27 +544,21 @@ export const ThinkingProcess = ({
   }, [content, isThinking])
 
   useEffect(() => {
-    if (isThinking) {
-      startedAtRef.current = Date.now()
+    if (!isThinking) {
+      if (elapsedSec != null && elapsedSec > 0) {
+        setDuration(elapsedSec)
+      }
       return
     }
-    startedAtRef.current = null
-  }, [isThinking])
 
-  useEffect(() => {
-    if (!isThinking) return
-
-    // Avoid setState synchronously inside effect body (eslint rule).
-    setTimeout(() => setDuration(0), 0)
-
-    const timer = setInterval(() => {
-      const startedAt = startedAtRef.current
-      if (!startedAt) return
-      const secs = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
-      setDuration(secs)
-    }, 1000)
+    const anchor = startedAt ?? Date.now()
+    const tick = () => {
+      setDuration(Math.max(0, Math.floor((Date.now() - anchor) / 1000)))
+    }
+    tick()
+    const timer = setInterval(tick, 1000)
     return () => clearInterval(timer)
-  }, [isThinking])
+  }, [isThinking, startedAt, elapsedSec])
 
   // IMPORTANT: Don't "guess" reasoning lifecycle on the frontend.
   // The backend decides when reasoning ends; on UI we treat reasoning as "running"

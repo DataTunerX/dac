@@ -2,6 +2,7 @@
 CREATE DATABASE relationship;
 CREATE DATABASE pagila;
 CREATE DATABASE chinook;
+CREATE DATABASE northwind;
 
 -- dac 账号 (沙盒用密码 dacpass)
 DO $$
@@ -15,3 +16,4 @@ GRANT ALL PRIVILEGES ON DATABASE dac_sandbox  TO dac;
 GRANT ALL PRIVILEGES ON DATABASE relationship TO dac;
 GRANT ALL PRIVILEGES ON DATABASE pagila       TO dac;
 GRANT ALL PRIVILEGES ON DATABASE chinook      TO dac;
+GRANT ALL PRIVILEGES ON DATABASE northwind   TO dac;

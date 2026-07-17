@@ -1,0 +1,25 @@
+# DAC sandbox demo: ClassicModels 制造企业样本库（客户/订单/产品/销售代表）
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-sandbox-classicmodels
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "classicmodels"
+      metadata:
+        host: "mysql-server.dac-sandbox.svc.cluster.local"
+        port: "3306"
+        user: "dac"
+        password: "dacpass"
+        database: "classicmodels"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""

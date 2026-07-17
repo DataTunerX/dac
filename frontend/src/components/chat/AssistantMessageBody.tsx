@@ -21,6 +21,8 @@ export interface AssistantMessageBodyProps {
   readonly messagesLength: number
   readonly isStreaming: boolean
   readonly streamProgressList: readonly ChatProgressPayload[]
+  readonly streamStartedAt?: number | null
+  readonly thinkingElapsedSec?: number | null
 }
 
 /** Renders one assistant message: progress list, thinking block, then answer. */
@@ -30,6 +32,8 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
   messagesLength,
   isStreaming,
   streamProgressList,
+  streamStartedAt,
+  thinkingElapsedSec,
 }: AssistantMessageBodyProps) {
   const thinking = stripModelLeakTags((msg.reasoning_content ?? "").trim())
   const answer = stripModelLeakLines(stripModelLeakTags(msg.content ?? ""))
@@ -55,6 +59,8 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
           isThinking={isThinkingNow}
           isLive={isLastMessage && isStreaming}
           progressList={progressList}
+          startedAt={isLastMessage ? streamStartedAt : undefined}
+          elapsedSec={isLastMessage ? thinkingElapsedSec : undefined}
         />
       ) : null}
       <ChatMarkdown source={answer} isStreaming={isLastMessage && isStreaming} />

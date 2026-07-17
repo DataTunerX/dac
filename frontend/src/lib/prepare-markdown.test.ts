@@ -35,3 +35,21 @@ describe("prepareMarkdown — GFM tables", () => {
     expect(out.split("\n").length).toBeGreaterThanOrEqual(3)
   })
 })
+
+describe("prepareMarkdown — empty table cells", () => {
+  it("does not split valid rows that contain empty cells", () => {
+    const input = [
+      "| Column | Type | Nullable | Key | Comment |",
+      "|--------|------|----------|-----|---------|",
+      "| `id` | `int4(32,0)` | NO | PRI | None |",
+      "| `first_name` | `varchar(256)` | NO |  |  |",
+      "| `last_name` | `varchar(256)` | NO |  |  |",
+    ].join("\n")
+    const out = prepareMarkdown(input)
+    expect(out).toBe(input)
+    // Each data row must still have 5 cells
+    const firstNameLine = out.split("\n").find((l) => l.includes("first_name"))
+    expect(firstNameLine).toBeDefined()
+    expect(firstNameLine!.split("|").filter(Boolean).length).toBeGreaterThanOrEqual(5)
+  })
+})

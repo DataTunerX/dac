@@ -26,7 +26,7 @@ spec:
       containers:
         # ---------- MySQL ----------
         - name: mysql
-          image: release.daocloud.io/dac/sandbox-mysql:v0.10.0
+          image: release.daocloud.io/dac/sandbox-mysql:v0.11.0
           imagePullPolicy: Always  # sandbox 自定义镜像同 tag 反复迭代
           env:
             - name: MYSQL_ROOT_PASSWORD
@@ -52,7 +52,7 @@ spec:
 
         # ---------- PostgreSQL ----------
         - name: postgres
-          image: release.daocloud.io/dac/sandbox-postgres:v0.10.0
+          image: release.daocloud.io/dac/sandbox-postgres:v0.11.0
           imagePullPolicy: Always  # sandbox 自定义镜像同 tag 反复迭代
           env:
             - name: POSTGRES_PASSWORD
@@ -113,7 +113,7 @@ spec:
 
         # ---------- FileServer (HTTP 静态) ----------
         - name: fileserver
-          image: release.daocloud.io/dac/sandbox-fileserver:v0.10.0
+          image: release.daocloud.io/dac/sandbox-fileserver:v0.11.0
           imagePullPolicy: Always  # sandbox 自定义镜像同 tag 反复迭代
           ports:
             - name: files
