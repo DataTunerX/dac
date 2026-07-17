@@ -358,6 +358,7 @@ export default function InfraDiscoveryDetailPage() {
     const namespace = String(data.namespace || "default").trim() || "default"
     const t = String(data.type || "").trim()
     const gpuEnabled = data.gpuEnabled === "yes" ? "yes" : "no"
+    const pdfLoader = data.pdfLoader ?? "auto"
 
     const promptsName = String(data.promptsConfigMapName || "").trim()
     const hasPrompts = Boolean(promptsName)
@@ -484,6 +485,7 @@ export default function InfraDiscoveryDetailPage() {
       namespace,
       descriptorType,
       gpuEnabled,
+      ...(descriptorType === "unstructured" ? { pdfLoader } : {}),
       sources,
     }
 

@@ -75,6 +75,7 @@ type CreateDataDescriptorRequest struct {
 	Labels         map[string]string
 	DescriptorType string
 	GPUEnabled     string
+	PDFLoader      string
 	Sources        []entity.DataSource
 }
 
@@ -83,5 +84,6 @@ type UpdateDataDescriptorRequest struct {
 	Labels         map[string]string
 	DescriptorType *string
 	GPUEnabled     *string
+	PDFLoader      *string
 	Sources        []entity.DataSource
 }

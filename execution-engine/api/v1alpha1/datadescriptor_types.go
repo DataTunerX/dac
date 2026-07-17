@@ -133,6 +133,15 @@ type DataDescriptorSpec struct {
 	// Valid values: "yes" or "no". Defaults to "no" if not set.
 	// When set to "yes", nvidia.com/gpu: "1" will be added to resource limits and requests.
 	GPUEnabled string `json:"gpuEnabled,omitempty"`
+	// PDFLoader selects how unstructured PDFs are processed, by capability rather than
+	// a specific library name.
+	// Valid values: "auto" (default), "ocr", "text".
+	// "auto": use OCR/layout parsing when GPU is allocated (gpuEnabled=yes) and the file is under ~1GB,
+	//         otherwise extract the embedded text layer only.
+	// "ocr": force OCR + layout parsing regardless of gpuEnabled (runs on CPU when gpuEnabled=no);
+	//        still falls back to text-only extraction for files >= ~1GB.
+	// "text": always extract the embedded text layer only (no OCR).
+	PDFLoader string `json:"pdfLoader,omitempty"`
 }
 
 // DataDescriptorStatus defines the observed state of DataDescriptor.

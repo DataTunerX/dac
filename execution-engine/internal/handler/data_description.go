@@ -431,7 +431,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 			Logger:      h.Logger.WithName("DataDescriptorGenerator"),
 		}
 		logger.Info("Creating deployment for DataDescriptor")
-		if err := ddGenerator.Do(ctx, dd); err != nil {
+		if err := ddGenerator.Do(ctx, dd, "AddOrUpdate"); err != nil {
 			if hadSyncRequestedAt {
 				logger.Error(err,
 					"resync path: DataDescriptorGenerator.Do failed; sync-requested-at was NOT cleared — will retry on next reconcile",
@@ -855,7 +855,7 @@ func (h *DataDescriptorHandler) handleDDDelete(ctx context.Context, namespace st
 	// 2. 创建 deployment（和 Add/Update 一样的逻辑）
 	// 注意：如果 deployment 是 Delete 操作已存在，前面的代码会通过 goto 跳过这里
 	logger.Info("Creating deployment for DataDescriptor deletion")
-	if err := ddGenerator.Do(ctx, dd); err != nil {
+	if err := ddGenerator.Do(ctx, dd, "Delete"); err != nil {
 		return "", fmt.Errorf("failed to create deployment for data descriptor deletion: %w", err)
 	}
 

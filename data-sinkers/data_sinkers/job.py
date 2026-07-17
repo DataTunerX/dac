@@ -193,7 +193,12 @@ def process_data(self, data: Dict[str, Any]):
                 if reader.has_unstructured_inventory_baseline(dd_ns, dd_nm, unstructured_files_client):
                     minio_incremental = True
                     added, removed, modified = reader.diff_against_saved_inventory(dd_ns, dd_nm, unstructured_files_client)
-                    stale = sorted(set(removed) | set(modified))
+                    # 方案B：对所有变化文件（含 added）统一「先按文件删旧 chunk，再重写」。
+                    # - modified/removed：原有行为，删旧 chunk。
+                    # - added：首次跑时为空删（inventory 无该文件记录，delete 是 no-op，无害）；
+                    #   重跑时清掉上次分批部分成功残留的 chunk，避免重复写入。
+                    # 删除按 metadata[source]=minio://bucket/key 精确匹配，不会波及其他文件的 chunk。
+                    stale = sorted(set(removed) | set(modified) | set(added))
                     if stale:
                         bucket = connection_config.get("bucket") or reader.config.get("bucket")
                         delete_minio_objects_from_pyramid_and_inventory(collection_name=collection_name, bucket=bucket, dd_namespace=dd_ns, dd_name=dd_nm, object_names=stale, knowledge_pyramid_client=knowledge_pyramid_client, unstructured_files_client=unstructured_files_client)
@@ -545,14 +550,76 @@ def send_add_documents_to_knowledge_pyramid(documents: List[Dict[str, Any]], col
             for doc in documents
         ]
 
-        add_documents_result = knowledge_pyramid_client.add_documents(
-            collection_name=collection_name,
-            documents=document_objects
-        )
+        # 分批调用 add_documents：13+ 文件会产生大量 chunk，一次性 embed+写入会使单次 HTTP
+        # 请求耗时超过网关超时（504 Gateway Timeout）。按批切分后每批只 embed/写入少量 chunk，
+        # 单批耗时远低于网关超时。批大小可通过 ADD_DOCUMENTS_BATCH_SIZE 环境变量调整。
+        batch_size = int(os.getenv("ADD_DOCUMENTS_BATCH_SIZE", "100"))
+        if batch_size <= 0:
+            batch_size = 100
+        # 单批重试：任何批次异常（超时、5xx、连接错误、网关错误、JSON 解析失败等）都在
+        # 批次内重试消化，避免为一次临时错误重跑整个 extract。注意：4xx 这类客户端错误
+        # 重试通常无效，但 client 已把错误包成通用 Exception 丢失了状态码，无法按状态码
+        # 区分，故统一重试（最坏情况是白等 2+4+8 秒后整体失败交给上层重跑）。
+        # max_retries 为「重试次数」（不含初始尝试），默认 3，即最多调用 4 次。
+        # 退避 2s/4s/8s（2^attempt）。可通过 ADD_DOCUMENTS_BATCH_RETRIES 调整。
+        max_retries = int(os.getenv("ADD_DOCUMENTS_BATCH_RETRIES", "3"))
+        if max_retries < 0:
+            max_retries = 3
+        total_attempts = max_retries + 1
+
+        total = len(document_objects)
+        all_vector_results: List[Any] = []
+        if total == 0:
+            logger.info("send_add_documents_to_knowledge_pyramid: no documents to add")
+        else:
+            total_batches = (total + batch_size - 1) // batch_size
+            for start in range(0, total, batch_size):
+                batch = document_objects[start:start + batch_size]
+                batch_no = start // batch_size + 1
+                logger.info(
+                    f"add_documents batch {batch_no}/{total_batches}: "
+                    f"chunks[{start}:{start + len(batch)}] (batch_size={len(batch)})"
+                )
+                batch_result = None
+                last_err = None
+                for attempt in range(1, total_attempts + 1):
+                    try:
+                        batch_result = knowledge_pyramid_client.add_documents(
+                            collection_name=collection_name,
+                            documents=batch,
+                        )
+                        last_err = None
+                        break
+                    except Exception as e:
+                        last_err = e
+                        if attempt < total_attempts:
+                            backoff = 2 ** attempt  # 2s, 4s, 8s
+                            logger.warning(
+                                f"add_documents batch {batch_no}/{total_batches} "
+                                f"attempt {attempt}/{total_attempts} failed: {e}; "
+                                f"retrying in {backoff}s"
+                            )
+                            time.sleep(backoff)
+                        else:
+                            logger.error(
+                                f"add_documents batch {batch_no}/{total_batches} "
+                                f"attempt {attempt}/{total_attempts} failed (retries exhausted): {e}"
+                            )
+                if last_err is not None:
+                    raise last_err
+                if isinstance(batch_result, dict):
+                    vector_results = batch_result.get("vector_results")
+                    if isinstance(vector_results, list):
+                        all_vector_results.extend(vector_results)
+
+        add_documents_result = {
+            "status": "success",
+            "message": f"Document added successfully in batches (total={total})",
+            "vector_results": all_vector_results,
+        }
         log_result = dict(add_documents_result)
-        vector_results = log_result.get("vector_results")
-        if isinstance(vector_results, list) and vector_results:
-            log_result["vector_results"] = [vector_results[0]]
+        if all_vector_results:
+            log_result["vector_results"] = [all_vector_results[0]]
         logger.info(f"add document success: {log_result}")
         return add_documents_result
     except Exception as e:
@@ -710,6 +777,10 @@ def send_add_unstructured_files_to_dataservices(
                 file_summary_value: Optional[str] = (
                     raw_fs.strip() if isinstance(raw_fs, str) and raw_fs.strip() else None
                 )
+                raw_ch = item.get("content_hash")
+                content_hash_value: Optional[str] = (
+                    raw_ch.strip() if isinstance(raw_ch, str) and raw_ch.strip() else None
+                )
                 records.append(
                     UnstructuredFileRecord(
                         dd_namespace=str(item.get("dd_namespace") or ""),
@@ -719,6 +790,7 @@ def send_add_unstructured_files_to_dataservices(
                         minio_path=str(item.get("minio_path") or ""),
                         file_size=int(item.get("file_size") or 0),
                         file_summary=file_summary_value,
+                        content_hash=content_hash_value,
                     )
                 )
             except (TypeError, ValueError) as conv_err:

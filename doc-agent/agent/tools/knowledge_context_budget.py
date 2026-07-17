@@ -112,6 +112,9 @@ def select_blocks_by_score(
             "id": str(bid) if bid else "?",
             "score": float(b.get("relevance_score") or 0),
             "summary": _block_summary(b),
+            "source": b.get("source") or "",
+            "file_name": b.get("file_name") or "",
+            "document_id": b.get("document_id") or "",
         })
 
     report = {
@@ -183,12 +186,24 @@ def log_final_knowledge_selection(
         bid = b.get("id", "?")
         score = float(b.get("relevance_score") or 0)
         summary = _block_summary(b)
+        file_info = _block_file(b)
         log.info(
-            "[DOC KNOWLEDGE SELECT]   #%-2d id=%-36s score=%-4.1f %s",
+            "[DOC KNOWLEDGE SELECT]   #%-2d id=%-36s score=%-4.1f file=%s %s",
             i + 1,
             bid,
             score,
+            file_info,
             summary,
         )
 
     log.info("[DOC KNOWLEDGE SELECT] ========== 选块结果结束 ==========")
+
+
+def _block_file(block: Dict[str, Any]) -> str:
+    """Pick the most informative file-ownership field for logging."""
+    return (
+        block.get("source")
+        or block.get("file_name")
+        or block.get("document_id")
+        or "-"
+    )

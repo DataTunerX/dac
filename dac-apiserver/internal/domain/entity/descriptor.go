@@ -1,6 +1,9 @@
 package entity
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // NormalizeGPUEnabled keeps the public DataDescriptor contract constrained to yes/no.
 // Empty or unknown values are treated as "no" for backward-compatible legacy CRs.
@@ -9,6 +12,19 @@ func NormalizeGPUEnabled(value string) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// NormalizePDFLoader keeps pdfLoader within the execution-engine contract.
+// Empty values mean unset and are left empty so the operator can apply its default (auto).
+func NormalizePDFLoader(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "ocr", "text":
+		return strings.ToLower(strings.TrimSpace(value))
+	case "auto":
+		return "auto"
+	default:
+		return ""
+	}
 }
 
 // DataDescriptor represents a data descriptor in the domain
@@ -22,6 +38,7 @@ type DataDescriptor struct {
 	// Spec
 	DescriptorType string
 	GPUEnabled     string
+	PDFLoader      string
 	Sources        []DataSource
 
 	// Status

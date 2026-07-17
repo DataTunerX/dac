@@ -257,7 +257,8 @@ class MetadataValuesResult:
         根据知识块 ID 列表获取完整知识块（保持块完整性，按 knowledge_ids 顺序返回）。
 
         Returns:
-            List[Dict]: 每项含 id / text / metadata_value
+            List[Dict]: 每项含 id / text / metadata_value；
+            额外透传 source / file_name / document_id（缺失则为空串），供下游日志识别块所属文件。
         """
         id_to_block: Dict[str, Dict[str, Any]] = {}
 
@@ -275,6 +276,9 @@ class MetadataValuesResult:
                     "id": item_id,
                     "text": text,
                     "metadata_value": item.get(metadata_key, "") or "",
+                    "source": item.get("source") or "",
+                    "file_name": item.get("file_name") or "",
+                    "document_id": item.get("document_id") or "",
                 }
 
         blocks: List[Dict[str, Any]] = []
@@ -360,6 +364,8 @@ class MetadataValuesResult:
                 trigger_chars=trigger_chars,
             )
 
+        # 暴露最终选中块（含文件归属字段）供上游日志/进度使用
+        meta["selected_blocks"] = blocks
         return join_knowledge_blocks(blocks), meta
 
     def get_all_items(self) -> List[Dict[str, Any]]:

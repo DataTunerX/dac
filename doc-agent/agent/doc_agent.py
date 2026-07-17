@@ -334,6 +334,7 @@ class DocAgent(BaseAgent):
         )
 
         self._knowledge_selection_summary: str = ""  # 由 get_knowledge 填充，供 sd_doc_step_finished 使用
+        self._knowledge_selection_blocks: List[Dict[str, Any]] = []  # 结构化块清单，供 sd_doc_step_finished extra 消费
 
         self.manager = ModelManager()
         _extra_body = {"enable_thinking": False} if os.getenv("ENABLE_THINKING_PARAM", "true").strip().lower() not in ("false", "0", "no") else {}
@@ -453,10 +454,12 @@ class DocAgent(BaseAgent):
             extra=extra,
         ))
 
-    def _build_knowledge_selection_summary(self, score_meta: Dict[str, Any]) -> str:
-        """构建选中知识块的摘要文本（供 sd_doc_step_finished message 拼接）。"""
-        report = score_meta.get("score_select_report") or {}
-        blocks: List[Dict[str, Any]] = report.get("blocks") or []
+    def _build_knowledge_selection_message(self, blocks: List[Dict[str, Any]]) -> str:
+        """根据结构化块清单构建 message 文本（供 sd_doc_step_finished 拼接，UI 直接展示）。
+
+        每行包含：序号、id、来源路、所属文件、摘要（截断）。
+        blocks 来自 _log_selected_knowledge_blocks 整理的 structured 列表。
+        """
         if not blocks:
             return ""
 
@@ -464,11 +467,110 @@ class DocAgent(BaseAgent):
             "",
             f"选中的知识块（共 {len(blocks)} 个）：",
         ]
-        for i, b in enumerate(blocks):
-            score = float(b.get("score", 0))
+        for b in blocks:
+            idx = b.get("index", 0)
+            bid = b.get("id", "?")
+            origin = b.get("source", "-")
+            file_label = b.get("file", "-")
             summary = (b.get("summary") or "").strip()
-            lines.append(f"  {i + 1}. [{score:.1f}] {summary}")
+            score = b.get("score")
+            score_str = f"[{float(score):.1f}] " if score is not None else ""
+            lines.append(
+                f"  {idx}. {score_str}id={bid} source={origin} file={file_label} | {summary}"
+            )
         return "\n".join(lines)
+
+    @staticmethod
+    def _block_file_label(block: Dict[str, Any]) -> str:
+        """选取块所属文件的最具信息量字段，用于日志展示。"""
+        return (
+            block.get("source")
+            or block.get("file_name")
+            or block.get("document_id")
+            or "-"
+        )
+
+    def _log_selected_knowledge_blocks(
+        self,
+        score_meta: Dict[str, Any],
+        *,
+        semantic_ids: Optional[set] = None,
+        vector_ids: Optional[set] = None,
+    ) -> None:
+        """记录最终喂给 LLM 的知识块清单：id / 来源路 / summary / 所属文件。
+
+        score_select_applied=True 时从 report.blocks 取（含分数）；
+        否则从 selected_blocks 取（未打分，全量保留）。两者都为空时跳过。
+
+        Args:
+            semantic_ids: 语义粗筛（LLM）选出的块 ID 集合。
+            vector_ids: 向量补充检索新增的块 ID 集合。
+        """
+        blocks: List[Dict[str, Any]] = []
+        if score_meta.get("score_select_applied"):
+            report = score_meta.get("score_select_report") or {}
+            blocks = report.get("blocks") or []
+        if not blocks:
+            blocks = score_meta.get("selected_blocks") or []
+
+        if not blocks:
+            return
+
+        semantic_ids = semantic_ids or set()
+        vector_ids = vector_ids or set()
+
+        def _origin(bid: Any) -> str:
+            bid = str(bid) if bid is not None else ""
+            in_sem = bid in semantic_ids
+            in_vec = bid in vector_ids
+            if in_sem and in_vec:
+                return "semantic+vector"
+            if in_vec:
+                return "vector"
+            if in_sem:
+                return "semantic"
+            return "unknown"
+
+        logger.info(
+            "[DOC KNOWLEDGE RETRIEVED] ========== 最终检索到 %d 块 ==========",
+            len(blocks),
+        )
+        # 结构化块清单，供 sd_doc_step_finished 的 extra 消费
+        structured: List[Dict[str, Any]] = []
+        for i, b in enumerate(blocks):
+            bid = b.get("id", "?")
+            summary = (b.get("summary") or b.get("metadata_value") or "").strip()
+            file_label = self._block_file_label(b)
+            origin = _origin(bid)
+            score = b.get("score")
+            if score is None:
+                score = b.get("relevance_score")
+            score_str = f"score={float(score):.1f} " if score is not None else ""
+            logger.info(
+                "[DOC KNOWLEDGE RETRIEVED]   #%-2d id=%-36s %ssource=%s file=%s | %s",
+                i + 1,
+                bid,
+                score_str,
+                origin,
+                file_label,
+                summary[:120],
+            )
+            entry: Dict[str, Any] = {
+                "index": i + 1,
+                "id": str(bid) if bid is not None else "",
+                "source": origin,
+                "file": file_label,
+                "summary": summary[:200],
+            }
+            if score is not None:
+                entry["score"] = float(score)
+            structured.append(entry)
+        logger.info("[DOC KNOWLEDGE RETRIEVED] ========== 检索块清单结束 ==========")
+
+        # 供 sd_doc_step_finished extra 使用
+        self._knowledge_selection_blocks = structured
+        # 供 sd_doc_step_finished message 使用（UI 直接展示，覆盖打分与非打分两条路径）
+        self._knowledge_selection_summary = self._build_knowledge_selection_message(structured)
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
@@ -924,6 +1026,10 @@ class DocAgent(BaseAgent):
                         or meta.get("metadata_value")
                         or vr.content[:200]
                     ),
+                    # 文件归属字段：与粗筛路保持一致，供下游日志识别块所属文件
+                    "source": meta.get("source") or "",
+                    "file_name": meta.get("file_name") or "",
+                    "document_id": meta.get("document_id") or "",
                 })
             if blocks:
                 data[coll_name] = blocks
@@ -1072,6 +1178,10 @@ class DocAgent(BaseAgent):
                     unique_ids = unique_ids[:_DOC_COARSE_MAX_TOTAL_IDS]
                 logger.info(f"get_knowledge: Total unique selected knowledge IDs: {len(unique_ids)}")
 
+                # 记录语义粗筛选出的 ID 集合，用于后续日志区分块来源（语义 vs 向量）
+                semantic_ids: set = set(unique_ids)
+                vector_new_ids: List[str] = []
+
                 # Step 1b: 向量补充检索（独立一路，不参与 LLM 粗筛）。
                 # 在语义粗筛完成后，用 data-services 的 hybrid search 补充召回语义粗筛可能遗漏的知识块。
                 # 向量召回的块合并到 knowledge_blocks 中（确保 get_blocks_by_ids 能找到），ID 一并加入精取阶段。
@@ -1080,7 +1190,6 @@ class DocAgent(BaseAgent):
                     if vector_result is not None and vector_result.get_all_items():
                         n_before = len(unique_ids)
                         seen = set(unique_ids)
-                        vector_new_ids = []
                         for coll_name, blocks in vector_result.data.items():
                             if not isinstance(blocks, list):
                                 continue
@@ -1126,8 +1235,14 @@ class DocAgent(BaseAgent):
                             "get_knowledge: score_select_report=%s",
                             score_meta.get("score_select_report"),
                         )
-                        # 构建选块摘要，供 sd_doc_step_finished 的 message 使用
-                        self._knowledge_selection_summary = self._build_knowledge_selection_summary(score_meta)
+
+                    # 记录最终喂给 LLM 的知识块清单（id / summary / 所属文件 / 来源路），
+                    # 同时构建 _knowledge_selection_summary 供 sd_doc_step_finished 的 message 使用（覆盖打分与非打分两条路径）
+                    self._log_selected_knowledge_blocks(
+                        score_meta,
+                        semantic_ids=semantic_ids,
+                        vector_ids=set(vector_new_ids),
+                    )
 
         except Exception as e:
             logger.error(f'An error occurred during two-stage knowledge retrieval: {e}')
@@ -1422,6 +1537,7 @@ class DocAgent(BaseAgent):
             ):
                 self.current_step += 1
                 self._knowledge_selection_summary = ""  # 每步开始前清空，避免残留
+                self._knowledge_selection_blocks = []   # 每步开始前清空，避免残留
 
                 current_task = self.metadata.get('current_task', '')
 
@@ -1465,17 +1581,20 @@ class DocAgent(BaseAgent):
                 )
                 if self._knowledge_selection_summary:
                     finished_message += self._knowledge_selection_summary
+                finished_extra: Dict[str, Any] = {
+                    "step": self.current_step,
+                    "max_steps": self.max_steps,
+                    "step_query": finished_query_preview,
+                    "result_chars": len(str(step_result or "")),
+                }
+                if self._knowledge_selection_blocks:
+                    finished_extra["blocks"] = self._knowledge_selection_blocks
                 await self.emit_progress(
                     "sd_doc_step_finished",
                     message=finished_message,
                     status="done",
                     task_id=self.current_task_id,
-                    extra={
-                        "step": self.current_step,
-                        "max_steps": self.max_steps,
-                        "step_query": finished_query_preview,
-                        "result_chars": len(str(step_result or "")),
-                    },
+                    extra=finished_extra,
                 )
 
                 yield step_result

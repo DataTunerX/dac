@@ -234,6 +234,7 @@ export type DataDescriptorResponse = {
   labels?: Record<string, string>
   descriptor_type: string
   gpuEnabled: "yes" | "no"
+  pdfLoader?: "auto" | "ocr" | "text"
   sources: DataSourceResponse[]
   overall_phase?: string
   source_statuses?: SourceStatusResponse[]

@@ -8,6 +8,7 @@ import axios from "axios";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { getDescriptor } from "@/lib/descriptors-api";
+import { formatGpuEnabledLabel, getPdfLoaderLabel } from "@/lib/pdf-loader";
 import { getConfigMap } from "@/lib/configmaps-api";
 import type { DataSourceResponse, DataDescriptorResponse, ObjectReferenceResponse } from "@/lib/api-types";
 import {
@@ -124,6 +125,8 @@ type DataDescriptor = {
   name: string;
   namespace: string;
   descriptor_type?: string;
+  gpuEnabled?: "yes" | "no";
+  pdfLoader?: "auto" | "ocr" | "text";
   overall_phase?: string;
   sources?: DataSourceResponse[];
   source_statuses?: unknown[];
@@ -228,14 +231,25 @@ function buildOverviewFields({
   source,
   connectionInfo,
   tableCount,
+  gpuEnabled,
+  pdfLoader,
 }: {
   kind: DataSourceKind;
   source: DataSourceResponse | null;
   connectionInfo: OverviewConnectionInfo;
   tableCount: number | null;
+  gpuEnabled?: "yes" | "no";
+  pdfLoader?: "auto" | "ocr" | "text";
 }): OverviewField[] {
   const meta = source?.metadata ?? {};
   const fileCount = getExtractFileCount(source);
+  const processingFields: OverviewField[] =
+    kind === "minio" || kind === "fileserver"
+      ? [
+          { label: "GPU 加速", value: formatGpuEnabledLabel(gpuEnabled) },
+          { label: "PDF 处理", value: getPdfLoaderLabel(pdfLoader) },
+        ]
+      : [];
 
   if (kind === "mysql" || kind === "postgres") {
     return [
@@ -267,6 +281,7 @@ function buildOverviewFields({
         label: "对象范围",
         value: fileCount && fileCount > 0 ? `${fileCount} 个对象` : "整个 Bucket",
       },
+      ...processingFields,
     ];
   }
 
@@ -280,6 +295,7 @@ function buildOverviewFields({
         value: typeof fileCount === "number" ? String(fileCount) : "-",
         highlight: typeof fileCount === "number",
       },
+      ...processingFields,
     ];
   }
 
@@ -473,8 +489,10 @@ export function DataSourceDetailView() {
         source: primarySource,
         connectionInfo,
         tableCount,
+        gpuEnabled: dd?.gpuEnabled,
+        pdfLoader: dd?.pdfLoader,
       }),
-    [connectionInfo, dataSourceKind, primarySource, tableCount],
+    [connectionInfo, dataSourceKind, dd?.gpuEnabled, dd?.pdfLoader, primarySource, tableCount],
   );
   const structureTitle = isStructuredSource ? "数据表结构" : "结构化 Schema";
   const structureCountLabel = isStructuredSource
@@ -581,6 +599,8 @@ export function DataSourceDetailView() {
         name: desc.name,
         namespace: desc.namespace ?? namespace,
         descriptor_type: desc.descriptor_type,
+        gpuEnabled: desc.gpuEnabled,
+        pdfLoader: desc.pdfLoader,
         overall_phase: desc.overall_phase,
         sources: desc.sources,
         source_statuses: desc.source_statuses,

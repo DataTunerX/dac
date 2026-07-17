@@ -23,14 +23,22 @@ def _normalize_etag(raw: Any) -> str:
     return s.strip().strip('"')
 
 
-def _file_descriptor_dict(bucket: str, object_name: str, file_size: int) -> Dict[str, Any]:
+def _file_descriptor_dict(
+    bucket: str,
+    object_name: str,
+    file_size: int,
+    content_hash: Optional[str] = None,
+) -> Dict[str, Any]:
     """Stable fields for unstructured-files / inventory APIs."""
-    return {
+    d: Dict[str, Any] = {
         "file_name": os.path.basename(object_name),
         "bucket": bucket,
         "minio_path": f"minio://{bucket}/{object_name}",
         "file_size": int(file_size),
     }
+    if content_hash:
+        d["content_hash"] = str(content_hash)
+    return d
 
 
 class MinIOReader(BaseDataReader):
@@ -84,7 +92,7 @@ class MinIOReader(BaseDataReader):
             if not size:
                 size = len(file_data)
 
-            descriptor = _file_descriptor_dict(bucket, object_name, size)
+            descriptor = _file_descriptor_dict(bucket, object_name, size, content_hash=etag or None)
 
             suffix = os.path.splitext(filename)[1]
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
@@ -333,7 +341,8 @@ class MinIOReader(BaseDataReader):
             if not name or name.endswith("/"):
                 continue
             size = int(info.get("size") or 0)
-            d = dict(_file_descriptor_dict(bucket, name, size))
+            etag = _normalize_etag(info.get("etag"))
+            d = dict(_file_descriptor_dict(bucket, name, size, content_hash=etag or None))
             d["dd_namespace"] = str(dd_namespace or "").strip()
             d["dd_name"] = str(dd_name or "").strip()
             out.append(d)
@@ -348,11 +357,18 @@ class MinIOReader(BaseDataReader):
         rows = resp.get("data") or []
         return bool(rows)
 
-    def fetch_saved_inventory_object_sizes(self, dd_namespace: str, dd_name: str, uf_client: Any) -> Dict[str, int]:
-        """Paginate GET /unstructured-files; map object key -> stored file_size."""
+    def fetch_saved_inventory_object_meta(
+        self, dd_namespace: str, dd_name: str, uf_client: Any
+    ) -> Dict[str, Tuple[Optional[str], int]]:
+        """Paginate GET /unstructured-files; map object key -> (stored content_hash, file_size).
+
+        ``content_hash`` is the MinIO etag persisted at last sync. Legacy rows (or rows
+        upserted by an older data-sinker that never sent etag) have ``content_hash=None``;
+        callers must fall back to ``file_size`` for those rows.
+        """
         limit = 500
         offset = 0
-        out: Dict[str, int] = {}
+        out: Dict[str, Tuple[Optional[str], int]] = {}
         while True:
             resp = uf_client.list_unstructured_files(
                 dd_namespace=dd_namespace, dd_name=dd_name, limit=limit, offset=offset
@@ -377,7 +393,9 @@ class MinIOReader(BaseDataReader):
                             self.config.get("bucket"),
                         )
                     continue
-                out[key] = int(row.get("file_size") or 0)
+                ch = row.get("content_hash")
+                ch_str = str(ch).strip() if isinstance(ch, str) and ch.strip() else None
+                out[key] = (ch_str, int(row.get("file_size") or 0))
             if len(rows) < limit:
                 break
             offset += limit
@@ -434,12 +452,15 @@ class MinIOReader(BaseDataReader):
         Returns:
             (added, removed, modified) as sets of object names (keys).
 
-        Modification is detected by **file_size** change only (inventory has no etag).
+        Modification is detected by **content_hash** (MinIO etag) first, falling back to
+        **file_size** when either side lacks a content_hash (legacy inventory rows, or a
+        live listing that returned no etag). This catches same-size content edits that a
+        size-only diff would miss.
         """
         current = self.current_bucket_objects_meta()
-        saved_sizes = self.fetch_saved_inventory_object_sizes(dd_namespace, dd_name, uf_client)
+        saved_meta = self.fetch_saved_inventory_object_meta(dd_namespace, dd_name, uf_client)
         current_keys = set(current.keys())
-        saved_keys = set(saved_sizes.keys())
+        saved_keys = set(saved_meta.keys())
 
         # If you delete an object but deleted=[] here, usually either (1) listing still sees the object,
         # or (2) that object was never counted in saved_keys (minio_path did not parse — see fetch warnings).
@@ -457,7 +478,14 @@ class MinIOReader(BaseDataReader):
         removed = saved_keys - current_keys
         modified: Set[str] = set()
         for k in current_keys & saved_keys:
-            if current[k][1] != saved_sizes[k]:
+            live_etag, live_size = current[k]
+            saved_etag, saved_size = saved_meta[k]
+            # Prefer etag/content_hash when both sides have it; otherwise fall back to size
+            # so legacy rows (no stored content_hash) still get size-change detection.
+            if live_etag and saved_etag:
+                if live_etag != saved_etag:
+                    modified.add(k)
+            elif live_size != saved_size:
                 modified.add(k)
         logger.info(
             "%s feature=minio_inventory_diff dd_namespace=%r dd_name=%r bucket=%r "

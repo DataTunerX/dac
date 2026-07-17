@@ -182,6 +182,10 @@ func (r *dataDescriptorRepository) toUnstructured(descriptor *entity.DataDescrip
 		},
 	}
 
+	if pdfLoader := entity.NormalizePDFLoader(descriptor.PDFLoader); pdfLoader != "" {
+		obj["spec"].(map[string]interface{})["pdfLoader"] = pdfLoader
+	}
+
 	if len(descriptor.SourceStatuses) > 0 || len(descriptor.ConsumedBy) > 0 || descriptor.OverallPhase != "" {
 		status := make(map[string]interface{})
 		if len(descriptor.SourceStatuses) > 0 {
@@ -239,6 +243,7 @@ func k8sDataDescriptorToEntity(k8sDesc *K8sDataDescriptor) *entity.DataDescripto
 		Annotations:    k8sDesc.Metadata.Annotations,
 		DescriptorType: k8sDesc.Spec.DescriptorType,
 		GPUEnabled:     entity.NormalizeGPUEnabled(k8sDesc.Spec.GPUEnabled),
+		PDFLoader:      entity.NormalizePDFLoader(k8sDesc.Spec.PDFLoader),
 		Sources:        mapK8sSourcesToEntity(k8sDesc.Spec.Sources),
 		SourceStatuses: k8sDesc.Status.SourceStatuses,
 		ConsumedBy:     k8sDesc.Status.ConsumedBy,

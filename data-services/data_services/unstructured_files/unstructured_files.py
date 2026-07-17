@@ -91,6 +91,7 @@ class AsyncUnstructuredFilesService:
             `bucket` VARCHAR(255) NOT NULL COMMENT 'MinIO bucket',
             minio_path VARCHAR(2048) NOT NULL COMMENT 'Full MinIO object path or URI',
             file_size BIGINT NOT NULL DEFAULT 0 COMMENT 'Size in bytes',
+            content_hash VARCHAR(128) NULL COMMENT 'Content hash for change detection (MinIO etag); NULL legacy',
             file_summary MEDIUMTEXT NULL COMMENT 'Optional file summary or analysis text',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT 'Record creation time',
             UNIQUE KEY uk_unstructured_files_dd_bucket_path (dd_namespace(64), dd_name(64), `bucket`(64), minio_path(512)),
@@ -102,6 +103,23 @@ class AsyncUnstructuredFilesService:
         try:
             async with self._get_cursor() as cursor:
                 await cursor.execute(create_sql)
+                # Backfill content_hash column for pre-existing tables (CREATE TABLE IF NOT EXISTS
+                # does not add new columns to an already-existing table).
+                try:
+                    await cursor.execute(
+                        f"ALTER TABLE {TABLE_NAME} "
+                        f"ADD COLUMN content_hash VARCHAR(128) NULL "
+                        f"COMMENT 'Content hash for change detection (MinIO etag); NULL legacy' "
+                        f"AFTER file_size"
+                    )
+                    logger.info(f"unstructured-files: added content_hash column to {TABLE_NAME}")
+                except Error as alter_err:
+                    # Duplicate column name (1060) means a concurrent init / earlier migration
+                    # already added it; treat as success and stay quiet.
+                    if getattr(alter_err, "args", ()) and alter_err.args[0] != 1060:
+                        logger.warning(
+                            f"unstructured-files: content_hash migration skipped ({alter_err})"
+                        )
                 logger.info(f"unstructured-files: ensured table {TABLE_NAME}")
         except Error as e:
             logger.error(f"unstructured-files: schema error: {e}")
@@ -117,6 +135,7 @@ class AsyncUnstructuredFilesService:
             bucket=row["bucket"],
             minio_path=row["minio_path"],
             file_size=row["file_size"],
+            content_hash=row.get("content_hash"),
             file_summary=row.get("file_summary"),
             created_at=row["created_at"],
         )
@@ -124,11 +143,12 @@ class AsyncUnstructuredFilesService:
     async def upsert(self, record: UnstructuredFile) -> int:
         """Insert or update by (dd_namespace, dd_name, bucket, minio_path); returns row id."""
         sql = f"""
-        INSERT INTO {TABLE_NAME} (dd_namespace, dd_name, file_name, `bucket`, minio_path, file_size, file_summary)
-        VALUES (%s, %s, %s, %s, %s, %s, %s) AS new
+        INSERT INTO {TABLE_NAME} (dd_namespace, dd_name, file_name, `bucket`, minio_path, file_size, content_hash, file_summary)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s) AS new
         ON DUPLICATE KEY UPDATE
             file_name = new.file_name,
             file_size = new.file_size,
+            content_hash = IF(new.content_hash IS NULL, {TABLE_NAME}.content_hash, new.content_hash),
             file_summary = IF(new.file_summary IS NULL, {TABLE_NAME}.file_summary, new.file_summary)
         """
         async with self._get_cursor() as cursor:
@@ -141,6 +161,7 @@ class AsyncUnstructuredFilesService:
                     record.bucket,
                     record.minio_path,
                     record.file_size,
+                    record.content_hash,
                     record.file_summary,
                 ),
             )
@@ -258,14 +279,14 @@ class AsyncUnstructuredFilesService:
         dd_name: str,
         bucket: str,
         minio_path: str,
-    ) -> bool:
+    ) -> int:
         async with self._get_cursor() as cursor:
             await cursor.execute(
                 f"DELETE FROM {TABLE_NAME} WHERE dd_namespace = %s AND dd_name = %s "
                 f"AND `bucket` = %s AND minio_path = %s",
                 (dd_namespace, dd_name, bucket, minio_path),
             )
-            return cursor.rowcount > 0
+            return int(cursor.rowcount or 0)
 
     async def delete_by_bucket(self, bucket: str) -> int:
         async with self._get_cursor() as cursor:

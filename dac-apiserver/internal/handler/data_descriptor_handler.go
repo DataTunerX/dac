@@ -36,6 +36,19 @@ func normalizeGPUEnabled(v string) string {
 	return entity.NormalizeGPUEnabled(strings.TrimSpace(v))
 }
 
+func isValidPDFLoader(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "auto", "ocr", "text":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizePDFLoader(v string) string {
+	return entity.NormalizePDFLoader(strings.TrimSpace(v))
+}
+
 func normalizeDataSourceType(t string) string {
 	// No type aliasing today; kept as a single chokepoint so future
 	// renames (e.g. legacy → canonical) don't have to chase callers.
@@ -76,6 +89,11 @@ func (h *DataDescriptorHandler) Create(ctx context.Context, c *app.RequestContex
 		ErrorResponse(c, domain.ErrInvalidInput)
 		return
 	}
+	if !isValidPDFLoader(req.PDFLoader) {
+		h.logger.Error("invalid pdfLoader", "pdfLoader", req.PDFLoader)
+		ErrorResponse(c, domain.ErrInvalidInput)
+		return
+	}
 
 	// Normalize source types to match execution-engine conventions.
 	for i := range req.Sources {
@@ -89,6 +107,7 @@ func (h *DataDescriptorHandler) Create(ctx context.Context, c *app.RequestContex
 		Labels:         req.Labels,
 		DescriptorType: req.DescriptorType,
 		GPUEnabled:     normalizeGPUEnabled(req.GPUEnabled),
+		PDFLoader:      normalizePDFLoader(req.PDFLoader),
 		Sources:        req.Sources,
 	}
 
@@ -271,6 +290,11 @@ func (h *DataDescriptorHandler) Update(ctx context.Context, c *app.RequestContex
 		ErrorResponse(c, domain.ErrInvalidInput)
 		return
 	}
+	if !isValidPDFLoader(req.PDFLoader) {
+		h.logger.Error("invalid pdfLoader", "pdfLoader", req.PDFLoader)
+		ErrorResponse(c, domain.ErrInvalidInput)
+		return
+	}
 
 	for i := range req.Sources {
 		req.Sources[i].Type = normalizeDataSourceType(req.Sources[i].Type)
@@ -286,11 +310,17 @@ func (h *DataDescriptorHandler) Update(ctx context.Context, c *app.RequestContex
 		normalized := normalizeGPUEnabled(req.GPUEnabled)
 		gpuEnabled = &normalized
 	}
+	var pdfLoader *string
+	if req.PDFLoader != "" {
+		normalized := normalizePDFLoader(req.PDFLoader)
+		pdfLoader = &normalized
+	}
 
 	domainReq := &domain.UpdateDataDescriptorRequest{
 		Labels:         req.Labels,
 		DescriptorType: descriptorType,
 		GPUEnabled:     gpuEnabled,
+		PDFLoader:      pdfLoader,
 		Sources:        req.Sources,
 	}
 

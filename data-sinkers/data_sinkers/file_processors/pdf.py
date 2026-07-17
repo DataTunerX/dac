@@ -119,6 +119,14 @@ class PDFProcessor:
         
         raw_documents = loader_methods[loader_type](file_path, **loader_kwargs)
 
+        # Stamp the loader used onto every doc so downstream process_file can branch
+        # (e.g. pymupdf → merge+CharacterTextSplitter, mineru → keep markdown-header splits).
+        for d in raw_documents:
+            if isinstance(d, Document):
+                md = dict(d.metadata) if d.metadata else {}
+                md["pdf_loader"] = loader_type
+                d.metadata = md
+
         return raw_documents
 
     def _select_best_loader(self, file_path: str) -> str:
@@ -126,9 +134,60 @@ class PDFProcessor:
         file_size = os.path.getsize(file_path)
         max_mineru_bytes = 1000 * 1024 * 1024  # 1000 MB
 
-        if file_size >= max_mineru_bytes:
+        # Two independent knobs (both set by execution-engine from the DD spec):
+        #   - PDF_LOADER_POLICY: "auto" (default) | "ocr" | "text"
+        #     Selects PDF processing by capability (not library name).
+        #   - MINERU_DEVICE_MODE: "cuda" | "cpu"
+        #     Controls which device the OCR/layout backend runs on.
+        #
+        # Decision matrix:
+        #   policy=text                          -> pymupdf (text layer only, no OCR)
+        #   policy=ocr + size < 1GB              -> mineru (OCR/layout; cuda or cpu per device mode)
+        #   policy=auto + gpu_available + <1GB   -> mineru (OCR when GPU available)
+        #   anything else (no GPU under auto, or file too large) -> pymupdf
+        policy = (os.getenv("PDF_LOADER_POLICY", "auto") or "").strip().lower() or "auto"
+        # Legacy technology-named policy values (pre ocr/text rename).
+        if policy == "mineru":
+            policy = "ocr"
+        elif policy == "pymupdf":
+            policy = "text"
+        mineru_device_mode = (os.getenv("MINERU_DEVICE_MODE", "cpu") or "").strip().lower()
+        gpu_available = mineru_device_mode == "cuda"
+        too_big = file_size >= max_mineru_bytes
+
+        if policy == "text":
+            logger.info("PDF loader selected: pymupdf (PDF_LOADER_POLICY=text, text layer only)")
             return "pymupdf"
-        return "mineru"
+
+        if policy == "ocr":
+            if too_big:
+                logger.info(
+                    "PDF loader selected: pymupdf (PDF_LOADER_POLICY=ocr but file too large: "
+                    "file_size=%d bytes >= %d, falling back to text layer)",
+                    file_size, max_mineru_bytes,
+                )
+                return "pymupdf"
+            logger.info(
+                "PDF loader selected: mineru (PDF_LOADER_POLICY=ocr, MINERU_DEVICE_MODE=%s, "
+                "file_size=%d bytes) — OCR/layout parsing",
+                mineru_device_mode, file_size,
+            )
+            return "mineru"
+
+        # policy == "auto" (and any unknown value falls back here)
+        if gpu_available and not too_big:
+            logger.info(
+                "PDF loader selected: mineru (PDF_LOADER_POLICY=auto, MINERU_DEVICE_MODE=%s, "
+                "file_size=%d bytes, OCR when GPU available)",
+                mineru_device_mode, file_size,
+            )
+            return "mineru"
+
+        reason = "no GPU (MINERU_DEVICE_MODE=%s)" % mineru_device_mode
+        if too_big:
+            reason = "file too large for OCR backend (%d bytes >= %d)" % (file_size, max_mineru_bytes)
+        logger.info("PDF loader selected: pymupdf (PDF_LOADER_POLICY=auto, %s, text layer only)", reason)
+        return "pymupdf"
     
     def batch_process(
         self, 

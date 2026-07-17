@@ -90,6 +90,7 @@ interface CreateDataSourcePayload {
     extractFiles?: string;
     promptsConfigMapName?: string;
     gpuEnabled?: "yes" | "no";
+    pdfLoader?: "auto" | "ocr" | "text";
     enableCodeRepo?: boolean;
     codeRepoType?: string;
     codeRepoPath?: string;
@@ -306,6 +307,7 @@ export default function DataSourcesPage() {
       const repoToken = data.codeRepoToken?.trim() || ""
       const t = String(data.type || "").trim()
       const gpuEnabled = data.gpuEnabled === "yes" ? "yes" : "no"
+      const pdfLoader = data.pdfLoader ?? "auto"
       const isCodeRepo = t === "coderepo"
       const hasCodeRepo =
         isCodeRepo || (Boolean(data.enableCodeRepo) && Boolean(repoType || repoPath || repoBranch || repoToken))
@@ -418,6 +420,7 @@ export default function DataSourcesPage() {
         namespace,
         descriptorType,
         gpuEnabled,
+        ...(descriptorType === "unstructured" ? { pdfLoader } : {}),
         sources,
       }
 

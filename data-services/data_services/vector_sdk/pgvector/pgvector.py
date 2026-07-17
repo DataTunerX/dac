@@ -654,42 +654,51 @@ class PGVector(BaseVector):
     async def afind_metadata_values_in_collection(self, metadata_key: str = "summary") -> list[dict]:
         """
         异步在当前collection中查找指定metadata字段的所有值
-        
+
         Args:
             metadata_key: 要查找的metadata字段名，默认为"summary"
-            
+
         Returns:
-            返回字典列表，每个字典包含id、text和metadata_value字段
+            返回字典列表，每个字典包含 id、text、metadata_value 字段；
+            额外附带 source / file_name / document_id（取自 meta，缺失则为 None），
+            供上游识别块所属文件，与 metadata_key 解耦，向后兼容。
         """
         results = []
-        
+
         try:
             conn = await self._get_async_connection()
             try:
-                # 查询指定metadata字段的所有记录
+                # 查询指定metadata字段的所有记录；同时附带文件归属字段，与 metadata_key 无关
                 records = await conn.fetch(
                     f"""
-                    SELECT id, text, meta->>$1 as metadata_value 
-                    FROM {self.table_name} 
+                    SELECT id, text,
+                           meta->>$1 as metadata_value,
+                           meta->>'source'      as source,
+                           meta->>'file_name'   as file_name,
+                           meta->>'document_id' as document_id
+                    FROM {self.table_name}
                     WHERE meta ? $1
                     """,
                     metadata_key
                 )
-                
+
                 for record in records:
-                    doc_id, text, metadata_value = record
+                    doc_id, text, metadata_value, source, file_name, document_id = record
                     results.append({
                         "id": str(doc_id),
                         "text": text,
-                        "metadata_value": metadata_value
+                        "metadata_value": metadata_value,
+                        "source": source,
+                        "file_name": file_name,
+                        "document_id": document_id,
                     })
-                    
+
             finally:
                 await conn.close()
-                
+
         except Exception as e:
             logger.warning(f"Error querying table {self.table_name} for metadata key '{metadata_key}': {e}")
-        
+
         return results
 
 

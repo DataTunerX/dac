@@ -241,6 +241,7 @@ class UnstructuredFile(BaseModel):
     bucket: str = Field(..., description="MinIO bucket name")
     minio_path: str = Field(..., description="Full MinIO object path or URI (e.g. minio://bucket/key)")
     file_size: int = Field(0, ge=0, description="File size in bytes")
+    content_hash: Optional[str] = Field(None, description="Content hash for change detection (MinIO etag); falls back to file_size when absent")
     file_summary: Optional[str] = Field(None, description="Optional summary or analysis text for the file")
     created_at: Optional[datetime] = Field(None, description="Record creation time")
 
@@ -252,6 +253,7 @@ class UnstructuredFileUpsertRequest(BaseModel):
     bucket: str = Field(..., description="MinIO bucket name")
     minio_path: str = Field(..., description="Full MinIO object path or URI")
     file_size: int = Field(0, ge=0, description="File size in bytes")
+    content_hash: Optional[str] = Field(None, description="Content hash for change detection (MinIO etag)")
     file_summary: Optional[str] = Field(None, description="Optional summary or analysis text for the file")
 
 

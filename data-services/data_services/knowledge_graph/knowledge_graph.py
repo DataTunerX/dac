@@ -101,7 +101,7 @@ class KnowledgeGraphVectorService:
         while time.time() - start_time < max_wait_seconds:
             try:
                 check_query = """
-                CALL db.indexes()
+                SHOW INDEXES
                 YIELD name, type, state, populationPercent
                 WHERE name = $index_name AND type = 'VECTOR'
                 RETURN name, state, populationPercent
@@ -157,7 +157,7 @@ class KnowledgeGraphVectorService:
         """
         try:
             list_query = """
-            CALL db.indexes()
+            SHOW INDEXES
             YIELD name, type, state, entityType, labelsOrTypes, properties, indexProvider
             WHERE type = 'VECTOR'
             RETURN name, state, labelsOrTypes, properties
@@ -199,12 +199,12 @@ class KnowledgeGraphVectorService:
                             f"DROP INDEX {' '.join([idx['name'] for idx in conflicting_indexes])} IF EXISTS;"
                         )
                 
-                # 检查索引是否已存在且就绪（Neo4j 5.x 使用 db.indexes()）
+                # 检查索引是否已存在且就绪（Neo4j 5.x 使用 SHOW INDEXES 命令）
                 existing_index = None
                 index_ready = False
                 try:
                     check_query = """
-                    CALL db.indexes()
+                    SHOW INDEXES
                     YIELD name, type, state, entityType, labelsOrTypes, properties, indexProvider
                     WHERE name = $index_name AND type = 'VECTOR'
                     RETURN name, state, properties
@@ -226,7 +226,7 @@ class KnowledgeGraphVectorService:
                             )
                             index_ready = self._wait_for_index_ready(session)
                 except Exception as e:
-                    self.logger.debug(f"db.indexes() check failed: {e}, will try to create index directly")
+                    self.logger.debug(f"SHOW INDEXES check failed: {e}, will try to create index directly")
                 
                 if existing_index is None or not index_ready:
                     # Neo4j 5.11+ 向量索引需指定标签；使用 Node，add() 中所有节点带 Node（5.18）
@@ -249,7 +249,7 @@ class KnowledgeGraphVectorService:
                         
                         # 立即验证索引是否真的被创建（Neo4j 可能因为冲突而不创建，但不会抛出异常）
                         verify_query = """
-                        CALL db.indexes()
+                        SHOW INDEXES
                         YIELD name, type, state
                         WHERE name = $index_name AND type = 'VECTOR'
                         RETURN name, state
@@ -309,7 +309,7 @@ class KnowledgeGraphVectorService:
                             # 再次检查索引是否存在
                             try:
                                 check_result = session.run(
-                                    "CALL db.indexes() YIELD name, type WHERE name = $index_name AND type = 'VECTOR' RETURN name",
+                                    "SHOW INDEXES YIELD name, type WHERE name = $index_name AND type = 'VECTOR' RETURN name",
                                     index_name=self.vector_index_name
                                 )
                                 if check_result.single():

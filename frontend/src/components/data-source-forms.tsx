@@ -38,6 +38,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import Link from "next/link"
+import {
+  getPdfLoaderDescription,
+  PDF_LOADER_OPTIONS,
+  type PdfLoaderPolicy,
+} from "@/lib/pdf-loader"
 
 // --- Schemas ---
 
@@ -72,6 +77,7 @@ const dataSourceSchema = z.object({
   // Optional: prompts configmap
   promptsConfigMapName: z.string().optional(),
   gpuEnabled: z.enum(["yes", "no"]),
+  pdfLoader: z.enum(["auto", "ocr", "text"]),
 
   // Code repo config (only for type=coderepo)
   codeRepoType: z.string().optional(),
@@ -189,6 +195,7 @@ const defaultFormValues: DataSourceFormValues = {
   extractFiles: "",
   promptsConfigMapName: "",
   gpuEnabled: "no",
+  pdfLoader: "auto",
   codeRepoType: "",
   codeRepoPath: "",
   codeRepoBranch: "main",
@@ -454,6 +461,7 @@ export function CreateDataSourceDialog({
 
   const typeValue = form.watch("type")
   const namespaceValue = form.watch("namespace")
+  const showPdfLoader = typeValue === "minio" || typeValue === "fileserver"
   const gpuSelectable = Boolean(gpuAvailability?.available)
 
   const loadNamespaces = async () => {
@@ -621,8 +629,8 @@ export function CreateDataSourceDialog({
                             {isLoadingGPU
                               ? "正在检查集群 GPU 能力…"
                               : gpuSelectable
-                                ? `检测到 ${gpuAvailability?.nodeCount ?? 0} 个 GPU 节点，共 ${gpuAvailability?.totalGPUs ?? 0} 张 GPU，可按需启用。`
-                                : gpuLoadError || "当前环境未检测到 GPU，已固定为不使用 GPU。"}
+                                ? `检测到 ${gpuAvailability?.nodeCount ?? 0} 个 GPU 节点、共 ${gpuAvailability?.totalGPUs ?? 0} 张 GPU，可按需启用。`
+                                : gpuLoadError || "当前环境未检测到 GPU，已固定为不启用。"}
                           </FormDescription>
                         </div>
                         <FormControl>
@@ -656,6 +664,46 @@ export function CreateDataSourceDialog({
                   )
                 }}
               />
+
+              {showPdfLoader ? (
+                <div className="space-y-4 rounded-lg border border-line p-4">
+                  <div className="text-xs font-semibold text-content-muted">PDF 处理</div>
+                  <p className="text-xs text-content-muted -mt-2">
+                    仅对 MinIO / 文件服务中的 PDF 文件生效，与上方 GPU 开关独立配置。
+                  </p>
+                  <FormField
+                    control={form.control}
+                    name="pdfLoader"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>处理方式</FormLabel>
+                        <Select
+                          value={field.value}
+                          onValueChange={field.onChange}
+                          disabled={isSubmitting}
+                        >
+                          <FormControl>
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="选择 PDF 处理方式" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
+                            {PDF_LOADER_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormDescription className="text-xs">
+                          {getPdfLoaderDescription(field.value as PdfLoaderPolicy)}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              ) : null}
             
               <div className="space-y-4">
                 <div className="text-xs font-semibold text-content-muted">连接配置</div>

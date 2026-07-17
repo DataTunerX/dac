@@ -14,6 +14,7 @@ type K8sDataDescriptor struct {
 	Spec       struct {
 		DescriptorType string          `json:"descriptorType"`
 		GPUEnabled     string          `json:"gpuEnabled,omitempty"`
+		PDFLoader      string          `json:"pdfLoader,omitempty"`
 		Sources        []K8sDataSource `json:"sources"`
 	} `json:"spec"`
 	Status struct {

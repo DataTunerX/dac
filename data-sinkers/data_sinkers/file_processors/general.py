@@ -145,6 +145,31 @@ class Processor:
             split_documents = self.paragraph_splitter.split_documents(raw_documents)
             return split_documents
 
+        if file_type == "pdf":
+            pdf_loader = (raw_documents[0].metadata.get("pdf_loader") if raw_documents else None)
+            # MinerU (GPU path) keeps its layout-aware markdown-header splits verbatim.
+            if pdf_loader == "mineru":
+                if len(raw_documents) > 1:
+                    return raw_documents
+                split_documents = self.text_splitter.split_documents(raw_documents)
+                return split_documents
+            # Non-MinerU loaders (pymupdf, pypdfium2, ...): merge per-page fragments into the
+            # full document text, then split with CharacterTextSplitter (paragraph-aware,
+            # separator \n\n) so chunks have a controlled size + overlap instead of being one
+            # chunk per page with no continuity between pages.
+            if len(raw_documents) > 1:
+                n_parts = len(raw_documents)
+                raw_documents = [_merge_raw_documents(raw_documents)]
+                self.logger.info(
+                    "Merged %d PDF page fragments before CharacterTextSplitter (loader=%s)",
+                    n_parts,
+                    pdf_loader,
+                )
+            if not (raw_documents and raw_documents[0].page_content and raw_documents[0].page_content.strip()):
+                raise Exception(f"Failed to load file")
+            split_documents = self.paragraph_splitter.split_documents(raw_documents)
+            return split_documents
+
         if len(raw_documents) > 1:
             return raw_documents
         split_documents = self.text_splitter.split_documents(raw_documents)

@@ -42,6 +42,7 @@ func (u *dataDescriptorUsecase) Create(ctx context.Context, req *domain.CreateDa
 		Labels:         req.Labels,
 		DescriptorType: req.DescriptorType,
 		GPUEnabled:     req.GPUEnabled,
+		PDFLoader:      entity.NormalizePDFLoader(req.PDFLoader),
 		Sources:        req.Sources,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
@@ -77,6 +78,9 @@ func (u *dataDescriptorUsecase) Update(ctx context.Context, namespace, name stri
 	}
 	if req.GPUEnabled != nil {
 		existing.GPUEnabled = *req.GPUEnabled
+	}
+	if req.PDFLoader != nil {
+		existing.PDFLoader = *req.PDFLoader
 	}
 	if req.Sources != nil {
 		existing.Sources = req.Sources
