@@ -1,5 +1,5 @@
 # DAC sandbox demo: Google Online Boutique 微服务电商演示（代码仓）
-# 运行时入口: frontend.dac-sandbox.svc.cluster.local:80
+# 运行时入口: <sts-pod-ip>:8080 或 frontend.dac-sandbox.svc.cluster.local:80 → 8080
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
 metadata:

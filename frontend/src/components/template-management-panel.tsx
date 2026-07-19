@@ -57,17 +57,10 @@ import { toast } from "sonner"
 import { Box, History, Loader2, Pencil, RefreshCw, X } from "lucide-react"
 import axios from "axios"
 import { cn } from "@/lib/utils"
+import { getApiErrorMessage as apiErrorMessage } from "@/lib/api-error"
 
 type DialogTab = "current" | "history"
 type EditorMode = "view" | "edit" | "create"
-
-function apiErrorMessage(err: unknown, fallback: string): string {
-  if (axios.isAxiosError(err)) {
-    const body = err.response?.data as { message?: string } | undefined
-    if (body?.message) return body.message
-  }
-  return fallback
-}
 
 function formatVersionTime(version: string, createdAt?: string): string {
   if (createdAt) {

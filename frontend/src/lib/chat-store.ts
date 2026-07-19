@@ -8,7 +8,8 @@ import { parseHistoryThink } from "@/lib/history-think"
 import { parseChatSSELine } from "@/lib/parse-chat-sse"
 import { type ChatMessage, type ConversationHistoryResponse } from "@/components/chat/chat-message-types"
 import { stripModelLeakTags } from "@/lib/strip-model-leak-tags"
-import { clearAuthToken, getAuthToken, redirectToLogin } from "@/lib/auth-session"
+import { clearAuthToken, redirectToLogin } from "@/lib/auth-session"
+import { authFetch } from "@/lib/auth-fetch"
 import { REFRESH_CHAT_LIST_EVENT, RUN_ID_RECONCILED_EVENT, type NewChatEventDetail } from "@/lib/events"
 
 type Message = ChatMessage
@@ -203,9 +204,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
     optimisticRunIds.delete(oldId)
     optimisticRunIds.add(newId)
 
-    const optimisticTitle = safeLocalStorageGet(`dac_title_${oldId}`)
+    const optimisticTitle =
+      safeLocalStorageGet(`dac_title_v1_${oldId}`) ?? safeLocalStorageGet(`dac_title_${oldId}`)
     if (optimisticTitle) {
-      safeLocalStorageSet(`dac_title_${newId}`, optimisticTitle)
+      safeLocalStorageSet(`dac_title_v1_${newId}`, optimisticTitle)
+      safeLocalStorageRemove(`dac_title_v1_${oldId}`)
       safeLocalStorageRemove(`dac_title_${oldId}`)
     }
 
@@ -328,10 +331,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
     int.historyAbortController = controller
 
     try {
-      const token = getAuthToken()
-      const response = await fetch(`/api/v1/chat/conversations/${runId}`, {
-        headers: { Authorization: token ? `Bearer ${token}` : "" },
+      const response = await authFetch(`/api/v1/chat/conversations/${runId}`, {
         signal: controller.signal,
+        skipAuthRedirect: true,
       })
       if (response.status === 401) {
         handleUnauthorized()
@@ -501,12 +503,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
     }
 
     try {
-      const token = getAuthToken()
-      const response = await fetch("/v1/chat/completions", {
+      const response = await authFetch("/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: token ? `Bearer ${token}` : "",
         },
         body: JSON.stringify({
           messages: messagesPayload,
@@ -514,6 +514,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           run_id: activeRunId,
         }),
         signal: int.abortController!.signal,
+        skipAuthRedirect: true,
       })
 
       if (!response.ok) {

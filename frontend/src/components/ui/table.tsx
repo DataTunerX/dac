@@ -371,7 +371,8 @@ export const TableCell = React.memo(function TableCell({
 }: TableCellProps) {
   return (
     <td
-      className={cn("px-4 py-3 align-middle", className)}
+      // overflow-hidden keeps table-fixed columns from painting over neighbors
+      className={cn("px-4 py-3 align-middle overflow-hidden", className)}
       style={style}
       {...props}
     />

@@ -1,24 +1,10 @@
-import { jwtDecode } from "jwt-decode"
 import { getAuthToken } from "@/lib/auth-session"
-
-interface DecodedToken {
-  user_id: string
-  username: string
-  role: string
-  exp: number
-}
+import { getJwtRole, isJwtUsable } from "@/lib/jwt-client"
 
 export const getUserRole = (): string => {
   const token = getAuthToken()
-  if (!token) return "anonymous"
-
-  try {
-    const decoded = jwtDecode<DecodedToken>(token)
-    return decoded.role || "user" // Default to "user" if role is missing but token is valid
-  } catch (error) {
-    console.error("Failed to decode token:", error)
-    return "anonymous"
-  }
+  if (!token || !isJwtUsable(token)) return "anonymous"
+  return getJwtRole(token)
 }
 
 export const isAdmin = (): boolean => {

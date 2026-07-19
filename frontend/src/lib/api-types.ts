@@ -253,6 +253,39 @@ export type DataDescriptorListResponse = {
   offset?: number
 }
 
+/**
+ * After axios envelope unwrap, signature/semantic-domain handlers still return
+ * `{ data: T }` (see dac-apiserver dto.DataDescriptorSignatureResponse).
+ */
+export type NestedDataEnvelope<T> = {
+  data?: T | null
+}
+
+/** Signature record fields used by the data-source detail UI */
+export type DataDescriptorSignature = {
+  sig_id?: string
+  sig_type?: string
+  discovery_mode?: string
+  fingerprint?: string
+  location_info?: Record<string, unknown>
+  metadata_content?: Record<string, unknown>
+  dd_namespace?: string
+  dd_name?: string
+  created_at?: string
+  updated_at?: string
+}
+
+/** Semantic domain record for a data descriptor */
+export type DataDescriptorSemanticDomain = {
+  semantic_domain_id?: string
+  semantic_domain?: string
+  agent_card?: string
+  dd_namespace?: string
+  dd_name?: string
+  created_at?: string
+  updated_at?: string
+}
+
 // ----- Knowledge graph (internal/handler/dto/knowledge_graph.go + data-services) -----
 
 export type KnowledgeGraphNode = {

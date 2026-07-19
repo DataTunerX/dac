@@ -80,7 +80,7 @@ spec:
             - name: MEMORY_GRAPH_DB_PROVIDER
               value: "neo4j"
             - name: MEMORY_GRAPH_DB_URL
-              value: {{ .Values.dataServices.config.neo4j.neo4jUrl | quote }}
+              value: {{ include "dac.neo4j.neo4jUrl" . | quote }}
             - name: MEMORY_GRAPH_DB_USERNAME
               value: {{ .Values.dataServices.config.neo4j.username | quote }}
             - name: MEMORY_GRAPH_DB_PASSWORD
@@ -123,7 +123,7 @@ spec:
               value: {{ .Values.dataServices.config.mysql.maxConnection | quote }}
             # Knowledge graph
             - name: KNOWLEDGE_GRAPH_DB_URL
-              value: {{ .Values.dataServices.config.neo4j.boltUrl | quote }}
+              value: {{ include "dac.neo4j.boltUrl" . | quote }}
             - name: KNOWLEDGE_GRAPH_DB_USERNAME
               value: {{ .Values.dataServices.config.neo4j.username | quote }}
             - name: KNOWLEDGE_GRAPH_DB_PASSWORD

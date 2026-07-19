@@ -1,10 +1,16 @@
 import Cookies from "js-cookie"
 
 const AUTH_COOKIE_NAME = "dac_token"
-const AUTH_COOKIE_OPTIONS = {
-  expires: 7,
-  path: "/",
-  sameSite: "lax" as const,
+
+function authCookieOptions() {
+  return {
+    expires: 7,
+    path: "/",
+    sameSite: "lax" as const,
+    ...(typeof window !== "undefined" && window.location.protocol === "https:"
+      ? { secure: true as const }
+      : {}),
+  }
 }
 
 function normalizeRelativePath(rawPath: string): string {
@@ -18,7 +24,7 @@ export function getAuthToken(): string {
 }
 
 export function persistAuthToken(token: string): void {
-  Cookies.set(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS)
+  Cookies.set(AUTH_COOKIE_NAME, token, authCookieOptions())
 }
 
 export function clearAuthToken(): void {

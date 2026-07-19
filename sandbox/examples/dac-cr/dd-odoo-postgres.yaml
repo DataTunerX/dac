@@ -13,7 +13,7 @@ spec:
     - type: postgres
       name: "sandbox-odoo-demo"
       metadata:
-        host: "odoo-db.dac-sandbox.svc.cluster.local"
+        host: "postgres.dac-sandbox.svc.cluster.local"
         port: "5432"
         user: "odoo"
         password: "odopass"

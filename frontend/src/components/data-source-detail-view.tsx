@@ -7,14 +7,14 @@ import { useParams, useRouter } from "next/navigation";
 import axios from "axios";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { getDescriptor } from "@/lib/descriptors-api";
+import { useDataSourceDetail } from "@/hooks/use-data-source-detail";
+import { DataSourceStructureTab } from "@/components/data-source-detail/structure-tab";
 import { formatGpuEnabledLabel, getPdfLoaderLabel } from "@/lib/pdf-loader";
 import { getConfigMap } from "@/lib/configmaps-api";
 import type { DataSourceResponse, DataDescriptorResponse, ObjectReferenceResponse } from "@/lib/api-types";
 import {
   detachDataDescriptorFromSemanticGroups,
   getDataDescriptorDependencyKindLabel,
-  listAllAgentContainers,
   listDataDescriptorDependencies,
   type DataDescriptorDependency,
 } from "@/lib/data-descriptor-dependencies";
@@ -316,13 +316,6 @@ function buildOverviewFields({
   ];
 }
 
-const SCHEMA_TABLE_COLUMNS = [
-  { id: "expand", size: 60 },
-  { id: "tableName", size: 250 },
-  { id: "businessObject", size: 200 },
-  { id: "description", size: 400 },
-] as const
-
 const DATASOURCE_DEPENDENT_COLUMNS = [
   { id: "resource", size: 240 },
   { id: "namespace", size: 112 },
@@ -340,13 +333,39 @@ export function DataSourceDetailView() {
     return `${namespace}_${name}`.replaceAll("-", "_");
   }, [namespace, name]);
 
-  const [isLoading, setIsLoading] = useState(false);
-  const [dd, setDD] = useState<DataDescriptor | null>(null);
-  const [signature, setSignature] = useState<Signature | null>(null);
-  const [semanticDomain, setSemanticDomain] = useState<SemanticDomain | null>(
-    null,
-  );
-  const [agentConsumers, setAgentConsumers] = useState<LineageConsumer[]>([]);
+  const [tab, setTab] = useState<DataSourceTabKey>("overview");
+
+  const {
+    dd: ddRaw,
+    signature,
+    semanticDomain,
+    lineageConsumers,
+    descriptorError,
+    isLoading,
+    isNotFound,
+    isLoadError,
+    refreshAll,
+  } = useDataSourceDetail(namespace, name, {
+    includeAgentLineage: tab === "lineage",
+  });
+
+  const dd = useMemo(() => {
+    if (!ddRaw) return null;
+    return {
+      name: ddRaw.name,
+      namespace: ddRaw.namespace ?? namespace,
+      descriptor_type: ddRaw.descriptor_type,
+      gpuEnabled: ddRaw.gpuEnabled,
+      pdfLoader: ddRaw.pdfLoader,
+      overall_phase: ddRaw.overall_phase,
+      sources: ddRaw.sources,
+      source_statuses: ddRaw.source_statuses,
+      created_at: ddRaw.created_at,
+      updated_at: ddRaw.updated_at,
+      consumed_by: ddRaw.consumed_by,
+    } as DataDescriptor;
+  }, [ddRaw, namespace]);
+
   const [dependentResources, setDependentResources] = useState<DataDescriptorDependency[]>([]);
   const [showDependencyDialog, setShowDependencyDialog] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -354,10 +373,11 @@ export function DataSourceDetailView() {
   const [detachingGroupId, setDetachingGroupId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const [tab, setTab] = useState<DataSourceTabKey>("overview");
   const [selectedTable, setSelectedTable] = useState<{
     tableName: string;
     md: string;
+    entity: string;
+    desc: string;
   } | null>(null);
 
 
@@ -586,138 +606,11 @@ export function DataSourceDetailView() {
     [],
   );
 
-  const load = async () => {
-    if (!name) return;
-    setIsLoading(true);
-    try {
-      setDD(null);
-      setSignature(null);
-      setSemanticDomain(null);
-      setAgentConsumers([]);
-      const desc = await getDescriptor(namespace, name);
-      setDD({
-        name: desc.name,
-        namespace: desc.namespace ?? namespace,
-        descriptor_type: desc.descriptor_type,
-        gpuEnabled: desc.gpuEnabled,
-        pdfLoader: desc.pdfLoader,
-        overall_phase: desc.overall_phase,
-        sources: desc.sources,
-        source_statuses: desc.source_statuses,
-        created_at: desc.created_at,
-        updated_at: desc.updated_at,
-        consumed_by: desc.consumed_by,
-      });
-
-      try {
-        const items = await listAllAgentContainers();
-        const deps: LineageConsumer[] = [];
-        for (const a of items) {
-          const an = a.name ?? "";
-          const ans = a.namespace ?? "default";
-          if (!an) continue;
-          let hit = false;
-          const sel = a.dataPolicy?.sourceNameSelector ?? [];
-          if (ans === namespace && sel.some((x) => x === name)) hit = true;
-          const ads = a.activeDataDescriptors ?? [];
-          if (ads.some((x) => x.name === name && (x.namespace ?? "default") === namespace)) hit = true;
-          if (hit) deps.push({ kind: "agent", name: an, namespace: ans });
-        }
-        const uniq = new Map<string, LineageConsumer>();
-        for (const d of deps) {
-          const k = `${d.kind}/${d.namespace}/${d.name}`;
-          if (!uniq.has(k)) uniq.set(k, d);
-        }
-        setAgentConsumers(Array.from(uniq.values()));
-      } catch (e) {
-        console.warn("load agent lineage deps failed", e);
-      }
-    } catch (e) {
-      if (axios.isAxiosError(e) && e.response?.status === 404) {
-        // Not found is a valid UI state; don't spam console/toast.
-        setDD(null);
-        return;
-      }
-      toast.error("加载数据源详情失败");
-      setDD(null);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const lineageConsumers = useMemo(() => {
-    const fromConsumedBy: LineageConsumer[] = Array.isArray(dd?.consumed_by)
-      ? (dd.consumed_by as ObjectReferenceResponse[])
-          .map((c: ObjectReferenceResponse) => {
-            const nm = c.name ?? "";
-            if (!nm) return null;
-            return {
-              kind: "unknown",
-              name: nm,
-              namespace: c.namespace ?? "default",
-            } as LineageConsumer;
-          })
-          .filter((x): x is LineageConsumer => Boolean(x))
-      : [];
-
-    const all = [...fromConsumedBy, ...agentConsumers];
-    const uniq = new Map<string, LineageConsumer>();
-    for (const d of all) {
-      const k = `${d.kind}/${d.namespace}/${d.name}`;
-      if (!uniq.has(k)) uniq.set(k, d);
-    }
-    return Array.from(uniq.values());
-  }, [dd?.consumed_by, agentConsumers]);
-
-  const loadSignature = async () => {
-    if (!name) return;
-    try {
-      const res = await api.get(
-        `/namespaces/${encodeURIComponent(namespace)}/descriptors/${encodeURIComponent(name)}/signature`,
-      );
-      const data = res.data as unknown;
-      const r = isRecord(data) ? data : {};
-      const sig = r.data;
-      setSignature(isRecord(sig) ? sig : sig ? (sig as UnknownRecord) : null);
-    } catch (e) {
-      if (axios.isAxiosError(e) && e.response?.status === 404) {
-        setSignature(null);
-        return;
-      }
-      setSignature(null);
-    }
-  };
-
-  const loadSemanticDomain = async () => {
-    if (!name) return;
-    try {
-      const res = await api.get(
-        `/namespaces/${encodeURIComponent(namespace)}/descriptors/${encodeURIComponent(name)}/semantic-domain`,
-      );
-      const data = res.data as unknown;
-      const r = isRecord(data) ? data : {};
-      const sd = r.data;
-      setSemanticDomain(isRecord(sd) ? sd : sd ? (sd as UnknownRecord) : null);
-    } catch (e) {
-      if (axios.isAxiosError(e) && e.response?.status === 404) {
-        setSemanticDomain(null);
-        return;
-      }
-      setSemanticDomain(null);
-    }
-  };
-
   useEffect(() => {
-    void load();
-    void loadSignature();
-    void loadSemanticDomain();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [namespace, name]);
-
-
-  const refreshAll = async () => {
-    await Promise.all([load(), loadSignature(), loadSemanticDomain()]);
-  };
+    if (!descriptorError) return
+    if (axios.isAxiosError(descriptorError) && descriptorError.response?.status === 404) return
+    toast.error("加载数据源详情失败")
+  }, [descriptorError])
 
   const checkDependencies = async () => {
     setCheckingDependency(true);
@@ -912,7 +805,25 @@ export function DataSourceDetailView() {
             <Loader2 className="w-8 h-8 animate-spin mb-4 text-cta" />
             <p>正在加载数据源详情…</p>
           </div>
-        ) : !dd ? (
+        ) : isLoadError ? (
+          <div className="rounded-lg border border-dashed border-line-hover p-12 text-center">
+            <Database className="mx-auto h-12 w-12 text-content-muted" />
+            <h3 className="mt-2 text-sm font-semibold text-content">
+              加载失败
+            </h3>
+            <p className="mt-1 text-sm text-content-muted">
+              无法获取数据源详情，请检查网络或稍后重试。
+            </p>
+            <div className="mt-6 flex items-center justify-center gap-3">
+              <Button variant="outline" onClick={() => void refreshAll()}>
+                重试
+              </Button>
+              <Button variant="outline" onClick={() => router.back()}>
+                返回列表
+              </Button>
+            </div>
+          </div>
+        ) : isNotFound || !dd ? (
           <div className="rounded-lg border border-dashed border-line-hover p-12 text-center">
             <Database className="mx-auto h-12 w-12 text-content-muted" />
             <h3 className="mt-2 text-sm font-semibold text-content">
@@ -1011,138 +922,18 @@ export function DataSourceDetailView() {
             </section>
           </div>
         ) : tab === "structure" ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-medium text-content flex items-center gap-2">
-                <TableIcon className="w-4 h-4 text-content-muted" />
-                {structureTitle}
-              </h3>
-              <div className="flex items-center gap-3">
-                <Badge
-                  variant="secondary"
-                  className="bg-surface border-line text-content"
-                >
-                  {structureCountLabel}
-                </Badge>
-              </div>
-            </div>
-
-            <div className="bg-surface rounded-xl border border-line shadow-sm overflow-hidden">
-              <div className="p-0">
-                {!isStructuredSource ? (
-                  <EmptyState icon={TableIcon} message={structureEmptyMessage} />
-                ) : !signatureMeta ? (
-                  <EmptyState icon={TableIcon} message={structureEmptyMessage} />
-                ) : (
-                  <div className="flex flex-col">
-                    {/* Table List (Main Content) */}
-                    <div className="flex-1 p-0 overflow-x-auto">
-                      <Table storageKey="datasource-schema-list" columns={[...SCHEMA_TABLE_COLUMNS]}>
-                        <TableHeader className="sticky top-0 bg-surface-muted z-10 shadow-sm">
-                          <TableRow>
-                            <TableHead columnId="expand" className="text-center" />
-                            <TableHead columnId="tableName">表名</TableHead>
-                            <TableHead columnId="businessObject">业务对象</TableHead>
-                            <TableHead columnId="description">描述</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {tableList.length > 0 ? (
-                            tableList.map((row, i) => {
-                              const isExpanded =
-                                selectedTable?.tableName === row.tableName;
-                              return (
-                                <React.Fragment key={i}>
-                                  <TableRow
-                                    className={cn(
-                                      "cursor-pointer transition-colors group",
-                                      isExpanded
-                                        ? "bg-surface-muted border-b-0"
-                                        : "hover:bg-surface-muted/50",
-                                    )}
-                                    onClick={() =>
-                                      setSelectedTable(isExpanded ? null : row)
-                                    }
-                                  >
-                                    <TableCell columnId="expand" className="text-center py-4 pl-4 pr-2">
-                                      <div
-                                        className={cn(
-                                          "w-6 h-6 rounded-md flex items-center justify-center transition-all duration-200",
-                                          isExpanded
-                                            ? "bg-surface-active text-content"
-                                            : "text-content-muted group-hover:bg-surface-muted group-hover:text-content",
-                                        )}
-                                      >
-                                        {isExpanded ? (
-                                          <ChevronDown className="h-4 w-4" />
-                                        ) : (
-                                          <ChevronRight className="h-4 w-4" />
-                                        )}
-                                      </div>
-                                    </TableCell>
-                                    <TableCell columnId="tableName" className="font-mono text-sm font-medium text-content py-4">
-                                      {row.tableName}
-                                    </TableCell>
-                                    <TableCell columnId="businessObject" className="text-sm text-content py-4">
-                                      {row.entity || "-"}
-                                    </TableCell>
-                                    <TableCell columnId="description" className="text-sm text-content-muted py-4">
-                                      <div title={row.desc}>
-                                        {row.desc || "-"}
-                                      </div>
-                                    </TableCell>
-                                  </TableRow>
-                                  {isExpanded && (
-                                    <TableRow className="bg-surface-muted hover:bg-surface-muted border-t-0 border-b border-line">
-                                      <TableCell
-                                        colSpan={4}
-                                        className="p-0 border-t-0 bg-surface-muted"
-                                      >
-                                        <div className="px-16 pb-8 pt-0 animate-in slide-in-from-top-1 duration-200 bg-surface-muted">
-                                          <div className="p-0 overflow-x-auto">
-                                            <Markdown
-                                              components={structureSchemaMarkdownComponents}
-                                            >
-                                              {/* Remove the redundant '## Table: ...' title line from the markdown content */}
-                                              {row.md
-                                                .replace(
-                                                  /^\s*## Table:.*$/m,
-                                                  "",
-                                                )
-                                                .trim()}
-                                            </Markdown>
-                                          </div>
-                                        </div>
-                                      </TableCell>
-                                    </TableRow>
-                                  )}
-                                </React.Fragment>
-                              );
-                            })
-                          ) : (
-                            <TableRow>
-                              <TableCell
-                                colSpan={4}
-                                className="h-24 text-center text-content-muted"
-                              >
-                                {structureEmptyRowMessage}
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </TableBody>
-                      </Table>
-                    </div>
-
-                    {/* Raw JSON Toggle (Bottom Left, Optional) */}
-                    {/* We can move this elsewhere or keep it hidden for now as user prefers the list view */}
-                  </div>
-                )}
-              </div>
-
-              {/* Slide-over Panel for Table Details */}
-              {/* Removed SidePanel as we are using accordion style now */}
-            </div>
-          </div>
+          <DataSourceStructureTab
+            isStructuredSource={isStructuredSource}
+            structureTitle={structureTitle}
+            structureCountLabel={structureCountLabel}
+            structureEmptyMessage={structureEmptyMessage}
+            structureEmptyRowMessage={structureEmptyRowMessage}
+            hasSignatureMeta={Boolean(signatureMeta)}
+            tableList={tableList}
+            selectedTableName={selectedTable?.tableName ?? null}
+            onSelectTable={(row) => setSelectedTable(row)}
+            markdownComponents={structureSchemaMarkdownComponents}
+          />
         ) : tab === "knowledge" ? (
           <KnowledgeShardsPanel namespace={namespace} name={name} />
         ) : tab === "graph" ? (

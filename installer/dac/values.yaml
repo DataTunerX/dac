@@ -59,14 +59,15 @@ global:
 
 # =============================================================================
 # Middleware - Built-in single-node StatefulSet instances
-# Set enabled: false to use an external instance instead.
+# Set <svc>.external.host to use an external instance (built-in deploy is skipped).
+# Or set enabled: false when you manage connectivity another way.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
 # MySQL 8.0 (used by: apiserver DB, data-services fingerprint/history)
 # ---------------------------------------------------------------------------
 mysql:
-  # -- Deploy built-in MySQL. Set false to use external MySQL.
+  # -- Deploy built-in MySQL. Ignored when mysql.external.host is set.
   enabled: true
   image:
     repository: mysql
@@ -96,8 +97,8 @@ mysql:
       memory: 2Gi
 
 
-  # -- External MySQL connection. Set host to use an external MySQL instance
-  #    instead of the built-in StatefulSet (mysql.enabled is ignored when set).
+  # -- External MySQL connection. When host is set, the built-in StatefulSet/
+  #    Service are not rendered and all consumers use these connection values.
   external:
     host: ""
     port: 3306
@@ -106,7 +107,7 @@ mysql:
 # Redis 7 (used by: agents, data-sinkers-job, semantic-grouper, registries)
 # ---------------------------------------------------------------------------
 redis:
-  # -- Deploy built-in Redis. Set false to use external Redis.
+  # -- Deploy built-in Redis. Ignored when redis.external.host is set.
   enabled: true
   image:
     repository: redis
@@ -130,8 +131,8 @@ redis:
       cpu: 500m
       memory: 1Gi
 
-  # -- External Redis connection. Set host to use an external Redis instance
-  #    instead of the built-in StatefulSet (redis.enabled is ignored when set).
+  # -- External Redis connection. When host is set, the built-in StatefulSet/
+  #    Service are not rendered and all consumers use these connection values.
   external:
     host: ""
     port: 6379
@@ -141,7 +142,7 @@ redis:
 # PostgreSQL 16 + pgvector (used by: data-services vectors and memory)
 # ---------------------------------------------------------------------------
 pgvector:
-  # -- Deploy built-in pgvector. Set false to use external PostgreSQL.
+  # -- Deploy built-in pgvector. Ignored when pgvector.external.host is set.
   enabled: true
   image:
     repository: pgvector
@@ -171,8 +172,8 @@ pgvector:
       cpu: 1000m
       memory: 2Gi
 
-  # -- External PostgreSQL/pgvector connection. Set host to use an external
-  #    instance instead of the built-in StatefulSet (pgvector.enabled is ignored).
+  # -- External PostgreSQL/pgvector connection. When host is set, the built-in
+  #    StatefulSet/Service are not rendered and all consumers use these values.
   external:
     host: ""
     port: 5432
@@ -184,7 +185,7 @@ pgvector:
 # For docker.m.daocloud.io/neo4j: set global.imageRegistry: "docker.m.daocloud.io"
 # ---------------------------------------------------------------------------
 neo4j:
-  # -- Deploy built-in Neo4j. Set false to use external Neo4j.
+  # -- Deploy built-in Neo4j. Ignored when neo4j.external.host is set.
   enabled: true
   image:
     repository: neo4j
@@ -227,11 +228,13 @@ neo4j:
       cpu: 1000m
       memory: 2Gi
 
-  # -- External Neo4j connection. Set host to use an external Neo4j instance
-  #    instead of the built-in StatefulSet (neo4j.enabled is ignored when set).
-  #    When using external, also set dataServices.config.neo4j.boltUrl / neo4jUrl.
+  # -- External Neo4j connection. When host is set, the built-in StatefulSet/
+  #    Service are not rendered; bolt/neo4j URLs are built as bolt://host:boltPort
+  #    and neo4j://host:boltPort (overrides dataServices.config.neo4j.* URLs).
   external:
     host: ""
+    # -- Bolt port for external Neo4j (default: neo4j.boltPort / 7687)
+    boltPort: 7687
     password: ""
 
 # =============================================================================
@@ -379,10 +382,13 @@ dataServices:
       maxConnection: "50"
       # -- Graph memory (enable | disable). Requires Neo4j.
       graphEnable: "disable"
-    # -- Neo4j connection (only needed if graphEnable=enable)
+    # -- Neo4j connection (only needed if graphEnable=enable).
+    #    When neo4j.external.host is set, boltUrl/neo4jUrl below are ignored
+    #    and URLs are derived from neo4j.external.host / boltPort.
     neo4j:
-      # -- In-cluster: service name defaults to release component "neo4j" (see dac.neo4j.serviceName)
+      # -- In-cluster Bolt URL (used when neo4j.external.host is empty)
       boltUrl: "bolt://neo4j:7687"
+      # -- In-cluster neo4j:// URL for mem0 graph (used when neo4j.external.host is empty)
       neo4jUrl: "neo4j://neo4j:7687"
       username: "neo4j"
       password: "test123456"

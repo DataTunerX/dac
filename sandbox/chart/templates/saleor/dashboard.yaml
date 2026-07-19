@@ -1,0 +1,130 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: saleor-dashboard-nginx
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: saleor-dashboard
+data:
+  default.conf: |
+    server {
+      listen 9002;
+      server_name localhost;
+      root /app/dashboard/;
+
+      add_header Referrer-Policy origin-when-cross-origin;
+
+      location /graphql/ {
+        proxy_pass http://127.0.0.1:{{ .Values.saleor.apiPort }}/graphql/;
+        proxy_set_header Host saleor-api;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+
+      location /media/ {
+        proxy_pass http://127.0.0.1:{{ .Values.saleor.apiPort }}/media/;
+        proxy_set_header Host saleor-api;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+
+      location / {
+        alias /app/dashboard/;
+        index index.html;
+        try_files $uri $uri/ /dashboard/index.html;
+      }
+
+      location /dashboard/ {
+        alias /app/dashboard/;
+        index index.html;
+        try_files $uri $uri/ /dashboard/index.html;
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saleor-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: saleor-dashboard
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 9002
+      targetPort: 9002
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: saleor-populatedb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: saleor-seed
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: saleor-seed
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-api
+          image: {{ include "dac-sandbox.alpineImage" . }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              apk add --no-cache curl >/dev/null
+              for i in $(seq 1 90); do
+                if curl -fsS http://saleor-api:{{ .Values.saleor.apiPort }}/graphql/ >/dev/null 2>&1; then
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "saleor-api not ready"
+              exit 1
+      containers:
+        - name: populate
+          image: {{ include "dac-sandbox.saleorImage" . }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DATABASE_URL
+              value: {{ include "dac-sandbox.saleorDatabaseUrlExternal" . | quote }}
+            - name: CACHE_URL
+              value: "redis://redis:6379/0"
+            - name: CELERY_BROKER_URL
+              value: "redis://redis:6379/1"
+            - name: SECRET_KEY
+              value: {{ .Values.credentials.saleorSecretKey | quote }}
+            - name: ALLOWED_HOSTS
+              value: "*"
+            - name: DEFAULT_CHANNEL_SLUG
+              value: default-channel
+          command:
+            - python3
+            - manage.py
+            - populatedb
+            - --createsuperuser
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1536Mi"

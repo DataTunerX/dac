@@ -1,0 +1,17 @@
+apiVersion: v2
+name: dac-sandbox
+description: >
+  DAC enterprise data-plane sandbox — one Pod IP (MySQL/Postgres/Redis/MinIO/FileServer/GitLab/Odoo/Saleor API)
+  plus Saleor Dashboard and Online Boutique for asset discovery demos.
+type: application
+version: 0.1.0
+appVersion: "0.11.0"
+keywords:
+  - dac
+  - sandbox
+  - discovery
+maintainers:
+  - name: DAC Team
+sources:
+  - https://github.com/James-Dao/dac
+home: https://github.com/James-Dao/dac

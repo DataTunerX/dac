@@ -1,11 +1,16 @@
 /**
  * Typed API for data descriptors. Uses @/lib/api; response interceptor unwraps envelope.
  */
+import axios from "axios"
 import { api } from "@/lib/api"
 import type {
   DataDescriptorResponse,
   DataDescriptorListResponse,
+  DataDescriptorSignature,
+  DataDescriptorSemanticDomain,
+  NestedDataEnvelope,
 } from "@/lib/api-types"
+import { unwrapNestedData } from "@/lib/unwrap-nested-data"
 
 export async function listDescriptorsAll(params?: {
   limit?: number
@@ -36,21 +41,53 @@ export async function listAllDescriptors(): Promise<DataDescriptorListResponse["
 
 export async function listDescriptorsInNamespace(
   namespace: string,
-  params?: { limit?: number; offset?: number }
+  params?: { limit?: number; offset?: number },
 ): Promise<DataDescriptorListResponse> {
   const res = await api.get<DataDescriptorListResponse>(
     `/namespaces/${encodeURIComponent(namespace)}/descriptors`,
-    { params }
+    { params },
   )
   return res.data
 }
 
 export async function getDescriptor(
   namespace: string,
-  name: string
+  name: string,
 ): Promise<DataDescriptorResponse> {
   const res = await api.get<DataDescriptorResponse>(
-    `/namespaces/${encodeURIComponent(namespace)}/descriptors/${encodeURIComponent(name)}`
+    `/namespaces/${encodeURIComponent(namespace)}/descriptors/${encodeURIComponent(name)}`,
   )
   return res.data
+}
+
+/** GET .../signature — returns null on 404. */
+export async function getDescriptorSignature(
+  namespace: string,
+  name: string,
+): Promise<DataDescriptorSignature | null> {
+  try {
+    const res = await api.get<NestedDataEnvelope<DataDescriptorSignature>>(
+      `/namespaces/${encodeURIComponent(namespace)}/descriptors/${encodeURIComponent(name)}/signature`,
+    )
+    return unwrapNestedData<DataDescriptorSignature>(res.data)
+  } catch (e) {
+    if (axios.isAxiosError(e) && e.response?.status === 404) return null
+    throw e
+  }
+}
+
+/** GET .../semantic-domain — returns null on 404. */
+export async function getDescriptorSemanticDomain(
+  namespace: string,
+  name: string,
+): Promise<DataDescriptorSemanticDomain | null> {
+  try {
+    const res = await api.get<NestedDataEnvelope<DataDescriptorSemanticDomain>>(
+      `/namespaces/${encodeURIComponent(namespace)}/descriptors/${encodeURIComponent(name)}/semantic-domain`,
+    )
+    return unwrapNestedData<DataDescriptorSemanticDomain>(res.data)
+  } catch (e) {
+    if (axios.isAxiosError(e) && e.response?.status === 404) return null
+    throw e
+  }
 }

@@ -4,6 +4,7 @@ import { memo, useEffect, useRef, useState, useId } from "react"
 import { Maximize2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { sanitizeSvg } from "@/lib/sanitize-svg"
 
 type MermaidBlockProps = {
   value: string
@@ -13,6 +14,8 @@ type MermaidBlockProps = {
 /** 修复大模型常输出的错误 Mermaid 语法（引号、subgraph 格式） */
 function normalizeMermaidFromLLM(source: string): string {
   let s = source
+  // Strip diagram-level init overrides (can re-enable unsafe securityLevel)
+  s = s.replace(/%%\{[\s\S]*?\}%%/g, "")
   // 1. 统一引号：中文/Unicode 弯引号 → ASCII
   s = s.replace(/\u201C|\u201D/g, '"')
   s = s.replace(/\u2018|\u2019/g, "'")
@@ -58,7 +61,8 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
         const mermaid = (await import("mermaid")).default
         const config = {
           startOnLoad: false,
-          securityLevel: "loose",
+          // Disable HTML labels / click callbacks from untrusted LLM diagrams
+          securityLevel: "strict" as const,
           theme: "base",
           themeVariables: {
             primaryColor: "#e0f2fe",
@@ -81,7 +85,7 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
         mermaid.initialize(config as Parameters<typeof mermaid.initialize>[0])
         const uid = `mermaid-${id}-${Math.random().toString(36).slice(2, 9)}`
         const { svg: out } = await mermaid.render(uid, normalized)
-        if (!cancelled) setSvg(out)
+        if (!cancelled) setSvg(sanitizeSvg(out))
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         if (!cancelled) {

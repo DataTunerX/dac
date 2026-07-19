@@ -112,8 +112,12 @@ function readStoredTitles(ids: readonly string[]): Map<string, string> {
   const m = new Map<string, string>()
   if (typeof window === "undefined") return m
   for (const id of ids) {
-    const t = localStorage.getItem(`dac_title_${id}`)
-    if (t) m.set(id, t)
+    try {
+      const t = localStorage.getItem(`dac_title_v1_${id}`) ?? localStorage.getItem(`dac_title_${id}`)
+      if (t) m.set(id, t)
+    } catch {
+      // private mode / blocked storage
+    }
   }
   return m
 }

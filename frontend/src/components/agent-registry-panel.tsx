@@ -40,15 +40,8 @@ import {
 import { TableWrapper } from "@/components/ui/table-wrapper"
 import { PaginationBar } from "@/components/pagination-bar"
 import { cn } from "@/lib/utils"
+import { getApiErrorMessage as apiErrorMessage } from "@/lib/api-error"
 import { Loader2, RefreshCw, Search, X } from "lucide-react"
-
-function apiErrorMessage(err: unknown, fallback: string): string {
-  if (axios.isAxiosError(err)) {
-    const body = err.response?.data as { message?: string } | undefined
-    if (body?.message) return body.message
-  }
-  return fallback
-}
 
 function cardString(card: Record<string, unknown>, key: string): string {
   const value = card[key]

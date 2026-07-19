@@ -25,6 +25,7 @@ import {
 import { Loader2, Plus, RefreshCw, Trash2, Eye, Target } from "lucide-react"
 import type { DiscoveryJobResponse, DiscoveryJobStatus } from "@/lib/discovery"
 import { deleteDiscoveryScan, listDiscoveryScans, startDiscoveryScan, updateDiscoveryScan } from "@/lib/discovery"
+import { getApiErrorMessage as getApiErrorMessageBase } from "@/lib/api-error"
 
 function statusLabel(status: DiscoveryJobStatus) {
   switch (status) {
@@ -63,18 +64,8 @@ function fmtTs(sec?: number) {
 }
 
 function getApiErrorMessage(err: unknown): string | null {
-  if (axios.isAxiosError(err)) {
-    const data = err.response?.data
-    if (data && typeof data === "object") {
-      const r = data as Record<string, unknown>
-      const msg = r.message
-      if (typeof msg === "string" && msg.trim()) return msg.trim()
-    }
-    if (typeof err.message === "string" && err.message.trim()) return err.message.trim()
-    return null
-  }
-  if (err instanceof Error && err.message.trim()) return err.message.trim()
-  return null
+  const msg = getApiErrorMessageBase(err, "")
+  return msg.trim() ? msg : null
 }
 
 const INFRA_JOBS_COLUMNS = [

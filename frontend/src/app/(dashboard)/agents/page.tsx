@@ -14,6 +14,7 @@ import useSWR from "swr";
 import { api } from "@/lib/api";
 import { listAllAgentContainers } from "@/lib/agents-api";
 import { apiFetcherWithParams } from "@/lib/swr";
+import { AGENTS_LIST_KEY } from "@/lib/swr-keys";
 import { filterListByQuery } from "@/lib/filter-list-by-query";
 import { RbacButton, RbacWrapper } from "@/components/rbac";
 import { StatusBadge } from "@/components/status-badge";
@@ -81,7 +82,6 @@ import { ListSkeleton } from "@/components/ui/skeleton";
 
 type UnknownRecord = Record<string, unknown>;
 
-const AGENTS_LIST_KEY = ["agents-list-all"] as const;
 const AGENTS_LIST_COLUMNS = [
   { id: "name", size: 220 },
   { id: "namespace", size: 140 },

@@ -61,14 +61,15 @@ function isSeparatorLine(line: string): boolean {
   return /^[|:\-\s]+$/.test(t)
 }
 
-/** Row boundary when models join multiple GFM rows on one line: `...| |...` */
-/** Next row is a separator (`---`) or starts with cell content. */
-const SQUASHED_ROW_BOUNDARY = /\|\s*\|(?=\s*(?:[\s:]*-{3,}|\S))/g
-
+/**
+ * Squashed single-line tables always include a separator on the same line.
+ * Do not treat normal rows that merely have empty cells (`|  |`) as squashed —
+ * that previously corrupted schema tables with blank Key/Comment columns.
+ */
 function lineLooksLikeSquashedTable(line: string): boolean {
   if (!line.includes("|")) return false
-  if (isSeparatorLine(line) || /\|[\s:]*-{3,}/.test(line)) return true
-  return (line.match(/\|/g)?.length ?? 0) >= 6 && SQUASHED_ROW_BOUNDARY.test(line)
+  if (!/\|[\s:]*-{3,}/.test(line)) return false
+  return (line.match(/\|/g)?.length ?? 0) >= 6
 }
 
 function alignSeparatorToHeader(table: string): string {
@@ -82,18 +83,93 @@ function alignSeparatorToHeader(table: string): string {
   return rows.join("\n")
 }
 
+/** Index of the closing `|` after the Nth cell, or -1. */
+function indexAfterNthCell(row: string, n: number): number {
+  let count = 0
+  let i = row.indexOf("|")
+  if (i < 0) return -1
+  for (i = i + 1; i < row.length; i++) {
+    if (row[i] === "|") {
+      count++
+      if (count === n) return i
+    }
+  }
+  return -1
+}
+
+/**
+ * Split a data line that still has multiple logical rows joined by `| |`.
+ * Uses header column count so empty cells inside a single row are preserved.
+ */
+function splitDataLineByColumnCount(row: string, headerCols: number): string[] {
+  const results: string[] = []
+  let remaining = row.trim()
+  if (!remaining.startsWith("|")) remaining = `| ${remaining}`
+
+  while (remaining) {
+    const cells = parseTableCells(remaining)
+    if (cells.length <= headerCols) {
+      results.push(remaining)
+      break
+    }
+    const splitAt = indexAfterNthCell(remaining, headerCols)
+    if (splitAt < 0) {
+      results.push(remaining)
+      break
+    }
+    results.push(remaining.slice(0, splitAt + 1).trim())
+    remaining = remaining.slice(splitAt + 1).trim()
+    if (remaining && !remaining.startsWith("|")) remaining = `| ${remaining}`
+  }
+  return results.filter(Boolean)
+}
+
+function splitOversizedDataRows(table: string): string {
+  const rows = table.split("\n").filter((l) => l.trim())
+  if (rows.length < 2) return table
+  const headerCols = parseTableCells(rows[0]).length
+  if (headerCols < 1) return table
+
+  const out: string[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    if (i < 2 || isSeparatorLine(row)) {
+      out.push(row)
+      continue
+    }
+    out.push(...splitDataLineByColumnCount(row, headerCols))
+  }
+  return out.join("\n")
+}
+
+/** If a line mixes a separator with following data, break after the separator. */
+function breakSeparatorFromData(line: string): string {
+  const re = /\|\s*\|/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(line)) !== null) {
+    const left = line.slice(0, match.index + 1)
+    const right = line.slice(match.index + match[0].length - 1)
+    if (isSeparatorLine(left) && /\|?\s*[^|:\-\s]/.test(right)) {
+      return `${left}\n${right}`
+    }
+  }
+  return line
+}
+
 function expandSquashedTableLine(line: string): string {
   const firstPipe = line.indexOf("|")
   if (firstPipe < 0) return line
 
   const prefix = line.slice(0, firstPipe).trimEnd()
   let table = line.slice(firstPipe).trim()
-  table = table.replace(SQUASHED_ROW_BOUNDARY, "|\n|")
+  // Break before separator: `| header | |---|---|`
+  table = table.replace(/\|\s*\|(?=\s*[\s:]*-{3,})/g, "|\n|")
   table = table
     .split("\n")
-    .map((l) => (l.trim().startsWith("|") ? l.trim() : `| ${l.trim()}`))
+    .map((l) => breakSeparatorFromData(l.trim().startsWith("|") ? l.trim() : `| ${l.trim()}`))
     .join("\n")
   table = alignSeparatorToHeader(table)
+  table = splitOversizedDataRows(table)
 
   return prefix ? `${prefix}\n\n${table}` : table
 }

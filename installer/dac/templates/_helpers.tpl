@@ -165,11 +165,45 @@ app.kubernetes.io/component: {{ .name }}
 {{- end }}
 {{- end }}
 
+{{- define "dac.neo4j.host" -}}
+{{- if .Values.neo4j.external.host }}
+{{- .Values.neo4j.external.host }}
+{{- else }}
+{{- printf "%s.%s.svc.cluster.local" (include "dac.neo4j.serviceName" .) .Release.Namespace }}
+{{- end }}
+{{- end }}
+
+{{- define "dac.neo4j.boltPort" -}}
+{{- if .Values.neo4j.external.host }}
+{{- .Values.neo4j.external.boltPort | default .Values.neo4j.boltPort | default 7687 | toString }}
+{{- else }}
+{{- .Values.neo4j.boltPort | toString }}
+{{- end }}
+{{- end }}
+
 {{- define "dac.neo4j.password" -}}
 {{- if .Values.neo4j.external.host }}
 {{- .Values.neo4j.external.password }}
 {{- else }}
 {{- .Values.neo4j.password }}
+{{- end }}
+{{- end }}
+
+{{/* Bolt URL: auto-built from neo4j.external.host when set; else dataServices.config.neo4j.boltUrl */}}
+{{- define "dac.neo4j.boltUrl" -}}
+{{- if .Values.neo4j.external.host }}
+{{- printf "bolt://%s:%s" .Values.neo4j.external.host (include "dac.neo4j.boltPort" .) }}
+{{- else }}
+{{- .Values.dataServices.config.neo4j.boltUrl }}
+{{- end }}
+{{- end }}
+
+{{/* neo4j:// URL for mem0 graph; same external/built-in resolution as boltUrl */}}
+{{- define "dac.neo4j.neo4jUrl" -}}
+{{- if .Values.neo4j.external.host }}
+{{- printf "neo4j://%s:%s" .Values.neo4j.external.host (include "dac.neo4j.boltPort" .) }}
+{{- else }}
+{{- .Values.dataServices.config.neo4j.neo4jUrl }}
 {{- end }}
 {{- end }}
 

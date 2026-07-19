@@ -1,4 +1,4 @@
-{{- if .Values.pgvector.enabled }}
+{{- if and .Values.pgvector.enabled (not .Values.pgvector.external.host) }}
 apiVersion: v1
 kind: Service
 metadata:

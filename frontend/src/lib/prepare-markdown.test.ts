@@ -43,13 +43,11 @@ describe("prepareMarkdown — empty table cells", () => {
       "|--------|------|----------|-----|---------|",
       "| `id` | `int4(32,0)` | NO | PRI | None |",
       "| `first_name` | `varchar(256)` | NO |  |  |",
-      "| `last_name` | `varchar(256)` | NO |  |  |",
+      "| `last_name` | `varchar(256)` | NO |  | some note |",
     ].join("\n")
     const out = prepareMarkdown(input)
     expect(out).toBe(input)
-    // Each data row must still have 5 cells
-    const firstNameLine = out.split("\n").find((l) => l.includes("first_name"))
-    expect(firstNameLine).toBeDefined()
-    expect(firstNameLine!.split("|").filter(Boolean).length).toBeGreaterThanOrEqual(5)
+    expect(out).toContain("| `first_name` | `varchar(256)` | NO |  |  |")
+    expect(out).toContain("| `last_name` | `varchar(256)` | NO |  | some note |")
   })
 })

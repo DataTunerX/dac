@@ -13,7 +13,7 @@ spec:
     - type: mysql
       name: "northwind"
       metadata:
-        host: "mysql-server.dac-sandbox.svc.cluster.local"
+        host: "mysql.dac-sandbox.svc.cluster.local"
         port: "3306"
         user: "dac"
         password: "dacpass"

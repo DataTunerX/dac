@@ -13,7 +13,7 @@ spec:
     - type: postgres
       name: "sandbox-saleor-db"
       metadata:
-        host: "saleor-db.dac-sandbox.svc.cluster.local"
+        host: "postgres.dac-sandbox.svc.cluster.local"
         port: "5432"
         user: "saleor"
         password: "saleor"

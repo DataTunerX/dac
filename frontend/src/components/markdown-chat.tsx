@@ -4,13 +4,12 @@ import React, { memo, useEffect, useMemo, useState } from "react"
 import type { HTMLAttributes, ReactNode } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import remarkMath from "remark-math"
-import rehypeKatex from "rehype-katex"
 import nextDynamic from "next/dynamic"
 import { Check, Copy } from "lucide-react"
 import { toast } from "sonner"
 import { prepareMarkdown } from "@/lib/prepare-markdown"
 import { defaultMarkdownComponents } from "@/components/markdown"
+import { isExternalMarkdownHref, sanitizeMarkdownHref } from "@/lib/markdown-url"
 
 const ChartBlock = nextDynamic(
   () => import("@/components/chart-block/index").then((m) => ({ default: m.ChartBlock })),
@@ -137,13 +136,15 @@ const chatMarkdownComponents = {
     )
   },
   a({ href, children }: { href?: string; children?: ReactNode }) {
-    const isExternal = href?.startsWith("http")
+    const safeHref = sanitizeMarkdownHref(href)
+    if (!safeHref) return <span>{children}</span>
+    const external = isExternalMarkdownHref(safeHref)
     return (
       <a
-        href={href}
+        href={safeHref}
         className="text-cta hover:text-cta/90 underline cursor-pointer transition-colors"
-        target={isExternal ? "_blank" : undefined}
-        rel={isExternal ? "noopener noreferrer" : undefined}
+        target={external ? "_blank" : undefined}
+        rel={external ? "noopener noreferrer" : undefined}
       >
         {children}
       </a>
@@ -151,11 +152,11 @@ const chatMarkdownComponents = {
   },
 }
 
-const REMARK_GFM_ONLY = [remarkGfm]
-const REMARK_GFM_MATH = [remarkGfm, remarkMath]
-const REHYPE_KATEX = [rehypeKatex]
-/** Stable empty list for ReactMarkdown when KaTeX is skipped. */
-const REHYPE_NONE: [] = []
+type RemarkPlugins = NonNullable<React.ComponentProps<typeof ReactMarkdown>["remarkPlugins"]>
+type RehypePlugins = NonNullable<React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]>
+
+const REMARK_GFM_ONLY: RemarkPlugins = [remarkGfm]
+const REHYPE_NONE: RehypePlugins = []
 
 const MATH_DELIMITER_RE = /\\[\[\(]|\$\$?/
 
@@ -170,6 +171,7 @@ export function normalizeMathDelimiters(input: string) {
 /**
  * Chat / history assistant answers: one entry for prepare + render.
  * `prepareMarkdown` runs before remark-gfm so tables and fences parse reliably.
+ * KaTeX / remark-math load only when math delimiters are present (and not while streaming).
  */
 export const ChatMarkdown = memo(function ChatMarkdown({
   source,
@@ -179,25 +181,43 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   /** When true, skip KaTeX until stream ends (perf during token updates). */
   isStreaming?: boolean
 }) {
-  const needsMath = useMemo(() => !isStreaming && MATH_DELIMITER_RE.test(source), [source, isStreaming])
-  const markdown = useMemo(
-    () => prepareMarkdown(normalizeMathDelimiters(source)),
-    [source]
-  )
-  const remarkPlugins = useMemo(
-    () => (needsMath ? REMARK_GFM_MATH : REMARK_GFM_ONLY),
-    [needsMath]
-  )
-  const rehypePlugins = useMemo(
-    () => (needsMath ? REHYPE_KATEX : REHYPE_NONE),
-    [needsMath]
-  )
+  const wantsMath = useMemo(() => !isStreaming && MATH_DELIMITER_RE.test(source), [source, isStreaming])
+  const markdown = useMemo(() => prepareMarkdown(normalizeMathDelimiters(source)), [source])
+
+  const [remarkPlugins, setRemarkPlugins] = useState<RemarkPlugins>(REMARK_GFM_ONLY)
+  const [rehypePlugins, setRehypePlugins] = useState<RehypePlugins>(REHYPE_NONE)
+
+  useEffect(() => {
+    if (!wantsMath) {
+      setRemarkPlugins(REMARK_GFM_ONLY)
+      setRehypePlugins(REHYPE_NONE)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const [{ default: remarkMath }, rehypeKatexMod] = await Promise.all([
+        import("remark-math"),
+        import("rehype-katex"),
+        import("katex/dist/katex.min.css"),
+      ])
+      if (cancelled) return
+      const rehypeKatex = (rehypeKatexMod as { default?: unknown }).default ?? rehypeKatexMod
+      setRemarkPlugins([remarkGfm, remarkMath])
+      setRehypePlugins([rehypeKatex as NonNullable<RehypePlugins>[number]])
+    })().catch((e) => {
+      console.warn("Failed to load KaTeX markdown plugins", e)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [wantsMath])
 
   return (
     <div className="min-w-0 overflow-hidden [content-visibility:auto]">
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}
+        urlTransform={(url) => sanitizeMarkdownHref(url) ?? ""}
         components={chatMarkdownComponents}
       >
         {markdown}

@@ -5,7 +5,7 @@ const STORAGE_PREFIX = "table-column-sizing:"
 /** Absolute floor for any resizable column (px). */
 export const COLUMN_MIN_WIDTH = 56
 /** Absolute ceiling for any resizable column (px). */
-export const COLUMN_MAX_WIDTH = 480
+export const COLUMN_MAX_WIDTH = 560
 /** Min width as a fraction of the column default size. */
 export const COLUMN_MIN_RATIO = 0.45
 /** Max width as a fraction of the column default size. */

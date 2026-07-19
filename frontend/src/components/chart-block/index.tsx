@@ -36,8 +36,50 @@ type EChartsSeriesItem = Record<string, unknown>
 type EChartsTitleOption = Record<string, unknown>
 type EChartsLegendOption = Record<string, unknown>
 
+/** Drop stringified JS handlers from model JSON (ECharts can execute formatter strings). */
+function looksLikeJsHandler(value: string): boolean {
+  const t = value.trim()
+  // Keep ECharts template strings like "{b}: {c}" / "{a}<br/>{b}"
+  if (/^\{[\s\S]*\}$/.test(t) || /\{[a-zA-Z0-9@]+\}/.test(t)) {
+    if (!t.includes("=>") && !/\bfunction\b/.test(t) && !/\bnew\s+Function\b/i.test(t)) {
+      return false
+    }
+  }
+  return (
+    t.startsWith("function") ||
+    t.includes("=>") ||
+    /^\s*new\s+Function\b/i.test(t) ||
+    /^\s*\(\s*[a-zA-Z_$]/.test(t)
+  )
+}
+
+function stripUnsafeEChartsValues(value: unknown): unknown {
+  if (typeof value === "string") {
+    return looksLikeJsHandler(value) ? undefined : value
+  }
+  if (Array.isArray(value)) {
+    return value.map(stripUnsafeEChartsValues).filter((v) => v !== undefined)
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (/^on[A-Z]/.test(k) || k.toLowerCase() === "onclick") continue
+      // Only strip formatter strings that look like executable JS
+      if (k === "formatter" && typeof v === "string" && looksLikeJsHandler(v)) continue
+      const cleaned = stripUnsafeEChartsValues(v)
+      if (cleaned !== undefined) out[k] = cleaned
+    }
+    return out
+  }
+  return value
+}
+
 function normalizeEChartsOption(input: Record<string, unknown>) {
-  const o = input
+  const sanitized = stripUnsafeEChartsValues(input)
+  const o =
+    sanitized && typeof sanitized === "object" && !Array.isArray(sanitized)
+      ? (sanitized as Record<string, unknown>)
+      : {}
   const out: Record<string, unknown> = { ...o }
 
   const series: unknown[] = Array.isArray(o.series) ? o.series : o.series ? [o.series] : []

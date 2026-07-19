@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 import { buildLoginRedirectUrl, isPublicPath, requiresAuth } from "@/lib/auth-redirect"
+import { isJwtUsable } from "@/lib/jwt-client"
 
 export function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname
@@ -10,8 +11,13 @@ export function middleware(request: NextRequest) {
   }
 
   const token = request.cookies.get("dac_token")?.value
-  if (!token) {
-    return NextResponse.redirect(buildLoginRedirectUrl(request.headers, request.nextUrl))
+  if (!token || !isJwtUsable(token)) {
+    const res = NextResponse.redirect(buildLoginRedirectUrl(request.headers, request.nextUrl))
+    if (token) {
+      // Clear unusable cookie so the client does not loop on stale JWT
+      res.cookies.set("dac_token", "", { path: "/", maxAge: 0 })
+    }
+    return res
   }
 
   return NextResponse.next()

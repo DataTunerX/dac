@@ -7,6 +7,7 @@ import useSWR from "swr"
 import { api } from "@/lib/api"
 import { listAgentsAll } from "@/lib/agents-api"
 import { getSemanticGroupWithMembers } from "@/lib/semantic-groups-api"
+import { semanticGroupKey } from "@/lib/swr-keys"
 import type {
   SemanticGroupResponse,
   SemanticGroupInfoResponse,
@@ -96,7 +97,7 @@ export default function SemanticGroupDetailPage() {
   const hrefForChild = (childId: string) =>
     `/semantic-groups/${encodeURIComponent(childId)}?path=${pathQueryFromIds([...pathIds, childId])}`
 
-  const swrKey = groupId ? (["semantic-group", groupId] as const) : null
+  const swrKey = groupId ? semanticGroupKey(groupId) : null
   const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
     swrKey,
     ([, id]) => fetcherGroupWithMembers(id)
