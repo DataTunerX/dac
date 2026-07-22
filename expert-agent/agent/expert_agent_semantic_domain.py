@@ -2696,10 +2696,13 @@ class ExpertAgent(BaseAgent):
         两阶段知识检索：
         第一阶段（粗筛）：获取所有知识块的摘要（metadata_value），LLM 根据用户问题筛选出相关的 knowledge_ids
         第二阶段（精取）：根据筛选出的 knowledge_ids，获取对应的完整知识内容（text 字段）
+
+        粗筛为空时：回退为“全部模块摘要再让 LLM 选”，最多重试 3 次。
         """
         logger.info(f"=========get_knowledge (two-stage), query: {self.query}, data_descriptors: {self.data_descriptors}")
 
         knowledge_str = ""
+        max_empty_retries = 3
 
         try:
             # ── Stage 1: 粗筛 ──────────────────────────────────────────
@@ -2709,49 +2712,111 @@ class ExpertAgent(BaseAgent):
             if knowledge_blocks is None or not knowledge_blocks.get_all_items():
                 logger.warning("get_knowledge: No knowledge blocks found, falling back to empty knowledge")
             else:
-                # 按 60000 字符上限分批（≈15K tokens），防止超出 LLM 上下文窗口
-                metadata_batches = knowledge_blocks.extract_metadata_as_batches(max_chars_per_batch=60000)
-                logger.info(f"get_knowledge: {len(knowledge_blocks.get_all_items())} knowledge blocks split into {len(metadata_batches)} batches")
-
-                all_selected_ids = []
-
-                async def _process_batch(batch_idx, batch):
-                    logger.info(f"get_knowledge: Processing batch {batch_idx + 1}/{len(metadata_batches)}, chars: {len(batch)}")
-                    selection_result = await self.select_relevant_knowledge(batch)
-                    if selection_result.knowledge_ids:
-                        logger.info(f"get_knowledge: Batch {batch_idx + 1} selected {len(selection_result.knowledge_ids)} knowledge IDs: {selection_result.knowledge_ids}")
-                        logger.info(f"get_knowledge: Batch {batch_idx + 1} intent: {selection_result.intent_analysis}")
-                    else:
-                        logger.info(f"get_knowledge: Batch {batch_idx + 1} selected 0 knowledge IDs")
-                    return selection_result
-
-                # 多批次并行发给 LLM 筛选，减少总延迟
-                batch_results = await asyncio.gather(
-                    *[_process_batch(idx, batch) for idx, batch in enumerate(metadata_batches)],
-                    return_exceptions=True
-                )
-
+                unique_ids: List[str] = []
                 domain_fit_votes = {"fit": 0, "mismatch": 0, "uncertain": 0}
                 mismatch_evidences: List[str] = []
 
-                # 收集所有批次选中的 knowledge_id
-                for idx, result in enumerate(batch_results):
-                    if isinstance(result, Exception):
-                        logger.error(f"get_knowledge: Batch {idx + 1} failed with error: {result}")
-                        continue
-                    if result.knowledge_ids:
-                        all_selected_ids.extend(result.knowledge_ids)
-                    fit = str(getattr(result, "domain_fit", "uncertain") or "uncertain").strip().lower()
-                    if fit not in domain_fit_votes:
-                        fit = "uncertain"
-                    domain_fit_votes[fit] += 1
-                    evidence = str(getattr(result, "mismatch_evidence", "") or "").strip()
-                    if evidence:
-                        mismatch_evidences.append(evidence)
+                async def _collect_selection_results(batch_results):
+                    selected_ids = []
+                    local_votes = {"fit": 0, "mismatch": 0, "uncertain": 0}
+                    local_evidences: List[str] = []
+                    for idx, result in enumerate(batch_results):
+                        if isinstance(result, Exception):
+                            logger.error(f"get_knowledge: Batch {idx + 1} failed with error: {result}")
+                            continue
+                        if result.knowledge_ids:
+                            selected_ids.extend(result.knowledge_ids)
+                        fit = str(getattr(result, "domain_fit", "uncertain") or "uncertain").strip().lower()
+                        if fit not in local_votes:
+                            fit = "uncertain"
+                        local_votes[fit] += 1
+                        evidence = str(getattr(result, "mismatch_evidence", "") or "").strip()
+                        if evidence:
+                            local_evidences.append(evidence)
+                    # 去重（保留首次出现顺序）
+                    seen = set()
+                    deduped = [kid for kid in selected_ids if not (kid in seen or seen.add(kid))]
+                    return deduped, local_votes, local_evidences
 
-                # 去重（保留首次出现顺序）
-                seen = set()
-                unique_ids = [kid for kid in all_selected_ids if not (kid in seen or seen.add(kid))]
+                # 首次：按 60000 字符上限分批粗筛
+                metadata_batches = knowledge_blocks.extract_metadata_as_batches(max_chars_per_batch=60000)
+                logger.info(
+                    f"get_knowledge: {len(knowledge_blocks.get_all_items())} knowledge blocks "
+                    f"split into {len(metadata_batches)} batches"
+                )
+
+                async def _process_batch(batch_idx, batch, total_batches, attempt_label):
+                    logger.info(
+                        f"get_knowledge[{attempt_label}]: Processing batch {batch_idx + 1}/{total_batches}, "
+                        f"chars: {len(batch)}"
+                    )
+                    selection_result = await self.select_relevant_knowledge(batch)
+                    if selection_result.knowledge_ids:
+                        logger.info(
+                            f"get_knowledge[{attempt_label}]: Batch {batch_idx + 1} selected "
+                            f"{len(selection_result.knowledge_ids)} knowledge IDs: {selection_result.knowledge_ids}"
+                        )
+                        logger.info(
+                            f"get_knowledge[{attempt_label}]: Batch {batch_idx + 1} intent: "
+                            f"{selection_result.intent_analysis}"
+                        )
+                    else:
+                        logger.info(
+                            f"get_knowledge[{attempt_label}]: Batch {batch_idx + 1} selected 0 knowledge IDs"
+                        )
+                    return selection_result
+
+                batch_results = await asyncio.gather(
+                    *[
+                        _process_batch(idx, batch, len(metadata_batches), "initial")
+                        for idx, batch in enumerate(metadata_batches)
+                    ],
+                    return_exceptions=True,
+                )
+                unique_ids, domain_fit_votes, mismatch_evidences = await _collect_selection_results(batch_results)
+                logger.info(f"get_knowledge: Initial unique selected knowledge IDs: {len(unique_ids)}")
+
+                # 粗筛为空：返回全部模块摘要再让 LLM 选，最多重试 3 次
+                if not unique_ids:
+                    all_summaries = knowledge_blocks.extract_metadata_as_string()
+                    # 若全文摘要过大，仍按边界分批，但每次重试都覆盖全部模块
+                    retry_batches = knowledge_blocks.extract_metadata_as_batches(max_chars_per_batch=60000)
+                    if not retry_batches and all_summaries:
+                        retry_batches = [all_summaries]
+
+                    for retry_idx in range(1, max_empty_retries + 1):
+                        logger.warning(
+                            "get_knowledge: coarse filter empty, retry %d/%d with ALL module summaries "
+                            "(batches=%d, total_chars=%d)",
+                            retry_idx,
+                            max_empty_retries,
+                            len(retry_batches),
+                            len(all_summaries or ""),
+                        )
+                        retry_results = await asyncio.gather(
+                            *[
+                                _process_batch(
+                                    idx,
+                                    batch,
+                                    len(retry_batches),
+                                    f"retry-{retry_idx}",
+                                )
+                                for idx, batch in enumerate(retry_batches)
+                            ],
+                            return_exceptions=True,
+                        )
+                        unique_ids, domain_fit_votes, mismatch_evidences = await _collect_selection_results(
+                            retry_results
+                        )
+                        logger.info(
+                            "get_knowledge: Retry %d/%d selected knowledge IDs: %d",
+                            retry_idx,
+                            max_empty_retries,
+                            len(unique_ids),
+                        )
+                        if unique_ids:
+                            break
+
                 logger.info(f"get_knowledge: Total unique selected knowledge IDs: {len(unique_ids)}")
 
                 # ── Stage 2: 精取 ──────────────────────────────────────
