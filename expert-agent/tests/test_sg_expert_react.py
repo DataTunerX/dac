@@ -500,7 +500,7 @@ class TestSGExpertReact:
     def agent_kwargs(self):
         return {
             "provider": "openai_compatible",
-            "api_key": "sk-6e3f3c21c50849f2b4630da2de9434c8",
+            "api_key": "sk-xxx",
             "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "model": "deepseek-v4-pro",
             "semantic_group_id": "test-sg-ecommerce",
@@ -763,7 +763,7 @@ class TestSGExpertReact:
 async def main():
     kwargs = {
         "provider": "openai_compatible",
-        "api_key": "sk-6e3f3c21c50849f2b4630da2de9434c8",
+        "api_key": "sk-xxx",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "deepseek-v4-flash",
         "semantic_group_id": "test-sg-ecommerce",
