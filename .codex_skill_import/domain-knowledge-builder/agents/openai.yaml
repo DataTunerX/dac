@@ -1,0 +1,4 @@
+interface:
+  display_name: "Domain Knowledge Builder"
+  short_description: "Build curricula and textbook CSVs"
+  default_prompt: "Use $domain-knowledge-builder to build an undergraduate curriculum with textbook ISBNs for a field."

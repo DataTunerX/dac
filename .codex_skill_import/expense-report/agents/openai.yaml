@@ -1,0 +1,9 @@
+interface:
+  display_name: "Expense Report"
+  short_description: "Manage Workday expense reports"
+  default_prompt: "Use $expense-report to check my Workday expense report statuses."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "playwright"
+      description: "Browser automation for Workday Expense Hub"

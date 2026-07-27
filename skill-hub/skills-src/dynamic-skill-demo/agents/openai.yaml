@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dynamic Skill Demo"
+  short_description: "Confirm automatic skill download and hot loading"
+  default_prompt: "Use $dynamic-skill-demo to prove this skill was dynamically loaded."

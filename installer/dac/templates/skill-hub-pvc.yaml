@@ -1,0 +1,21 @@
+{{- if and .Values.skillHub.enabled .Values.skillHub.persistence.enabled (not .Values.skillHub.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "dac.skillHub.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "skill-hub") | nindent 4 }}
+  {{- with .Values.skillHub.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.skillHub.persistence.accessModes | nindent 4 }}
+  {{- with .Values.skillHub.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.skillHub.persistence.size | quote }}
+{{- end }}

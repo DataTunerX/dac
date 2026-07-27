@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker buildx:*)",
+      "Bash(make docker-build *)",
+      "Read(//private/tmp/**)",
+      "Read(//Users/tony/**)",
+      "Bash(wait)",
+      "Bash(ssh root@10.124.48.126 'kubectl get pods -n dac --no-headers | grep data-sink')",
+      "Bash(ssh root@10.124.48.126 'kubectl get pods -n dac | grep dd-minio')",
+      "Bash(ssh root@10.124.48.126 'kubectl get pods -A | grep -i minio')",
+      "Bash(ssh root@10.124.48.126 'kubectl describe pod dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default -c data-sinker-job --tail=50')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default -c data-sinker-job --tail=20 2>&1 | tail -20')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default -c data-sinker-job -f 2>&1')",
+      "Bash(kill %1)",
+      "Bash(ssh root@10.124.48.126 'kubectl exec -n default dd-minio-192-168-3-140-80-7ff79845-7k4r2 -c data-sinker-job -- grep -n \"method\" /app/data_sinkers/file_processors/mineru.py | head -10')",
+      "Bash(ssh root@10.124.48.126 'kubectl exec -n default dd-minio-192-168-3-140-80-7ff79845-7k4r2 -c data-sinker-job -- sed -i \"s/method: Optional\\\\[str\\\\] = \\\\\"auto\\\\\"/method: Optional[str] = \\\\\"txt\\\\\"/g; s/def run_mineru\\(self, input_path: Path, output_dir: Path, method: str = \\\\\"auto\\\\\"/def run_mineru\\(self, input_path: Path, output_dir: Path, method: str = \\\\\"txt\\\\\"/g; s/def read_md_output\\(self, output_dir: Path, file_stem: str, method: str = \\\\\"auto\\\\\"/def read_md_output\\(self, output_dir: Path, file_stem: str, method: str = \\\\\"txt\\\\\"/g; s/def read_json_output\\(self, output_dir: Path, file_stem: str, method: str = \\\\\"auto\\\\\"/def read_json_output\\(self, output_dir: Path, file_stem: str, method: str = \\\\\"txt\\\\\"/g\" /app/data_sinkers/file_processors/mineru.py')",
+      "Bash(ssh root@10.124.48.126 'kubectl exec -n default dd-minio-192-168-3-140-80-7ff79845-7k4r2 -c data-sinker-job -- grep -n \"method\" /app/data_sinkers/file_processors/mineru.py | head -8')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default -c data-sinker-job --tail=30')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs -n dac semantic-grouper-worker-68798d5574-92x7m --tail=50')",
+      "Bash(ssh root@10.124.48.126 'kubectl get pods -n default | grep minio')",
+      "Bash(ssh root@10.124.48.126 'kubectl get dd -n default 2>/dev/null || kubectl get datadescriptor -n default 2>/dev/null || kubectl api-resources | grep -i descriptor')",
+      "Bash(ssh root@10.124.48.126 'kubectl describe dd minio-192-168-3-140-80 -n default')",
+      "Bash(ssh root@10.124.48.126 'kubectl api-resources | grep -i descriptor')",
+      "Bash(ssh root@10.124.48.126 'kubectl describe datadescriptor minio-192-168-3-140-80 -n default 2>&1 | head -60')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default -c data-sinker-job 2>&1 | grep -E \"^INFO:\\(base_extractor|minio|job|sinker\\).*file_summary|agent_card|process_file|query_one|Finished|Complete|Done|bucket\" | tail -20')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs -n dac semantic-grouper-worker-68798d5574-92x7m --tail=30 2>&1 | grep -v \"^$\"')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default -c data-sinker-job --tail=30 2>&1')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default -c data-sinker-job --tail=20 2>&1 | grep -v \"^INFO:base_extractor:chunk_summary\"')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default -c data-sinker-job 2>&1 | grep -A2 -B2 \"31/31\\\\|mineru_pdf_58ek\\\\|VLM\\\\|vlm\\\\|hybrid\\\\|OceanStor Pacific.*20230410\\\\|extract_minio\\\\|bucket summary\\\\|agent_card\\\\|semantic_group\\\\|send_add_semantic\" | tail -60')",
+      "Bash(ssh root@10.124.48.126 'kubectl logs dd-minio-192-168-3-140-80-7ff79845-7k4r2 -n default -c data-sinker-job 2>&1 | tail -50')",
+      "Bash(ssh root@10.124.48.126 'kubectl get pods -n default | grep minio && kubectl logs -n dac semantic-grouper-worker-68798d5574-92x7m --tail=20 2>&1')",
+      "Bash(curl -sk https://192.168.3.123/v2/dac/chart-agent/manifests/v0.11.0-amd64 -H 'Accept: application/vnd.oci.image.index.v1+json' -D -)",
+      "Bash(ssh root@10.124.48.126 \"kubectl get pods -n dac | grep data-sinkers\")",
+      "Bash(ssh root@10.124.48.126 \"kubectl get pods -A | grep sinker\")",
+      "Bash(ssh root@10.124.48.126 \"kubectl get jobs -A | grep sinker; kubectl get pods -A | grep sinker\")",
+      "Bash(ssh root@10.124.48.126 'kubectl get pods -A | grep sinker')",
+      "Bash(ssh -o StrictHostKeyChecking=no root@10.124.48.126 'kubectl get pods -A | grep sinker')",
+      "Bash(ssh root@10.124.48.126 echo ok)"
+    ]
+  }
+}
