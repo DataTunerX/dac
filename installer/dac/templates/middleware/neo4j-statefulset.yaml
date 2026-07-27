@@ -1,4 +1,8 @@
 {{- if .Values.neo4j.enabled }}
+{{- $registry := .Values.global.imageRegistry }}
+{{- if hasKey .Values.neo4j.image "registry" }}
+{{- $registry = .Values.neo4j.image.registry }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -18,7 +22,7 @@ spec:
     spec:
       containers:
         - name: neo4j
-          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.neo4j.image.repository "tag" .Values.neo4j.image.tag) }}
+          image: {{ include "dac.image" (dict "registry" $registry "repository" .Values.neo4j.image.repository "tag" .Values.neo4j.image.tag) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

@@ -1,4 +1,8 @@
 {{- if .Values.redis.enabled }}
+{{- $registry := .Values.global.imageRegistry }}
+{{- if hasKey .Values.redis.image "registry" }}
+{{- $registry = .Values.redis.image.registry }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -18,7 +22,7 @@ spec:
     spec:
       containers:
         - name: redis
-          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.redis.image.repository "tag" .Values.redis.image.tag) }}
+          image: {{ include "dac.image" (dict "registry" $registry "repository" .Values.redis.image.repository "tag" .Values.redis.image.tag) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: redis

@@ -40,24 +40,30 @@ spec:
               value: {{ .Values.bizSkillAgent.config.cmdTimeoutSec | quote }}
             - name: LOCAL_SKILL_MAX_CONCURRENCY
               value: {{ .Values.bizSkillAgent.config.maxConcurrency | quote }}
-            {{- with .Values.bizSkillAgent.config.skills }}
             # Startup-time skill download from skill-hub. Agent will fetch each
             # {name}.zip into SKILLS_DOWNLOAD_DIR before SkillRunner preload.
             - name: SKILLS
-              value: {{ toJson . | quote }}
+              value: {{ toJson .Values.bizSkillAgent.config.skills | quote }}
             - name: SKILL_HUB_URL
-              value: {{ coalesce $.Values.bizSkillAgent.config.skillHubUrl (include "dac.skillHub.url" $) | quote }}
+              value: {{ coalesce .Values.bizSkillAgent.config.skillHubUrl (include "dac.skillHub.url" .) | quote }}
             - name: SKILLS_DOWNLOAD_DIR
-              value: {{ $.Values.bizSkillAgent.config.skillsDownloadDir | quote }}
+              value: {{ .Values.bizSkillAgent.config.skillsDownloadDir | quote }}
+            - name: LOCAL_SKILLS_DIR
+              value: {{ .Values.bizSkillAgent.config.skillsDownloadDir | quote }}
             - name: SKILL_DOWNLOAD_OVERWRITE
-              value: {{ $.Values.bizSkillAgent.config.skillDownloadOverwrite | quote }}
+              value: {{ .Values.bizSkillAgent.config.skillDownloadOverwrite | quote }}
             - name: SKILL_DOWNLOAD_CONCURRENCY
-              value: {{ $.Values.bizSkillAgent.config.skillDownloadConcurrency | quote }}
-            {{- with $.Values.bizSkillAgent.config.skillDownloadTimeout }}
+              value: {{ .Values.bizSkillAgent.config.skillDownloadConcurrency | quote }}
+            {{- with .Values.bizSkillAgent.config.skillDownloadTimeout }}
             - name: SKILL_DOWNLOAD_TIMEOUT
               value: {{ . | quote }}
             {{- end }}
-            {{- end }}
+            - name: SKILL_SYNC_ENABLED
+              value: {{ .Values.bizSkillAgent.config.skillSyncEnabled | quote }}
+            - name: SKILL_SYNC_INTERVAL
+              value: {{ .Values.bizSkillAgent.config.skillSyncInterval | quote }}
+            - name: SKILL_SYNC_WATCH_ALL
+              value: {{ .Values.bizSkillAgent.config.skillSyncWatchAll | quote }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
           args:
             - "--redis-host"

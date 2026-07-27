@@ -69,6 +69,8 @@ mysql:
   # -- Deploy built-in MySQL. Set false to use external MySQL.
   enabled: true
   image:
+    # -- Override registry for this standard image. Empty means Docker Hub/default registry.
+    registry: ""
     repository: mysql
     tag: "8.0"
   # -- MySQL service port
@@ -102,6 +104,8 @@ redis:
   # -- Deploy built-in Redis. Set false to use external Redis.
   enabled: true
   image:
+    # -- Override registry for this standard image. Empty means Docker Hub/default registry.
+    registry: ""
     repository: redis
     tag: "7.0.4"
   # -- Redis service port
@@ -130,8 +134,10 @@ pgvector:
   # -- Deploy built-in pgvector. Set false to use external PostgreSQL.
   enabled: true
   image:
-    repository: pgvector
-    tag: "pg16-amd64"
+    # -- Override registry for this standard image. Empty means Docker Hub/default registry.
+    registry: ""
+    repository: pgvector/pgvector
+    tag: "pg16"
   # -- PostgreSQL service port
   port: 5432
   # -- PostgreSQL superuser name
@@ -166,6 +172,8 @@ neo4j:
   # -- Deploy built-in Neo4j. Set false to use external Neo4j.
   enabled: true
   image:
+    # -- Override registry for this standard image. Empty means Docker Hub/default registry.
+    registry: ""
     repository: neo4j
     tag: "5.18.0"
   # -- Neo4j browser / HTTP Service port (container listens on 7474)
@@ -645,6 +653,10 @@ bizSkillAgent:
       - tavily-search
       - code_execution
       - extract_pdf
+      - redis-inspect
+      - mysql-inspect
+      - pgvector-inspect
+      - neo4j-inspect
     # -- Override skill-hub base URL. Empty string uses the in-cluster skill-hub
     #    Service (see dac.skillHub.url).
     skillHubUrl: ""
@@ -657,6 +669,12 @@ bizSkillAgent:
     skillDownloadConcurrency: "8"
     # -- Per-request HTTP timeout in seconds. "" -> use module default (30).
     skillDownloadTimeout: ""
+    # -- Continuously poll skill-hub and hot-load newly pushed versions.
+    skillSyncEnabled: "true"
+    # -- Poll interval in seconds. Set to 0 to disable monitoring.
+    skillSyncInterval: "30"
+    # -- Pull newly published skills in addition to configured startup skills.
+    skillSyncWatchAll: "true"
   service:
     type: ClusterIP
     # -- A2A protocol port
@@ -689,6 +707,26 @@ skillHub:
     # -- Override SKILLS_DIR inside the container. Empty string keeps the
     #    image default (/app/skills/). Useful if you mount a volume.
     skillsDir: ""
+    # -- Maximum accepted push body size in bytes (default 50 MiB).
+    maxUploadBytes: "52428800"
+    # -- Maximum total uncompressed zip content and archive entry count.
+    maxExtractedBytes: "262144000"
+    maxArchiveEntries: "2048"
+  auth:
+    # -- Bearer token protecting push/delete/reload. For production, prefer
+    #    existingSecret instead of committing a token to values files.
+    pushToken: ""
+    existingSecret: ""
+    existingSecretKey: "push-token"
+  persistence:
+    # -- Persist pushed skills across pod restarts. Disable for ephemeral use.
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+    annotations: {}
   service:
     type: ClusterIP
     port: 8000

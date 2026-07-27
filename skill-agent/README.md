@@ -19,8 +19,11 @@
 | `SKILL_DOWNLOAD_TIMEOUT` | `30` | 单次 HTTP 下载超时（秒，浮点）。 |
 | `SKILL_DOWNLOAD_OVERWRITE` | `false` | `true`/`1`/`yes` 时若本地已有同名 zip 会重新下载；否则跳过已有文件。 |
 | `SKILL_DOWNLOAD_CONCURRENCY` | `8` | 并行下载线程数上限（`>= 1`）。每个线程使用独立 `httpx.Client`。 |
+| `SKILL_SYNC_ENABLED` | `true` | 启动后台 watcher，持续监控 hub。 |
+| `SKILL_SYNC_INTERVAL` | `60` | 轮询 `/skills` 的秒数；`<=0` 时禁用。Helm 默认 `30`。 |
+| `SKILL_SYNC_WATCH_ALL` | `true` | `true` 时自动拉取新发布的 skill；`false` 时只更新 `SKILLS` 订阅列表。 |
 
-启动时若配置了 `SKILLS`，会先调用 `download_skills()` 从 hub 拉 zip，再构建 `SkillAgentExecutor`（见 `agent/server.py`）。随后 `SkillAgentExecutor.preload_skill_runner()` 会打印完整 skill 清单，在第一次请求到来前就能在 Pod 日志里看到当前加载了哪些 skill。进程退出时通过 `atexit` 调用 `shutdown_skill_runner()`，自动清理 `SkillLoader` 解压出的临时目录。
+启动时若配置了 `SKILLS`，会先调用 `download_skills()` 从 hub 拉 zip，再构建 `SkillAgentExecutor`（见 `agent/server.py`）。后台 watcher 启动后立即扫描一次 hub（`watch_all=true` 时也拉取未显式订阅的现有 skill），随后持续比较版本清单；发现新 skill 或版本变化后会原子下载、热加载、重建 AgentCard 并重新注册到 Redis，不需要重启 Pod。进程退出时会停止 watcher，并通过 `atexit` 调用 `shutdown_skill_runner()` 清理资源。
 
 ## 本地开发
 

@@ -8,6 +8,7 @@ import uvicorn
 import os
 import atexit
 import signal
+import threading
 from typing import Any, Dict, Literal, List, Optional, Union
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -17,6 +18,7 @@ from a2a.server.tasks import BasePushNotificationSender, InMemoryPushNotificatio
 from .redis_registry import RedisRegistry, HeartbeatService
 from .skill_agent import SkillAgentExecutor
 from .skill_download import download_skills
+from .skill_sync import start_watcher
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 
@@ -166,6 +168,58 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         server = A2AStarletteApplication(
             agent_card=agent_card, http_handler=request_handler
         )
+
+        # ------------------------------------------------------------------
+        # Start the skill-hub watcher: when a skill is pushed/updated on the
+        # hub, pull it, hot-reload the SkillRunner, refresh the AgentCard, and
+        # re-register so the orchestrator sees the new capability without a
+        # restart. Disabled via SKILL_SYNC_ENABLED=false / SKILL_SYNC_INTERVAL<=0.
+        # ------------------------------------------------------------------
+        _sync_lock = threading.Lock()
+
+        def _on_skills_changed(changed):
+            with _sync_lock:
+                logger.info(
+                    "[SkillSync] applying %d change(s): %s",
+                    len(changed), ", ".join(changed),
+                )
+                try:
+                    skill_executor.reload_skill_runner()
+                except Exception:  # noqa: BLE001
+                    logger.exception("[SkillSync] reload_skill_runner failed")
+                    return
+                try:
+                    desc, skills = skill_executor.build_dynamic_agent_card_fields()
+                    if skills:
+                        agent_card.description = desc
+                        agent_card.skills = skills
+                except Exception:  # noqa: BLE001
+                    logger.exception("[SkillSync] rebuilding agent card failed")
+                # Re-register so the refreshed card (new skill list) is pushed to
+                # Redis. HeartbeatService.register_agent updates its in-memory
+                # copy too, so heartbeats keep advertising the new card.
+                try:
+                    if heartbeat_service is not None:
+                        heartbeat_service.register_agent(agent_card)
+                    elif registry is not None:
+                        registry.register_agent(agent_card)
+                    logger.info(
+                        "[SkillSync] agent card refreshed and re-registered "
+                        "(skills=%d)", len(agent_card.skills or []),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("[SkillSync] re-registration failed")
+
+        watcher = None
+        try:
+            watcher = start_watcher(
+                _on_skills_changed,
+                initial_versions=skill_executor.get_loaded_skill_versions(),
+            )
+            if watcher is not None:
+                atexit.register(watcher.stop)
+        except Exception:  # noqa: BLE001
+            logger.exception("[SkillSync] failed to start watcher — continuing")
 
         logger.info(f'Starting server on {host}:{port}')
         logger.info(f'LLM Configuration: provider={provider}, model={model}, temperature={temperature}, stream={stream}')

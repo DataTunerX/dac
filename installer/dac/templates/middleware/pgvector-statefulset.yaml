@@ -1,4 +1,8 @@
 {{- if .Values.pgvector.enabled }}
+{{- $registry := .Values.global.imageRegistry }}
+{{- if hasKey .Values.pgvector.image "registry" }}
+{{- $registry = .Values.pgvector.image.registry }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -18,7 +22,7 @@ spec:
     spec:
       containers:
         - name: pgvector
-          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.pgvector.image.repository "tag" .Values.pgvector.image.tag) }}
+          image: {{ include "dac.image" (dict "registry" $registry "repository" .Values.pgvector.image.repository "tag" .Values.pgvector.image.tag) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: postgres

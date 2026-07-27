@@ -32,9 +32,24 @@ spec:
             # real langfuse instance is wired up.
             - name: LANGFUSE_ENABLED
               value: {{ .Values.skillHub.config.langfuseEnabled | quote }}
-            {{- with .Values.skillHub.config.skillsDir }}
             - name: SKILLS_DIR
-              value: {{ . | quote }}
+              value: {{ default (ternary "/var/lib/skill-hub" "/app/skills" .Values.skillHub.persistence.enabled) .Values.skillHub.config.skillsDir | quote }}
+            {{- if .Values.skillHub.persistence.enabled }}
+            - name: SKILL_HUB_SEED_DIR
+              value: "/app/skills"
+            {{- end }}
+            - name: SKILL_HUB_MAX_UPLOAD_BYTES
+              value: {{ .Values.skillHub.config.maxUploadBytes | quote }}
+            - name: SKILL_HUB_MAX_EXTRACTED_BYTES
+              value: {{ .Values.skillHub.config.maxExtractedBytes | quote }}
+            - name: SKILL_HUB_MAX_ARCHIVE_ENTRIES
+              value: {{ .Values.skillHub.config.maxArchiveEntries | quote }}
+            {{- if or .Values.skillHub.auth.pushToken .Values.skillHub.auth.existingSecret }}
+            - name: SKILL_HUB_PUSH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-auth" (include "dac.skillHub.serviceName" .)) .Values.skillHub.auth.existingSecret | quote }}
+                  key: {{ .Values.skillHub.auth.existingSecretKey | quote }}
             {{- end }}
           readinessProbe:
             httpGet:
@@ -50,4 +65,15 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.skillHub.resources | nindent 12 }}
+          {{- if .Values.skillHub.persistence.enabled }}
+          volumeMounts:
+            - name: skills
+              mountPath: /var/lib/skill-hub
+          {{- end }}
+      {{- if .Values.skillHub.persistence.enabled }}
+      volumes:
+        - name: skills
+          persistentVolumeClaim:
+            claimName: {{ default (include "dac.skillHub.serviceName" .) .Values.skillHub.persistence.existingClaim }}
+      {{- end }}
 {{- end }}

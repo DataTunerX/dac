@@ -1,5 +1,5 @@
 global:
-  imageRegistry: "192.168.3.123/dac"
+  imageRegistry: "10.124.48.120/dac"
   imagePullPolicy: Always
 
   llm:
@@ -112,24 +112,28 @@ skillHub:
 
 mysql:
   image:
+    registry: "10.124.48.120/dac"
     repository: "mysql"
     tag: "8.0"
   rootPassword: "changeme"
 
 redis:
   image:
+    registry: "10.124.48.120/dac"
     repository: "redis"
     tag: "7.0.4"
   password: "changeme"
 
 pgvector:
   image:
+    registry: "10.124.48.120/dac"
     repository: "pgvector"
     tag: "pg16-amd64"
   password: "changeme"
 
 neo4j:
   image:
+    registry: "10.124.48.120/dac"
     repository: "neo4j"
     tag: "5.18.0"
   password: "changeme"

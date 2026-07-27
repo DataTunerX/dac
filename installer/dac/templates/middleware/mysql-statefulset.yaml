@@ -1,4 +1,8 @@
 {{- if .Values.mysql.enabled }}
+{{- $registry := .Values.global.imageRegistry }}
+{{- if hasKey .Values.mysql.image "registry" }}
+{{- $registry = .Values.mysql.image.registry }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -18,7 +22,7 @@ spec:
     spec:
       containers:
         - name: mysql
-          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.mysql.image.repository "tag" .Values.mysql.image.tag) }}
+          image: {{ include "dac.image" (dict "registry" $registry "repository" .Values.mysql.image.repository "tag" .Values.mysql.image.tag) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           # MySQL 8 default auth (caching_sha2_password) requires the
           # `cryptography` Python package on the client side; data-services'

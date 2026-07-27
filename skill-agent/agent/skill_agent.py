@@ -670,6 +670,44 @@ class SkillAgentExecutor(AgentExecutor):
         self._skill_runner_initialised = True
         return self._skill_runner
 
+    def reload_skill_runner(self) -> int:
+        """Reload skill packs from ``LOCAL_SKILLS_DIR`` into the live runner.
+
+        Called by the background :mod:`agent.skill_sync` watcher after it pulls
+        new/updated zips from skill-hub, so freshly-pushed skills become usable
+        **without** restarting the process. Re-runs ``SkillRunner.load_from_dir``
+        (which swaps the lister's skill set atomically) and returns the number of
+        skills now loaded. Safe no-op (returns 0) when LocalSkill is disabled or
+        the runner could not be built.
+        """
+        if not LOCAL_SKILLS_ENABLED or SkillRunner is None:
+            return 0
+        # Build the runner on first use if preload was skipped/failed, so the
+        # very first pushed skill can bootstrap an otherwise-empty agent.
+        if self._skill_runner is None:
+            self._skill_runner = self._init_skill_runner_sync()
+            self._skill_runner_initialised = True
+        runner = self._skill_runner
+        if runner is None or not LOCAL_SKILLS_DIR:
+            return 0
+        try:
+            loaded = runner.load_from_dir(LOCAL_SKILLS_DIR) or []
+        except Exception:  # noqa: BLE001
+            logger.exception("[LocalSkill][Reload] load_from_dir raised")
+            return 0
+        names = [
+            str(getattr(s, "name", "") or "").strip()
+            for s in loaded
+        ]
+        names = [n for n in names if n]
+        logger.info(
+            "[LocalSkill][Reload] reloaded %d skill(s) from %s: %s",
+            len(loaded),
+            LOCAL_SKILLS_DIR,
+            ", ".join(names) if names else "(none)",
+        )
+        return len(loaded)
+
     async def _ensure_skill_runner(self) -> "SkillRunner | None":
         """Return the process-wide SkillRunner, constructing it on first use."""
         if self._skill_runner_initialised:
@@ -735,7 +773,11 @@ class SkillAgentExecutor(AgentExecutor):
         runner = self._skill_runner
         lister = getattr(runner, "lister", None) if runner is not None else None
         try:
-            skills = list(getattr(lister, "skills", None) or []) if lister is not None else []
+            skills = (
+                list(getattr(lister, "skills", None) or [])
+                if lister is not None
+                else []
+            )
         except Exception:  # noqa: BLE001
             logger.exception("[LocalSkill][CardBuild] failed to read skill list from lister")
             skills = []
@@ -790,6 +832,26 @@ class SkillAgentExecutor(AgentExecutor):
             hidden,
         )
         return description, agent_skills
+
+    def get_loaded_skill_versions(self) -> dict[str, str]:
+        """Return ``{name: version}`` for every currently-loaded skill.
+
+        Used to seed the skill-hub watcher's baseline so it does not re-download
+        skills that are already current on disk.
+        """
+        runner = self._skill_runner
+        lister = getattr(runner, "lister", None) if runner is not None else None
+        try:
+            skills = list(getattr(lister, "skills", None) or []) if lister is not None else []
+        except Exception:  # noqa: BLE001
+            return {}
+        out: dict[str, str] = {}
+        for s in skills:
+            name = str(getattr(s, "name", "") or "").strip()
+            version = str(getattr(s, "version", "") or "").strip()
+            if name and version:
+                out[name] = version
+        return out
 
     # ------------------------------------------------------------------
     # A2A hooks

@@ -358,14 +358,18 @@ def _download_one(client: httpx.Client, url: str, dest_path: Path) -> Path:
     logger.info("[SkillDownload] GET %s -> %s", url, dest_path)
 
     bytes_written = 0
-    with client.stream("GET", url) as resp:
-        resp.raise_for_status()
-        with tmp_path.open("wb") as fh:
-            for chunk in resp.iter_bytes():
-                if not chunk:
-                    continue
-                fh.write(chunk)
-                bytes_written += len(chunk)
+    try:
+        with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            with tmp_path.open("wb") as fh:
+                for chunk in resp.iter_bytes():
+                    if not chunk:
+                        continue
+                    fh.write(chunk)
+                    bytes_written += len(chunk)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     if bytes_written == 0:
         tmp_path.unlink(missing_ok=True)
