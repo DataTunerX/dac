@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 import click
 import httpx
@@ -49,78 +50,13 @@ from a2a.utils import new_agent_text_message, new_task, new_text_artifact
 from a2a.client import A2AClient
 from model_sdk import ModelManager
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.tools import StructuredTool, tool
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 from .agentregistry_client import AgentRegistryClient
 from .dataservices_client import DataServicesClient, CreateHistoryRequest, HistoryMessage, SearchHistoryRequest
+from .tool_call_utils import invoke_llm_with_tool, extract_tool_call_result
 
-try:
-    # json_repair is a tolerant JSON parser designed specifically for LLM output.
-    # It handles common failure modes such as unescaped inner double quotes,
-    # trailing commas, missing quotes, python-style single quotes, etc.
-    from json_repair import repair_json as _json_repair  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - optional runtime dep, fail-soft
-    _json_repair = None  # type: ignore[assignment]
-
-
-# Router LLM JSON: split-plan (``reasoning``, task ``description`` / ``why_agent``),
-# possible aggregate ``answer`` / ``requery``, plus planner/orchestrator keys.
-_KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
-    "original_query",
-    "description",
-    "thought_process",
-    "reason",
-    "rationale",
-    "final_answer",
-    "answer",
-    "requery",
-    "reasoning",
-    "why_agent",
-)
-
-
-def _escape_known_string_field_inner_quotes(text: str) -> str:
-    """Best-effort escape of unescaped inner ``"`` inside known single-line
-    string fields of a planner-style JSON payload.
-
-    We deliberately restrict the pre-pass to a whitelist of known fields where
-    the value is a single JSON string on one line so we can recognize the end
-    of the value by the structural pattern ``"`` followed by an optional
-    comma/whitespace and a newline. Multi-line values and nested structures
-    are left untouched (json_repair handles those as a later fallback).
-    """
-    if not text or '"' not in text:
-        return text
-
-    pattern_fields = "|".join(re.escape(f) for f in _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES)
-    # See the sibling implementation in orchestrator_agent_semantic_group.py
-    # for detailed rationale about the regex anchoring strategy.
-    pattern = re.compile(
-        rf'("(?:{pattern_fields})"\s*:\s*")'
-        r'(.*?)'
-        r'((?<!\\)"[ \t]*,?[ \t]*$)',
-        re.MULTILINE,
-    )
-
-    def _repl(m: "re.Match[str]") -> str:
-        head, body, tail = m.group(1), m.group(2), m.group(3)
-        fixed_chars: List[str] = []
-        i = 0
-        while i < len(body):
-            ch = body[i]
-            if ch == "\\" and i + 1 < len(body):
-                fixed_chars.append(body[i : i + 2])
-                i += 2
-                continue
-            if ch == '"':
-                fixed_chars.append('\\"')
-                i += 1
-                continue
-            fixed_chars.append(ch)
-            i += 1
-        return head + "".join(fixed_chars) + tail
-
-    return pattern.sub(_repl, text)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -129,29 +65,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _json_repair_to_dict(
-    text: str,
-    log_if_dict: str,
-    log_if_repaired_string: str,
-) -> Optional[dict]:
-    """Run json_repair and return a dict, or None. Used by format_llm_output in two stages."""
-    if _json_repair is None:
-        return None
-    try:
-        repaired = _json_repair(text, return_objects=True)
-        if isinstance(repaired, dict):
-            logger.info(" === format_llm_output, %s", log_if_dict)
-            return repaired
-        if isinstance(repaired, str):
-            parsed = json.loads(repaired)
-            if isinstance(parsed, dict):
-                logger.info(" === format_llm_output, %s", log_if_repaired_string)
-                return parsed
-    except Exception as e:  # noqa: BLE001
-        logger.debug(" === format_llm_output, json_repair step failed: %s | %s", log_if_dict, e)
-    return None
 
 
 PROGRESS_SCHEMA_VERSION = "v1"
@@ -481,6 +394,11 @@ class CapabilityCheckResponse(BaseModel):
         default="single",
         description="Execution strategy for the selected SG. Single-layer SG only returns 'single'."
     )
+    latency_ms: int = Field(
+        default=0,
+        description="Capability check end-to-end latency in milliseconds, measured by the responding agent."
+        # 与各 agent 的 CapabilityCheckResponse 对齐：agent 上报自身耗时，routing 用于观测广播链路耗时。
+    )
 
 # ==================== Multi-Root Task Plan Protocol ====================
 
@@ -714,6 +632,29 @@ class MultiRootTaskPlan(BaseModel):
     tasks: List[MultiRootTask] = Field(default_factory=list, description="List of sub-tasks")
 
 
+class ResolvedTaskQuery(BaseModel):
+    """Tool-call schema for routing_resolve_task_query_for_multi_root LLM output."""
+    model_config = {"extra": "ignore"}
+    resolved_query: str = Field(default="", description="The rewritten task description ready to be executed downstream")
+    selected_keys: List[str] = Field(default_factory=list, description="Key info sources actually depended on (field/column/semantic labels)")
+    applied: bool = Field(default=False, description="Whether the prior results were actually used to rewrite the task")
+    reason: str = Field(default="", description="One-sentence reason why the rewrite was or was not applied")
+
+
+class SplitJudgement(BaseModel):
+    """Tool-call schema for split-necessity judge LLM output."""
+    model_config = {"extra": "ignore"}
+    needs_split: bool = Field(default=False, description="Whether the query truly needs multi-agent split")
+
+
+class AgentRankToolResult(BaseModel):
+    """Tool-call schema for single-root fallback best-agent ranking LLM output."""
+    model_config = {"extra": "ignore"}
+    best_agent: str = Field(default="", description="Name of the best agent to handle the query")
+    confidence: float = Field(default=0.0, description="Confidence level from 0.0 to 1.0")
+    reason: str = Field(default="", description="Brief reason for the selection")
+
+
 MULTI_ROOT_PRIOR_RESULT_MAX_CHARS = int(os.getenv("MULTI_ROOT_PRIOR_RESULT_MAX_CHARS", "12000"))
 MAX_JOIN_KEY_VALUES_PER_KEY = int(os.getenv("MAX_JOIN_KEY_VALUES_PER_KEY", "50"))
 JOIN_KEY_ALLOWLIST = [k.strip() for k in os.getenv("JOIN_KEY_ALLOWLIST", "").split(",") if k.strip()]
@@ -736,17 +677,6 @@ def _routing_truncate_for_log(text: str, limit: int = 260) -> str:
     if len(raw) <= limit:
         return raw
     return raw[: limit - 3] + "..."
-
-
-def _extract_llm_json_payload(raw_text: str) -> str:
-    raw = str(raw_text or "").strip()
-    if not raw:
-        return ""
-    if "```json" in raw:
-        return raw.split("```json", 1)[1].split("```", 1)[0].strip()
-    if raw.startswith("```") and "```" in raw[3:]:
-        return raw.split("```", 2)[1].strip()
-    return raw
 
 
 def _is_allowed_join_key(key: str) -> bool:
@@ -996,14 +926,7 @@ async def routing_resolve_task_query_for_multi_root(
         "你是多智能体编排器中的依赖任务解析器。请根据当前子任务描述和前序任务结果，"
         "把当前任务改写成可以直接执行的描述。你的职责不是只看结构化字段，而是要主动从前序文本里提取当前任务真正需要的信息。"
         "前序结果可能是自然语言、项目符号、markdown 表格、排行榜、对比说明或混合文本，只要信息真实存在于文本里，你就应该识别并使用。"
-        "不要臆造不存在的数据，不要改变任务目标。仅返回 JSON。\n\n"
-        "输出格式：\n"
-        "{\n"
-        '  "resolved_query": "string",\n'
-        '  "selected_keys": ["string"],\n'
-        '  "applied": true,\n'
-        '  "reason": "string"\n'
-        "}\n\n"
+        "不要臆造不存在的数据，不要改变任务目标。通过调用 `resolve_task` 工具输出结果。\n\n"
         "规则：\n"
         "1) 优先依据语义理解前序结果，不要因为前序结果不是 JSON/数组/显式字段结构，就判定为无法提取。\n"
         "2) 如果前序文本中已经出现了当前任务所需的 ID、名称、时间、筛选条件、排名结果或对象列表，应主动抽取并写入 resolved_query。\n"
@@ -1017,9 +940,23 @@ async def routing_resolve_task_query_for_multi_root(
 
     llm_reason = ""
     try:
-        answer = await llm.ainvoke([HumanMessage(content=prompt)])
-        raw = answer.content if hasattr(answer, "content") else str(answer)
-        data = json.loads(_extract_llm_json_payload(raw))
+        resolve_tool = StructuredTool(
+            name="resolve_task",
+            description="Rewrite the current task description using info extracted from the prior task results.",
+            args_schema=ResolvedTaskQuery,
+            func=None,
+            coroutine=None,
+        )
+        data = await invoke_llm_with_tool(
+            llm=llm,
+            tool=resolve_tool,
+            messages=[HumanMessage(content=prompt)],
+            metadata=None,
+            tool_choice="resolve_task",
+            span_name="routing-resolve-task",
+        )
+        if not isinstance(data, dict):
+            raise ValueError("resolve_task tool call returned no structured args")
         resolved = str(data.get("resolved_query") or "").strip()
         applied = bool(data.get("applied", False))
         llm_reason = str(data.get("reason") or "").strip()
@@ -1184,83 +1121,6 @@ class PlannerAgent(BaseAgent):
             lines.append("\n".join(block))
         return "\n\n".join(lines)
 
-    def format_llm_output(self, answer) -> dict:
-        """Parse the planner LLM output into a dict with heavy tolerance.
-
-        See ``orchestrator_agent_semantic_group.PlannerAgent.format_llm_output``
-        for the detailed recovery strategy — this implementation mirrors it.
-        """
-        raw = getattr(answer, "content", "") or ""
-
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            pass
-
-        cleaned_content = raw.strip()
-        if cleaned_content.startswith('```json'):
-            cleaned_content = cleaned_content[7:]
-        elif cleaned_content.startswith('```'):
-            cleaned_content = cleaned_content[3:]
-        if cleaned_content.endswith('```'):
-            cleaned_content = cleaned_content[:-3]
-        cleaned_content = cleaned_content.strip()
-
-        try:
-            return json.loads(cleaned_content)
-        except json.JSONDecodeError as e2:
-            logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-
-        repaired = _json_repair_to_dict(
-            cleaned_content,
-            "recovered via json_repair (pre-inner-escape)",
-            "recovered via json_repair string (pre-inner-escape)",
-        )
-        if repaired is not None:
-            return repaired
-
-        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
-        if escaped_content != cleaned_content:
-            try:
-                parsed = json.loads(escaped_content)
-                logger.info(" === format_llm_output, recovered via inner-quote field escaping")
-                return parsed
-            except json.JSONDecodeError as e_esc:
-                logger.warning(f" === format_llm_output, field-escape pre-pass still invalid: {e_esc}")
-
-        repaired = _json_repair_to_dict(
-            escaped_content,
-            "recovered via json_repair",
-            "recovered via json_repair (string)",
-        )
-        if repaired is not None:
-            return repaired
-
-        if _json_repair is None:
-            logger.warning(
-                " === format_llm_output, json_repair not installed; "
-                "add 'json-repair' to dependencies to improve LLM JSON tolerance"
-            )
-
-        try:
-            import ast
-            parsed = ast.literal_eval(cleaned_content)
-            if isinstance(parsed, dict):
-                return parsed
-        except (ValueError, SyntaxError) as e3:
-            logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-        except Exception as e5:  # noqa: BLE001
-            logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
-
-        try:
-            parsed = json.loads(cleaned_content.replace("'", '"'))
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError as e4:
-            logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-
-        return None
-
     async def get_history_payload(
         self,
         user_id: str,
@@ -1332,7 +1192,6 @@ class PlannerAgent(BaseAgent):
         """
         Based on the information from all provided agent cards, analyze which agents are required for the user's query, and finally return the names and descriptions of these agent cards.
         """
-
         enable_history = os.getenv('Enable_History',"enable")
         logger.info(f"enable_history is: {enable_history}")
 
@@ -1372,7 +1231,30 @@ class PlannerAgent(BaseAgent):
 
         logger.info(f"PlannerAgent.make_plan, system_prompt_agents = {system_prompt_agents}")
 
-        chain = chat_prompt | self.llm
+        # Build the messages once, then reuse them across tool-call retry attempts.
+        if enable_history == "enable":
+            history = await self.get_history(
+                user_id=user_id,
+                run_id=run_id,
+                propagated_history=propagated_history,
+            )
+            messages = chat_prompt.format_messages(
+                **{"query": query, "history": history, "agents": system_prompt_agents}
+            )
+        else:
+            messages = chat_prompt.format_messages(
+                **{"query": query, "agents": system_prompt_agents}
+            )
+
+        make_plan_tool = StructuredTool(
+            name="make_plan_cmd",
+            description="Provide the routing plan as structured tool arguments (original_query and selected agent).",
+            args_schema=PlannerStep,
+            func=None,
+            coroutine=None,
+        )
+
+        metadata = {"user_id": user_id, "run_id": run_id, "trace_id": trace_id}
 
         # Use the predefined trace ID with trace_context
         with langfuse.start_as_current_span(
@@ -1385,34 +1267,50 @@ class PlannerAgent(BaseAgent):
                 input={"query": query}
             )
 
-            answer = None
-            if enable_history == "enable":
-                history = await self.get_history(
-                    user_id=user_id,
-                    run_id=run_id,
-                    propagated_history=propagated_history,
+            step = None
+            for attempt in range(1, 3):
+                data_dict = await invoke_llm_with_tool(
+                    llm=self.llm,
+                    tool=make_plan_tool,
+                    messages=messages,
+                    metadata=metadata,
+                    tool_choice="make_plan_cmd",
+                    span_name="routingagent-make_plan-step",
+                    span_input={"query": query, "attempt": attempt},
                 )
-                answer = chain.invoke(
-                    {"query": query, "history": history, "agents": system_prompt_agents},
-                    config={"callbacks": [langfuse_handler]}
-                )
-            else:
-                answer = chain.invoke(
-                    {"query": query, "agents": system_prompt_agents},
-                    config={"callbacks": [langfuse_handler]}
-                )
-         
-            span.update_trace(output={"answer": answer})
+                if not isinstance(data_dict, dict):
+                    logger.warning(
+                        f"PlannerAgent.make_plan attempt {attempt}/2: LLM did not call tool, nudging."
+                    )
+                    messages = messages + [
+                        AIMessage(content=""),
+                        HumanMessage(
+                            content="你上一次没有调用工具。请**必须**调用 `make_plan_cmd` 工具来输出规划结果，不要直接输出文本或 JSON。"
+                        ),
+                    ]
+                    continue
+
+                logger.info(f" === PlannerAgent.make_plan, data_dict = {data_dict}")
+                try:
+                    step = PlannerStep(**data_dict)
+                    break
+                except Exception as e:
+                    logger.warning(
+                        f"PlannerAgent.make_plan attempt {attempt}/2: failed to parse PlannerStep from args: {e}, nudging."
+                    )
+                    messages = messages + [
+                        AIMessage(content=""),
+                        HumanMessage(
+                            content=f"工具调用参数解析失败: {e}。请重新调用 `make_plan_cmd`，并确保提供 original_query 和 agent 字段。"
+                        ),
+                    ]
+
+            span.update_trace(output={"step": step.dict() if step else None})
 
         langfuse.flush()
 
-        logger.info(f" === PlannerAgent.make_plan , llm result = {answer.content}")
-
-        data_dict = self.format_llm_output(answer)
-
-        logger.info(f" === PlannerAgent.make_plan , data_dict = {data_dict}")
-
-        step = PlannerStep(**data_dict)
+        if step is None:
+            raise ValueError("PlannerAgent.make_plan failed to obtain a valid plan after retries")
         logger.info(f" === PlannerAgent.make_plan , step = {step}")
         return step
 
@@ -2019,6 +1917,7 @@ class RoutingAgent(BaseAgent):
         }
 
         broadcast_timeout = float(os.getenv("BROADCAST_TIMEOUT", "30"))
+        _t0 = time.monotonic()
 
         try:
             async with httpx.AsyncClient(timeout=broadcast_timeout) as httpx_client:
@@ -2050,6 +1949,14 @@ class RoutingAgent(BaseAgent):
                 rps = response_data.get("route_paths") or []
                 if not rps and rp:
                     rps = [{"path": rp, "confidence": response_data.get("confidence", 0.0)}]
+                agent_latency_ms = int(response_data.get("latency_ms", 0) or 0)  # agent 自身上报的端到端耗时
+                wait_ms = int((time.monotonic() - _t0) * 1000)  # routing 侧观测到的完整等待耗时
+                logger.info(
+                    "[Capability] agent=%s respond in wait_ms=%d agent_latency_ms=%d",
+                    response_data.get("agent_name", agent_card.name),
+                    wait_ms,
+                    agent_latency_ms,
+                )
                 return CapabilityCheckResponse(
                     can_handle=response_data.get("can_handle", False),
                     confidence=response_data.get("confidence", 0.0),
@@ -2061,6 +1968,7 @@ class RoutingAgent(BaseAgent):
                     can_contribute=response_data.get("can_contribute", False),
                     contribution=response_data.get("contribution", ""),
                     execution_strategy=response_data.get("execution_strategy", "single"),
+                    latency_ms=agent_latency_ms,
                 )
         except json.JSONDecodeError as e:
             logger.error(
@@ -2287,20 +2195,26 @@ class RoutingAgent(BaseAgent):
                     input={"query": query, "votes": votes, "candidate_count": len(capable_agents)},
                 )
 
+                judge_tool = StructuredTool(
+                    name="judge_split",
+                    description="Judge whether the query truly needs multi-agent split.",
+                    args_schema=SplitJudgement,
+                    func=None,
+                    coroutine=None,
+                )
+
                 async def _one_vote() -> bool:
-                    response = await self.planner_agent.llm.ainvoke(
-                        [HumanMessage(content=prompt)],
-                        config={"callbacks": [langfuse_handler]},
+                    data = await invoke_llm_with_tool(
+                        llm=self.planner_agent.llm,
+                        tool=judge_tool,
+                        messages=[HumanMessage(content=prompt)],
+                        metadata={"user_id": user_id, "run_id": run_id, "trace_id": trace_id},
+                        tool_choice="judge_split",
+                        span_name="routing-split-judge-vote",
+                        span_input={"query": query},
                     )
-                    raw = (response.content or "").strip()
-                    if raw.startswith("```json"):
-                        raw = raw[7:]
-                    elif raw.startswith("```"):
-                        raw = raw[3:]
-                    if raw.endswith("```"):
-                        raw = raw[:-3]
-                    raw = raw.strip()
-                    data = json.loads(raw)
+                    if not isinstance(data, dict):
+                        return False
                     return bool(data.get("needs_split", False))
 
                 ballot = await asyncio.gather(*[_one_vote() for _ in range(votes)])
@@ -2685,19 +2599,24 @@ class RoutingAgent(BaseAgent):
                     session_id=run_id,
                     input={"query": query, "handle_agents": list(handle_names)},
                 )
-                response = await self.planner_agent.llm.ainvoke(
-                    [HumanMessage(content=prompt)],
-                    config={"callbacks": [langfuse_handler]},
+                rank_tool = StructuredTool(
+                    name="rank_agent",
+                    description="Rank the best root agent to handle the query.",
+                    args_schema=AgentRankToolResult,
+                    func=None,
+                    coroutine=None,
                 )
-                raw = (response.content or "").strip()
-                if raw.startswith("```json"):
-                    raw = raw[7:]
-                elif raw.startswith("```"):
-                    raw = raw[3:]
-                if raw.endswith("```"):
-                    raw = raw[:-3]
-                raw = raw.strip()
-                data = json.loads(raw)
+                data = await invoke_llm_with_tool(
+                    llm=self.planner_agent.llm,
+                    tool=rank_tool,
+                    messages=[HumanMessage(content=prompt)],
+                    metadata={"user_id": user_id, "run_id": run_id, "trace_id": trace_id},
+                    tool_choice="rank_agent",
+                    span_name="routing-single-root-fallback-rank",
+                    span_input={"query": query, "handle_agents": list(handle_names)},
+                )
+                if not isinstance(data, dict):
+                    raise ValueError("rank_agent tool call returned no structured args")
                 best_agent = str(data.get("best_agent") or "").strip()
                 confidence = float(data.get("confidence", 0.0) or 0.0)
                 reason = str(data.get("reason") or "").strip()
@@ -2766,8 +2685,16 @@ class RoutingAgent(BaseAgent):
                     final_prompt += (
                         "\n\n上一次规划未通过校验，请修复后重试。"
                         f"\n校验反馈：{feedback}\n"
-                        "请输出新的完整 JSON，不要解释。"
+                        "请重新调用 `plan_multi_root` 工具输出新的规划结果。"
                     )
+
+                plan_tool = StructuredTool(
+                    name="plan_multi_root",
+                    description="Decompose the user query into sub-tasks across multiple root orchestrators.",
+                    args_schema=MultiRootTaskPlan,
+                    func=None,
+                    coroutine=None,
+                )
 
                 with langfuse.start_as_current_span(
                     name="routing-multiroot-plan-attempt",
@@ -2778,20 +2705,21 @@ class RoutingAgent(BaseAgent):
                         session_id=run_id,
                         input={"query": query, "attempt": attempt + 1, "candidate_count": len(capable_agents)},
                     )
-                    response = await self.planner_agent.llm.ainvoke(
-                        [HumanMessage(content=final_prompt)],
-                        config={"callbacks": [langfuse_handler]},
+                    plan_data = await invoke_llm_with_tool(
+                        llm=self.planner_agent.llm,
+                        tool=plan_tool,
+                        messages=[HumanMessage(content=final_prompt)],
+                        metadata={"user_id": user_id, "run_id": run_id, "trace_id": trace_id},
+                        tool_choice="plan_multi_root",
+                        span_name="routing-multiroot-plan-toolcall",
+                        span_input={"query": query, "attempt": attempt + 1},
                     )
                     span.update_trace(output={"attempt": attempt + 1})
-                # Use the same tolerant JSON path as the planner (inner-quote escape,
-                # optional json_repair) — bare json.loads fails when reasoning/description
-                # echo user text with unescaped " or other LLM JSON slips.
 
-                logger.info(f"Multi-root task plan : llm result={response}")
+                logger.info(f"Multi-root task plan : llm result={plan_data}")
 
-                plan_data = self.planner_agent.format_llm_output(response)
                 if not isinstance(plan_data, dict):
-                    raise ValueError("multi-root plan: LLM output was not a parseable JSON object")
+                    raise ValueError("multi-root plan: LLM did not call plan_multi_root tool")
 
                 plan = MultiRootTaskPlan(**plan_data)
 

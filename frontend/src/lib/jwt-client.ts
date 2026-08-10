@@ -1,34 +1,26 @@
 /**
- * Client/edge JWT helpers. Does NOT verify signatures (no secret in the browser).
- * Used only to reject obviously unusable tokens (malformed / expired) for UX gates.
+ * Client JWT helpers. Does NOT verify signatures (no secret in the browser).
+ * Used only to decode browser-visible JWT data for non-authoritative UX helpers.
  */
+import { jwtDecode } from "jwt-decode"
 
-type JwtPayload = {
+export type JwtPayload = {
   exp?: number
+  orig_iat?: number
   role?: string
   user_id?: string
   username?: string
 }
 
-function base64UrlDecode(segment: string): string {
-  const padded = segment.replace(/-/g, "+").replace(/_/g, "/")
-  const pad = padded.length % 4 === 0 ? "" : "=".repeat(4 - (padded.length % 4))
-  const b64 = padded + pad
-  if (typeof atob === "function") {
-    return atob(b64)
-  }
-  // Node / Vitest
-  return Buffer.from(b64, "base64").toString("utf8")
-}
-
 export function decodeJwtPayload(token: string): JwtPayload | null {
-  const parts = token.split(".")
+  const trimmed = token.trim()
+  if (!trimmed) return null
+  const parts = trimmed.split(".")
   if (parts.length !== 3) return null
   try {
-    const json = base64UrlDecode(parts[1])
-    const payload = JSON.parse(json) as unknown
+    const payload = jwtDecode<JwtPayload>(trimmed)
     if (!payload || typeof payload !== "object") return null
-    return payload as JwtPayload
+    return payload
   } catch {
     return null
   }
@@ -37,7 +29,7 @@ export function decodeJwtPayload(token: string): JwtPayload | null {
 /** True when token has 3 segments and exp is missing or in the future (30s skew). */
 export function isJwtUsable(token: string | undefined | null, nowMs = Date.now()): boolean {
   if (!token || !token.trim()) return false
-  const payload = decodeJwtPayload(token.trim())
+  const payload = decodeJwtPayload(token)
   if (!payload) return false
   if (typeof payload.exp !== "number") return true
   return payload.exp * 1000 > nowMs - 30_000

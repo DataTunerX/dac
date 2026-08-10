@@ -12,9 +12,10 @@ type MockDataDescriptorRepository struct {
 	CreateFunc       func(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error)
 	GetFunc          func(ctx context.Context, namespace, name string) (*entity.DataDescriptor, error)
 	ListFunc         func(ctx context.Context, namespace string, opts domain.ListOptions) ([]*entity.DataDescriptor, error)
-	UpdateFunc       func(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error)
-	UpdateStatusFunc func(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error)
-	DeleteFunc       func(ctx context.Context, namespace, name string) error
+	UpdateFunc            func(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error)
+	UpdateStatusFunc      func(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error)
+	DeleteFunc            func(ctx context.Context, namespace, name string) error
+	PatchAnnotationFunc   func(ctx context.Context, namespace, name, key, value string) error
 }
 
 // Create mocks the Create method
@@ -64,6 +65,14 @@ func (m *MockDataDescriptorRepository) UpdateStatus(ctx context.Context, descrip
 func (m *MockDataDescriptorRepository) Delete(ctx context.Context, namespace, name string) error {
 	if m.DeleteFunc != nil {
 		return m.DeleteFunc(ctx, namespace, name)
+	}
+	return nil
+}
+
+// PatchAnnotation mocks the PatchAnnotation method
+func (m *MockDataDescriptorRepository) PatchAnnotation(ctx context.Context, namespace, name, key, value string) error {
+	if m.PatchAnnotationFunc != nil {
+		return m.PatchAnnotationFunc(ctx, namespace, name, key, value)
 	}
 	return nil
 }

@@ -109,8 +109,22 @@ func (c *APIClient) Login(ctx context.Context, username, password string) (*type
 	if err := sonic.Unmarshal(resp.Body(), &loginResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
+	token, ok := responseCookieValue(&resp.Header, "dac_token")
+	if !ok || token == "" {
+		return nil, fmt.Errorf("login response did not include an authentication cookie")
+	}
+	loginResp.Data.Token = token
 
 	return &loginResp, nil
+}
+
+func responseCookieValue(header *protocol.ResponseHeader, name string) (string, bool) {
+	var cookie protocol.Cookie
+	cookie.SetKey(name)
+	if !header.Cookie(&cookie) {
+		return "", false
+	}
+	return string(cookie.Value()), true
 }
 
 // ListAgentContainers lists agent containers in a namespace

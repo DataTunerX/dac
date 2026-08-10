@@ -50,7 +50,11 @@ type ObservabilityConfig struct {
 
 // JWTConfig holds JWT configuration
 type JWTConfig struct {
-	Secret string `mapstructure:"secret"`
+	Secret       string        `mapstructure:"secret"`
+	Timeout      time.Duration `mapstructure:"timeout"`
+	MaxRefresh   time.Duration `mapstructure:"max_refresh"`
+	CookieSecure bool          `mapstructure:"cookie_secure"`
+	CookieDomain string        `mapstructure:"cookie_domain"`
 }
 
 // RoutingAgentConfig holds Routing Agent configuration
@@ -115,6 +119,13 @@ func Load(cfgFile string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	if cfg.JWT.Timeout == 0 {
+		cfg.JWT.Timeout = 15 * time.Minute
+	}
+	if cfg.JWT.MaxRefresh == 0 {
+		cfg.JWT.MaxRefresh = 168 * time.Hour
 	}
 
 	return &cfg, nil

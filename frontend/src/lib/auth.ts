@@ -1,10 +1,7 @@
-import { getAuthToken } from "@/lib/auth-session"
-import { getJwtRole, isJwtUsable } from "@/lib/jwt-client"
+import { getClientSession } from "@/lib/auth-session"
 
 export const getUserRole = (): string => {
-  const token = getAuthToken()
-  if (!token || !isJwtUsable(token)) return "anonymous"
-  return getJwtRole(token)
+  return getClientSession()?.role || "anonymous"
 }
 
 export const isAdmin = (): boolean => {

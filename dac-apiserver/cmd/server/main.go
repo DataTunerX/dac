@@ -217,7 +217,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Initialize User components
 	userRepo := infradb.NewUserRepository(dbClient)
 	userUsecase := usecase.NewUserUsecase(userRepo, appLogger)
-	userHandler := handler.NewUserHandler(userUsecase, cfg.JWT.Secret, appLogger)
+	userHandler := handler.NewUserHandler(userUsecase, cfg.JWT, appLogger)
 
 	slog.Info("user module initialized")
 

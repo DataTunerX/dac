@@ -64,7 +64,9 @@ make scan-targets
 | 字段 | 值 |
 |------|-----|
 | 目标 | **仅** `dac-sandbox-0` 的 Pod IP |
-| 端口 | `3306,5432,6379,8000,8001,8069,8080,8929,9000,9001,9002` |
+| 端口 | 可留空（apiserver `DefaultPorts` 已含下列端口），或显式 `3306,5432,6379,8000,8001,8069,8080,8929,9000,9001,9002` |
+
+识别引擎：dac-apiserver 使用 [Nerva](https://github.com/praetorian-inc/nerva)（Praetorian，fingerprintx 继任）做通用协议指纹，再叠加 GitLab/Odoo/Saleor/Boutique/fileserver 等 HTTP 产品 enricher。全端口扫描传 `portsSpec=*`。
 
 ---
 

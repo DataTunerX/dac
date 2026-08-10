@@ -29,6 +29,11 @@ spec:
           env:
             - name: BACKEND_URL
               value: "http://{{ include "dac.componentName" (dict "context" . "name" "dac-apiserver") }}:{{ .Values.apiserver.service.port }}"
+            # Must match apiserver.config.jwt.secret so middleware /api/auth/session can jose-verify.
+            - name: DAC_JWT_SECRET
+              value: {{ .Values.apiserver.config.jwt.secret | quote }}
+            - name: DAC_JWT_MAX_REFRESH
+              value: {{ .Values.apiserver.config.jwt.maxRefresh | quote }}
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}
 {{- end }}

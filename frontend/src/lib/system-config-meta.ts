@@ -80,29 +80,29 @@ export function mergeFormData(
 }
 
 /**
- * Validate that the LLM ConfigMaps referenced in dac-configuration and
- * dd-configuration exist in the dac namespace. Returns human-readable
- * error messages for any missing ConfigMaps.
+ * Validate that LLM ConfigMaps referenced by dac/dd-configuration exist in the
+ * DataDescriptor target namespace (same rule as execution-engine PreCheckLLMConfig).
+ *
+ * Name refs are read from system ConfigMaps in `dac`; existence is checked in
+ * `targetNamespace` via GET-by-name (not type=llm list — Helm-seeded CMs often
+ * lack dac.io/config-type labels and would false-negative).
  */
-export async function validateSystemLlmConfigMaps(): Promise<string | null> {
+export async function validateSystemLlmConfigMaps(
+  targetNamespace: string
+): Promise<string | null> {
+  const ns = (targetNamespace || "").trim() || "default"
   const { getSystemConfiguration } = await import("@/lib/system-config-api")
-  const { listAllConfigMaps } = await import("@/lib/configmaps-api")
+  const { getConfigMap } = await import("@/lib/configmaps-api")
+  const axios = (await import("axios")).default
 
-  const allCms = await listAllConfigMaps(SYSTEM_CONFIG_NAMESPACE, { type: "llm" })
-  const existingNames = new Set(allCms.map((c) => c.name))
-
-  const missing: string[] = []
+  const refs: { key: string; name: string }[] = []
 
   try {
     const dacCfg = await getSystemConfiguration("dac-configuration")
     const planner = (dacCfg.data?.["default-planner-llm"] ?? "").trim()
     const expert = (dacCfg.data?.["default-expert-llm"] ?? "").trim()
-    if (planner && !existingNames.has(planner)) {
-      missing.push(`default-planner-llm → "${planner}"`)
-    }
-    if (expert && !existingNames.has(expert)) {
-      missing.push(`default-expert-llm → "${expert}"`)
-    }
+    if (planner) refs.push({ key: "default-planner-llm", name: planner })
+    if (expert) refs.push({ key: "default-expert-llm", name: expert })
   } catch {
     // dac-configuration may not exist yet; skip
   }
@@ -110,13 +110,28 @@ export async function validateSystemLlmConfigMaps(): Promise<string | null> {
   try {
     const ddCfg = await getSystemConfiguration("dd-configuration")
     const llmConfig = (ddCfg.data?.["llm-config"] ?? "").trim()
-    if (llmConfig && !existingNames.has(llmConfig)) {
-      missing.push(`llm-config → "${llmConfig}"`)
-    }
+    if (llmConfig) refs.push({ key: "llm-config", name: llmConfig })
   } catch {
     // dd-configuration may not exist yet; skip
   }
 
+  const missing: string[] = []
+  const seen = new Set<string>()
+  for (const ref of refs) {
+    const dedupe = `${ref.key}\0${ref.name}`
+    if (seen.has(dedupe)) continue
+    seen.add(dedupe)
+    try {
+      await getConfigMap(ns, ref.name)
+    } catch (e) {
+      if (axios.isAxiosError(e) && e.response?.status === 404) {
+        missing.push(`${ref.key} → "${ref.name}"`)
+      } else {
+        throw e
+      }
+    }
+  }
+
   if (missing.length === 0) return null
-  return `以下 LLM 配置在命名空间 ${SYSTEM_CONFIG_NAMESPACE} 中不存在，请先在 模版中心 创建对应 ConfigMap：\n${missing.join("\n")}`
+  return `以下 LLM 配置在命名空间 ${ns} 中不存在（须与数据源同命名空间），请先在 模版中心 创建对应 ConfigMap：\n${missing.join("\n")}`
 }

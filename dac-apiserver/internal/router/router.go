@@ -89,6 +89,7 @@ func Setup(
 			auth.POST("/register", userHandler.Register)
 			auth.POST("/login", userHandler.Login)
 			auth.POST("/refresh", userHandler.RefreshToken)
+			auth.POST("/logout", userHandler.Logout)
 		}
 
 		// ============ Protected routes (JWT authentication required) ============
@@ -153,6 +154,7 @@ func Setup(
 				descriptors.GET("/:name/signature", descriptorHandler.GetSignature)
 				descriptors.GET("/:name/semantic-domain", descriptorHandler.GetSemanticDomain)
 				descriptors.PUT("/:name", descriptorHandler.Update)
+				descriptors.POST("/:name/resync", descriptorHandler.RequestResync)
 				descriptors.DELETE("/:name", descriptorHandler.Delete)
 
 				// Knowledge Fragments Management

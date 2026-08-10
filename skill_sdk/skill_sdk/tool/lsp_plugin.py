@@ -22,25 +22,48 @@ logger = logging.getLogger(__name__)
 
 LSP_TOOL_NAME = "lsp"
 
-DESCRIPTION = """Interact with Language Server Protocol (LSP) servers to get code intelligence features.
+# Shared char budget for documentSymbol: return full outline if it fits; otherwise
+# filter/truncate down to this same ceiling. Override via SKILL_SDK_DOC_SYMBOL_FILTER_MAX_CHARS.
+DOC_SYMBOL_FILTER_MAX_CHARS_DEFAULT = 10000
+
+DESCRIPTION = f"""Interact with Language Server Protocol (LSP) servers to get code intelligence features.
 
 Supported operations:
 - goToDefinition: Find where a symbol is defined
 - findReferences: Find all references to a symbol
 - hover: Get hover information (documentation, type info) for a symbol
-- documentSymbol: Get all symbols (functions, classes, variables) in a document
+- documentSymbol: Get symbols (functions, classes, methods) in a document.
+  By default omits noise kinds (Variable/Field/literals) that rarely help readline
+  boundaries; set SKILL_SDK_DOC_SYMBOL_KEEP_NOISE=1 for the raw LSP tree.
+  Returns the **full** (pruned) outline when it fits in SKILL_SDK_DOC_SYMBOL_FILTER_MAX_CHARS
+  (default {DOC_SYMBOL_FILTER_MAX_CHARS_DEFAULT}) **and** no symbol_name/line focus
+  is provided. If symbol_name and/or line are set, always return that focused
+  subtree (fitted to the same budget). If the outline exceeds the budget with no
+  focus, truncate to the budget.
 - workspaceSymbol: Search for symbols across the entire workspace
 - goToImplementation: Find implementations of an interface or abstract method
 - prepareCallHierarchy: Get call hierarchy item at a position (functions/methods)
 - incomingCalls: Find all functions/methods that call the function at a position
 - outgoingCalls: Find all functions/methods called by the function at a position
 
-All operations require:
-- filePath: The file to operate on
+Most operations require:
+- filePath: The source file to operate on
 - line: The line number (1-based). Required for goToDefinition, findReferences, hover,
       goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls.
-      Optional (ignored) for documentSymbol, workspaceSymbol.
-- character: The character offset (1-based). Same requirements as line.
+      For documentSymbol: optional focus — keep symbols covering this line
+      (applied even when the outline is under budget).
+
+documentSymbol size policy (client-side):
+- default prune: drop Variable/Field/literal kinds (SKILL_SDK_DOC_SYMBOL_KEEP_NOISE=1 to keep)
+- budget = SKILL_SDK_DOC_SYMBOL_FILTER_MAX_CHARS (default {DOC_SYMBOL_FILTER_MAX_CHARS_DEFAULT})
+- with symbol_name and/or line → always focus to that subtree (under or over budget)
+- no focus and pruned outline ≤ budget → return full pruned outline
+- no focus and pruned outline > budget → truncate; result fitted to the same budget
+
+workspaceSymbol:
+- symbol_name: search query (fuzzy name match across the LSP workspace)
+- filePath: optional workspace root directory OR any source file (only used to pick
+  the language server). Directory roots are accepted. May be omitted if WORKSPACE_FOLDER is set.
 
 Note: LSP servers must be configured for the file type. If no server is available, an error will be returned."""
 
@@ -167,10 +190,13 @@ def _build_params(
     file_path: str,
     line: int,
     character: int,
+    *,
+    query: str = "",
 ) -> tuple[str, Any]:
     """Map an LSPTool operation to a (LSP-method, params) pair.
 
     ``line`` / ``character`` are 1-based and converted to 0-based LSP protocol.
+    ``query`` is used only by ``workspaceSymbol``.
     """
     from pathlib import Path as _Path
 
@@ -200,7 +226,7 @@ def _build_params(
         ),
         "workspaceSymbol": (
             "workspace/symbol",
-            {"query": ""},
+            {"query": query},
         ),
         "goToImplementation": (
             "textDocument/implementation",
@@ -220,6 +246,103 @@ def _build_params(
         ),
     }
     return method_map[operation]
+
+
+_SKIP_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    "dist",
+    "build",
+    "target",
+    "vendor",
+}
+
+
+def _normalized_exts_from_manager(manager: Any) -> set[str]:
+    exts: set[str] = set()
+    for srv in manager.get_all_servers().values():
+        mapping = getattr(getattr(srv, "config", None), "extension_to_language", None) or {}
+        for ext in mapping:
+            e = str(ext).lower()
+            if not e.startswith("."):
+                e = f".{e}"
+            exts.add(e)
+    return exts
+
+
+def _find_source_file_under(root: Path, exts: set[str]) -> Path | None:
+    """Return the first source file under ``root`` matching ``exts`` (shallow-first)."""
+    if not root.is_dir() or not exts:
+        return None
+    try:
+        for entry in sorted(root.iterdir(), key=lambda p: p.name):
+            if entry.is_file() and entry.suffix.lower() in exts:
+                return entry
+    except OSError:
+        return None
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")
+        )
+        for name in sorted(filenames):
+            candidate = Path(dirpath) / name
+            if candidate.suffix.lower() in exts:
+                return candidate
+    return None
+
+
+def _resolve_workspace_symbol_seed(manager: Any, file_path: str) -> Path | None:
+    """Resolve a path whose extension selects an LSP server for workspace/symbol.
+
+    ``file_path`` may be a source file, a workspace directory, or empty
+    (falls back to ``WORKSPACE_FOLDER`` / server workspace folders).
+    """
+    exts = _normalized_exts_from_manager(manager)
+    roots: list[Path] = []
+
+    raw = (file_path or "").strip()
+    if raw:
+        path = Path(os.path.abspath(os.path.expanduser(raw)))
+        if path.is_file():
+            return path
+        if path.is_dir():
+            roots.append(path)
+        else:
+            return None
+    else:
+        env_ws = os.environ.get("WORKSPACE_FOLDER", "").strip()
+        if env_ws:
+            roots.append(Path(os.path.abspath(os.path.expanduser(env_ws))))
+        for srv in manager.get_all_servers().values():
+            wf = getattr(getattr(srv, "config", None), "workspace_folder", None)
+            if wf:
+                roots.append(Path(os.path.abspath(os.path.expanduser(str(wf)))))
+
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root.resolve()) if root.exists() else str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        found = _find_source_file_under(root, exts)
+        if found is not None:
+            return found
+        # Extension-only seed: ensure_server_started keys off suffix; file need not exist.
+        if exts and root.exists():
+            return root / f"__workspace_symbol_seed{sorted(exts)[0]}"
+
+    if exts:
+        return Path.cwd() / f"__workspace_symbol_seed{sorted(exts)[0]}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -343,22 +466,712 @@ def _format_document_symbol_node(symbol: dict[str, Any], indent: int = 0) -> lis
     prefix = "  " * indent
     kind = _symbol_kind_name(symbol.get("kind", 0))
     name = symbol.get("name", "?")
-    detail = symbol.get("detail", "")
     rng = symbol.get("range", {})
     start_ln = (rng.get("start") or {}).get("line", 0) + 1
     end_ln = (rng.get("end") or {}).get("line", 0) + 1
-    line = f"{prefix}{name} ({kind})"
-    if detail:
-        line += f" {detail}"
-    line += f" - Lines {start_ln}-{end_ln}"
-    lines = [line]
+    # Compact read-code outline: name, short-enough kind, line span only.
+    # Skip LSP ``detail`` (signatures / types) — rarely needed before readline.
+    lines = [f"{prefix}{name} ({kind}) - Lines {start_ln}-{end_ln}"]
     for child in symbol.get("children", []):
         lines.extend(_format_document_symbol_node(child, indent + 1))
     return lines
 
 
-def _format_document_symbol(result: Any, cwd: str | None = None) -> str:
+# LSP SymbolKind values that usually contain members worth outlining.
+_CONTAINER_SYMBOL_KINDS = frozenset(
+    {
+        2,  # Module
+        3,  # Namespace
+        4,  # Package
+        5,  # Class
+        10,  # Enum
+        11,  # Interface
+        19,  # Object
+        23,  # Struct
+    }
+)
+
+# Prefer these kinds when capping a long child list (methods/ctors before fields).
+_OUTLINE_PRIORITY_KINDS = frozenset(
+    {
+        5,  # Class (nested)
+        6,  # Method
+        9,  # Constructor
+        11,  # Interface
+        12,  # Function
+        23,  # Struct
+        10,  # Enum
+    }
+)
+
+# Dropped from the default documentSymbol outline for read-code (save context).
+# These rarely define useful readline boundaries compared with class/method/function.
+# Override with SKILL_SDK_DOC_SYMBOL_KEEP_NOISE=1 to keep the full LSP tree.
+_DOC_SYMBOL_NOISE_KINDS = frozenset(
+    {
+        8,  # Field
+        13,  # Variable
+        15,  # String
+        16,  # Number
+        17,  # Boolean
+        18,  # Array
+        20,  # Key
+        21,  # Null
+    }
+)
+
+
+def _doc_symbol_keep_noise() -> bool:
+    raw = os.environ.get("SKILL_SDK_DOC_SYMBOL_KEEP_NOISE", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _symbol_kind_int(symbol: dict[str, Any]) -> int:
+    try:
+        return int(symbol.get("kind") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _prune_document_symbol_noise(
+    symbols: list[Any],
+    *,
+    keep_names: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Drop Variable/Field/literal leaves that bloat outlines without helping navigation.
+
+    If a dropped node has children, those children are promoted. Names in
+    ``keep_names`` are retained even when their kind is normally noise (so a
+    focused ``symbol_name`` that hits a Variable still works).
+    """
+    keep = {n for n in (keep_names or set()) if n}
+    out: list[dict[str, Any]] = []
+    for sym in symbols:
+        if not isinstance(sym, dict):
+            continue
+        kids = _prune_document_symbol_noise(
+            list(sym.get("children") or []), keep_names=keep
+        )
+        name = str(sym.get("name", ""))
+        kind = _symbol_kind_int(sym)
+        if kind in _DOC_SYMBOL_NOISE_KINDS and name not in keep:
+            out.extend(kids)
+            continue
+        node = dict(sym)
+        node["children"] = kids
+        out.append(node)
+    return out
+
+
+# Soft cap so a huge class outline stays usable but does not refill context.
+# Final size is governed by DOC_SYMBOL_FILTER_MAX_CHARS_DEFAULT / env override.
+_MAX_OUTLINE_CHILDREN = 200
+
+
+def _filtered_doc_symbol_max_chars() -> int:
+    """Resolve the shared documentSymbol char budget (full-or-filter ceiling)."""
+    raw = os.environ.get(
+        "SKILL_SDK_DOC_SYMBOL_FILTER_MAX_CHARS",
+        str(DOC_SYMBOL_FILTER_MAX_CHARS_DEFAULT),
+    ).strip()
+    try:
+        return max(200, int(raw))
+    except ValueError:
+        return DOC_SYMBOL_FILTER_MAX_CHARS_DEFAULT
+
+
+def _symbol_name_matches(name: str, query: str) -> bool:
+    """Exact (case-insensitive) match, or trailing identifier of ``Type.Method`` / ``(*T).Method``."""
+    q = (query or "").strip()
+    if not q or not name:
+        return False
+    if name == q or name.lower() == q.lower():
+        return True
+    tail = name.rsplit(".", 1)[-1]
+    return tail.lower() == q.lower()
+
+
+def _symbol_covers_line(symbol: dict[str, Any], line_1based: int) -> bool:
+    """True if DocumentSymbol ``range`` covers the 1-based line."""
+    rng = symbol.get("range") or {}
+    start = (rng.get("start") or {}).get("line")
+    end = (rng.get("end") or {}).get("line")
+    if start is None or end is None:
+        return False
+    # LSP lines are 0-based
+    return int(start) + 1 <= line_1based <= int(end) + 1
+
+
+def _is_container_kind(kind: Any) -> bool:
+    try:
+        return int(kind) in _CONTAINER_SYMBOL_KINDS
+    except (TypeError, ValueError):
+        return False
+
+
+def _shallow_outline_children(
+    children: list[Any], *, max_children: int = _MAX_OUTLINE_CHILDREN
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep one level of members (no grandchildren). Prefer methods when capping.
+
+    Returns ``(shallow_children, omitted_count)``.
+    """
+    valid = [c for c in children if isinstance(c, dict)]
+    if not valid:
+        return [], 0
+
+    def _prio(sym: dict[str, Any]) -> tuple[int, int]:
+        kind = sym.get("kind", 0)
+        try:
+            k = int(kind)
+        except (TypeError, ValueError):
+            k = 0
+        # lower tuple sorts first: priority kinds before others, then by start line
+        is_prio = 0 if k in _OUTLINE_PRIORITY_KINDS else 1
+        start = ((sym.get("range") or {}).get("start") or {}).get("line", 0)
+        try:
+            return (is_prio, int(start))
+        except (TypeError, ValueError):
+            return (is_prio, 0)
+
+    ordered = sorted(valid, key=_prio)
+    omitted = max(0, len(ordered) - max_children)
+    selected = ordered[:max_children]
+    # Restore source order among the selected set for readable outlines
+    selected_ids = {id(s) for s in selected}
+    in_source_order = [c for c in valid if id(c) in selected_ids]
+
+    shallow: list[dict[str, Any]] = []
+    for child in in_source_order:
+        node = {k: v for k, v in child.items() if k != "children"}
+        node["children"] = []
+        shallow.append(node)
+    return shallow, omitted
+
+
+def _filter_document_symbol_node_by_name(
+    symbol: dict[str, Any], query: str
+) -> dict[str, Any] | None:
+    """Keep node if it or a descendant matches ``query``; prune non-matching siblings.
+
+    - Method/function self-match: no children (boundary is enough for readline).
+    - Class/interface/… self-match: keep **one level** of members (method outline).
+    - Ancestor of a name match: only the matching descendant path.
+    """
+    matched_children: list[dict[str, Any]] = []
+    for child in symbol.get("children") or []:
+        if not isinstance(child, dict):
+            continue
+        filtered = _filter_document_symbol_node_by_name(child, query)
+        if filtered is not None:
+            matched_children.append(filtered)
+
+    self_match = _symbol_name_matches(str(symbol.get("name", "")), query)
+    if not self_match and not matched_children:
+        return None
+
+    out = {k: v for k, v in symbol.items() if k != "children"}
+    if matched_children:
+        # Name hit is below this node — keep only the matching path
+        out["children"] = matched_children
+    elif self_match and _is_container_kind(symbol.get("kind")):
+        shallow, _omitted = _shallow_outline_children(list(symbol.get("children") or []))
+        out["children"] = shallow
+        if _omitted:
+            out["_outline_omitted"] = _omitted
+    else:
+        # Leaf-like self-match (method/function/…): boundary only
+        out["children"] = []
+    return out
+
+
+def _filter_document_symbols_by_name(
+    symbols: list[dict[str, Any]], query: str
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for sym in symbols:
+        if not isinstance(sym, dict):
+            continue
+        filtered = _filter_document_symbol_node_by_name(sym, query)
+        if filtered is not None:
+            out.append(filtered)
+    return out
+
+
+def _deepest_symbol_covering_line(
+    symbols: list[dict[str, Any]], line_1based: int
+) -> list[dict[str, Any]]:
+    """Return a pruned tree: ancestors + deepest symbol whose range covers ``line_1based``.
+
+    When the deepest hit is a container (e.g. class declaration line), attach a
+    one-level member outline so callers still see methods without a full dump.
+    """
+
+    def walk(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
+        for node in nodes:
+            if not isinstance(node, dict) or not _symbol_covers_line(node, line_1based):
+                continue
+            child_hit = walk(list(node.get("children") or []))
+            out = {k: v for k, v in node.items() if k != "children"}
+            if child_hit is not None:
+                out["children"] = [child_hit]
+            elif _is_container_kind(node.get("kind")):
+                shallow, omitted = _shallow_outline_children(
+                    list(node.get("children") or [])
+                )
+                out["children"] = shallow
+                if omitted:
+                    out["_outline_omitted"] = omitted
+            else:
+                out["children"] = []
+            return out
+        return None
+
+    hit = walk(symbols)
+    return [hit] if hit is not None else []
+
+
+def _filter_symbol_information(
+    symbols: list[dict[str, Any]],
+    *,
+    symbol_name: str | None = None,
+    line_1based: int | None = None,
+) -> list[dict[str, Any]]:
+    """Filter flat SymbolInformation[] by name and/or covering line."""
+    out: list[dict[str, Any]] = []
+    for sym in symbols:
+        if not isinstance(sym, dict):
+            continue
+        if symbol_name and not _symbol_name_matches(str(sym.get("name", "")), symbol_name):
+            continue
+        if line_1based is not None:
+            loc = sym.get("location") or {}
+            rng = loc.get("range") or {}
+            start = (rng.get("start") or {}).get("line")
+            end = (rng.get("end") or {}).get("line")
+            if start is None or end is None:
+                continue
+            if not (int(start) + 1 <= line_1based <= int(end) + 1):
+                continue
+        out.append(sym)
+    return out
+
+
+def _refine_name_matches_by_line(
+    symbols: list[dict[str, Any]], line_1based: int
+) -> list[dict[str, Any]]:
+    """Among an already name-filtered tree, keep branches that cover ``line_1based``."""
+    covering = _deepest_symbol_covering_line(symbols, line_1based)
+    return covering if covering else symbols
+
+
+def _collect_outline_omitted(symbols: list[Any]) -> int:
+    total = 0
+    for sym in symbols:
+        if not isinstance(sym, dict):
+            continue
+        omitted = sym.pop("_outline_omitted", None)
+        if isinstance(omitted, int):
+            total += omitted
+        total += _collect_outline_omitted(list(sym.get("children") or []))
+    return total
+
+
+def _estimate_document_symbol_chars(
+    symbols: list[Any], *, filter_note: str = ""
+) -> int:
+    lines = [f"Document symbols{filter_note}:"]
+    for sym in symbols:
+        if isinstance(sym, dict):
+            lines.extend(_format_document_symbol_node(sym))
+    return len("\n".join(lines))
+
+
+def _clone_symbol_node(symbol: dict[str, Any]) -> dict[str, Any]:
+    out = {k: v for k, v in symbol.items() if k != "children"}
+    out["children"] = [
+        _clone_symbol_node(c)
+        for c in (symbol.get("children") or [])
+        if isinstance(c, dict)
+    ]
+    return out
+
+
+def _clone_symbol_forest(symbols: list[Any]) -> list[dict[str, Any]]:
+    return [_clone_symbol_node(s) for s in symbols if isinstance(s, dict)]
+
+
+def _find_symbol_node(
+    nodes: list[Any], *, name: str | None = None, start_line_0: int | None = None
+) -> dict[str, Any] | None:
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        rng = node.get("range") or {}
+        start = (rng.get("start") or {}).get("line")
+        name_ok = name is None or str(node.get("name", "")) == name
+        line_ok = start_line_0 is None or start == start_line_0
+        if name_ok and line_ok:
+            return node
+        hit = _find_symbol_node(
+            list(node.get("children") or []), name=name, start_line_0=start_line_0
+        )
+        if hit is not None:
+            return hit
+    return None
+
+
+def _enrich_filtered_with_full_outline(
+    filtered: list[dict[str, Any]], full: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Expand narrow hits (e.g. Class→one Method) back to a one-level member outline.
+
+    Uses the full documentSymbol tree as the source of siblings/members so a
+    method query still shows neighboring methods within the char budget.
+    """
+
+    def enrich(node: dict[str, Any]) -> None:
+        children = [c for c in (node.get("children") or []) if isinstance(c, dict)]
+        for child in children:
+            enrich(child)
+
+        if not _is_container_kind(node.get("kind")):
+            return
+
+        start = ((node.get("range") or {}).get("start") or {}).get("line")
+        full_node = _find_symbol_node(
+            full, name=str(node.get("name", "")), start_line_0=start
+        )
+        if full_node is None:
+            full_node = _find_symbol_node(full, name=str(node.get("name", "")))
+        if full_node is None:
+            return
+
+        full_shallow, omitted = _shallow_outline_children(
+            list(full_node.get("children") or [])
+        )
+        if not full_shallow:
+            return
+
+        # Preserve any deeper match paths already present (e.g. nested hits),
+        # then fill remaining slots with sibling outline from the full tree.
+        existing_by_name = {str(c.get("name")): c for c in children}
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for shallow in full_shallow:
+            n = str(shallow.get("name", ""))
+            if n in existing_by_name and existing_by_name[n].get("children"):
+                merged.append(existing_by_name[n])
+            else:
+                merged.append(shallow)
+            seen.add(n)
+        for c in children:
+            n = str(c.get("name", ""))
+            if n not in seen:
+                merged.append(c)
+        node["children"] = merged
+        if omitted:
+            node["_outline_omitted"] = int(node.get("_outline_omitted") or 0) + omitted
+
+    out = _clone_symbol_forest(filtered)
+    for root in out:
+        enrich(root)
+    return out
+
+
+def _child_removal_score(
+    child: dict[str, Any], prefer_names: set[str]
+) -> tuple[int, int, int]:
+    """Higher score = remove sooner."""
+    name = str(child.get("name", ""))
+    if name in prefer_names:
+        return (-1, 0, 0)  # never prefer removing these (handled by caller)
+    try:
+        kind = int(child.get("kind", 0))
+    except (TypeError, ValueError):
+        kind = 0
+    # Remove non-outline kinds first, then later lines
+    kind_score = 0 if kind not in _OUTLINE_PRIORITY_KINDS else 1
+    start = ((child.get("range") or {}).get("start") or {}).get("line", 0)
+    try:
+        start_i = int(start)
+    except (TypeError, ValueError):
+        start_i = 0
+    # Prefer removing far-away / low-priority members first:
+    # sort key for max(): higher removed first → use inverted priority
+    return (0 if kind not in _OUTLINE_PRIORITY_KINDS else -1, start_i, len(name))
+
+
+def _trim_outline_to_char_budget(
+    symbols: list[dict[str, Any]],
+    *,
+    max_chars: int,
+    filter_note: str,
+    prefer_names: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Drop outline members until formatted size fits ``max_chars``.
+
+    Can remove nested members **and** top-level symbols. Returns
+    ``(trimmed_symbols, removed_count)``.
+    """
+    prefer = prefer_names or set()
+    out = _clone_symbol_forest(symbols)
+    removed = 0
+
+    def remove_one() -> bool:
+        nonlocal removed
+        # (score, parent_or_None, child) — parent None means top-level list
+        candidates: list[
+            tuple[tuple[int, int, int], dict[str, Any] | None, dict[str, Any]]
+        ] = []
+
+        def consider(parent: dict[str, Any] | None, child: dict[str, Any], siblings: list) -> None:
+            name = str(child.get("name", ""))
+            if name in prefer and len(siblings) > 1:
+                return
+            if name in prefer:
+                return
+            score = _child_removal_score(child, prefer)
+            candidates.append((score, parent, child))
+
+        def walk(nodes: list[dict[str, Any]], parent: dict[str, Any] | None) -> None:
+            kids = [c for c in nodes if isinstance(c, dict)]
+            for child in kids:
+                nested = [c for c in (child.get("children") or []) if isinstance(c, dict)]
+                has_keep_path = bool(nested) and any(
+                    str(gc.get("name", "")) in prefer for gc in nested
+                )
+                if has_keep_path:
+                    walk(nested, child)
+                    continue
+                consider(parent, child, kids)
+                if nested:
+                    walk(nested, child)
+
+        walk(out, None)
+        if not candidates:
+            return False
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        _score, parent, child = candidates[0]
+        if parent is None:
+            out[:] = [c for c in out if c is not child]
+        else:
+            parent["children"] = [
+                c for c in (parent.get("children") or []) if c is not child
+            ]
+        removed += 1
+        return True
+
+    for _ in range(10000):
+        if _estimate_document_symbol_chars(out, filter_note=filter_note) <= max_chars:
+            break
+        if not remove_one():
+            break
+    return out, removed
+
+
+def _fit_filtered_document_symbols(
+    filtered: list[dict[str, Any]],
+    full: list[dict[str, Any]],
+    *,
+    filter_note: str,
+    prefer_names: set[str] | None = None,
+    max_chars: int | None = None,
+    enrich: bool = True,
+) -> tuple[list[dict[str, Any]], str]:
+    """Optionally enrich narrow filters, then fit formatted output to the char budget."""
+    budget = max_chars if max_chars is not None else _filtered_doc_symbol_max_chars()
+    working = (
+        _enrich_filtered_with_full_outline(filtered, full)
+        if enrich
+        else _clone_symbol_forest(filtered)
+    )
+    fitted, removed = _trim_outline_to_char_budget(
+        working,
+        max_chars=max(200, budget - 80),  # reserve room for fit_note suffix
+        filter_note=filter_note,
+        prefer_names=prefer_names,
+    )
+    note = ""
+    final_chars = _estimate_document_symbol_chars(fitted, filter_note=filter_note)
+    if removed:
+        note = f"; fitted to ≤{budget} chars ({final_chars} chars, {removed} members omitted)"
+    else:
+        note = f"; {final_chars} chars (budget ≤{budget})"
+    return fitted, note
+
+
+def filter_document_symbol_result(
+    result: Any,
+    *,
+    symbol_name: str | None = None,
+    line_1based: int | None = None,
+    max_chars: int | None = None,
+) -> tuple[Any, str]:
+    """Return documentSymbol output under a shared char budget.
+
+    Policy (``budget`` = ``max_chars`` or ``SKILL_SDK_DOC_SYMBOL_FILTER_MAX_CHARS``,
+    default ``DOC_SYMBOL_FILTER_MAX_CHARS_DEFAULT``):
+
+    1. Prune noise kinds (unless KEEP_NOISE).
+    2. If ``symbol_name`` / ``line`` provided → always apply that focus (even when
+       the pruned outline fits in ``budget``).
+    3. Else if pruned outline ≤ ``budget`` → return full pruned outline.
+    4. Else (over budget, no focus) → truncate; focused results are fitted to
+       the same ``budget``.
+
+    Goal: prefer focused symbol spans for reading; otherwise give the most
+    complete outline that still fits.
+    """
+    budget = max_chars if max_chars is not None else _filtered_doc_symbol_max_chars()
+
+    if not result or not isinstance(result, list):
+        return result, ""
+
+    if not result:
+        return result, ""
+
+    first = result[0]
+    is_symbol_info = isinstance(first, dict) and "location" in first
+
+    if is_symbol_info:
+        full_text = _format_workspace_symbol(result, cwd=None)
+        full_chars = len(full_text)
+        name_q = (symbol_name or "").strip() or None
+        has_focus = bool(name_q) or line_1based is not None
+        if full_chars <= budget and not has_focus:
+            return result, f" (full outline, {full_chars} chars ≤ {budget})"
+
+        filtered = _filter_symbol_information(
+            result, symbol_name=name_q, line_1based=line_1based
+        )
+        if name_q and line_1based is not None and not filtered:
+            filtered = _filter_symbol_information(
+                result, symbol_name=name_q, line_1based=None
+            )
+        if not filtered:
+            if has_focus:
+                return [], (
+                    f" (focused: full={full_chars}, name={name_q!r}, "
+                    f"line={line_1based}; no matches)"
+                    if full_chars <= budget
+                    else (
+                        f" (filtered: full={full_chars} > {budget}, "
+                        f"name={name_q!r}, line={line_1based}; no matches)"
+                    )
+                )
+            # Still over budget with nothing matched — keep head of full list
+            filtered = list(result)
+        # Trim flat list by dropping trailing symbols until under budget
+        kept = list(filtered)
+        while kept and len(_format_workspace_symbol(kept, cwd=None)) > budget:
+            kept.pop()
+        if full_chars <= budget and has_focus:
+            note = (
+                f" (focused under budget: {full_chars} chars ≤ {budget}; "
+                f"kept {len(_format_workspace_symbol(kept, cwd=None))} chars)"
+            )
+        else:
+            note = (
+                f" (over budget: full={full_chars} > {budget}; "
+                f"filtered to {len(_format_workspace_symbol(kept, cwd=None))} chars)"
+            )
+        return kept, note
+
+    # Hierarchical DocumentSymbol[]
+    name_q = (symbol_name or "").strip() or None
+    prefer_keep = {name_q} if name_q else set()
+    pruned_note = ""
+    working: list[dict[str, Any]] = result
+    if not _doc_symbol_keep_noise():
+        working = _prune_document_symbol_noise(
+            _clone_symbol_forest(result), keep_names=prefer_keep
+        )
+        pruned_note = "; noise kinds omitted (Variable/Field/…)"
+
+    full_chars = _estimate_document_symbol_chars(working, filter_note="")
+    has_focus = bool(name_q) or line_1based is not None
+    if full_chars <= budget and not has_focus:
+        return working, f" (full outline, {full_chars} chars ≤ {budget}{pruned_note})"
+
+    # Focused (any size) or over budget — filter / truncate on the pruned tree
+    prefer = prefer_keep
+
+    if full_chars <= budget and has_focus:
+        parts: list[str] = [f"under budget {full_chars} ≤ {budget}"]
+        if pruned_note:
+            parts.append("noise omitted")
+        if name_q:
+            parts.append(f"name={name_q!r}")
+        if line_1based is not None:
+            parts.append(f"line={line_1based}")
+        suffix = f" (focused: {', '.join(parts)})"
+    else:
+        parts = [f"full={full_chars} > {budget}"]
+        if pruned_note:
+            parts.append("noise omitted")
+        if name_q:
+            parts.append(f"name={name_q!r}")
+        if line_1based is not None:
+            parts.append(f"line={line_1based}")
+        suffix = f" (filtered: {', '.join(parts)})"
+
+    filtered: list[dict[str, Any]]
+    if name_q and line_1based is not None:
+        by_name = _filter_document_symbols_by_name(working, name_q)
+        refined = _refine_name_matches_by_line(by_name, line_1based)
+        if refined is not by_name and refined:
+            filtered = refined
+        elif by_name:
+            if not _deepest_symbol_covering_line(by_name, line_1based):
+                kind = "focused" if full_chars <= budget else "filtered"
+                suffix = (
+                    f" ({kind}: full={full_chars}, name={name_q!r}; "
+                    f"no match covering line={line_1based}, showing name matches)"
+                )
+            filtered = by_name
+        else:
+            return [], suffix
+        do_enrich = True
+    elif name_q:
+        filtered = _filter_document_symbols_by_name(working, name_q)
+        if not filtered:
+            return [], suffix
+        do_enrich = True
+    elif line_1based is not None:
+        filtered = _deepest_symbol_covering_line(working, line_1based)
+        if not filtered:
+            return [], suffix
+        do_enrich = True
+    else:
+        # No focus hint: truncate the pruned outline to the shared budget
+        filtered = _clone_symbol_forest(working)
+        do_enrich = False
+
+    _collect_outline_omitted(filtered)
+    fitted, fit_note = _fit_filtered_document_symbols(
+        filtered,
+        working,
+        filter_note=suffix,
+        prefer_names=prefer,
+        max_chars=budget,
+        enrich=do_enrich,
+    )
+    return fitted, suffix + fit_note
+
+
+def _format_document_symbol(
+    result: Any,
+    cwd: str | None = None,
+    *,
+    filter_note: str = "",
+) -> str:
     if not result or not isinstance(result, list) or len(result) == 0:
+        if filter_note:
+            return (
+                f"No document symbols matching filter{filter_note}. "
+                "Try a different symbol_name/line, or omit filters for the full outline."
+            )
         return (
             "No symbols found in document. This may occur if the file is empty, "
             "not supported by the LSP server, or if the server has not fully indexed the file."
@@ -372,7 +1185,7 @@ def _format_document_symbol(result: Any, cwd: str | None = None) -> str:
         return _format_workspace_symbol(result, cwd)
 
     # DocumentSymbol[] (hierarchical)
-    lines = ["Document symbols:"]
+    lines = [f"Document symbols{filter_note}:"]
     for sym in result:
         lines.extend(_format_document_symbol_node(sym))
     return "\n".join(lines)
@@ -550,14 +1363,24 @@ def _count_unique_file_uris(items: list[dict[str, Any]], uri_key: str = "uri") -
 class LspInput(BaseModel):
     operation: str = Field(description="The LSP operation to perform")
     file_path: str = Field(
-        description="The absolute or relative path to the file",
+        default="",
+        description=(
+            "Absolute or relative path. Required source file for most operations. "
+            "For workspaceSymbol: optional workspace root directory OR any source file "
+            "(only used to select the language server); may be omitted if WORKSPACE_FOLDER is set."
+        ),
     )
-    line: int = Field(
-        default=1,
+    line: int | None = Field(
+        default=None,
         ge=1,
-        description="The line number (1-based, as shown in editors). Required for goToDefinition, "
-        "findReferences, hover, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. "
-        "Optional (ignored) for documentSymbol, workspaceSymbol.",
+        description=(
+            "The line number (1-based, as shown in editors). Required for goToDefinition, "
+            "findReferences, hover, goToImplementation, prepareCallHierarchy, incomingCalls, "
+            "outgoingCalls (defaults to 1 if omitted). "
+            "For documentSymbol: optional focus — keep symbols covering this line "
+            "(applied even when the outline fits the char budget). "
+            "Ignored for workspaceSymbol."
+        ),
     )
     character: int | None = Field(
         default=None,
@@ -566,11 +1389,12 @@ class LspInput(BaseModel):
     )
     symbol_name: str | None = Field(
         default=None,
-        description="The identifier name (e.g. function/method/variable name) to look up. "
-        "When provided, the SDK reads the specified line from the file and computes the exact "
-        "character offset automatically. This is the recommended approach for all position-dependent "
-        "operations (goToDefinition, findReferences, hover, goToImplementation, prepareCallHierarchy, "
-        "incomingCalls, outgoingCalls). Ignored for documentSymbol and workspaceSymbol.",
+        description=(
+            "For position-based operations: identifier on the given line (SDK computes character). "
+            "For workspaceSymbol: the search query string passed to workspace/symbol. "
+            "For documentSymbol: optional focus — prefer matching this symbol (plus useful "
+            "outline); applied even when the outline fits the shared char budget."
+        ),
     )
 
 
@@ -600,10 +1424,97 @@ class LspPlugin(ToolPlugin):
             )
         operation: Operation = operation_raw  # type: ignore[assignment]
 
-        file_path = kwargs.get("file_path", "")
-        line = int(kwargs.get("line", 1))
+        file_path = kwargs.get("file_path", "") or ""
+        line_raw = kwargs.get("line")
+        line: int | None = int(line_raw) if line_raw is not None else None
+        symbol_name: str | None = kwargs.get("symbol_name")
+        cwd = os.getcwd()
 
-        # ---- resolve file ------------------------------------------------------
+        # ---- workspaceSymbol: directory roots + symbol_name → query ------------
+        if operation == "workspaceSymbol":
+            manager = _get_or_create_manager()
+            if manager is None:
+                return json.dumps(
+                    {"error": "LSP server manager not initialized", "error_code": 5},
+                    ensure_ascii=False,
+                )
+
+            seed = _resolve_workspace_symbol_seed(manager, file_path)
+            if seed is None:
+                return json.dumps(
+                    {
+                        "error": (
+                            "workspaceSymbol could not select an LSP server. "
+                            "Pass file_path as the workspace root directory or any source file, "
+                            "or set WORKSPACE_FOLDER / SKILL_SDK_LSP_SERVERS workspaceFolder."
+                        ),
+                        "error_code": 1,
+                    },
+                    ensure_ascii=False,
+                )
+            if file_path.strip():
+                provided = Path(os.path.abspath(os.path.expanduser(file_path.strip())))
+                if not provided.exists():
+                    return json.dumps(
+                        {"error": f"File does not exist: {file_path}", "error_code": 1},
+                        ensure_ascii=False,
+                    )
+
+            query = (symbol_name or "").strip()
+            seed_path = str(seed.resolve())
+            server = manager.ensure_server_started(seed_path)
+            if server is None:
+                ext = Path(seed_path).suffix
+                return json.dumps(
+                    {
+                        "error": f"No LSP server available for file type: {ext}",
+                        "error_code": 4,
+                    },
+                    ensure_ascii=False,
+                )
+
+            method, params = _build_params(
+                operation, seed_path, 1, 1, query=query
+            )
+            try:
+                result = server.send_request(method, params)
+            except Exception as exc:
+                err_str = str(exc)
+                if "unhandled method" in err_str.lower():
+                    return json.dumps(
+                        {
+                            "error": (
+                                f"LSP server does not support operation "
+                                f"'workspaceSymbol': {err_str}"
+                            ),
+                            "error_code": 7,
+                        },
+                        ensure_ascii=False,
+                    )
+                return json.dumps(
+                    {
+                        "error": f"Error performing workspaceSymbol: {err_str}",
+                        "error_code": 7,
+                    },
+                    ensure_ascii=False,
+                )
+
+            formatted = _FORMATTERS[operation](result, cwd)
+            result_count = _compute_result_count(operation, result)
+            file_count = _compute_file_count(operation, result)
+            return json.dumps(
+                {
+                    "operation": operation,
+                    "result": formatted,
+                    "filePath": file_path or seed_path,
+                    "query": query,
+                    "resultCount": result_count,
+                    "fileCount": file_count,
+                },
+                ensure_ascii=False,
+            )
+
+        # ---- resolve file (other operations) -----------------------------------
         if not file_path:
             return json.dumps(
                 {"error": "file_path is required", "error_code": 1},
@@ -625,39 +1536,51 @@ class LspPlugin(ToolPlugin):
                 ensure_ascii=False,
             )
 
-        # ---- auto-compute character from symbol_name ---------------------------
-        symbol_name: str | None = kwargs.get("symbol_name")
-        if symbol_name:
-            try:
-                with open(str(fp_path), "r", encoding="utf-8") as f:
-                    file_lines = f.readlines()
-                if line - 1 >= len(file_lines):
+        # documentSymbol does not use cursor position; symbol_name/line are client-side filters.
+        # Skip character resolution so symbol_name can filter without a precise line hit.
+        character = 1
+        if operation != "documentSymbol":
+            if line is None:
+                line = 1
+            # ---- auto-compute character from symbol_name -----------------------
+            if symbol_name:
+                try:
+                    with open(str(fp_path), "r", encoding="utf-8") as f:
+                        file_lines = f.readlines()
+                    if line - 1 >= len(file_lines):
+                        return json.dumps(
+                            {
+                                "error": f"line {line} exceeds file length ({len(file_lines)} lines)",
+                                "error_code": 8,
+                            },
+                            ensure_ascii=False,
+                        )
+                    line_content = file_lines[line - 1]
+                    idx = line_content.find(symbol_name)
+                    if idx == -1:
+                        return json.dumps(
+                            {
+                                "error": f"symbol '{symbol_name}' not found on line {line}",
+                                "error_code": 8,
+                            },
+                            ensure_ascii=False,
+                        )
+                    character = idx + 1  # 1-based
+                except Exception as exc:
                     return json.dumps(
                         {
-                            "error": f"line {line} exceeds file length ({len(file_lines)} lines)",
+                            "error": f"Failed to auto-compute character from symbol_name: {exc}",
                             "error_code": 8,
                         },
                         ensure_ascii=False,
                     )
-                line_content = file_lines[line - 1]
-                idx = line_content.find(symbol_name)
-                if idx == -1:
-                    return json.dumps(
-                        {
-                            "error": f"symbol '{symbol_name}' not found on line {line}",
-                            "error_code": 8,
-                        },
-                        ensure_ascii=False,
-                    )
-                character = idx + 1  # 1-based
-            except Exception as exc:
-                return json.dumps(
-                    {"error": f"Failed to auto-compute character from symbol_name: {exc}", "error_code": 8},
-                    ensure_ascii=False,
-                )
+            else:
+                raw_char = kwargs.get("character")
+                character = int(raw_char) if raw_char is not None else 1
         else:
-            raw_char = kwargs.get("character")
-            character = int(raw_char) if raw_char is not None else 1
+            # documentSymbol request itself ignores position; keep a dummy for _build_params
+            if line is None:
+                line = 1
 
         # ---- size check --------------------------------------------------------
         file_size = fp_path.stat().st_size
@@ -700,7 +1623,8 @@ class LspPlugin(ToolPlugin):
             )
 
         # ---- build method + params ---------------------------------------------
-        method, params = _build_params(operation, str(fp_path.resolve()), line, character)
+        # For documentSymbol, line/character are unused by the LSP request.
+        method, params = _build_params(operation, str(fp_path.resolve()), line or 1, character)
 
         # ---- send request ------------------------------------------------------
         server = manager.ensure_server_started(str(fp_path.resolve()))
@@ -763,9 +1687,22 @@ class LspPlugin(ToolPlugin):
                 logger.exception("LSP call hierarchy request failed")
                 result = None
 
+        # ---- documentSymbol client-side filter (shrink context for large files)
+        filter_note = ""
+        if operation == "documentSymbol":
+            # Re-read raw filters: line may have been defaulted to 1 for _build_params
+            filter_line = int(line_raw) if line_raw is not None else None
+            filter_name = (symbol_name or "").strip() or None
+            result, filter_note = filter_document_symbol_result(
+                result, symbol_name=filter_name, line_1based=filter_line
+            )
+
         # ---- format result -----------------------------------------------------
         formatter = _FORMATTERS[operation]
-        formatted = formatter(result, cwd)
+        if operation == "documentSymbol":
+            formatted = formatter(result, cwd, filter_note=filter_note)
+        else:
+            formatted = formatter(result, cwd)
 
         # ---- compute result/file counts ----------------------------------------
         result_count = _compute_result_count(operation, result)

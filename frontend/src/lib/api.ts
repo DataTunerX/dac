@@ -1,56 +1,90 @@
 import axios, { type InternalAxiosRequestConfig } from "axios"
-import { clearAuthToken, getAuthToken, redirectToLogin } from "@/lib/auth-session"
+import {
+  clearClientSession,
+  isAuthRefreshPath,
+  redirectToLogin,
+  refreshAuthSession,
+} from "@/lib/auth-session"
+
+type RetryConfig = InternalAxiosRequestConfig & { _authRetry?: boolean }
 
 // Axios instance for DAC API.
 // - baseURL: /api/v1
-// - request: attach Bearer token if exists (dac_token)
+// - withCredentials: send HttpOnly dac_token cookie
 // - response: unwrap Go envelope { code, message, data } so res.data is the payload.
 //   Use res.data only; do not double-unwrap (res.data.data). See docs/api-contract-go-frontend.md.
+// - 401: single-flight /auth/refresh → retry once → else clear session + redirect
 export const api = axios.create({
   baseURL: "/api/v1",
+  withCredentials: true,
 })
 
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token = getAuthToken()
-  if (token) {
-    config.headers = config.headers ?? {}
-    const headers = config.headers as Record<string, string>
-    headers["Authorization"] = `Bearer ${token}`
+const SUCCESS_ENVELOPE_CODES = new Set(["SUCCESS", "CREATED", "ACCEPTED", "0", 0])
+
+function redirectAfterAuthFailure() {
+  if (typeof window === "undefined") return
+  const path = window.location.pathname || "/"
+  const search = window.location.search || ""
+  const hash = window.location.hash || ""
+  const next = `${path}${search}${hash}`
+  if (!path.startsWith("/login") && !path.startsWith("/register")) {
+    redirectToLogin(next)
   }
-  return config
-})
+}
 
 api.interceptors.response.use(
   (res) => {
     const body = res.data as unknown
     if (body && typeof body === "object") {
       const r = body as Record<string, unknown>
+      // Reject business-error envelopes that arrived with HTTP 2xx.
+      if ("code" in r && r.code != null && !SUCCESS_ENVELOPE_CODES.has(r.code as string | number)) {
+        const message =
+          typeof r.message === "string" && r.message.trim()
+            ? r.message
+            : "请求失败"
+        return Promise.reject(
+          new axios.AxiosError(
+            message,
+            String(r.code),
+            res.config,
+            res.request,
+            {
+              ...res,
+              data: body,
+              status: res.status,
+              statusText: res.statusText,
+              headers: res.headers,
+              config: res.config,
+            },
+          ),
+        )
+      }
       if (r.data !== undefined) {
         return { ...res, data: r.data }
       }
     }
     return res
   },
-  (err) => {
-    // Global 401 handling:
-    // - clear token cookie
-    // - redirect to login with next=...
-    // IMPORTANT: must be safe in non-browser contexts.
-    if (axios.isAxiosError(err) && err.response?.status === 401) {
-      clearAuthToken()
-      if (typeof window !== "undefined") {
-        const path = window.location.pathname || "/"
-        const search = window.location.search || ""
-        const hash = window.location.hash || ""
-        const next = `${path}${search}${hash}`
+  async (err) => {
+    if (!axios.isAxiosError(err) || err.response?.status !== 401) {
+      return Promise.reject(err)
+    }
 
-        // Avoid redirect loop on auth pages.
-        if (!path.startsWith("/login") && !path.startsWith("/register")) {
-          redirectToLogin(next)
-        }
+    const cfg = err.config as RetryConfig | undefined
+    const url = `${cfg?.baseURL ?? ""}${cfg?.url ?? ""}`
+    const canRefresh = cfg && !cfg._authRetry && !isAuthRefreshPath(url)
+
+    if (canRefresh) {
+      const refreshed = await refreshAuthSession()
+      if (refreshed) {
+        cfg._authRetry = true
+        return api.request(cfg)
       }
     }
-    return Promise.reject(err)
-  }
-)
 
+    clearClientSession()
+    redirectAfterAuthFailure()
+    return Promise.reject(err)
+  },
+)

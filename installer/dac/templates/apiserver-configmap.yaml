@@ -34,6 +34,10 @@ data:
 
     jwt:
       secret: {{ .Values.apiserver.config.jwt.secret | quote }}
+      timeout: {{ .Values.apiserver.config.jwt.timeout | quote }}
+      max_refresh: {{ .Values.apiserver.config.jwt.maxRefresh | quote }}
+      cookie_secure: {{ .Values.apiserver.config.jwt.cookieSecure }}
+      cookie_domain: {{ .Values.apiserver.config.jwt.cookieDomain | quote }}
 
     routing_agent:
       base_url: "http://{{ include "dac.bizRoutingAgent.serviceName" . }}:{{ .Values.bizRoutingAgent.service.port }}"

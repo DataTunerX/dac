@@ -11,7 +11,6 @@ import re
 import time as _time
 from typing import Any
 from uuid import uuid4
-from contextlib import asynccontextmanager
 from typing import Any, AsyncIterable, ClassVar, Dict, Literal, List, Optional, Union
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
@@ -21,10 +20,6 @@ from langchain_core.prompts.chat import(
     HumanMessagePromptTemplate,
     SystemMessagePromptTemplate,
     )
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.sse import sse_client
-from mcp.client.stdio import stdio_client
-from mcp.types import CallToolRequest, ReadResourceResult
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -60,7 +55,8 @@ from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 from .agentregistry_client import AgentRegistryClient
 from .agent_card_resolve import resolve_agent_card_by_planner_name
-from langchain_core.tools import tool
+from langchain_core.tools import tool, StructuredTool
+from .tool_call_utils import invoke_llm_with_tool
 
 try:
     from skill_sdk.skill.runner import SkillRunner  # noqa: F401  (used when local skills enabled)
@@ -71,73 +67,6 @@ try:
     from skill_sdk.tool.code_execution import CodeExecution
 except ImportError:  # pragma: no cover
     CodeExecution = None  # type: ignore[assignment,misc]
-
-try:
-    # json_repair is a tolerant JSON parser designed specifically for LLM output.
-    # It handles common failure modes such as unescaped inner double quotes,
-    # trailing commas, missing quotes, python-style single quotes, etc.
-    from json_repair import repair_json as _json_repair  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - optional runtime dep, fail-soft
-    _json_repair = None  # type: ignore[assignment]
-
-
-# Fields in the planner output that carry free-form natural language and are
-# the most frequent victims of "LLM forgot to escape inner quotes" — typical
-# failure mode is a user query containing a JSON/code fragment inlined as the
-# value without escaping the inner ``"`` characters. The helper below surgically
-# escapes unescaped inner double quotes *only* for these specific fields.
-_KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
-    "original_query",
-    "description",
-    "thought_process",
-    "reason",
-    "rationale",
-    "final_answer",
-)
-
-
-def _escape_known_string_field_inner_quotes(text: str) -> str:
-    """Best-effort escape of unescaped inner ``"`` inside known single-line
-    string fields of a planner-style JSON payload.
-
-    We deliberately restrict the pre-pass to a whitelist of known fields where
-    the value is a single JSON string on one line so we can recognize the end
-    of the value by the structural pattern ``"`` followed by an optional
-    comma/whitespace and a newline. Multi-line values and nested structures
-    are left untouched (json_repair handles those as a later fallback).
-    """
-    if not text or '"' not in text:
-        return text
-
-    pattern_fields = "|".join(re.escape(f) for f in _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES)
-    # See the sibling implementation in orchestrator_agent_semantic_group.py
-    # for detailed rationale about the regex anchoring strategy.
-    pattern = re.compile(
-        rf'("(?:{pattern_fields})"\s*:\s*")'
-        r'(.*?)'
-        r'((?<!\\)"[ \t]*,?[ \t]*$)',
-        re.MULTILINE,
-    )
-
-    def _repl(m: "re.Match[str]") -> str:
-        head, body, tail = m.group(1), m.group(2), m.group(3)
-        fixed_chars: List[str] = []
-        i = 0
-        while i < len(body):
-            ch = body[i]
-            if ch == "\\" and i + 1 < len(body):
-                fixed_chars.append(body[i : i + 2])
-                i += 2
-                continue
-            if ch == '"':
-                fixed_chars.append('\\"')
-                i += 1
-                continue
-            fixed_chars.append(ch)
-            i += 1
-        return head + "".join(fixed_chars) + tail
-
-    return pattern.sub(_repl, text)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -178,7 +107,7 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 根据业务领域将用户查询分解为可执行任务。你必须通过 **[前置任务执行情况]**、**[执行上下文]** 与 **[上一轮的执行结果]** 建立反馈闭环，确保规划路径既能解决指代关系，又能避免重复失败、复用已有数据。
 
 ## 战略思考过程（思维链）
-在生成 JSON 之前，请严格执行以下 **业务领域决策流**：
+在调用 `make_plan_cmd` 工具之前，请严格执行以下 **业务领域决策流**：
 
 1. **业务领域提取**：识别查询中的核心业务实体（如“订单”、“财务”、“天气”），锁定其所属的业务边界。
 2. **反馈闭环分析**：
@@ -237,21 +166,18 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 
 ---
 
-## 输出要求
-1. **格式**：仅返回一个有效的JSON字符串。
-2. **结构**：
+## 工具调用要求
+必须调用 `make_plan_cmd` 工具输出规划结果，直接填充工具参数字段。不要直接输出自然语言或 JSON 文本，也不要返回 JSON Schema 的 `properties` 包装。
+
+工具参数结构：
    - `thought_process`：关于领域映射和主权原则的简明推理。
-   - `original_query`：原始用户输入。
+   - `original_query`：逐字复制原始用户输入，必须保留全部字符、空格、引号和标点，不得改写、规范化或删减。
    - `tasks`：包含以下字段的对象列表：
      - `id`：整数（从1开始）。
      - `description`：转述给智能体的子任务或问题。必须忠实于用户原始表述，禁止添加额外条件，禁止注入历史执行中的具体数值或对系统能力的判断。对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含，但仅限于补全指代对象本身。
      - `agent`：确切的智能体名称或"NONE"。
-3. **JSON 转义（必须严格遵守）**：
-   - 当字符串值（如 `original_query`、`description`、`thought_process`）内部出现双引号 `"` 时，**必须写成 `\\"`** 以避免非法 JSON。
-   - 典型场景：用户原话中包含 JSON 片段 `{{"category":"手机"}}`，应写成 `"original_query": "请将 JSON {{\\"category\\":\\"手机\\"}} ..."`，**不得**直接粘贴未转义的内部引号。
-   - 反斜杠 `\\` 本身在字符串值中需写成 `\\\\`；换行需写成 `\\n`。
 
-## 示例
+## `make_plan_cmd` 工具参数示例
 {instructions}
 
 或当未找到智能体时：
@@ -269,7 +195,7 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 根据业务领域将用户查询分解为可执行任务。你必须通过 **[前置任务执行情况]**、**[执行上下文]** 与 **[上一轮的执行结果]** 建立反馈闭环，结合 **[对话历史]** 的语境，确保规划路径既能解决指代关系，又能避免重复失败、复用已有数据。
 
 ## 战略思考过程（思维链）
-在生成 JSON 之前，请严格执行以下 **业务领域决策流**：
+在调用 `make_plan_cmd` 工具之前，请严格执行以下 **业务领域决策流**：
 
 1. **业务领域提取**：识别查询中的核心业务实体（如“订单”、“财务”、“天气”），锁定其所属的业务边界。
 2. **反馈闭环分析**：
@@ -338,21 +264,18 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 
 ---
 
-## 输出要求
-1. **格式**：仅返回一个有效的JSON字符串。
-2. **结构**：
+## 工具调用要求
+必须调用 `make_plan_cmd` 工具输出规划结果，直接填充工具参数字段。不要直接输出自然语言或 JSON 文本，也不要返回 JSON Schema 的 `properties` 包装。
+
+工具参数结构：
    - `thought_process`：关于领域映射和主权原则的简明推理。
-   - `original_query`：原始用户输入。
+   - `original_query`：逐字复制原始用户输入，必须保留全部字符、空格、引号和标点，不得改写、规范化或删减。
    - `tasks`：包含以下字段的对象列表：
      - `id`：整数（从1开始）。
      - `description`：转述给智能体的子任务或问题。必须忠实于用户原始表述，禁止添加额外条件，禁止注入历史执行中的具体数值或对系统能力的判断。对比性追问需继承完整上下文；指代性追问需补充上下文使其自包含，但仅限于补全指代对象本身。
      - `agent`：确切的智能体名称或"NONE"。
-3. **JSON 转义（必须严格遵守）**：
-   - 当字符串值（如 `original_query`、`description`、`thought_process`）内部出现双引号 `"` 时，**必须写成 `\\"`** 以避免非法 JSON。
-   - 典型场景：用户原话中包含 JSON 片段 `{{"category":"手机"}}`，应写成 `"original_query": "请将 JSON {{\\"category\\":\\"手机\\"}} ..."`，**不得**直接粘贴未转义的内部引号。
-   - 反斜杠 `\\` 本身在字符串值中需写成 `\\\\`；换行需写成 `\\n`。
 
-## 示例
+## `make_plan_cmd` 工具参数示例
 {instructions}
 
 或当未找到智能体时：
@@ -570,6 +493,16 @@ class PlannerTask(BaseModel):
     )
 
 
+class DependencyJudgeResult(BaseModel):
+    """Tool-call schema for _judge_task_dependency LLM output."""
+    model_config = {"extra": "ignore"}
+    needs_upstream: bool = Field(default=False, description="Whether the current task relies on upstream output")
+    unmet: bool = Field(default=False, description="Whether any dependency is unmet")
+    unmet_upstream_ids: List[int] = Field(default_factory=list, description="IDs of upstream tasks that block dispatch")
+    missing_fields: List[str] = Field(default_factory=list, description="Data fields missing from upstream results")
+    rationale: str = Field(default="", description="One-sentence reason in user's language")
+
+
 class TaskList(BaseModel):
     """Output schema for the Planner Agent."""
 
@@ -579,7 +512,10 @@ class TaskList(BaseModel):
     )
 
     original_query: Optional[str] = Field(
-        description='The original user query for context.'
+        description=(
+            "Verbatim original user query. Preserve every character, space, "
+            "quote, and punctuation mark without normalization."
+        )
     )
 
     tasks: List[PlannerTask] = Field(
@@ -804,7 +740,18 @@ class PlannerAgent(BaseAgent):
             extra_body=_extra_body,
         )
 
-        self.llm = self.llm.bind_tools([self.make_plan_tool])
+        # Force the planner onto the structured tool-call path so it cannot
+        # regress to returning prompt-shaped JSON text. The fallback below is
+        # only for providers whose bind_tools implementation lacks tool_choice.
+        try:
+            self.llm = self.llm.bind_tools(
+                [self.make_plan_tool],
+                tool_choice="make_plan_cmd",
+            )
+        except TypeError:
+            # Some OpenAI-compatible providers do not accept tool_choice.
+            # Keep tool binding plus the existing nudge loop as a fallback.
+            self.llm = self.llm.bind_tools([self.make_plan_tool])
         self.make_plan_max_attempts = int(os.getenv("MAKE_PLAN_MAX_ATTEMPTS", "3"))
 
         self.data_services_client = DataServicesClient(
@@ -983,11 +930,10 @@ class PlannerAgent(BaseAgent):
         original_query: Optional[str] = None,
         tasks: List[PlannerTask] = None
     ) -> str:
-        """Create and return a structured plan with tasks to be executed sequentially.
-        
-        This tool takes a thought process, original query, and a list of tasks,
-        and returns them as a structured JSON plan. The tasks will be executed
-        by the runner in sequence.
+        """Create a structured plan with tasks to be executed sequentially.
+
+        Supply the plan through this tool's structured arguments. The planner
+        consumes the tool-call arguments directly instead of parsing JSON text.
         
         Args:
             thought_process: The internal reasoning steps of the planner
@@ -995,7 +941,7 @@ class PlannerAgent(BaseAgent):
             tasks: A list of PlannerTask objects to be executed sequentially
         
         Returns:
-            JSON string containing the structured plan
+            Serialized plan when the tool is executed directly.
         """
         plan_data = {
             "thought_process": thought_process,
@@ -1003,80 +949,6 @@ class PlannerAgent(BaseAgent):
             "tasks": [task.dict() if isinstance(task, PlannerTask) else task for task in (tasks or [])]
         }
         return json.dumps(plan_data, ensure_ascii=False)
-
-    def format_llm_output(self, answer) -> dict:
-        """Parse the planner LLM output into a dict with heavy tolerance.
-
-        See ``orchestrator_agent_semantic_group.PlannerAgent.format_llm_output``
-        for the detailed recovery strategy — this implementation mirrors it.
-        """
-        raw = getattr(answer, "content", "") or ""
-
-        try:
-            return json.loads(raw, strict=False)
-        except json.JSONDecodeError:
-            pass
-
-        cleaned_content = raw.strip()
-        if cleaned_content.startswith('```json'):
-            cleaned_content = cleaned_content[7:]
-        elif cleaned_content.startswith('```'):
-            cleaned_content = cleaned_content[3:]
-        if cleaned_content.endswith('```'):
-            cleaned_content = cleaned_content[:-3]
-        cleaned_content = cleaned_content.strip()
-
-        try:
-            return json.loads(cleaned_content, strict=False)
-        except json.JSONDecodeError as e2:
-            logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-
-        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
-        if escaped_content != cleaned_content:
-            try:
-                parsed = json.loads(escaped_content, strict=False)
-                logger.info(" === format_llm_output, recovered via inner-quote field escaping")
-                return parsed
-            except json.JSONDecodeError as e_esc:
-                logger.warning(f" === format_llm_output, field-escape pre-pass still invalid: {e_esc}")
-
-        if _json_repair is not None:
-            try:
-                repaired = _json_repair(escaped_content, return_objects=True)
-                if isinstance(repaired, dict):
-                    logger.info(" === format_llm_output, recovered via json_repair")
-                    return repaired
-                if isinstance(repaired, str):
-                    parsed = json.loads(repaired, strict=False)
-                    if isinstance(parsed, dict):
-                        logger.info(" === format_llm_output, recovered via json_repair (string)")
-                        return parsed
-            except Exception as e_rep:  # noqa: BLE001
-                logger.error(f" === format_llm_output, json_repair failed: {e_rep}")
-        else:
-            logger.warning(
-                " === format_llm_output, json_repair not installed; "
-                "add 'json-repair' to dependencies to improve LLM JSON tolerance"
-            )
-
-        try:
-            import ast
-            parsed = ast.literal_eval(cleaned_content)
-            if isinstance(parsed, dict):
-                return parsed
-        except (ValueError, SyntaxError) as e3:
-            logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-        except Exception as e5:  # noqa: BLE001
-            logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
-
-        try:
-            parsed = json.loads(cleaned_content.replace("'", '"'), strict=False)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError as e4:
-            logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-
-        return None
 
     async def make_plan(
         self,
@@ -1125,6 +997,8 @@ class PlannerAgent(BaseAgent):
 
         human_template = "{query}"
 
+        # Few-shot values below illustrate make_plan_cmd arguments. They are
+        # injected as semantic examples, not as instructions to emit JSON text.
         json_prompt_instructions_zh: dict = {
             "thought_process": "1. 识别实体：'北京天气'（气象领地）和'穿衣建议'（生活方式领地）。2. 领地映射：'气象'归属于天气查询员，'穿衣'归属于时尚顾问。3. 涉及两个不同领域且有先后依赖，拆分为两个任务。注意：description 忠实转述用户原话，不添加额外条件。",
             "original_query": "帮我查询北京的天气并推荐合适的穿衣建议",
@@ -1332,7 +1206,9 @@ class PlannerAgent(BaseAgent):
                 try:
                     tasks = TaskList(
                         thought_process=args.get("thought_process"),
-                        original_query=args.get("original_query"),
+                        # This value is already known by the caller. Do not trust
+                        # the model to reproduce punctuation and quoting exactly.
+                        original_query=str(query),
                         tasks=args.get("tasks") or [],
                     )
                 except Exception as e:
@@ -1422,46 +1298,6 @@ class PlannerAgent(BaseAgent):
         return tasks
 
 
-@asynccontextmanager
-async def init_session(host, port, transport):
-    """Initializes and manages an MCP ClientSession based on the specified transport.
-
-    This asynchronous context manager establishes a connection to an MCP server
-    using either Server-Sent Events (SSE) or Standard I/O (STDIO) transport.
-    It handles the setup and teardown of the connection and yields an active
-    `ClientSession` object ready for communication.
-
-    Args:
-        host: The hostname or IP address of the MCP server (used for SSE).
-        port: The port number of the MCP server (used for SSE).
-        transport: The communication transport to use ('sse' or 'stdio').
-
-    Yields:
-        ClientSession: An initialized and ready-to-use MCP client session.
-
-    Raises:
-        ValueError: If an unsupported transport type is provided (implicitly,
-                    as it won't match 'sse' or 'stdio').
-        Exception: Other potential exceptions during client initialization or
-                   session setup.
-    """
-    if transport == 'sse':
-        url = f'http://{host}:{port}/sse'
-        async with sse_client(url) as (read_stream, write_stream):
-            async with ClientSession(
-                read_stream=read_stream, write_stream=write_stream
-            ) as session:
-                logger.debug('SSE ClientSession created, initializing...')
-                await session.initialize()
-                logger.info('SSE ClientSession initialized successfully.')
-                yield session
-    else:
-        logger.error(f'Unsupported transport type: {transport}')
-        raise ValueError(
-            f"Unsupported transport type: {transport}. Must be 'sse' or 'stdio'."
-        )
-
-
 class OrchestratorAgent(BaseAgent):
     """Orchestrator Agent."""
 
@@ -1518,6 +1354,16 @@ class OrchestratorAgent(BaseAgent):
             model=model,
             temperature=temperature,
             stream=stream,
+            extra_body=_extra_body,
+        )
+        # Non-streaming LLM instance for tool-call based invocations.
+        self.llm_non_stream = self.manager.get_llm(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=temperature,
+            stream=False,
             extra_body=_extra_body,
         )
         self.data_descriptors = data_descriptors
@@ -1712,26 +1558,6 @@ class OrchestratorAgent(BaseAgent):
             snapshot = snapshot[-DEPENDENCY_CHECK_MAX_UPSTREAM:]
         return snapshot
 
-    def _parse_dependency_judge_output(self, raw: str) -> Optional[dict[str, Any]]:
-        """Best-effort JSON extractor for the dependency judge's reply."""
-        if not raw:
-            return None
-        text = raw.strip()
-        if text.startswith("```"):
-            # Strip markdown fences (```json ... ``` or plain ```...```).
-            text = re.sub(r"^```(?:json)?", "", text, count=1).strip()
-            text = re.sub(r"```\s*$", "", text, count=1).strip()
-        # Grab the first {...} block to tolerate leading/trailing prose.
-        first = text.find("{")
-        last = text.rfind("}")
-        if first < 0 or last <= first:
-            return None
-        candidate = text[first : last + 1]
-        try:
-            return json.loads(candidate)
-        except (ValueError, TypeError):
-            return None
-
     async def _judge_task_dependency(
         self,
         task: "PlannerTask",
@@ -1777,14 +1603,7 @@ class OrchestratorAgent(BaseAgent):
             "   - Otherwise the dependency is MET.\n"
             "3. If the current task does not need upstream output at all, report unmet=false.\n"
             "4. Be conservative: when uncertain, prefer unmet=true.\n\n"
-            "Respond with a SINGLE JSON object and nothing else:\n"
-            "{{\n"
-            '  "needs_upstream": <bool>,\n'
-            '  "unmet": <bool>,\n'
-            '  "unmet_upstream_ids": [<int>, ...],\n'
-            '  "missing_fields": [<string>, ...],\n'
-            '  "rationale": "<one-sentence reason in user\'s language>"\n'
-            "}}"
+            "Call the judge_dependency tool to output your verdict."
         )
         human_template = (
             "CURRENT_TASK:\n"
@@ -1800,7 +1619,6 @@ class OrchestratorAgent(BaseAgent):
             )
             human_prompt = HumanMessagePromptTemplate.from_template(human_template)
             chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-            chain = chat_prompt | self.llm
 
             current_task_payload = json.dumps(
                 {
@@ -1812,34 +1630,33 @@ class OrchestratorAgent(BaseAgent):
             )
             upstream_payload = json.dumps(upstream, ensure_ascii=False)
 
-            def _invoke() -> str:
-                answer = chain.invoke(
-                    {
-                        "current_task": current_task_payload,
-                        "upstream_tasks": upstream_payload,
-                    }
-                )
-                return getattr(answer, "content", None) or str(answer or "")
+            messages = await chat_prompt.aformat_prompt(
+                current_task=current_task_payload,
+                upstream_tasks=upstream_payload,
+            )
+            messages = messages.to_messages()
 
-            try:
-                raw_content = await asyncio.wait_for(
-                    asyncio.to_thread(_invoke),
-                    timeout=max(1.0, float(DEPENDENCY_CHECK_TIMEOUT_SEC)),
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[DependencyGuard] LLM timeout (%ss) — fail-close for task_id=%s",
-                    DEPENDENCY_CHECK_TIMEOUT_SEC,
-                    task.id,
-                )
-                return {**default_fail_close, "error": "timeout"}
+            judge_tool = StructuredTool(
+                name="judge_dependency",
+                description="Judge whether a task can proceed given upstream dependency state.",
+                args_schema=DependencyJudgeResult,
+                func=None,
+                coroutine=None,
+            )
 
-            parsed = self._parse_dependency_judge_output(raw_content)
+            parsed = await invoke_llm_with_tool(
+                llm=self.llm_non_stream,
+                tool=judge_tool,
+                messages=messages,
+                metadata=self.metadata,
+                tool_choice="judge_dependency",
+                span_name="dependency-judge",
+                span_input={"task_id": task.id},
+            )
             if not isinstance(parsed, dict):
                 logger.warning(
-                    "[DependencyGuard] malformed judge output — fail-close for task_id=%s raw=%r",
+                    "[DependencyGuard] malformed judge output — fail-close for task_id=%s",
                     task.id,
-                    str(raw_content)[:400],
                 )
                 return {**default_fail_close, "error": "malformed_output"}
 
@@ -2272,22 +2089,6 @@ class OrchestratorAgent(BaseAgent):
         return steps
 
 
-    # get all or one resource (agent card) with resource name, such as list or expert_agent 
-    async def find_resource(self, session: ClientSession, resource) -> ReadResourceResult:
-        """Reads a resource from the connected MCP server.
-
-        Args:
-            session: The active ClientSession.
-            resource: The URI of the resource to read (e.g., 'resource://agent_cards/list').
-
-        Returns:
-            The result of the resource read operation.
-        """
-        logger.info(f'Reading resource: {resource}')
-        return await session.read_resource(resource)
-
-
-    # get all AgentCards using find_resource func
     async def list_agent_cards(self, query) -> list[AgentCard]:
         """Resolve which expert agents the planner may choose.
 
@@ -4216,160 +4017,6 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
         elif already_initialised:
             logger.debug("[LocalSkill][Shutdown] no active SkillRunner to close")
 
-    async def _check_feasibility_before_plan(
-        self,
-        agent: "OrchestratorAgent",
-        query: str,
-        updater: TaskUpdater,
-        task,
-    ) -> bool:
-        """Pre-plan feasibility self-check for the SD agent.
-
-        Only effective for ``structured`` type SD agents.  For code / unstructured
-        / unknown types this is a no-op (returns False).
-
-        Returns ``True`` when the task was blocked and a structured_failure was
-        already reported via ``updater``, so the caller should return immediately.
-        """
-        ddname, agent_type, db_type = agent.planner_agent.analyze_descriptor_types()
-
-        if agent_type != "structured":
-            logger.info(
-                "[SDFeasibility] agent_type=%s — 跳过可行性检查（非 structured 类型，无需表级校验）",
-                agent_type,
-            )
-            return False
-
-        # Extract the inventory tables from this SD agent's own agent_card
-        try:
-            from .data_inventory import extract_inventory_tables
-        except Exception:  # noqa: BLE001
-            logger.info("[SDFeasibility] data_inventory module not available — 跳过检查")
-            return False
-
-        own_card = getattr(self, "agent_card", None) or getattr(agent, "agent_card", None)
-        if own_card is None:
-            logger.info("[SDFeasibility] 无 agent_card — 跳过检查")
-            return False
-
-        inventory = sorted(extract_inventory_tables(own_card))
-        if not inventory:
-            logger.info(
-                "[SDFeasibility] agent_card 中未声明 data_inventory — 跳过检查"
-            )
-            return False
-
-        logger.info(
-            "[SDFeasibility] structured agent inventory 表: %s",
-            inventory[:30] if len(inventory) > 30 else inventory,
-        )
-
-        # 用 LLM 判断这条 query 是否能用本 SD 的 inventory 完成
-        from langchain_core.messages import HumanMessage
-
-        prompt = (
-            "你是一个 SQL 路由可行性判定器。给定一条用户问题和一个 SD agent 的"
-            "**可访问数据资产**（data_inventory），判断该 agent 能否独立完成该问题。\n\n"
-            "判定准则：\n"
-            "1) 只看数据归属。若问题必须读取的表 / 实体在 inventory 中存在或可由其字段推断，则 feasible=true。\n"
-            "2) 若问题必须读取的关键表名/概念在 inventory 中完全找不到对应项，feasible=false，"
-            "并把缺失的表名或最贴近的业务概念写到 missing。\n"
-            "3) 不要臆造表，不要给出与问题无关的概念。不确定时返回 feasible=true（保守起见）。\n"
-            "4) missing 中的项尽量使用小写下划线英文表名；如确实无法判断英文名，"
-            "可写中文业务概念。\n\n"
-            f"用户问题: {query}\n"
-            f"agent data_inventory 表: {', '.join(inventory)}\n\n"
-            "请只输出 JSON 对象，不要 Markdown：\n"
-            '{"feasible": true|false, "missing": ["<table_or_concept>"], "reason": "<一句话>"}'
-        )
-
-        try:
-            response = await asyncio.wait_for(
-                agent.llm.ainvoke([HumanMessage(content=prompt)]),
-                timeout=8.0,
-            )
-            parsed = agent.planner_agent.format_llm_output(response)
-        except asyncio.TimeoutError:
-            logger.warning(
-                "[SDFeasibility] LLM 判定超时 — 保守放行（feasible=true）"
-            )
-            return False
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "[SDFeasibility] LLM 判定失败: %s — 保守放行（feasible=true）",
-                e,
-            )
-            return False
-
-        reason_ok = str(parsed.get("reason") or "").strip()
-        if not isinstance(parsed, dict) or parsed.get("feasible", True):
-            logger.info(
-                "[SDFeasibility] 判定结果: feasible=true — 该 SD 可独立完成此任务，原因: %s | inventory 表: %s",
-                reason_ok or "(未说明)",
-                inventory[:20] if len(inventory) > 20 else inventory,
-            )
-            return False
-
-        missing = parsed.get("missing") or []
-        reason = str(parsed.get("reason") or "").strip()
-        logger.info(
-            "[SDFeasibility] 判定结果: feasible=false — 该 SD 无法完成此任务，缺失表: %s，原因: %s | inventory 仅有: %s",
-            missing, reason or "(未说明)",
-            inventory[:20] if len(inventory) > 20 else inventory,
-        )
-
-        # 构建 structured_failure 并返回给上游 SG
-        unfulfilled_needs = [
-            {"missing_table": m, "reason": reason}
-            for m in missing
-        ] if missing else []
-        structured_control = json.dumps(
-            {
-                "reason_code": "data_sovereignty_gap",
-                "non_retryable": False,
-                "retryable": True,
-                "unfulfilled_needs": unfulfilled_needs,
-            },
-            ensure_ascii=False,
-        )
-        fail_msg = (
-            f"该 SD agent 无法独立完成此任务：用户问题涉及的表不在当前 data_inventory 中。\n"
-            f"缺失表: {', '.join(missing) if missing else '(未知)'}\n"
-            f"原因: {reason}\n"
-            f"structured_control: {structured_control}"
-        )
-
-        await agent.emit_progress(
-            updater,
-            f"{agent.agent_name}-result",
-            event="sd_feasibility_blocked",
-            message=(
-                f"判定结果: feasible=false — 该 SD 无法完成此任务，"
-                f"缺失表: {missing}，"
-                f"原因: {reason} | "
-                f"inventory 仅有: {inventory[:20] if len(inventory) > 20 else inventory}。"
-                f"任务被 feasibility 检查拦截"
-            ),
-            status="fail",
-            extra={
-                "agent_type": agent_type,
-                "db_type": db_type,
-                "ddname": ddname,
-                "missing_tables": missing,
-                "reason": reason,
-            },
-        )
-        await updater.add_artifact(
-            [TextPart(text=fail_msg)],
-            name=f"{agent.agent_name}-result",
-        )
-        await updater.complete(
-            message=new_agent_text_message(
-                fail_msg, context_id=task.context_id,
-            ),
-        )
-        return True
-
     @override
     async def execute(
         self,
@@ -4434,17 +4081,6 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
             await event_queue.enqueue_event(task)
 
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
-
-        # ---- 快速可行性自检（仅 structured 类型）----
-        # 在 SD 内部获得 plan 之前，先判断当前 task 是否在本 SD 的
-        # data_inventory 范围内。不可行时直接返回 structured_failure，
-        # 让上游 SG Orchestrator 的 retry loop 通过 SovereigntyIndex
-        # 重新路由，避免浪费 SD 内部的 step 预算。
-        feasibility_blocked = await self._check_feasibility_before_plan(
-            agent, query, updater, task,
-        )
-        if feasibility_blocked:
-            return
 
         # make plans for user question, each plan is the name of agent card
         tasks = await agent.get_plan(query)

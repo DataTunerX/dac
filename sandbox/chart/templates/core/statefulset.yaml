@@ -128,6 +128,10 @@ spec:
             {{- toYaml .Values.resources.fileserver | nindent 12 }}
 
         # ---------- GitLab CE ----------
+        # Omnibus first boot is slow (often 10–20m). Shared STS Pod Ready requires
+        # ALL containers Ready — so GitLab must not use readiness/startup/liveness
+        # probes. Otherwise MinIO/Postgres stay off ClusterIP endpoints and seed
+        # Jobs fail even though those containers are healthy.
         - name: gitlab
           image: {{ include "dac-sandbox.gitlabImage" . }}
           imagePullPolicy: IfNotPresent
@@ -148,8 +152,14 @@ spec:
                 mattermost['enable'] = false
                 registry['enable'] = false
                 gitlab_kas['enable'] = false
+                gitlab_pages['enable'] = false
                 gitlab_rails['monitoring_whitelist'] = ['0.0.0.0/0']
+                # Same Pod network NS as Online Boutique frontend (:8080).
+                # Default puma['port']=8080 → EADDRINUSE → Puma crash-loop → workhorse 502.
+                puma['port'] = 18080
                 puma['worker_processes'] = 1
+                puma['min_threads'] = 1
+                puma['max_threads'] = 4
                 sidekiq['max_concurrency'] = 5
                 gitlab_rails['env'] = { 'GITLAB_LOG_LEVEL' => 'WARN' }
           ports:
@@ -162,25 +172,17 @@ spec:
               mountPath: /var/log/gitlab
             - name: gitlab-data
               mountPath: /var/opt/gitlab
-          startupProbe:
-            httpGet:
-              path: /-/liveness
-              port: 8929
-            initialDelaySeconds: 60
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 48
-          readinessProbe:
-            httpGet:
-              path: /-/readiness
-              port: 8929
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 6
+          # No probes: GitLab omnibus stays "Running" while Rails boots for a long
+          # time; any readiness/startup here would keep the whole STS Pod NotReady
+          # and empty ClusterIP endpoints for MinIO/Postgres seed Jobs.
           resources:
             {{- toYaml .Values.resources.gitlab | nindent 12 }}
 
         # ---------- Odoo (shared STS Postgres) ----------
+        # NOTE: K8s `command` replaces the image ENTRYPOINT (/entrypoint.sh), which is
+        # what normally turns HOST/USER/PASSWORD into --db_host/--db_user/--db_password.
+        # Pass those flags explicitly here, or Odoo falls back to a local Unix socket
+        # (log: database: default@default:default).
         - name: odoo
           image: {{ include "dac-sandbox.odooImage" . }}
           imagePullPolicy: IfNotPresent
@@ -196,25 +198,38 @@ spec:
             - name: ODOO_DB
               value: {{ .Values.credentials.odooDatabase | quote }}
           command:
-            - /bin/sh
+            - /bin/bash
             - -c
             - |
-              set -e
-              echo "waiting for local postgres..."
-              i=0
-              while [ "$i" -lt 90 ]; do
-                if pg_isready -h 127.0.0.1 -U "$USER" 2>/dev/null; then
+              set -euo pipefail
+              DB_HOST="${HOST:-127.0.0.1}"
+              DB_PORT="${PORT:-5432}"
+              DB_USER="${USER:-odoo}"
+              DB_PASSWORD="${PASSWORD:-odopass}"
+              ODOO_DB="${ODOO_DB:-odoo_demo}"
+              DB_ARGS=(--db_host="$DB_HOST" --db_port="$DB_PORT" --db_user="$DB_USER" --db_password="$DB_PASSWORD")
+
+              echo "waiting for postgres at ${DB_HOST}:${DB_PORT} (user=${DB_USER})..."
+              # Image ships wait-for-psql.py; retry until STS postgres finishes init (~minutes).
+              ready=0
+              for i in $(seq 1 90); do
+                if wait-for-psql.py "${DB_ARGS[@]}" --timeout=3; then
+                  ready=1
                   break
                 fi
-                i=$((i+1))
                 sleep 3
               done
+              if [ "$ready" -ne 1 ]; then
+                echo "ERROR: postgres not ready after ~270s" >&2
+                exit 1
+              fi
+
               if [ ! -f /var/lib/odoo/.sandbox_init_v2 ]; then
                 echo "initializing $ODOO_DB (base,sale,stock,account,point_of_sale,pos_restaurant)..."
-                odoo -d "$ODOO_DB" -i base,sale,stock,account,point_of_sale,pos_restaurant --stop-after-init
+                odoo "${DB_ARGS[@]}" -d "$ODOO_DB" -i base,sale,stock,account,point_of_sale,pos_restaurant --stop-after-init
                 touch /var/lib/odoo/.sandbox_init_v2
               fi
-              exec odoo -d "$ODOO_DB"
+              exec odoo "${DB_ARGS[@]}" -d "$ODOO_DB"
           ports:
             - name: odoo
               containerPort: {{ .Values.odoo.httpPort }}

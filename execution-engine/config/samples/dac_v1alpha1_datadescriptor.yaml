@@ -58,6 +58,29 @@ spec:
 
 ---
 
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dianshang-postgres
+  namespace: default
+spec:
+  descriptorType: "structured-postgres"
+  sources:
+    - type: postgres
+      name: "postgres-production"
+      metadata:
+        host: "postgres-server.dac"
+        port: "5432"
+        user: "postgres"
+        password: "postgres"
+        database: "dactest"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+---
 
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor

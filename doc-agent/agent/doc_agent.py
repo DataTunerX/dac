@@ -17,7 +17,7 @@ from decimal import Decimal
 import uuid
 import numpy as np
 from typing import Any, AsyncIterable, Dict, Literal, List, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from abc import ABC
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -41,6 +41,8 @@ from .prompts import (
     OBSERVE_PROMPT_UNSTRUCTURED_ZH,
     LOCATE_KNOWLEDGE_PROMPT_ZH
 )
+from langchain_core.tools import StructuredTool
+from .tool_call_utils import invoke_llm_with_tool, validate_pydantic, format_llm_output
 
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
@@ -184,37 +186,81 @@ class TaskAnalyze(BaseModel):
     )
 
 class LLMResult(BaseModel):
+    """LLM 回答结果。包含三个字段：answer（回答内容）、conclusion（结论）、requery（重新生成的问题）。
+
+    输出示例：
+    terminate 示例（答案已满足问题）：
+    {
+      "answer": "Java是一种高级、面向对象、跨平台的编程语言，由Sun公司推出，具有可移植性、安全性等特点，广泛应用于企业级应用和Android开发。",
+      "conclusion": "terminate",
+      "requery": ""
+    }
+    continue 示例（需要重新查询）：
+    {
+      "answer": "当前背景知识主要涵盖Java和Go语言，无法提供Python相关的详细信息",
+      "conclusion": "continue",
+      "requery": "能否提供Python编程语言的具体介绍和特点？"
+    }
+    """
 
     answer: Optional[str] = Field(
-        description='The answer of llm for user question.'
+        description='answer字段：LLM 对用户问题的回答内容。当能提供完整回答时填入具体回答（如"Java是一种高级、面向对象、跨平台的编程语言..."），否则填空字符串。'
     )
 
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+    conclusion: Optional[Literal["terminate", "continue"]] = Field(
+        description='conclusion字段：结论。"terminate" 表示回答已满足问题可终止，"continue" 表示需要重新查询。'
     )
 
     requery: Optional[str] = Field(
-        description='The regenerated new user query.'
+        description='requery字段：重新生成的新问题。当conclusion为"continue"时填入新问题（如"能否提供Python编程语言的具体介绍和特点？"），否则填空字符串。'
     )
 
 class RequeryResult(BaseModel):
+    """重新生成问题结果。包含两个字段：requery（新问题）和 conclusion（结论）。
+
+    输出示例：
+    terminate 示例（已生成新问题）：
+    {
+      "requery": "新生成的问题...",
+      "conclusion": "terminate"
+    }
+    continue 示例（无法生成新问题）：
+    {
+      "requery": "",
+      "conclusion": "continue"
+    }
+    """
 
     requery: Optional[str] = Field(
-        description='The new query for user question.'
+        description='requery字段：重新生成的新问题。当能生成新问题时填入（如"新生成的问题..."），否则填空字符串。'
     )
 
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+    conclusion: Optional[Literal["terminate", "continue"]] = Field(
+        description='conclusion字段：结论。"terminate" 表示可以终止（已生成新问题），"continue" 表示需要继续（无法生成新问题）。'
     )
 
 class ObserveResult(BaseModel):
+    """观察答案是否满足问题结果。包含两个字段：reason（分析依据）和 conclusion（结论）。
+
+    输出示例：
+    terminate 示例（答案满足问题）：
+    {
+      "reason": "满足问题的原因",
+      "conclusion": "terminate"
+    }
+    continue 示例（答案不满足问题）：
+    {
+      "reason": "不满足问题的原因",
+      "conclusion": "continue"
+    }
+    """
 
     reason: Optional[str] = Field(
-        description='The reason for answer.'
+        description='reason字段：分析依据。说明答案是否满足问题的详细理由，必须包含具体分析内容（如"满足问题的原因"或"不满足问题的原因"）。'
     )
 
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+    conclusion: Optional[Literal["terminate", "continue"]] = Field(
+        description='conclusion字段：结论。"terminate" 表示答案已满足问题，"continue" 表示答案不满足需要继续。'
     )
 
 class TaskStatus(BaseModel):
@@ -279,21 +325,29 @@ class Dimensions(BaseModel):
     )
 
 class KnowledgeSelectionResult(BaseModel):
-    """LLM 从摘要中筛选出的相关知识 ID 列表"""
+    """LLM 从摘要中筛选出的相关知识 ID 列表。输出包含 knowledge_ids（选中的知识ID列表）、intent_analysis（意图分析）、reasoning（选择原因）。
+
+    输出示例：
+    {
+      "knowledge_ids": ["Knowledge ID 1", "Knowledge ID 2", "Knowledge ID 3"],
+      "intent_analysis": "对用户真实意图的理解。",
+      "reasoning": "选择这些知识记录的原因。"
+    }
+    """
 
     knowledge_ids: List[str] = Field(
         default_factory=list,
-        description="与用户问题相关的知识记录 ID 列表"
+        description="与用户问题相关的知识记录 ID 列表，按与问题相关度从高到低排列，如 ['Knowledge ID 1', 'Knowledge ID 2', 'Knowledge ID 3']"
     )
 
     intent_analysis: Optional[str] = Field(
         default=None,
-        description="对用户真实意图的理解"
+        description="对用户真实意图的理解，说明用户问题的核心诉求是什么，如 '对用户真实意图的理解。'"
     )
 
     reasoning: Optional[str] = Field(
         default=None,
-        description="选择这些知识记录的原因"
+        description="选择这些知识记录的原因，2-5句话概括选择逻辑，禁止逐条解释每个ID，如 '选择这些知识记录的原因。'"
     )
 
 class AgentState(str, Enum):
@@ -345,6 +399,18 @@ class DocAgent(BaseAgent):
             model=model,
             temperature=temperature,
             stream=stream,
+            extra_body=_extra_body,
+        )
+        # Tool calls require non-streaming LLM. When stream=True, the LLM returns
+        # AsyncStream instead of AIMessage, causing 'AsyncStream' object has no
+        # attribute 'model_dump'. Create a separate non-streaming instance for tool calls.
+        self.llm_non_stream = self.manager.get_llm(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=temperature,
+            stream=False,
             extra_body=_extra_body,
         )
         self.query=query
@@ -694,23 +760,10 @@ class DocAgent(BaseAgent):
         system_template = self.next_step_prompt
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "answer": "Java是一种高级、面向对象、跨平台的编程语言，由Sun公司推出，具有可移植性、安全性等特点，广泛应用于企业级应用和Android开发。",
-            "conclusion": "terminate",
-            "requery": ""
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "answer": "当前背景知识主要涵盖Java和Go语言，无法提供Python相关的详细信息",
-            "conclusion": "continue",
-            "requery": "能否提供Python编程语言的具体介绍和特点？"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["knowledge","original_query","history_querys","memory","current_time"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
@@ -719,51 +772,58 @@ class DocAgent(BaseAgent):
 
         history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call: answer_question — 根据背景知识回答用户问题
+        answer_question_tool = StructuredTool(
+            name="answer_question",
+            description="Answer the user's question based on background knowledge. Set conclusion to 'terminate' if satisfied, 'continue' if needs requery.",
+            args_schema=LLMResult,
+            func=None,
+            coroutine=None,
+        )
 
-        answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=answer_question_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                knowledge=knowledge,
+                original_query=self.original_query,
+                history_querys=history_querys,
+                memory=memory,
+                current_time=current_time,
+            ).to_messages(),
+            tool_choice="answer_question",
+            span_name="doc-agent-invoke",
+            span_input={"query": self.query},
+            retry=2,
+            validate=validate_pydantic(LLMResult),
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="doc-agent-invoke",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={
-                    "query": self.query,
-                    "agent_id": self.agent_id,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                },
-            )
+        logger.info(f" === ExpertAgent.invoke_unstructured, result = {result}")
 
-            answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": knowledge, "original_query":self.original_query, "history_querys":history_querys, "memory":memory, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.invoke_unstructured, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "answer": "System error: Unable to process model response",
                 "conclusion": "error",
                 "requery": ""
             }
+        else:
+            data_dict = result
 
-        llm_result = LLMResult(**data_dict)
+        try:
+            llm_result = LLMResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[invoke_unstructured] LLM returned invalid schema (%s) — returning fallback",
+                exc.error_count(),
+            )
+            llm_result = LLMResult(
+                answer="System error: Unable to process model response",
+                conclusion=None,
+                requery="",
+            )
 
         logger.info(f" === ExpertAgent.invoke_unstructured , llm_result = {llm_result}")
 
@@ -780,21 +840,10 @@ class DocAgent(BaseAgent):
 
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "requery": "新生成的问题...",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "requery": "",
-            "conclusion": "continue"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["original_query","history_querys","current_time","step_history"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
@@ -803,50 +852,55 @@ class DocAgent(BaseAgent):
 
         history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call: reformulate_query — 重新表述查询
+        reformulate_query_tool = StructuredTool(
+            name="reformulate_query",
+            description="Reformulate the query when the current answer is insufficient. Set conclusion to 'terminate' if no further reformulation is needed, 'continue' to try a different query.",
+            args_schema=RequeryResult,
+            func=None,
+            coroutine=None,
+        )
 
-        answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=reformulate_query_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                original_query=self.original_query,
+                history_querys=history_querys,
+                current_time=current_time,
+                step_history=step_history,
+            ).to_messages(),
+            tool_choice="reformulate_query",
+            span_name="doc-agent-requery",
+            span_input={"query": self.query},
+            retry=2,
+            validate=validate_pydantic(RequeryResult),
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="doc-agent-requery",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={
-                    "query": self.query,
-                    "agent_id": self.agent_id,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                },
-            )
+        logger.info(f" === ExpertAgent.invoke_requery, result = {result}")
 
-            answer = await chain.ainvoke(
-                {"query": self.query, "original_query": self.original_query,"history_querys": history_querys, "current_time":current_time, "step_history":step_history},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.invoke_requery, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
-                "query": "System error: Unable to process model response",
+                "requery": "System error: Unable to process model response",
                 "conclusion": "error"
             }
+        else:
+            data_dict = result
 
-        llm_result = RequeryResult(**data_dict)
+        try:
+            llm_result = RequeryResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[invoke_requery] LLM returned invalid schema (%s) — returning fallback",
+                exc.error_count(),
+            )
+            llm_result = RequeryResult(
+                requery="System error: Unable to process model response",
+                conclusion=None,
+            )
 
         logger.debug(f" === ExpertAgent.invoke_requery , llm_result = {llm_result}")
 
@@ -858,71 +912,64 @@ class DocAgent(BaseAgent):
 
         human_template = "question: {query};\n\nanswer:{answer}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "reason": "满足问题的原因",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "reason": "不满足问题的原因",
-            "conclusion": "continue"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["knowledge","current_time"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call: observe_answer — 评估答案是否满足问题
+        observe_answer_tool = StructuredTool(
+            name="observe_answer",
+            description="Evaluate whether the answer satisfies the user's question. Set conclusion to 'terminate' if satisfied, 'continue' if needs further refinement.",
+            args_schema=ObserveResult,
+            func=None,
+            coroutine=None,
+        )
 
-        llm_answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=observe_answer_tool,
+            messages=chat_prompt.format_prompt(
+                query=query,
+                answer=answer,
+                knowledge=knowledge,
+                current_time=current_time,
+            ).to_messages(),
+            tool_choice="observe_answer",
+            span_name="doc-agent-observe",
+            span_input={"query": query},
+            retry=2,
+            validate=validate_pydantic(ObserveResult),
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="doc-agent-observe",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={
-                    "query": query,
-                    "agent_id": self.agent_id,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                },
-            )
+        logger.info(f" === ExpertAgent.observe_unstructured, result = {result}")
 
-            llm_answer = await chain.ainvoke(
-                {"query": query, "answer":answer, "knowledge":knowledge, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": llm_answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.observe_unstructured, answer = {llm_answer}")
-
-        data_dict = self.format_llm_output(llm_answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "reason": "System error: Unable to process model response",
                 "conclusion": "error"
             }
+        else:
+            data_dict = result
 
-        llm_result = ObserveResult(**data_dict)
+        try:
+            llm_result = ObserveResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[observe_unstructured] LLM returned invalid schema (%s) — returning fallback",
+                exc.error_count(),
+            )
+            llm_result = ObserveResult(
+                reason="System error: Unable to process model response",
+                conclusion="continue",
+            )
 
         logger.debug(f" === ExpertAgent.observe_unstructured , llm_result = {llm_result}")
 
@@ -1068,57 +1115,57 @@ class DocAgent(BaseAgent):
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call: select_knowledge — 从知识摘要中选择相关记录
+        select_knowledge_tool = StructuredTool(
+            name="select_knowledge",
+            description="Select relevant knowledge record IDs from the knowledge summaries based on the user's question.",
+            args_schema=KnowledgeSelectionResult,
+            func=None,
+            coroutine=None,
+        )
 
-        chain = chat_prompt | self.llm
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=select_knowledge_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                knowledge=knowledge_summaries,
+                current_time=current_time,
+            ).to_messages(),
+            tool_choice="select_knowledge",
+            span_name="doc-agent-select-knowledge",
+            span_input={"query": self.query},
+            retry=2,
+            validate=validate_pydantic(KnowledgeSelectionResult),
+        )
 
-        with langfuse.start_as_current_span(
-            name="doc-agent-select-knowledge",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={
-                    "query": self.query,
-                    "agent_id": self.agent_id,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                },
-            )
+        logger.info(f" === DocAgent.select_relevant_knowledge, result = {result}")
 
-            answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": knowledge_summaries, "current_time": current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === DocAgent.select_relevant_knowledge, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             logger.error("select_relevant_knowledge: LLM output parsing failed, returning empty result")
             return KnowledgeSelectionResult(knowledge_ids=[], intent_analysis="", reasoning="parsing failed")
 
-        result = KnowledgeSelectionResult(**data_dict)
+        try:
+            result_obj = KnowledgeSelectionResult(**result)
+        except ValidationError as exc:
+            logger.warning(
+                "[select_relevant_knowledge] LLM returned invalid schema (%s) — returning empty result",
+                exc.error_count(),
+            )
+            return KnowledgeSelectionResult(knowledge_ids=[], intent_analysis="", reasoning="parsing failed")
 
         # 安全兜底：单批次返回 ID 数量异常时截断（防止 LLM 过度选择导致二阶拉取成本爆炸）
-        n_ids = len(result.knowledge_ids)
+        n_ids = len(result_obj.knowledge_ids)
         if n_ids > _DOC_COARSE_MAX_IDS_PER_BATCH:
             logger.warning(
                 "select_relevant_knowledge: LLM returned %d ids (cap=%d), truncating",
                 n_ids, _DOC_COARSE_MAX_IDS_PER_BATCH,
             )
-            result.knowledge_ids = result.knowledge_ids[:_DOC_COARSE_MAX_IDS_PER_BATCH]
+            result_obj.knowledge_ids = result_obj.knowledge_ids[:_DOC_COARSE_MAX_IDS_PER_BATCH]
 
-        return result
+        return result_obj
 
     async def get_knowledge(self) -> str:
         """
@@ -1220,7 +1267,7 @@ class DocAgent(BaseAgent):
                     knowledge_str, score_meta = await knowledge_blocks.get_text_by_ids(
                         unique_ids,
                         query=self.query,
-                        llm=self.llm,
+                        llm=self.llm_non_stream,
                         parse_output=self.format_llm_output,
                         trace=self._langfuse_trace_context(),
                     )

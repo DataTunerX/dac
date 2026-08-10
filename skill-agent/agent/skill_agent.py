@@ -46,6 +46,8 @@ from model_sdk import ModelManager
 from pydantic import BaseModel, Field
 from typing_extensions import override
 from langchain_core.messages import HumanMessage
+from langchain_core.tools import StructuredTool
+from .tool_call_utils import invoke_llm_with_tool
 
 try:
     from skill_sdk.skill.runner import SkillRunner  # noqa: F401  (gated by ENABLE_LOCAL_SKILLS)
@@ -215,6 +217,25 @@ class CapabilityCheckResponse(BaseModel):
     )
     contribution: str = Field(default="", description="Brief description when can_contribute=true.")
     execution_strategy: str = Field(default="single", description="Capability response strategy.")
+    latency_ms: int = Field(
+        default=0,
+        description="Capability check end-to-end latency in milliseconds, measured by the responding agent.",
+        # 由 handle_capability_check 用 _time.monotonic() 计时填充，随响应 JSON 上报给 routing-agent 用于链路耗时观测。
+    )
+
+
+class CapabilityCheckToolResult(BaseModel):
+    """Capability check result for handle_capability_check (tool-call schema).
+
+    与 orchestrator 的 CapabilityCheckToolResult 对齐：LLM 通过 bind_tools 直接输出
+    符合该 schema 的参数，替代原先提示词要求 JSON 字符串的方案。
+    """
+    model_config = {"extra": "ignore"}
+    can_handle: bool = Field(default=False, description="Whether this agent can handle the query")
+    can_contribute: bool = Field(default=False, description="Whether this agent can contribute")
+    contribution: str = Field(default="", description="What this agent can contribute")
+    confidence: float = Field(default=0.0, description="Confidence score from 0.0 to 1.0")
+    reason: str = Field(default="", description="Detailed reasoning")
 
 
 SKILL_CAPABILITY_CHECK_PROMPT = """# Role：本地技能与通用工具任务判定器
@@ -874,6 +895,9 @@ class SkillAgentExecutor(AgentExecutor):
 
         history_text = _history_text_from_metadata(md)
 
+        # 必须放在 try 之前计时，保证异常分支也能取得有效的 latency_ms。
+        _cc_start = _time.monotonic()
+
         try:
             mgr = ModelManager()
             _extra_body = (
@@ -897,32 +921,24 @@ class SkillAgentExecutor(AgentExecutor):
                 history=history_text,
                 query=query,
             )
-            trace_id = md.get("trace_id", "") or ""
-            user_id = md.get("user_id", "") or ""
-            run_id = md.get("run_id", "") or ""
-            with langfuse.start_as_current_span(
-                name="skill-capability-check-llm",
-                trace_context={"trace_id": trace_id} if trace_id else {},
-            ) as span:
-                span.update_trace(
-                    user_id=user_id,
-                    session_id=run_id,
-                    input={"query": query, "agent_name": agent_name},
-                )
-                response = await llm.ainvoke(
-                    [HumanMessage(content=prompt)],
-                    config={"callbacks": [langfuse_handler]},
-                )
-                span.update_trace(output={"agent_name": agent_name})
-
-            response_text = (response.content or "").strip()
-            for p, s in [("```json", "```"), ("```", "```")]:
-                if response_text.startswith(p):
-                    response_text = response_text[len(p) :]
-                if response_text.endswith(s):
-                    response_text = response_text[: -len(s)]
-            response_text = response_text.strip()
-            result_data = json.loads(response_text)
+            cap_tool = StructuredTool(
+                name="evaluate_capability",
+                description="评估本智能体能否处理用户问题，输出判定结果和推理过程。",
+                args_schema=CapabilityCheckToolResult,
+                func=None,
+                coroutine=None,
+            )
+            result_data = await invoke_llm_with_tool(
+                llm=llm,
+                tool=cap_tool,
+                messages=[HumanMessage(content=prompt)],
+                metadata=md,
+                tool_choice="evaluate_capability",
+                span_name="skill-capability-check-llm",
+                span_input={"query": query, "agent_name": agent_name},
+            )
+            if result_data is None:
+                raise ValueError("LLM did not call evaluate_capability tool")
             conf = float(result_data.get("confidence", 0.0))
             leaf_path = [agent_name]
             check_response = CapabilityCheckResponse(
@@ -937,6 +953,7 @@ class SkillAgentExecutor(AgentExecutor):
                 ],
                 can_contribute=bool(result_data.get("can_contribute", False)),
                 contribution=str(result_data.get("contribution", "")),
+                latency_ms=int((_time.monotonic() - _cc_start) * 1000),
             )
         except Exception as e:
             logger.error("Capability check analysis failed: %s", e, exc_info=True)
@@ -951,6 +968,7 @@ class SkillAgentExecutor(AgentExecutor):
                 route_paths=[
                     {"path": leaf_path, "confidence": 0.0, "alias": _path_to_alias(leaf_path)}
                 ],
+                latency_ms=int((_time.monotonic() - _cc_start) * 1000),
             )
 
         logger.info(

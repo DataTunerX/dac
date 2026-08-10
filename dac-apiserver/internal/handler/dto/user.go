@@ -20,7 +20,6 @@ type LoginRequest struct {
 
 // LoginResponse 登录响应（HTTP）
 type LoginResponse struct {
-	Token  string        `json:"token"`
 	Expire string        `json:"expire"`
 	User   *UserResponse `json:"user"`
 }

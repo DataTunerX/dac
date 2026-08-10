@@ -88,6 +88,7 @@ const AGENTS_LIST_COLUMNS = [
   { id: "type", size: 100 },
   { id: "status", size: 110 },
   { id: "binding", size: 220 },
+  { id: "created", size: 160 },
   { id: "actions", size: 120 },
 ] as const
 
@@ -97,6 +98,13 @@ function isRecord(v: unknown): v is UnknownRecord {
 
 function asString(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
+}
+
+function formatCreatedAt(input?: string): string {
+  if (!input) return "-";
+  const date = new Date(input);
+  if (!Number.isFinite(date.getTime())) return "-";
+  return date.toLocaleString("zh-CN", { hour12: false });
 }
 
 function getItemField(
@@ -117,6 +125,7 @@ export interface Agent {
   semanticGroupID?: string;
   plannerLLM?: string;
   expertLLM?: string;
+  createdAt?: string;
   status: "AVAILABLE" | "CREATING" | "UNKNOWN";
   raw: unknown;
 }
@@ -187,6 +196,11 @@ function mapRawToAgent(
     semanticGroupID,
     plannerLLM,
     expertLLM,
+    createdAt:
+      asString(item.createdAt) ??
+      asString(item.created_at) ??
+      asString(item.creationTimestamp) ??
+      asString(item.creation_timestamp),
     status: deriveAgentStatus(item),
     raw: item,
   };
@@ -617,7 +631,8 @@ export default function AgentsPage() {
                 <TableHead columnId="namespace" className="whitespace-nowrap">命名空间</TableHead>
                 <TableHead columnId="type" className="whitespace-nowrap">类型</TableHead>
                 <TableHead columnId="status" className="whitespace-nowrap">状态</TableHead>
-                <TableHead columnId="binding">关联</TableHead>
+                <TableHead columnId="binding">关联语义组</TableHead>
+                <TableHead columnId="created" className="whitespace-nowrap">创建时间</TableHead>
                 <TableHead columnId="actions" className="text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -667,6 +682,12 @@ export default function AgentsPage() {
                     </TableCell>
                     <TableCell columnId="binding" className="max-w-[16rem] truncate text-sm text-content" title={binding}>
                       {binding}
+                    </TableCell>
+                    <TableCell
+                      columnId="created"
+                      className="whitespace-nowrap tabular-nums text-sm text-content-muted"
+                    >
+                      {formatCreatedAt(a.createdAt)}
                     </TableCell>
                     <TableCell columnId="actions" className="text-right">
                       <div

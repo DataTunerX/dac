@@ -338,6 +338,28 @@ func (h *DataDescriptorHandler) Update(ctx context.Context, c *app.RequestContex
 	SuccessResponse(c, dto.ToDataDescriptorResponse(descriptor))
 }
 
+// RequestResync sets the sync-requested-at annotation so Ready DDs re-run ingestion.
+func (h *DataDescriptorHandler) RequestResync(ctx context.Context, c *app.RequestContext) {
+	namespace := c.Param("namespace")
+	name := c.Param("name")
+
+	if err := h.usecase.RequestResync(ctx, namespace, name); err != nil {
+		h.logger.Error("failed to request data descriptor resync",
+			"namespace", namespace,
+			"name", name,
+			"error", err,
+		)
+		ErrorResponse(c, err)
+		return
+	}
+
+	AcceptedResponse(c, map[string]string{
+		"namespace": namespace,
+		"name":      name,
+		"status":    "resync_requested",
+	})
+}
+
 // Delete deletes a data descriptor
 func (h *DataDescriptorHandler) Delete(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")

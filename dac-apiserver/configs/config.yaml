@@ -23,6 +23,10 @@ observability:
 # JWT 配置
 jwt:
   secret: "dac-jwt-secret-key-for-development-please-change-in-production"
+  timeout: 15m
+  max_refresh: 168h
+  cookie_secure: false
+  cookie_domain: ""
 
 # Routing Agent 配置
 routing_agent:

@@ -32,6 +32,16 @@ function unescapeJsonLike(input: string): string {
     .replace(/\\\\/g, "\\")
 }
 
+/**
+ * Fence-aware version of unescapeJsonLike: only unescape literal `\n`/`\r`/`\t`
+ * on lines OUTSIDE ``` code fences. Code blocks such as ```chart JSON must keep
+ * their literal `\n` escapes intact — turning them into real newlines makes the
+ * JSON invalid (JS `JSON.parse` throws "Bad control character in string literal").
+ */
+function unescapeJsonLikeOutsideFences(input: string): string {
+  return mapLines(input, (line, { inFence }) => (inFence ? line : unescapeJsonLike(line)))
+}
+
 function collapseExcessiveNewlines(input: string): string {
   return input.replace(/\n{4,}/g, "\n\n\n")
 }
@@ -261,7 +271,7 @@ function repairGfmTables(text: string): string {
  * Single pipeline: transport escapes → whitespace → fences → tables.
  */
 export function prepareMarkdown(raw: string): string {
-  const s = stripModelLeakTags(unescapeJsonLike(raw || ""))
+  const s = stripModelLeakTags(unescapeJsonLikeOutsideFences(raw || ""))
   const s1 = collapseExcessiveNewlines(s)
   const s2 = balanceCodeFences(s1)
   const s3 = convertTablesNumberedList(s2)

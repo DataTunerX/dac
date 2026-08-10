@@ -127,8 +127,9 @@ func (u *discoveryUsecase) run(jobID string, req *domain.StartDiscoveryScanReque
 		return
 	}
 	if len(ports) == 0 {
-		// Design: empty portsSpec means scan all ports.
-		ports = infra.AllPorts()
+		// Empty portsSpec → practical defaults (common + sandbox).
+		// Full 1–65535 sweeps must pass portsSpec="*" or "1-65535".
+		ports = infra.DefaultPorts()
 	}
 
 	targets, err := infra.ParseTargets(req.Target)

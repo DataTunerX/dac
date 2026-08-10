@@ -65,93 +65,8 @@ from .skill_repo_cwd import use_code_repo_cwd
 from .skill_runner_service import CodeAgentSkillRunnerService, SKILL_FALLBACK_ON_EMPTY
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
-try:
-    # json_repair is a tolerant JSON parser designed specifically for LLM output.
-    # It handles common failure modes such as unescaped inner double quotes,
-    # trailing commas, missing quotes, python-style single quotes, etc.
-    from json_repair import repair_json as _json_repair  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - optional runtime dep, fail-soft
-    _json_repair = None  # type: ignore[assignment]
-
-
-# Top-level JSON string fields where the model often inlines code or quotes
-# without escaping (pre-pass before json_repair). Matches code-agent prompts:
-# answer/requery/observe, retrieval, relevance, path reasoning.
-_KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
-    "original_query",
-    "description",
-    "thought_process",
-    "rationale",
-    "final_answer",
-    "answer",
-    "requery",
-    "reason",
-    "reasoning",
-    "relevance_reason",
-    "reasoning_path",
-    "file_path",
-    "intent_analysis",
-)
-
-def _escape_known_string_field_inner_quotes(text: str) -> str:
-    """Best-effort escape of unescaped inner ``"`` inside known single-line
-    string fields of a planner-style JSON payload.
-
-    We deliberately restrict the pre-pass to a whitelist of known fields where
-    the value is a single JSON string on one line so we can recognize the end
-    of the value by the structural pattern ``"`` followed by an optional
-    comma/whitespace and a newline. Multi-line values and nested structures
-    are left untouched (json_repair handles those as a later fallback).
-    """
-    if not text or '"' not in text:
-        return text
-
-    pattern_fields = "|".join(re.escape(f) for f in _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES)
-    # See the sibling implementation in orchestrator_agent_semantic_group.py
-    # for detailed rationale about the regex anchoring strategy.
-    pattern = re.compile(
-        rf'("(?:{pattern_fields})"\s*:\s*")'
-        r'(.*?)'
-        r'((?<!\\)"[ \t]*,?[ \t]*$)',
-        re.MULTILINE,
-    )
-
-    def _repl(m: "re.Match[str]") -> str:
-        head, body, tail = m.group(1), m.group(2), m.group(3)
-        fixed_chars: List[str] = []
-        i = 0
-        while i < len(body):
-            ch = body[i]
-            if ch == "\\" and i + 1 < len(body):
-                fixed_chars.append(body[i : i + 2])
-                i += 2
-                continue
-            if ch == '"':
-                fixed_chars.append('\\"')
-                i += 1
-                continue
-            fixed_chars.append(ch)
-            i += 1
-        return head + "".join(fixed_chars) + tail
-
-    return pattern.sub(_repl, text)
-
-
-def _extract_json_object_from_llm_text(raw: str) -> Optional[str]:
-    """Pull a JSON object string from prose / markdown-fenced LLM output."""
-    if not raw:
-        return None
-    text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL | re.IGNORECASE)
-    if fence:
-        text = fence.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    return text[start : end + 1]
-
-
+from langchain_core.tools import StructuredTool
+from .tool_call_utils import invoke_llm_with_tool, validate_pydantic, format_llm_output
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -162,6 +77,10 @@ logger = logging.getLogger(__name__)
 
 PROGRESS_FRAME_PREFIX = "[[DAC_PROGRESS]] "
 DAC_PROGRESS_LAYER = "sd_code"
+
+# 上下文窗口截断保护：answer_with_code 的 prompt 最大字符数
+# deepseek 系列模型上下文窗口约 128K tokens，字符数保守估计取 120K
+MAX_PROMPT_CHARS = 120000
 
 # Initialize Langfuse client
 langfuse = get_client()
@@ -220,23 +139,51 @@ class LLMResult(BaseModel):
     )
 
 class RequeryResult(BaseModel):
+    """重新生成问题结果。包含两个字段：requery（新问题）和 conclusion（结论）。
+
+    输出示例：
+    terminate 示例（已生成新问题）：
+    {
+      "requery": "新生成的问题...",
+      "conclusion": "terminate"
+    }
+    continue 示例（无法生成新问题）：
+    {
+      "requery": "",
+      "conclusion": "continue"
+    }
+    """
 
     requery: Optional[str] = Field(
-        description='The new query for user question.'
+        description='重新生成的新问题（requery字段）。当能生成新问题时填入（如"新生成的问题..."），否则为空字符串。'
     )
 
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+    conclusion: Optional[Literal["terminate", "continue"]] = Field(
+        description='结论（conclusion字段）。"terminate" 表示可以终止（已生成新问题），"continue" 表示需要继续（无法生成新问题）。'
     )
 
 class ObserveResult(BaseModel):
+    """观察答案是否满足问题结果。包含两个字段：reason（分析依据）和 conclusion（结论）。
+
+    输出示例：
+    terminate 示例（答案满足问题）：
+    {
+      "reason": "满足问题的原因",
+      "conclusion": "terminate"
+    }
+    continue 示例（答案不满足问题）：
+    {
+      "reason": "不满足问题的原因",
+      "conclusion": "continue"
+    }
+    """
 
     reason: Optional[str] = Field(
-        description='The reason for answer.'
+        description='分析依据（reason字段）。说明答案是否满足问题的详细理由，必须包含具体分析内容（如"满足问题的原因"或"不满足问题的原因"）。'
     )
 
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+    conclusion: Optional[Literal["terminate", "continue"]] = Field(
+        description='结论（conclusion字段）。"terminate" 表示答案已满足问题，"continue" 表示答案不满足需要继续。'
     )
 
 class TaskStatus(BaseModel):
@@ -281,30 +228,51 @@ class StepStatusList(BaseModel):
     
     steps: List[StepStatus] = Field(description='List of steps')
 
+class KnowledgeFiles(BaseModel):
+    """知识ID与其关联文件的映射"""
+    knowledge_id: str = Field(
+        description="知识文档的唯一标识符，如 '知识中的Knowledge ID 1'"
+    )
+    files: List[str] = Field(
+        description="该知识ID下定位到的文件路径列表，如 ['该知识下的文件路径1', '该知识下的文件路径2']"
+    )
+
+
 class FileLocationResult(BaseModel):
     """
-    基于业务意图的代码文件定位结果模型
+    基于业务意图的代码文件定位结果模型。
+    输出格式示例：
+    {
+      "knowledge_files": [
+        {"knowledge_id": "知识中的Knowledge ID 1", "files": ["该知识下的文件路径1", "该知识下的文件路径2"]},
+        {"knowledge_id": "知识中的Knowledge ID 2", "files": ["该知识下的文件路径3"]}
+      ],
+      "intent_analysis": "对用户真实业务意图的理解及其背后的逻辑链路拆解。",
+      "reasoning_path": "描述从触发点到执行点的逻辑推演过程（体现：因为 A 负责...，且 B 消费了 A 的...，所以...）。"
+    }
     """
-    
-    knowledge_files: List['KnowledgeFiles'] = Field(
-        default_factory=list,
-        description="知识ID与文件的映射列表，清晰展示每个知识文档包含哪些定位到的文件。"
+
+    # NOTE: KnowledgeFiles 必须定义在本类之前。若使用前向引用 List['KnowledgeFiles']
+    # 且未 model_rebuild()，LangChain convert_to_openai_tool 会生成空的
+    # parameters.properties={}，LLM 就会回显 {"properties": {}}。
+    knowledge_files: List[KnowledgeFiles] = Field(
+        description="知识ID与文件的映射列表。命中相关文件时必须返回对应映射；确认没有相关文件时返回空列表。每个元素必须同时包含 knowledge_id 和非空 files"
     )
 
     intent_analysis: str = Field(
-        description="对用户真实业务意图的理解及其背后的逻辑链路拆解，阐述‘为什么要找这些文件’。"
+        description="对用户真实业务意图的理解及其背后的逻辑链路拆解，阐述‘为什么要找这些文件’。如 '用户想了解订单创建流程，需要定位订单服务、库存服务和支付服务中的核心逻辑'"
     )
-    
+
     reasoning_path: str = Field(
-        description="从触发点到执行点的逻辑推演过程，描述文件之间的调用、依赖或数据流转关系。"
+        description="从触发点到执行点的逻辑推演过程，描述文件之间的调用、依赖或数据流转关系。体现：因为 A 负责...，且 B 消费了 A 的...，所以..."
     )
-    
+
     def get_all_files(self, unique: bool = True) -> List[str]:
         """获取所有定位到的文件列表
-        
+
         Args:
             unique: 是否去重，默认 True
-        
+
         Returns:
             文件路径列表
         """
@@ -316,10 +284,10 @@ class FileLocationResult(BaseModel):
             seen = set()
             return [f for f in all_files if not (f in seen or seen.add(f))]
         return all_files
-    
+
     def get_all_knowledge_ids(self, unique: bool = True) -> List[str]:
         """获取所有知识ID列表
-        
+
         Args:
             unique: 是否去重，默认 True
         """
@@ -329,42 +297,51 @@ class FileLocationResult(BaseModel):
             return [i for i in ids if not (i in seen or seen.add(i))]
         return ids
 
-class KnowledgeFiles(BaseModel):
-    """知识ID与其关联文件的映射"""
-    knowledge_id: str = Field(description="知识文档的ID")
-    files: List[str] = Field(default_factory=list, description="该知识ID下定位到的文件列表")
-
 
 class AuditResult(BaseModel):
     """
     表示对单个文件的审计结果，判断其是否符合业务逻辑层级。
     """
     knowledge_id: str = Field(
-        description="知识库中的 ID 或模块标识符"
+        description="知识库中的 ID 或模块标识符，如 'Knowledge ID'"
     )
     file_path: str = Field(
         description="被审核文件的完整路径"
     )
     action: Literal["KEEP", "DISCARD"] = Field(
-        description="审计动作：KEEP 表示与用户问题代码相关，DISCARD 表示业务域明显无关"
+        description="审计动作：KEEP 表示与用户问题代码相关保留，DISCARD 表示业务域明显无关剔除"
     )
     logic_score: int = Field(
         ge=0, le=10, 
         description="代码相关度得分 (0-10)；含关键数据/逻辑但缺现成接口仍可给高分"
     )
     reasoning: str = Field(
-        description="基于代码相关性（实体、字段、方法、调用链）说明保留或剔除原因"
+        description="基于代码相关性（实体、字段、方法、调用链）说明保留或剔除原因；若 KEEP，说明含哪些关键实体/字段/方法；若 DISCARD，说明为何与业务域无关而非仅缺现成接口"
     )
 
 class FileAuditResponse(BaseModel):
     """
     针对用户查询意图，对初步筛选文件进行二次审计后的最终结构化输出。
+    输出格式示例：
+    {
+      "intent_reconstruction": "简述用户意图及回答该问题需要关注哪些代码层面（数据模型/服务/查询逻辑等）。",
+      "audit_results": [
+        {
+          "knowledge_id": "Knowledge ID",
+          "action": "KEEP | DISCARD",
+          "file_path": "文件路径",
+          "logic_score": 8,
+          "reasoning": "基于代码相关性说明保留或剔除原因；若 KEEP，说明含哪些关键实体/字段/方法；若 DISCARD，说明为何与业务域无关而非仅缺现成接口。"
+        }
+      ],
+      "final_context_summary": "保留下来的文件如何共同提供与用户问题相关的代码上下文。"
+    }
     """
     intent_reconstruction: str = Field(
         description="使用架构语言（如：宏观编排层、底层执行层等）重新描述用户的核心意图及其所处的系统层级"
     )
     audit_results: List[AuditResult] = Field(
-        description="对每个候选文件进行逻辑审查的结果列表"
+        description="对每个候选文件进行逻辑审查的结果列表，包含 action（KEEP保留/DISCARD剔除）、file_path、logic_score（0-10匹配得分）、reasoning（说明原因）"
     )
     final_context_summary: str = Field(
         description="说明保留下来的文件如何共同提供与用户问题相关的代码上下文"
@@ -450,18 +427,25 @@ class RelevantCodeSegment(BaseModel):
     """与用户问题相关的代码片段"""
     file_path: str = Field(description="文件路径")
     segment_type: str = Field(description="片段类型：entity, function, api_endpoint, global_function")
-    name: str = Field(description="代码元素名称")
-    line_no: str = Field(description="行号范围，如 100-160")
-    relevance_reason: str = Field(description="与用户问题相关的原因")
-    business_meaning: Optional[str] = Field(default=None, description="业务含义")
+    name: str = Field(description="代码元素名称，只填方法/函数/类名称，不带类名前缀，如 'create_order' 而非 'OrderService.create_order'")
+    line_no: str = Field(description="行号范围，如 100-160 或单行 100")
+    relevance_score: int = Field(
+        ge=0, le=10,
+        description="相关度评分（0-10）。精确查询/实体查询只返回评分>=7的片段，流程查询返回评分>=6的片段"
+    )
+    relevance_reason: str = Field(description="为什么这段代码与用户问题直接相关")
+    business_meaning: Optional[str] = Field(default=None, description="该代码片段的业务含义")
 
 
 class CodeSearchResult(BaseModel):
-    """代码搜索结果"""
-    query: str = Field(description="用户查询")
-    intent_analysis: str = Field(description="对用户意图的分析")
+    """代码搜索结果，包含 query_type 分类（precise/entity/process）"""
+    query: str = Field(description="用户的原始问题")
+    query_type: Literal["precise", "entity", "process"] = Field(
+        description="查询类型分类：precise（精确查询，如问特定函数实现）、entity（实体查询，如问类/模型结构）、process（流程查询，如问业务流程调用链）"
+    )
+    intent_analysis: str = Field(description="对用户意图的分析，说明用户想了解什么")
     relevant_segments: List[RelevantCodeSegment] = Field(default_factory=list, description="相关代码片段列表")
-    summary: str = Field(description="搜索结果总结")
+    summary: str = Field(description="对搜索结果的总结")
 
 
 class CodebaseIndex:
@@ -1789,6 +1773,54 @@ class CodebaseIndex:
         return self.file_index.get(filepath)
 
 
+# ==================== Tool-Call 专用 Pydantic 模型 ====================
+# 这些模型用作 StructuredTool.args_schema，供 LLM 通过 tool-calling
+# 机制输出结构化结果，替代之前基于 prompt 要求返回 JSON 的方案。
+
+class KeywordExtractionResult(BaseModel):
+    """LLM 提取的关键词结果，包含 entity_keywords（主体关键词）、action_keywords（动作关键词）和 reasoning（提取说明）。
+
+    输出示例：
+    {
+      "entity_keywords": ["订单", "Order"],
+      "action_keywords": ["创建", "create"],
+      "reasoning": "简要说明关键词提取的依据"
+    }
+    """
+    entity_keywords: List[str] = Field(
+        default_factory=list,
+        description="主体关键词，如业务实体、模块、服务名称，如 ['订单', 'Order']"
+    )
+    action_keywords: List[str] = Field(
+        default_factory=list,
+        description="动作关键词，如操作、动作、行为，如 ['创建', 'create']"
+    )
+    reasoning: str = Field(
+        default="",
+        description="简要说明关键词提取的依据"
+    )
+
+class RelevanceCheckResult(BaseModel):
+    """LLM 快速相关性检查结果。
+
+    输出示例：
+    {"relevant": true, "reason": "一句话说明判断理由"}
+    """
+    relevant: bool = Field(
+        description="代码片段是否与用户查询相关（true=相关，false=不相关）"
+    )
+    reason: str = Field(
+        description="一句话说明判断理由，解释为什么相关或不相关"
+    )
+
+class SnippetScoreBatchResult(BaseModel):
+    """LLM 批量代码片段评分结果"""
+    scores: List[dict] = Field(
+        default_factory=list,
+        description="每个代码片段的相关性评分结果列表"
+    )
+
+
 class AgentState(str, Enum):
     """Agent execution states"""
     IDLE = "IDLE"
@@ -1914,6 +1946,17 @@ class CodeAgent(BaseAgent):
             model=model,
             temperature=temperature,
             stream=stream,
+            extra_body=_extra_body,
+        )
+        # 非流式 LLM 实例，供 invoke_llm_with_tool() 使用。stream=True 时 OpenAI 返回
+        # AsyncStream 对象，无法使用 .tool_calls 提取工具调用结果。
+        self.llm_non_stream = self.manager.get_llm(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=temperature,
+            stream=False,
             extra_body=_extra_body,
         )
         self.query=query
@@ -2141,91 +2184,6 @@ class CodeAgent(BaseAgent):
         finally:
             self.state = previous_state
 
-    def format_llm_output(self, answer) -> dict:
-        """Parse the planner LLM output into a dict with heavy tolerance.
-
-        See ``orchestrator_agent_semantic_group.PlannerAgent.format_llm_output``
-        for the detailed recovery strategy — this implementation mirrors it.
-        """
-        raw = getattr(answer, "content", "") or ""
-
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            pass
-
-        extracted = _extract_json_object_from_llm_text(raw)
-        if extracted:
-            try:
-                parsed = json.loads(extracted)
-                if isinstance(parsed, dict):
-                    logger.info(" === format_llm_output, recovered via embedded JSON block")
-                    return parsed
-            except json.JSONDecodeError:
-                pass
-
-        cleaned_content = raw.strip()
-        if cleaned_content.startswith('```json'):
-            cleaned_content = cleaned_content[7:]
-        elif cleaned_content.startswith('```'):
-            cleaned_content = cleaned_content[3:]
-        if cleaned_content.endswith('```'):
-            cleaned_content = cleaned_content[:-3]
-        cleaned_content = cleaned_content.strip()
-
-        try:
-            return json.loads(cleaned_content)
-        except json.JSONDecodeError as e2:
-            logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
-
-        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
-        if escaped_content != cleaned_content:
-            try:
-                parsed = json.loads(escaped_content)
-                logger.info(" === format_llm_output, recovered via inner-quote field escaping")
-                return parsed
-            except json.JSONDecodeError as e_esc:
-                logger.warning(f" === format_llm_output, field-escape pre-pass still invalid: {e_esc}")
-
-        if _json_repair is not None:
-            try:
-                repaired = _json_repair(escaped_content, return_objects=True)
-                if isinstance(repaired, dict):
-                    logger.info(" === format_llm_output, recovered via json_repair")
-                    return repaired
-                if isinstance(repaired, str):
-                    parsed = json.loads(repaired)
-                    if isinstance(parsed, dict):
-                        logger.info(" === format_llm_output, recovered via json_repair (string)")
-                        return parsed
-            except Exception as e_rep:  # noqa: BLE001
-                logger.error(f" === format_llm_output, json_repair failed: {e_rep}")
-        else:
-            logger.warning(
-                " === format_llm_output, json_repair not installed; "
-                "add 'json-repair' to dependencies to improve LLM JSON tolerance"
-            )
-
-        try:
-            import ast
-            parsed = ast.literal_eval(cleaned_content)
-            if isinstance(parsed, dict):
-                return parsed
-        except (ValueError, SyntaxError) as e3:
-            logger.error(f" === format_llm_output, ast parsing fail: {e3}")
-        except Exception as e5:  # noqa: BLE001
-            logger.error(f" === format_llm_output, exception occurred during parsing: {e5}, using default value")
-
-        try:
-            parsed = json.loads(cleaned_content.replace("'", '"'))
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError as e4:
-            logger.error(f" === format_llm_output, secondary parsing failed: {e4}, using default value")
-
-        return None
-
-
     async def locate_files(self, knowledge: str = ""):
         """
         基于系统全局信息（knowledge）定位与用户查询相关的代码文件
@@ -2236,58 +2194,67 @@ class CodeAgent(BaseAgent):
         Returns:
             FileLocationResult: 包含意图分析、推理路径和定位到的文件列表
         """
-        system_template = LOCATE_FILES
-
-        human_template = "{query}"
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["current_time", "knowledge"],
+        try:
+            prompt = LOCATE_FILES.format(
+                current_time=current_time,
+                knowledge=knowledge,
+            ) + f"\n{self.query}"
+        except Exception as exc:
+            logger.error(
+                "[locate_files] Failed to format LOCATE_FILES prompt: %s: %s "
+                "(usually unescaped {{ }} in prompt template)",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise
+
+        locate_tool = StructuredTool(
+            name="locate_files",
+            description="基于业务意图定位相关的代码文件，输出知识文件映射、意图分析和推理路径。",
+            args_schema=FileLocationResult,
+            func=None,
+            coroutine=None,
         )
 
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
-
-        answer = None
-
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="codeagent-locate-files",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input=self._langfuse_trace_input(query=self.query)
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "current_time": current_time, "knowledge": knowledge},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === CodeAgent.locate_files, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
+        data_dict = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            tool=locate_tool,
+            messages=[HumanMessage(content=prompt)],
+            metadata=self.metadata,
+            tool_choice="locate_files",
+            span_name="codeagent-locate-files",
+            span_input={"query": self.query, "knowledge_chars": len(knowledge)},
+            retry=2,
+            validate=validate_pydantic(FileLocationResult),
+            fallback_formatter=format_llm_output,
+        )
 
         if data_dict is None:
-            data_dict = {
-                "query": "System error: Unable to process model response",
-                "conclusion": "error"
-            }
+            logger.warning(
+                "[locate_files] LLM tool call returned None after retries — falling back to empty result"
+            )
+            return FileLocationResult(
+                knowledge_files=[],
+                intent_analysis="LLM 响应解析失败，无法定位相关文件",
+                reasoning_path="locate_files tool call 未返回有效参数",
+            )
 
-        llm_result = FileLocationResult(**data_dict)
+        try:
+            llm_result = FileLocationResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[locate_files] LLM returned invalid schema (%s) — falling back to empty result, "
+                "first error: %s",
+                exc.error_count(),
+                exc.errors()[0] if exc.errors() else "unknown",
+            )
+            llm_result = FileLocationResult(
+                knowledge_files=[],
+                intent_analysis="LLM 响应格式校验失败，无法解析文件定位结果",
+                reasoning_path="LLM 返回了不完整的 tool call 参数，缺少必填字段",
+            )
 
         logger.debug(f" === CodeAgent.locate_files , FileLocationResult.llm_result = {llm_result}")
 
@@ -2306,52 +2273,34 @@ class CodeAgent(BaseAgent):
         Returns:
             FileLocationResult: 包含意图分析、推理路径和定位到的文件列表
         """
-        system_template = OBSERVE_LOCATE_FILES
-
-        human_template = "{query}"
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["current_time", "knowledge"],
-            partial_variables={"locate_files":locate_files}
+        prompt = OBSERVE_LOCATE_FILES.format(
+            current_time=current_time,
+            knowledge=knowledge,
+            locate_files=locate_files,
+        ) + f"\n{self.query}"
+
+        tool = StructuredTool(
+            name="observe_locate_files",
+            description="审计定位到的代码文件，剔除无关文件，保留与问题相关的代码载体。",
+            args_schema=FileAuditResponse,
+            func=None,
+            coroutine=None,
         )
 
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
-
-        answer = None
-
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="codeagent-observe_locate_files",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input=self._langfuse_trace_input(query=self.query)
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "current_time": current_time, "knowledge": knowledge},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === CodeAgent.observe_locate_files, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
+        data_dict = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            tool=tool,
+            messages=[HumanMessage(content=prompt)],
+            metadata=self.metadata,
+            tool_choice="observe_locate_files",
+            span_name="codeagent-observe-locate-files",
+            span_input={"query": self.query},
+            retry=2,
+            validate=validate_pydantic(FileAuditResponse),
+            fallback_formatter=format_llm_output,
+        )
 
         if data_dict is None:
             logger.warning(
@@ -2402,10 +2351,6 @@ class CodeAgent(BaseAgent):
 
         step_history = self.get_step_history_for_requery()
 
-        system_template = REQUERY_PROMPT_ZH
-
-        human_template = "{query}"
-
         terminate_json_prompt_instructions_zh: dict = {
             "requery": "新生成的问题...",
             "conclusion": "terminate"
@@ -2417,56 +2362,56 @@ class CodeAgent(BaseAgent):
         }
 
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["original_query","history_querys","current_time","step_history"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
-        )
-
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
         history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        prompt = REQUERY_PROMPT_ZH.format(
+            original_query=self.original_query,
+            history_querys=history_querys,
+            current_time=current_time,
+            step_history=step_history,
+            terminate_fewshots=terminate_json_prompt_instructions_zh,
+            continue_fewshots=continue_json_prompt_instructions_zh,
+        ) + f"\n{self.query}"
 
-        answer = None
+        tool = StructuredTool(
+            name="requery",
+            description="根据历史执行结果生成新问题或判断是否可以终止。",
+            args_schema=RequeryResult,
+            func=None,
+            coroutine=None,
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="code-requery",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input=self._langfuse_trace_input(query=self.query)
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "original_query": self.original_query,"history_querys": history_querys, "current_time":current_time, "step_history":step_history},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === CodeAgent.invoke_requery, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
+        data_dict = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            tool=tool,
+            messages=[HumanMessage(content=prompt)],
+            metadata=self.metadata,
+            tool_choice="requery",
+            span_name="codeagent-requery",
+            span_input={"query": self.query},
+            retry=2,
+            validate=validate_pydantic(RequeryResult),
+            fallback_formatter=format_llm_output,
+        )
 
         if data_dict is None:
             data_dict = {
-                "query": "System error: Unable to process model response",
-                "conclusion": "error"
+                "requery": "",
+                "conclusion": "continue"
             }
 
-        llm_result = RequeryResult(**data_dict)
+        try:
+            llm_result = RequeryResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[invoke_requery] LLM returned invalid schema (%s) — falling back to default",
+                exc.error_count(),
+            )
+            llm_result = RequeryResult(
+                requery="",
+                conclusion="continue",
+            )
 
         logger.debug(f" === CodeAgent.invoke_requery , llm_result = {llm_result}")
 
@@ -2490,10 +2435,6 @@ class CodeAgent(BaseAgent):
                 conclusion="terminate"
             )
 
-        system_template = OBSERVE_PROMPT_COMMON_ZH
-
-        human_template = "question: {query};\n\nanswer:{answer}"
-
         terminate_json_prompt_instructions_zh: dict = {
             "reason": "满足问题的原因",
             "conclusion": "terminate"
@@ -2505,54 +2446,52 @@ class CodeAgent(BaseAgent):
         }
 
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["knowledge","current_time"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
+
+        prompt = OBSERVE_PROMPT_COMMON_ZH.format(
+            knowledge=knowledge,
+            current_time=current_time,
+            terminate_fewshots=terminate_json_prompt_instructions_zh,
+            continue_fewshots=continue_json_prompt_instructions_zh,
+        ) + f"\nquestion: {query};\n\nanswer:{answer}"
+
+        tool = StructuredTool(
+            name="observe_common",
+            description="分析答案是否已经满足当前问题，输出分析依据和结论。",
+            args_schema=ObserveResult,
+            func=None,
+            coroutine=None,
         )
 
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
-
-        llm_answer = None
-
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="code-observe_common",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input=self._langfuse_trace_input(query=query)
-            )
-
-            llm_answer = await chain.ainvoke(
-                {"query": query, "answer":answer, "knowledge":knowledge, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": llm_answer})
-
-        langfuse.flush()
-
-        logger.info(f" === CodeAgent.observe_common, answer = {llm_answer}")
-
-        data_dict = self.format_llm_output(llm_answer)
+        data_dict = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            tool=tool,
+            messages=[HumanMessage(content=prompt)],
+            metadata=self.metadata,
+            tool_choice="observe_common",
+            span_name="codeagent-observe-common",
+            span_input={"query": query},
+            retry=2,
+            validate=validate_pydantic(ObserveResult),
+            fallback_formatter=format_llm_output,
+        )
 
         if data_dict is None:
             data_dict = {
                 "reason": "System error: Unable to process model response",
-                "conclusion": "error"
+                "conclusion": "continue"
             }
 
-        llm_result = ObserveResult(**data_dict)
+        try:
+            llm_result = ObserveResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[observe_common] LLM returned invalid schema (%s) — falling back to default",
+                exc.error_count(),
+            )
+            llm_result = ObserveResult(
+                reason="LLM 响应格式校验失败，无法分析观察结果",
+                conclusion="continue",
+            )
 
         logger.debug(f" === CodeAgent.observe_common , llm_result = {llm_result}")
 
@@ -3284,57 +3223,57 @@ class CodeAgent(BaseAgent):
                 summary="找到4个与订单创建相关的代码片段：1个核心服务方法(create_order)负责主要业务逻辑，1个API接口(POST /api/v1/orders)处理外部请求，1个数据模型(Order)定义订单结构，1个验证方法(validate_order_data)确保数据有效性。建议从 order_service.py 的 create_order 方法开始阅读，了解完整的订单创建流程。"
             )
         """
-        system_template = SEARCH_CODE_SEGMENTS_PROMPT
-        human_template = "{query}"
-        
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["current_time", "code_analysis"],
+        prompt = SEARCH_CODE_SEGMENTS_PROMPT.format(
+            current_time=current_time,
+            code_analysis=code_analysis_context,
+        ) + f"\n{self.query}"
+
+        tool = StructuredTool(
+            name="search_code_segments",
+            description="根据代码分析结果和用户问题，定位相关代码片段。",
+            args_schema=CodeSearchResult,
+            func=None,
+            coroutine=None,
         )
-        
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-        
-        user_id = self.metadata.get('user_id', 'unknown')
-        run_id = self.metadata.get('run_id', 'unknown')
-        trace_id = self.metadata.get('trace_id', 'unknown')
-        
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="codeagent-search-code-segments",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input=self._langfuse_trace_input(query=self.query)
-            )
-            
-            answer = await chain.ainvoke(
-                {"query": self.query, "current_time": current_time, "code_analysis": code_analysis_context},
-                config={"callbacks": [langfuse_handler]}
-            )
-            
-            span.update_trace(output={"answer": answer})
-        
-        langfuse.flush()
-        
-        logger.info(f"CodeAgent.search_relevant_code_segments, answer = {answer}")
-        
-        data_dict = self.format_llm_output(answer)
-        
+
+        data_dict = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            tool=tool,
+            messages=[HumanMessage(content=prompt)],
+            metadata=self.metadata,
+            tool_choice="search_code_segments",
+            span_name="codeagent-search-code-segments",
+            span_input={"query": self.query},
+            retry=2,
+            validate=validate_pydantic(CodeSearchResult),
+            fallback_formatter=format_llm_output,
+        )
+
         if data_dict is None:
             data_dict = {
                 "query": self.query,
+                "query_type": "precise",
                 "intent_analysis": "无法解析 LLM 响应",
                 "relevant_segments": [],
                 "summary": "搜索失败"
             }
         
-        return CodeSearchResult(**data_dict)
+        try:
+            return CodeSearchResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[search_relevant_code_segments] LLM returned invalid schema (%s) — returning fallback",
+                exc.error_count(),
+            )
+            return CodeSearchResult(
+                query=self.query,
+                query_type="precise",
+                intent_analysis="LLM 响应格式校验失败",
+                relevant_segments=[],
+                summary="搜索失败",
+            )
 
     def extract_code_by_line_range(self, filepath: str, line_no: str, context_lines: int = 5) -> str:
         """
@@ -3558,6 +3497,7 @@ class CodeAgent(BaseAgent):
             return {
                 'search_result': CodeSearchResult(
                     query=self.query,
+                    query_type="precise",
                     intent_analysis="未能定位到相关文件",
                     relevant_segments=[],
                     summary="请尝试提供更具体的文件路径或关键词"
@@ -3942,6 +3882,7 @@ class CodeAgent(BaseAgent):
             return {
                 'search_result': CodeSearchResult(
                     query=self.query,
+                    query_type="precise",
                     intent_analysis="未能定位到相关文件",
                     relevant_segments=[],
                     summary="请尝试提供更具体的文件路径或关键词"
@@ -3959,6 +3900,7 @@ class CodeAgent(BaseAgent):
             return {
                 'search_result': CodeSearchResult(
                     query=self.query,
+                    query_type="precise",
                     intent_analysis=f"定位到文件 {located_files}，但未找到代码分析记录",
                     relevant_segments=[],
                     summary="文件可能尚未被索引，请确保代码已完成索引"
@@ -4083,73 +4025,45 @@ class CodeAgent(BaseAgent):
         query = query or self.query
         logger.info(f"=== extract_keywords_with_llm, query: {query} ===")
         
-        system_template = EXTRACT_KEYWORDS_PROMPT
-        human_template = "{query}"
-        
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["query"],
-        )
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-        
-        trace_id = self.metadata.get('trace_id', '')
-        user_id = self.metadata.get('user_id', '')
-        run_id = self.metadata.get('run_id', '')
-        
-        chain = chat_prompt | self.llm
-        
         fallback_result = {
             'entity_keywords': self.codebase_index.extract_search_keywords(query),
             'action_keywords': []
         }
         
-        try:
-            with langfuse.start_as_current_span(
-                name="codeagent-extract-keywords",
-                trace_context={"trace_id": trace_id}
-            ) as span:
-                span.update_trace(
-                    user_id=user_id,
-                    session_id=run_id,
-                    input=self._langfuse_trace_input(query=query)
-                )
-                
-                answer = await chain.ainvoke(
-                    {"query": query},
-                    config={"callbacks": [langfuse_handler]}
-                )
-                
-                span.update_trace(output={"answer": str(answer)})
-            
-            langfuse.flush()
-            
-            # 解析 LLM 输出
-            data_dict = self.format_llm_output(answer)
-            
-            if data_dict and "entity_keywords" in data_dict:
-                entity_keywords = data_dict.get("entity_keywords", [])
-                action_keywords = data_dict.get("action_keywords", [])
-                logger.info(f"LLM extracted - entity: {entity_keywords}, action: {action_keywords}")
-                return {
-                    'entity_keywords': entity_keywords,
-                    'action_keywords': action_keywords
-                }
-            elif data_dict and "keywords" in data_dict:
-                # 兼容旧格式
-                keywords = data_dict["keywords"]
-                logger.info(f"LLM extracted keywords (old format): {keywords}")
-                return {
-                    'entity_keywords': keywords,
-                    'action_keywords': []
-                }
-            else:
-                logger.warning("LLM did not return keywords in expected format")
-                return fallback_result
-                
-        except Exception as e:
-            logger.error(f"Error extracting keywords with LLM: {e}")
+        prompt = EXTRACT_KEYWORDS_PROMPT.format(query=query) + f"\n{query}"
+
+        tool = StructuredTool(
+            name="extract_keywords",
+            description="从用户查询中提取用于代码搜索的关键词。",
+            args_schema=KeywordExtractionResult,
+            func=None,
+            coroutine=None,
+        )
+
+        data_dict = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            tool=tool,
+            messages=[HumanMessage(content=prompt)],
+            metadata=self.metadata,
+            tool_choice="extract_keywords",
+            span_name="codeagent-extract-keywords",
+            span_input={"query": query},
+            retry=2,
+            validate=validate_pydantic(KeywordExtractionResult),
+            fallback_formatter=format_llm_output,
+        )
+
+        if data_dict is None:
+            logger.warning("LLM did not return keywords, using fallback")
             return fallback_result
+
+        entity_keywords = data_dict.get("entity_keywords", [])
+        action_keywords = data_dict.get("action_keywords", [])
+        logger.info(f"LLM extracted - entity: {entity_keywords}, action: {action_keywords}")
+        return {
+            'entity_keywords': entity_keywords,
+            'action_keywords': action_keywords
+        }
 
     async def quick_relevance_check(self, match: Dict[str, Any], query: str) -> bool:
         """
@@ -4189,40 +4103,32 @@ class CodeAgent(BaseAgent):
                 name=match.get("name", ""),
                 description=match.get("content", "")[:200]  # 截断以加快判断
             )
-            
-            message = HumanMessage(content=prompt)
-            trace = self._langfuse_trace_context()
-            trace_ctx = {"trace_id": trace.trace_id} if trace.trace_id else {}
 
-            with langfuse.start_as_current_span(
-                name="codeagent-quick-relevance-check",
-                trace_context=trace_ctx,
-            ) as span:
-                span.update_trace(
-                    user_id=trace.user_id,
-                    session_id=trace.run_id,
-                    input=self._langfuse_trace_input(
-                        query=query,
-                        file_path=match.get("file_path", ""),
-                        name=match.get("name", ""),
-                        segment_type=match.get("match_type", "unknown"),
-                    ),
-                )
-                answer = await self.llm.ainvoke(
-                    [message],
-                    config={"callbacks": [langfuse_handler]},
-                )
-                span.update_trace(
-                    output={"answer": getattr(answer, "content", str(answer))},
-                )
+            tool = StructuredTool(
+                name="quick_relevance_check",
+                description="快速判断代码片段是否与用户查询相关。",
+                args_schema=RelevanceCheckResult,
+                func=None,
+                coroutine=None,
+            )
 
-            langfuse.flush()
-            data_dict = self.format_llm_output(answer)
-            
+            data_dict = await invoke_llm_with_tool(
+                llm=self.llm_non_stream,
+                tool=tool,
+                messages=[HumanMessage(content=prompt)],
+                metadata=self.metadata,
+                tool_choice="quick_relevance_check",
+                span_name="codeagent-quick-relevance-check",
+                span_input={"query": query, "file_path": match.get("file_path", "")},
+                retry=2,
+                validate=validate_pydantic(RelevanceCheckResult),
+                fallback_formatter=format_llm_output,
+            )
+
             if data_dict and "relevant" in data_dict:
                 return data_dict["relevant"]
             return True  # 解析失败时默认保留
-            
+
         except Exception as e:
             logger.debug(f"Quick relevance check failed: {e}")
             return True  # 出错时默认保留
@@ -4534,8 +4440,7 @@ class CodeAgent(BaseAgent):
         return await score_snippets_batch_parallel(
             snippets,
             query=self.query,
-            llm=self.llm,
-            parse_output=self.format_llm_output,
+            llm=self.llm_non_stream,
             trace=self._langfuse_trace_context(),
         )
 
@@ -4576,7 +4481,12 @@ class CodeAgent(BaseAgent):
         
         # 处理语义检索结果
         if isinstance(results[0], Exception):
-            logger.error(f"Semantic retrieval failed: {results[0]}")
+            logger.error(
+                "Semantic retrieval failed: %s: %s",
+                type(results[0]).__name__,
+                results[0],
+                exc_info=results[0],
+            )
             semantic_result = {'code_snippets': []}
         else:
             semantic_result = results[0]
@@ -4585,7 +4495,12 @@ class CodeAgent(BaseAgent):
         
         # 处理 grep 召回结果
         if isinstance(results[1], Exception):
-            logger.error(f"Grep recall failed: {results[1]}")
+            logger.error(
+                "Grep recall failed: %s: %s",
+                type(results[1]).__name__,
+                results[1],
+                exc_info=results[1],
+            )
             grep_result = {'code_snippets': [], 'keywords': [], 'files_matched': [], 'filtered_count': 0}
         else:
             grep_result = results[1]
@@ -4914,6 +4829,15 @@ class CodeAgent(BaseAgent):
             chain_section += "\n\n".join(call_chain_info)
             chain_section += "\n"
             code_snippets_str = code_snippets_str + chain_section
+        
+        # 上下文窗口截断保护：防止 prompt 总长度超出 LLM 上下文限制
+        if len(code_snippets_str) > MAX_PROMPT_CHARS:
+            logger.warning(
+                "[answer_with_code] code_snippets_str length %d exceeds MAX_PROMPT_CHARS %d, "
+                "truncating to fit context window",
+                len(code_snippets_str), MAX_PROMPT_CHARS,
+            )
+            code_snippets_str = code_snippets_str[:MAX_PROMPT_CHARS]
         
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,

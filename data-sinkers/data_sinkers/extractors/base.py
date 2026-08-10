@@ -3812,44 +3812,61 @@ class SQLAnalyzer:
             {
                 "table_name": "tb_ai_wo_chunk_snapshot",
                 "entity_name": "工单文本分片快照",
-                "business_meaning": "存储工单关联的文本分片信息及其快照，包含分片内容、来源文件及资料库信息。"
-            },
-            {
-                "table_name": "tb_ai_work_order",
-                "entity_name": "AI工单",
-                "business_meaning": "记录AI助手处理的工单信息，包括用户提问、处理过程、结果及状态。"
-            },
-            {
-                "table_name": "tb_api_key",
-                "entity_name": "API密钥",
-                "business_meaning": "管理系统使用的API密钥信息，包括密钥名称、令牌、有效期及所属应用。"
+                "business_meaning": "存储工单关联的文本分片信息及其快照，包含分片内容、来源文件及资料库信息。",
+                "key_fields": [
+                    {"field_name": "work_order_id", "business_meaning": "关联工单ID"},
+                    {"field_name": "chunk_content", "business_meaning": "文本分片内容"},
+                    {"field_name": "source_file", "business_meaning": "来源文件"}
+                ]
             },
             ...
         ]
 
         """
         prompt = f"""
-        你是一个数据分析专家，负责根据提供的数据表的信息总结出这个表的业务描述。
+        你是一个数据分析专家，负责根据提供的数据表的信息总结出这个表的业务描述，并挑出若干关键业务字段。
 
         ## 处理规则 ##
-        1. 不需要完整的整理出这个表包含的各个字段。
-        2. 重点是根据所有的表的字段来分析出这个数据表负责的业务范围。
-        3. 字数要控制在100字以内。
-        
+        1. 不需要完整罗列该表的全部字段。
+        2. 重点根据表字段分析该表负责的业务范围；业务描述控制在100字以内。
+        3. 必须为每张表选出 3～5 个关键业务字段（key_fields），优先选择：
+           - 主键 / 业务主键 / 外键关联字段
+           - 核心度量指标（金额、余额、数量、占比等）
+           - 核心业务维度（机构、客户类型、产品类型、状态、日期等）
+           - 能帮助判断“这张表能否回答某类业务问题”的字段
+        4. 不要选无业务语义的技术字段（如自增内部序号、纯审计字段 create_time/update_time、无业务含义的 flag 等），除非它本身就是核心业务口径。
+        5. key_fields 中的 field_name 必须是 schema 中真实存在的物理字段名，禁止编造；business_meaning 用简短中文说明业务含义。
 
         ## 输出格式 ##
         请严格按以下JSON格式返回，确保可直接被 `json.loads()` 解析：
         [
             {{
-                "table_name": "user", "entity_name":"用户", "business_meaning":"存储所有注册用户或系统操作者的基本信息，包括**用户ID、登录凭证（密码哈希）、联系方式、角色权限、注册时间及账户状态**等"
+                "table_name": "deposit_data",
+                "entity_name": "存款数据",
+                "business_meaning": "记录各分支机构的存款明细，包括对公和零售存款的活期、定期及总额等",
+                "key_fields": [
+                    {{"field_name": "branch_id", "business_meaning": "分支机构标识"}},
+                    {{"field_name": "corp_demand_deposit", "business_meaning": "对公活期存款"}},
+                    {{"field_name": "retail_time_deposit", "business_meaning": "零售定期存款"}},
+                    {{"field_name": "total_deposit", "business_meaning": "存款总额"}}
+                ]
             }},
             {{
-                "table_name": "product", "entity_name":"产品/商品", "business_meaning":"存储商城或业务系统的产品信息，包括名称、价格、库存、描述、分类和状态等"
+                "table_name": "loan_data",
+                "entity_name": "贷款数据",
+                "business_meaning": "记录各分支机构的贷款明细，包括对公、零售、普惠小微、信用卡及贴现等",
+                "key_fields": [
+                    {{"field_name": "branch_id", "business_meaning": "分支机构标识"}},
+                    {{"field_name": "corp_loan", "business_meaning": "对公贷款余额"}},
+                    {{"field_name": "retail_loan", "business_meaning": "零售贷款余额"}},
+                    {{"field_name": "inclusive_loan", "business_meaning": "普惠小微贷款余额"}}
+                ]
             }}
         ]
 
         ## 注意事项 ##
         - 只返回JSON格式，不要包含任何额外文本
+        - 每张表都必须包含 key_fields，且数量为 3～5 个
         """
 
         system_message = SystemMessage(content=prompt)
@@ -3861,6 +3878,210 @@ class SQLAnalyzer:
         response = self.llm.invoke([system_message, human_message])
 
         llm_result = self.format_llm_output(response)
+        return self._enrich_tables_overview_with_key_fields(llm_result, tables_schema)
+
+    def _extract_schema_column_map(self, tables_schema: List[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+        """Build table_name -> {normalized_column_name: original_column_name, ...}."""
+        column_map: Dict[str, Dict[str, str]] = {}
+        for table in tables_schema or []:
+            if not isinstance(table, dict):
+                continue
+            table_name = str(table.get("table_name") or "").strip()
+            if not table_name:
+                continue
+            cols = {}
+            for col in table.get("columns") or []:
+                if not isinstance(col, dict):
+                    continue
+                raw_name = (
+                    col.get("COLUMN_NAME")
+                    or col.get("column_name")
+                    or col.get("Field")
+                    or ""
+                )
+                raw_name = str(raw_name).strip()
+                if not raw_name:
+                    continue
+                cols[raw_name.lower()] = raw_name
+            column_map[table_name] = cols
+        return column_map
+
+    def _extract_schema_column_comments(self, tables_schema: List[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+        """Build table_name -> {column_name: comment}."""
+        comment_map: Dict[str, Dict[str, str]] = {}
+        for table in tables_schema or []:
+            if not isinstance(table, dict):
+                continue
+            table_name = str(table.get("table_name") or "").strip()
+            if not table_name:
+                continue
+            comments = {}
+            for col in table.get("columns") or []:
+                if not isinstance(col, dict):
+                    continue
+                raw_name = (
+                    col.get("COLUMN_NAME")
+                    or col.get("column_name")
+                    or col.get("Field")
+                    or ""
+                )
+                raw_name = str(raw_name).strip()
+                if not raw_name:
+                    continue
+                comment = str(
+                    col.get("COLUMN_COMMENT")
+                    or col.get("column_comment")
+                    or col.get("Comment")
+                    or ""
+                ).strip()
+                comments[raw_name] = comment
+            comment_map[table_name] = comments
+        return comment_map
+
+    def _is_technical_field(self, field_name: str) -> bool:
+        name = (field_name or "").strip().lower()
+        if not name:
+            return True
+        technical_exact = {
+            "id", "created_at", "updated_at", "create_time", "update_time",
+            "created_by", "updated_by", "create_by", "update_by",
+            "deleted", "is_deleted", "del_flag", "version", "tenant_id",
+        }
+        if name in technical_exact:
+            return True
+        technical_suffixes = ("_at", "_time", "_by", "_flag")
+        if name.endswith(technical_suffixes) and not any(
+            token in name for token in ("amount", "balance", "loan", "deposit", "date", "status", "type")
+        ):
+            # Keep business dates/status-like fields; drop pure audit suffixes.
+            if name.endswith(("_created_at", "_updated_at", "_create_time", "_update_time")):
+                return True
+        return False
+
+    def _fallback_key_fields_from_schema(self, table: Dict[str, Any], max_fields: int = 5) -> List[Dict[str, str]]:
+        """Heuristic fallback: pick business-meaningful columns from raw schema."""
+        columns = table.get("columns") or []
+        if not isinstance(columns, list):
+            return []
+
+        scored: List[tuple] = []
+        for col in columns:
+            if not isinstance(col, dict):
+                continue
+            field_name = str(
+                col.get("COLUMN_NAME")
+                or col.get("column_name")
+                or col.get("Field")
+                or ""
+            ).strip()
+            if not field_name or self._is_technical_field(field_name):
+                continue
+
+            comment = str(
+                col.get("COLUMN_COMMENT")
+                or col.get("column_comment")
+                or col.get("Comment")
+                or ""
+            ).strip()
+            col_key = str(
+                col.get("COLUMN_KEY")
+                or col.get("column_key")
+                or ""
+            ).strip().upper()
+            name_l = field_name.lower()
+
+            score = 0
+            if col_key in ("PRI", "UNI", "MUL", "PK", "FK"):
+                score += 40
+            if comment:
+                score += 25
+            business_tokens = (
+                "amount", "balance", "loan", "deposit", "asset", "liab",
+                "branch", "org", "customer", "client", "product", "status",
+                "type", "date", "cnt", "count", "num", "qty", "rate", "ratio",
+                "金额", "余额", "贷款", "存款", "资产", "负债", "机构", "客户",
+            )
+            if any(token in name_l or token in comment for token in business_tokens):
+                score += 30
+            if score <= 0:
+                continue
+            scored.append((score, field_name, comment or field_name))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        result = []
+        seen = set()
+        for _, field_name, meaning in scored:
+            if field_name in seen:
+                continue
+            seen.add(field_name)
+            result.append({"field_name": field_name, "business_meaning": meaning})
+            if len(result) >= max_fields:
+                break
+        return result
+
+    def _enrich_tables_overview_with_key_fields(
+        self,
+        llm_result,
+        tables_schema: List[Dict[str, Any]],
+        min_fields: int = 3,
+        max_fields: int = 5,
+    ):
+        """Validate LLM key_fields against schema; fill/fallback when missing."""
+        if not isinstance(llm_result, list):
+            return llm_result
+
+        column_map = self._extract_schema_column_map(tables_schema)
+        comment_map = self._extract_schema_column_comments(tables_schema)
+        schema_by_name = {
+            str(t.get("table_name") or "").strip(): t
+            for t in (tables_schema or [])
+            if isinstance(t, dict) and str(t.get("table_name") or "").strip()
+        }
+
+        for item in llm_result:
+            if not isinstance(item, dict):
+                continue
+            table_name = str(item.get("table_name") or "").strip()
+            valid_cols = column_map.get(table_name, {})
+            comments = comment_map.get(table_name, {})
+
+            normalized_fields = []
+            seen = set()
+            for field in item.get("key_fields") or []:
+                if not isinstance(field, dict):
+                    continue
+                raw_name = str(field.get("field_name") or "").strip()
+                if not raw_name:
+                    continue
+                actual_name = valid_cols.get(raw_name.lower())
+                if not actual_name or actual_name in seen:
+                    continue
+                if self._is_technical_field(actual_name):
+                    continue
+                meaning = str(field.get("business_meaning") or "").strip() or comments.get(actual_name) or actual_name
+                normalized_fields.append({
+                    "field_name": actual_name,
+                    "business_meaning": meaning,
+                })
+                seen.add(actual_name)
+                if len(normalized_fields) >= max_fields:
+                    break
+
+            if len(normalized_fields) < min_fields:
+                fallback = self._fallback_key_fields_from_schema(
+                    schema_by_name.get(table_name, {}),
+                    max_fields=max_fields,
+                )
+                for field in fallback:
+                    name = field["field_name"]
+                    if name in seen:
+                        continue
+                    normalized_fields.append(field)
+                    seen.add(name)
+                    if len(normalized_fields) >= max_fields:
+                        break
+
+            item["key_fields"] = normalized_fields[:max_fields]
 
         return llm_result
 
@@ -3872,17 +4093,11 @@ class SQLAnalyzer:
             {
                 "table_name": "tb_ai_wo_chunk_snapshot",
                 "entity_name": "工单文本分片快照",
-                "business_meaning": "存储工单关联的文本分片信息及其快照，包含分片内容、来源文件及资料库信息，属于**AI工单处理与知识管理**领域。"
-            },
-            {
-                "table_name": "tb_ai_work_order",
-                "entity_name": "AI工单",
-                "business_meaning": "记录AI助手处理的工单信息，包括用户提问、处理过程、结果及状态，属于**智能客服与工单管理**领域。"
-            },
-            {
-                "table_name": "tb_api_key",
-                "entity_name": "API密钥",
-                "business_meaning": "管理系统使用的API密钥信息，包括密钥名称、令牌、有效期及所属应用，属于**安全认证与权限管理**领域。"
+                "business_meaning": "存储工单关联的文本分片信息及其快照，包含分片内容、来源文件及资料库信息，属于**AI工单处理与知识管理**领域。",
+                "key_fields": [
+                    {"field_name": "work_order_id", "business_meaning": "关联工单ID"},
+                    {"field_name": "chunk_content", "business_meaning": "文本分片内容"}
+                ]
             },
             ...
         ]
@@ -3921,13 +4136,32 @@ class SQLAnalyzer:
         return all_results
 
 
+    def _format_key_fields(self, key_fields) -> str:
+        """Format key_fields into a compact business-readable string."""
+        if not key_fields or not isinstance(key_fields, list):
+            return ""
+
+        parts = []
+        for field in key_fields:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("field_name") or "").strip()
+            if not field_name:
+                continue
+            business_meaning = str(field.get("business_meaning") or "").strip()
+            if business_meaning:
+                parts.append(f"{field_name}({business_meaning})")
+            else:
+                parts.append(field_name)
+
+        return "、".join(parts)
+
     def format_table_data(self, data_list: List[Dict[str, str]]) -> str:
         """
         return:
 
-        1. table name: tb_ai_wo_chunk_snapshot(工单文本分片快照)，table description: 存储工单关联的文本分片信息及其快照，包含分片内容、来源文件及资料库信息，用于AI处理工单时的知识检索与上下文构建，属于智能客服与知识管理领域。
-        2. table name: tb_ai_work_order(AI工单)，table description: 记录用户发起的AI服务请求工单，包括工单内容、处理过程、结果反馈及相关冗余信息，支撑AI问答、任务处理与服务质量评估，属于智能客服与工单管理领域。
-        3. table name: tb_api_key(API密钥)，table description: 管理系统中用于身份认证的API密钥信息，包括密钥名称、令牌、有效期及所属应用，保障接口调用安全，属于系统安全管理领域。
+        1. table name: deposit_data(存款数据)，table description: 记录各分支机构的存款明细...，key fields: branch_id(分支机构标识)、total_deposit(存款总额)、corp_demand_deposit(对公活期存款)
+        2. table name: loan_data(贷款数据)，table description: 记录各分支机构的贷款明细...，key fields: branch_id(分支机构标识)、corp_loan(对公贷款余额)、retail_loan(零售贷款余额)
         ........
 
         """
@@ -3937,8 +4171,11 @@ class SQLAnalyzer:
             table_name = item.get("table_name", "N/A")
             entity_name = item.get("entity_name", "无业务实体")
             table_comment = item.get("business_meaning", "无业务描述")
+            key_fields_str = self._format_key_fields(item.get("key_fields"))
 
             line = f"{index}. table name: {table_name}({entity_name})，table description: {table_comment}"
+            if key_fields_str:
+                line = f"{line}，key fields: {key_fields_str}"
             output_lines.append(line)
             
         return '\n'.join(output_lines)

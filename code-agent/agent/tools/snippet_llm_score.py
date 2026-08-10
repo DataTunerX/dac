@@ -7,13 +7,16 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from langchain_core.messages import HumanMessage
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 
 from agent.prompts import BATCH_SNIPPET_SCORE_PROMPT
+from agent.tool_call_utils import invoke_llm_with_tool, validate_pydantic, format_llm_output
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,26 @@ class LangfuseTraceContext:
 _DEFAULT_BATCH_SIZE = 5
 _DEFAULT_SINGLE_BLOCK_PREVIEW_CHARS = 15000
 _DEFAULT_FALLBACK_SCORE = 5.0
+
+
+class SnippetScoreItem(BaseModel):
+    """单个代码片段的相关性评分结果。每个 snippet_id 对应一个完整的代码块，请勿拆分理解。"""
+    snippet_id: int = Field(description="代码片段在列表中的序号（从0开始），必须为列表中每个 snippet_id 返回一条结果")
+    relevance_score: float = Field(
+        ge=0.0, le=10.0,
+        description="相关度评分（0-10）。9-10：直接实现用户问题的核心逻辑；7-8：强相关依赖、关键数据模型或 API；4-6：间接相关，可作上下文参考；0-3：import、main、无关工具类或噪声"
+    )
+    description: str = Field(
+        description="该代码块与用户问题的关系说明，1-2句话说明"
+    )
+
+
+class SnippetScoreBatchResult(BaseModel):
+    """LLM 批量代码片段评分结果"""
+    scores: List[SnippetScoreItem] = Field(
+        default_factory=list,
+        description="每个代码片段的相关性评分结果列表，必须为每个 snippet_id 返回一条结果"
+    )
 
 
 def _env_int(name: str, default: int) -> int:
@@ -131,25 +154,6 @@ def build_batch_score_prompt(query: str, batch: Sequence[Dict[str, Any]]) -> str
     )
 
 
-def _default_parse_output(answer: Any) -> Dict[str, Any]:
-    import json
-
-    raw = getattr(answer, "content", "") or str(answer or "")
-    raw = raw.strip()
-    if raw.startswith("```json"):
-        raw = raw[7:]
-    elif raw.startswith("```"):
-        raw = raw[3:]
-    if raw.endswith("```"):
-        raw = raw[:-3]
-    raw = raw.strip()
-    try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
-
-
 def _apply_batch_scores(
     batch: Sequence[Dict[str, Any]],
     scores: Sequence[Dict[str, Any]],
@@ -186,61 +190,11 @@ def _fallback_batch_scores(batch: Sequence[Dict[str, Any]], *, reason: str) -> N
         snippet["score_description"] = reason
 
 
-async def _invoke_llm_with_langfuse(
-    llm: Any,
-    prompt: str,
-    *,
-    query: str,
-    trace: Optional[LangfuseTraceContext],
-    batch_index: int,
-    batch_total: int,
-    snippet_count: int,
-) -> Any:
-    message = HumanMessage(content=prompt)
-    span_name = f"codeagent-snippet-score-batch-{batch_index}"
-
-    if trace and trace.trace_id:
-        with langfuse.start_as_current_span(
-            name=span_name,
-            trace_context={"trace_id": trace.trace_id},
-        ) as span:
-            span.update_trace(
-                user_id=trace.user_id,
-                session_id=trace.run_id,
-                input={
-                    "query": query,
-                    "agent_id": trace.agent_id,
-                    "run_id": trace.run_id,
-                    "trace_id": trace.trace_id,
-                    "user_id": trace.user_id,
-                    "batch_index": batch_index,
-                    "batch_total": batch_total,
-                    "snippet_count": snippet_count,
-                },
-            )
-            answer = await llm.ainvoke(
-                [message],
-                config={"callbacks": [langfuse_handler]},
-            )
-            span.update_trace(
-                output={"answer": getattr(answer, "content", str(answer))},
-            )
-            return answer
-
-    logger.warning(
-        "[SNIPPET LLM SCORE] missing trace_id; Langfuse span skipped for batch %d/%d",
-        batch_index,
-        batch_total,
-    )
-    return await llm.ainvoke([message])
-
-
 async def score_snippet_batch(
     batch: Sequence[Dict[str, Any]],
     *,
     query: str,
     llm: Any,
-    parse_output: Optional[Callable[[Any], Dict[str, Any]]] = None,
     trace: Optional[LangfuseTraceContext] = None,
     batch_index: int = 0,
     batch_total: int = 1,
@@ -248,21 +202,43 @@ async def score_snippet_batch(
     if not batch:
         return
 
-    parser = parse_output or _default_parse_output
     prompt = build_batch_score_prompt(query, batch)
     started = time.monotonic()
 
     try:
-        answer = await _invoke_llm_with_langfuse(
-            llm,
-            prompt,
-            query=query,
-            trace=trace,
-            batch_index=batch_index,
-            batch_total=batch_total,
-            snippet_count=len(batch),
+        score_tool = StructuredTool(
+            name="score_snippets",
+            description="为一批代码片段评分，返回每个片段与用户问题的相关度分数。",
+            args_schema=SnippetScoreBatchResult,
+            func=None,
+            coroutine=None,
         )
-        data = parser(answer) or {}
+
+        md = {
+            "user_id": trace.user_id if trace else "",
+            "run_id": trace.run_id if trace else "",
+            "trace_id": trace.trace_id if trace else "",
+        }
+
+        data = await invoke_llm_with_tool(
+            llm=llm,
+            tool=score_tool,
+            messages=[HumanMessage(content=prompt)],
+            metadata=md,
+            tool_choice="score_snippets",
+            span_name=f"codeagent-snippet-score-batch-{batch_index}",
+            span_input={
+                "query": query,
+                "batch_index": batch_index,
+                "batch_total": batch_total,
+                "snippet_count": len(batch),
+            },
+            retry=2,
+            validate=validate_pydantic(SnippetScoreBatchResult),
+            fallback_formatter=format_llm_output,
+        )
+        if data is None:
+            raise ValueError("LLM did not call score_snippets tool")
         scores = data.get("scores") or []
         if not isinstance(scores, list):
             raise ValueError("LLM response missing scores list")
@@ -300,7 +276,6 @@ async def score_snippets_batch_parallel(
     *,
     query: str,
     llm: Any,
-    parse_output: Optional[Callable[[Any], Dict[str, Any]]] = None,
     trace: Optional[LangfuseTraceContext] = None,
 ) -> List[Dict[str, Any]]:
     if not snippets:
@@ -327,7 +302,6 @@ async def score_snippets_batch_parallel(
                 batch,
                 query=query,
                 llm=llm,
-                parse_output=parse_output,
                 trace=trace,
                 batch_index=i + 1,
                 batch_total=batch_total,

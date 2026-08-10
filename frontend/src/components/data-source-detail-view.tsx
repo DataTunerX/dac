@@ -201,7 +201,8 @@ function getSafeConfigSummary(source: DataSourceResponse | null) {
 type OverviewConnectionInfo = {
   host: unknown;
   port: unknown;
-  database: unknown;
+  /** One or more databases from all sources (mysql/postgres multi-DB descriptors). */
+  databases: string[];
   username: unknown;
 };
 
@@ -252,10 +253,13 @@ function buildOverviewFields({
       : [];
 
   if (kind === "mysql" || kind === "postgres") {
+    const dbs = connectionInfo.databases;
+    const dbLabel = dbs.length > 1 ? `数据库 (${dbs.length})` : "数据库";
+    const dbValue = dbs.length > 0 ? dbs.join(", ") : "-";
     return [
       overviewField("主机", connectionInfo.host, { copy: true }),
       overviewField("端口", connectionInfo.port, { copy: true }),
-      overviewField("数据库", connectionInfo.database, { copy: true }),
+      overviewField(dbLabel, dbValue, { copy: dbs.length > 0 }),
       overviewField("用户名", connectionInfo.username, { copy: true }),
       {
         label: "数据表数量",
@@ -404,34 +408,54 @@ export function DataSourceDetailView() {
   const isStructuredSource = isStructuredDataSourceKind(dataSourceKind);
 
   const connectionInfo = useMemo(() => {
-    // 1. Try to get connection info from dd.sources[0].metadata
+    const sources = Array.isArray(dd?.sources) ? dd.sources : [];
+
+    // Collect databases from every source — a structured DD can fan out to
+    // one DataSource per selected database on the same host:port.
+    const databases: string[] = [];
+    const seenDb = new Set<string>();
+    for (const s of sources) {
+      const db = String(s?.metadata?.database ?? "").trim();
+      if (!db || seenDb.has(db)) continue;
+      seenDb.add(db);
+      databases.push(db);
+    }
+
+    // Connection identity (host/port/user) is shared across sources; use the first.
     if (primarySource) {
       const meta = primarySource.metadata;
       if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+        const m = meta as Record<string, unknown>;
         return {
-          host: (meta as Record<string, unknown>).host,
-          port: (meta as Record<string, unknown>).port,
-          database: (meta as Record<string, unknown>).database,
-          username: (meta as Record<string, unknown>).user,
+          host: m.host,
+          port: m.port,
+          databases,
+          username: m.user,
         };
       }
     }
 
-    // 2. Fallback to signature.location_info (legacy)
+    // Fallback to signature.location_info (legacy single-DB)
     if (isRecord(signature)) {
       const v = signature.location_info;
       if (isRecord(v)) {
+        const sigDb = typeof v.database === "string" ? v.database.trim() : "";
         return {
           host: v.host,
           port: v.port,
-          database: v.database,
+          databases:
+            databases.length > 0
+              ? databases
+              : sigDb
+                ? [sigDb]
+                : [],
           username: v.username,
         };
       }
     }
 
-    return { host: null, port: null, database: null, username: null };
-  }, [primarySource, signature]);
+    return { host: null, port: null, databases, username: null };
+  }, [dd?.sources, primarySource, signature]);
 
   const signatureMeta = useMemo(() => {
     if (!isRecord(signature)) return null;

@@ -1,11 +1,13 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import useSWR from "swr"
 import axios from "axios"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
+import { discoveryScansKey } from "@/lib/swr-keys"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -80,10 +82,6 @@ const INFRA_JOBS_COLUMNS = [
 export default function InfraDiscoveryListPage() {
   const router = useRouter()
 
-  const [items, setItems] = useState<DiscoveryJobResponse[]>([])
-  const [total, setTotal] = useState(0)
-  const [isLoading, setIsLoading] = useState(false)
-
   const [pageSize, setPageSize] = useState(20)
   const [page, setPage] = useState(1)
 
@@ -98,30 +96,29 @@ export default function InfraDiscoveryListPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
-  const fetchData = async () => {
-    setIsLoading(true)
-    try {
-      const offset = (page - 1) * pageSize
-      const res = await listDiscoveryScans({ limit: pageSize, offset })
-      setItems(res.items || [])
-      setTotal(res.totalCount || 0)
-    } catch (err) {
-      console.error("List discovery scans failed", err)
-      toast.error("获取扫描记录失败")
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  const offset = (page - 1) * pageSize
+  const {
+    data,
+    error,
+    isLoading,
+    isValidating,
+    mutate: mutateList,
+  } = useSWR(
+    discoveryScansKey(page, pageSize),
+    () => listDiscoveryScans({ limit: pageSize, offset }),
+    { revalidateOnFocus: false },
+  )
 
   useEffect(() => {
-    void fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize])
+    if (error) toast.error("获取扫描记录失败")
+  }, [error])
 
-  // Backend returns stable order (created_at desc). Use items directly to avoid redundant useMemo (Vercel React Best Practices 5.3).
-  const ordered = items ?? []
-
+  const items = data?.items ?? []
+  const total = data?.totalCount ?? 0
+  const ordered = items
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  const fetchData = () => void mutateList()
 
   const openDetail = (id: string) => {
     router.push(`/infra/${encodeURIComponent(id)}`)
@@ -154,7 +151,7 @@ export default function InfraDiscoveryListPage() {
       setIsCreateOpen(false)
       setCreateName("")
       setPage(1)
-      await fetchData()
+      await mutateList()
       openDetail(res.id)
     } catch (err) {
       console.error("Create discovery scan failed", err)
@@ -175,7 +172,7 @@ export default function InfraDiscoveryListPage() {
       const remaining = Math.max(0, total - 1)
       const nextTotalPages = Math.max(1, Math.ceil(remaining / pageSize))
       if (page > nextTotalPages) setPage(nextTotalPages)
-      await fetchData()
+      await mutateList()
     } catch (err) {
       console.error("Delete discovery scan failed", err)
       toast.error("删除失败")
@@ -191,8 +188,14 @@ export default function InfraDiscoveryListPage() {
           <span className="text-content font-semibold">资产探测</span>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading} aria-label="刷新">
-            <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={fetchData}
+            disabled={isLoading || isValidating}
+            aria-label="刷新"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading || isValidating ? "animate-spin" : ""}`} />
           </Button>
           <RbacButton 
             className="flex items-center gap-2" 

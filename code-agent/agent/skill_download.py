@@ -136,7 +136,7 @@ def _fetch_one_skill(
 ) -> Tuple[str, Optional[Path], Optional[str]]:
     filename = f"{name}.zip"
     dest_path = dest_dir / filename
-    url = f"{base_url}/{filename}"
+    url = f"{base_url}/skills/{filename}"
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             path = _download_one(client, url, dest_path)
@@ -223,7 +223,7 @@ def download_skills(
                 name, path, err = fut.result()
                 if err is not None:
                     filename = f"{name}.zip"
-                    url = f"{base_url}/{filename}"
+                    url = f"{base_url}/skills/{filename}"
                     logger.error(
                         "[SkillDownload] Failed to download %s from %s: %s",
                         filename, url, err,

@@ -377,10 +377,12 @@ func TestFingerprinter_Wants(t *testing.T) {
 		skips []string
 	}{
 		{minioFingerprinter{}, []string{"/", "/minio/health/ready"}, []string{"/-/health", "/web/login"}},
-		{gitlabFingerprinter{}, []string{"/", "/-/health", "/api/v4/version"}, []string{"/status.php", "/web/login"}},
+		{gitlabFingerprinter{}, []string{"/", "/-/health", "/-/liveness", "/api/v4/version"}, []string{"/status.php", "/web/login"}},
 		{nextcloudFingerprinter{}, []string{"/status.php"}, []string{"/", "/-/health"}},
 		{trinoFingerprinter{}, []string{"/v1/info"}, []string{"/", "/web/login"}},
-		{odooFingerprinter{}, []string{"/web/login"}, []string{"/", "/v1/info"}},
+		{odooFingerprinter{}, []string{"/", "/web/login"}, []string{"/v1/info"}},
+		{saleorFingerprinter{}, []string{"/", "/graphql/", "/dashboard/"}, []string{"/web/login"}},
+		{boutiqueFingerprinter{}, []string{"/"}, []string{"/web/login"}},
 		{nginxFingerprinter{}, []string{"/"}, []string{"/-/health", "/v1/info", "/web/login"}},
 	}
 	for _, tc := range cases {

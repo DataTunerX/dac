@@ -95,6 +95,17 @@ func (u *dataDescriptorUsecase) Delete(ctx context.Context, namespace, name stri
 	return u.repo.Delete(ctx, namespace, name)
 }
 
+const annotationSyncRequestedAt = "dac.dac.io/sync-requested-at"
+
+// RequestResync asks execution-engine to re-process a Ready DataDescriptor
+// (e.g. after appending mysql/postgres database sources).
+func (u *dataDescriptorUsecase) RequestResync(ctx context.Context, namespace, name string) error {
+	if _, err := u.repo.Get(ctx, namespace, name); err != nil {
+		return err
+	}
+	return u.repo.PatchAnnotation(ctx, namespace, name, annotationSyncRequestedAt, time.Now().UTC().Format(time.RFC3339))
+}
+
 // GetSignatureByDD retrieves the newest signature record for a given data descriptor (if any).
 func (u *dataDescriptorUsecase) GetSignatureByDD(ctx context.Context, namespace, name string) (*domain.Signature, error) {
 	return u.dsClient.GetSignatureByDD(ctx, namespace, name)

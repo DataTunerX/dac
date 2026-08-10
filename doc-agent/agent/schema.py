@@ -38,6 +38,42 @@ class AgentState(str, Enum):
     ERROR = "ERROR"
 
 
+class ScoreItem(BaseModel):
+    """单个知识块的评分结果。每个 block_id 对应一个完整知识块，请勿拆分理解。
+
+    输出示例：
+    {
+      "block_id": 0,
+      "relevance_score": 9.0,
+      "description": "该知识块与用户问题的关系说明"
+    }
+    """
+
+    block_id: int = Field(description="知识块序号，从0开始，必须为列表中每个 block_id 返回一条结果")
+    relevance_score: float = Field(
+        ge=0.0, le=10.0,
+        description="相关度评分（0-10）。9-10：直接包含回答用户问题所需的核心信息；7-8：强相关背景、流程说明或关键定义；4-6：间接相关，可作上下文参考；0-3：主题无关、重复或噪声内容"
+    )
+    description: str = Field(
+        description="该知识块与用户问题的关系说明，1-2句话说明"
+    )
+
+
+class ScoresResult(BaseModel):
+    """知识块批量评分结果。
+
+    输出示例：
+    {
+      "scores": [
+        {"block_id": 0, "relevance_score": 9.0, "description": "该知识块与用户问题的关系说明"},
+        {"block_id": 1, "relevance_score": 7.5, "description": "另一个知识块的关系说明"}
+      ]
+    }
+    """
+
+    scores: List[ScoreItem] = Field(description="所有知识块的评分列表，必须为列表中每个 block_id 返回一条结果")
+
+
 class Function(BaseModel):
     name: str
     arguments: str

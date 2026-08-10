@@ -293,6 +293,14 @@ apiserver:
     jwt:
       # -- JWT signing secret (CHANGE THIS before production use)
       secret: "dac-jwt-secret-change-me"
+      # -- Access token lifetime
+      timeout: "15m"
+      # -- Maximum refresh window; also used by the frontend middleware
+      maxRefresh: "168h"
+      # -- Send the authentication cookie only over HTTPS
+      cookieSecure: false
+      # -- Optional authentication cookie domain
+      cookieDomain: ""
   resources:
     requests:
       cpu: 200m
@@ -708,7 +716,7 @@ bizSkillAgent:
 # ---------------------------------------------------------------------------
 # skill-hub - HTTP index/download service for skill zip packages.
 # skill-agent (and orchestrator-agent's skill_download.py) fetches
-# `{SKILL_HUB_URL}/{name}.zip` from this service at startup.
+# `{SKILL_HUB_URL}/skills/{name}.zip` from this service at startup.
 # Images bake the zip packs into /app/skills/, so no PVC is required.
 # ---------------------------------------------------------------------------
 skillHub:

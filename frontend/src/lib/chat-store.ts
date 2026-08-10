@@ -8,7 +8,7 @@ import { parseHistoryThink } from "@/lib/history-think"
 import { parseChatSSELine } from "@/lib/parse-chat-sse"
 import { type ChatMessage, type ConversationHistoryResponse } from "@/components/chat/chat-message-types"
 import { stripModelLeakTags } from "@/lib/strip-model-leak-tags"
-import { clearAuthToken, redirectToLogin } from "@/lib/auth-session"
+import { clearClientSession, redirectToLogin } from "@/lib/auth-session"
 import { authFetch } from "@/lib/auth-fetch"
 import { REFRESH_CHAT_LIST_EVENT, RUN_ID_RECONCILED_EVENT, type NewChatEventDetail } from "@/lib/events"
 
@@ -78,7 +78,7 @@ const optimisticRunIds = new Set<string>()
 const justFinishedRunIds = new Set<string>()
 
 function handleUnauthorized() {
-  clearAuthToken()
+  clearClientSession()
   if (typeof window !== "undefined") {
     const path = window.location.pathname || "/"
     const search = window.location.search || ""

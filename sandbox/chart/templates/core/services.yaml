@@ -136,3 +136,20 @@ spec:
     - name: http
       port: {{ .Values.saleor.apiPort }}
       targetPort: {{ .Values.saleor.apiPort }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: s3, port: 9000, targetPort: 9000 }
+    - { name: console, port: 9001, targetPort: 9001 }

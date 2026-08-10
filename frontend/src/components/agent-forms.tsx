@@ -11,7 +11,7 @@ import { toast } from "sonner"
 import { api } from "@/lib/api"
 import { apiFetcher } from "@/lib/swr"
 import { listNamespaces } from "@/lib/namespaces-api"
-import { listDescriptorsAll } from "@/lib/descriptors-api"
+import { listAllDescriptors } from "@/lib/descriptors-api"
 import { listSemanticGroups } from "@/lib/semantic-groups-api"
 import { listConfigMaps } from "@/lib/configmaps-api"
 import type {
@@ -169,8 +169,8 @@ export function CreateAgentDialog({
     resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
-      plannerModel: "llm-deepseek-v3",
-      expertModel: "llm-qwen3-coder-480b",
+      plannerModel: "",
+      expertModel: "",
       namespace: "default",
       dataSourceType: "descriptor",
       dataSourceId: "",
@@ -197,8 +197,8 @@ export function CreateAgentDialog({
     setDescTouched(false)
     form.reset({
       name: "",
-      plannerModel: "llm-deepseek-v3",
-      expertModel: "llm-qwen3-coder-480b",
+      plannerModel: "",
+      expertModel: "",
       namespace: "default",
       dataSourceType: "descriptor",
       dataSourceId: "",
@@ -274,7 +274,7 @@ export function CreateAgentDialog({
     setIsLoadingDD(true)
     setDdError(null)
     try {
-      const { items } = await listDescriptorsAll()
+      const items = await listAllDescriptors()
       const mapped: DataDescriptor[] = items.map((item: DataDescriptorResponse) => ({
         id: item.name ?? "",
         name: item.name ?? "",
@@ -330,20 +330,16 @@ export function CreateAgentDialog({
       })).filter((i) => i.name)
       setLlmConfigs(list)
       
-      // Auto-select first two models if not already set (or if current selection is invalid for this ns)
+      // Default both planner and expert to the same first available ConfigMap.
       if (list.length > 0) {
-        const first = list[0]?.name
-        const second = list[1]?.name || first
-        // Only override if current value is empty or not in the new list (and we haven't touched it manually, though form state doesn't track 'touched' perfectly here without more complex logic. 
-        // For simplicity: if current value is empty, set default.
+        const first = list[0]?.name || ""
         const currentPlanner = form.getValues("plannerModel")
         const currentExpert = form.getValues("expertModel")
-        
-        if (!currentPlanner || !list.find(c => c.name === currentPlanner)) {
-            form.setValue("plannerModel", first)
+        if (!currentPlanner || !list.find((c) => c.name === currentPlanner)) {
+          form.setValue("plannerModel", first)
         }
-        if (!currentExpert || !list.find(c => c.name === currentExpert)) {
-            form.setValue("expertModel", second)
+        if (!currentExpert || !list.find((c) => c.name === currentExpert)) {
+          form.setValue("expertModel", first)
         }
       }
     } catch (err) {
@@ -393,23 +389,20 @@ export function CreateAgentDialog({
     }
   }, [open, namespace]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Agent namespace follows selected DataDescriptor namespace, so the selectable models
-  // must also follow that namespace. If the current selection doesn't exist in the new
-  // namespace, pick the first available configmap (but never overwrite a user-changed value).
+  // Repair invalid selections when namespace LLM list changes; default both to the same first CM.
   useEffect(() => {
     if (!open) return
     if (llmConfigs.length === 0) return
 
     const names = new Set(llmConfigs.map((c) => c.name))
     const first = llmConfigs[0]?.name || ""
-    const second = llmConfigs[1]?.name || first
     if (!first) return
 
     if (!names.has(plannerModel)) {
       form.setValue("plannerModel", first, { shouldValidate: true, shouldDirty: false })
     }
     if (!names.has(expertModel)) {
-      form.setValue("expertModel", second, { shouldValidate: true, shouldDirty: false })
+      form.setValue("expertModel", first, { shouldValidate: true, shouldDirty: false })
     }
   }, [open, llmConfigs, plannerModel, expertModel, form])
 

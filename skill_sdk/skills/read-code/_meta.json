@@ -1,4 +1,10 @@
 {
   "version": "1.0.0",
-  "slug": "read-code"
+  "slug": "read-code",
+  "allowed_tools": [
+    "glob",
+    "grep",
+    "lsp",
+    "readline_in_range"
+  ]
 }

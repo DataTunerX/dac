@@ -166,6 +166,36 @@ type StatusAPIResponse struct {
 	Error     string `json:"error"`
 }
 
+func parseStatusTimestamp(value string) (metav1.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return metav1.Time{}, fmt.Errorf("status timestamp is empty")
+	}
+
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05"} {
+		parsed, err := time.ParseInLocation(layout, value, time.UTC)
+		if err == nil {
+			return metav1.NewTime(parsed), nil
+		}
+	}
+
+	return metav1.Time{}, fmt.Errorf("unsupported status timestamp %q", value)
+}
+
+func readyConditionTime(dd *dacv1alpha1.DataDescriptor) metav1.Time {
+	for _, condition := range dd.Status.Conditions {
+		if condition.Type != dacv1alpha1.ConditionAvailable ||
+			condition.Status != corev1.ConditionTrue {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, condition.LastUpdateTime)
+		if err == nil {
+			return metav1.NewTime(parsed)
+		}
+	}
+	return metav1.Time{}
+}
+
 // errDataDescriptorGone is returned when the DD was deleted or is being deleted while waiting for deployment.
 var errDataDescriptorGone = fmt.Errorf("data descriptor deleted or being deleted")
 
@@ -1304,7 +1334,7 @@ func (h *DataDescriptorHandler) isStatusEqualIgnoringTime(oldStatus, newStatus d
 		}
 	}
 
-	// Compare SourceStatuses (ignoring LastSyncTime)
+	// LastSyncTime is user-visible and must trigger a status update.
 	if len(oldStatus.SourceStatuses) != len(newStatus.SourceStatuses) {
 		return false
 	}
@@ -1313,6 +1343,7 @@ func (h *DataDescriptorHandler) isStatusEqualIgnoringTime(oldStatus, newStatus d
 		newSource := newStatus.SourceStatuses[i]
 		if oldSource.Name != newSource.Name ||
 			oldSource.Phase != newSource.Phase ||
+			!oldSource.LastSyncTime.Time.Equal(newSource.LastSyncTime.Time) ||
 			oldSource.Records != newSource.Records ||
 			oldSource.TaskID != newSource.TaskID {
 			return false
@@ -1359,10 +1390,18 @@ func (h *DataDescriptorHandler) checkSourceStatus(ctx context.Context, dd *dacv1
 	if existingStatus := h.getExistingSourceStatus(dd, source.Name); existingStatus != nil {
 		if existingStatus.Phase == "Ready" {
 			logger.Info("Data source already completed", "source", source.Name)
+			lastSyncTime := existingStatus.LastSyncTime
+			if lastSyncTime.IsZero() {
+				// Older Ready resources may not have persisted LastSyncTime. Their
+				// Available condition is the closest durable readiness timestamp.
+				lastSyncTime = readyConditionTime(dd)
+			}
 			return SourceStatusResult{
-				Name:   source.Name,
-				Phase:  "Ready",
-				TaskID: existingStatus.TaskID,
+				Name:         source.Name,
+				Phase:        "Ready",
+				LastSyncTime: lastSyncTime,
+				Records:      existingStatus.Records,
+				TaskID:       existingStatus.TaskID,
 			}
 		}
 	}
@@ -1397,10 +1436,17 @@ func (h *DataDescriptorHandler) checkSourceStatus(ctx context.Context, dd *dacv1
 
 	switch strings.ToLower(statusResp.Status) {
 	case "success":
+		lastSyncTime, parseErr := parseStatusTimestamp(statusResp.Timestamp)
+		if parseErr != nil {
+			logger.Error(parseErr, "Failed to parse successful job timestamp",
+				"source", source.Name,
+				"timestamp", statusResp.Timestamp)
+		}
 		return SourceStatusResult{
-			Name:   source.Name,
-			Phase:  "Ready",
-			TaskID: statusResp.TaskID,
+			Name:         source.Name,
+			Phase:        "Ready",
+			LastSyncTime: lastSyncTime,
+			TaskID:       statusResp.TaskID,
 		}
 	case "failure":
 		errMsg := statusResp.Error

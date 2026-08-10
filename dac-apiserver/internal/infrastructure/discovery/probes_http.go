@@ -79,10 +79,13 @@ func (p *httpProbe) probeScheme(ctx context.Context, t Target, scheme string) *M
 		"/",                   // Server header, generic banners
 		"/minio/health/ready", // MinIO
 		"/-/health",           // GitLab CE (Omnibus health endpoint)
+		"/-/liveness",         // GitLab CE (workhorse; 200 once Puma is up)
 		"/api/v4/version",     // GitLab CE (returns 401 even unauth)
 		"/status.php",         // Nextcloud
 		"/v1/info",            // Trino
 		"/web/login",          // Odoo
+		"/graphql/",           // Saleor API
+		"/dashboard/",         // Saleor Dashboard
 	}
 
 	type cachedResp struct {
@@ -250,6 +253,8 @@ func defaultHTTPDetectors() []HTTPFingerprinter {
 		nextcloudFingerprinter{},
 		trinoFingerprinter{},
 		odooFingerprinter{},
+		saleorFingerprinter{},
+		boutiqueFingerprinter{},
 	}
 }
 
@@ -296,13 +301,21 @@ type gitlabFingerprinter struct{}
 
 func (gitlabFingerprinter) Name() string { return "gitlab" }
 func (gitlabFingerprinter) Wants(p string) bool {
-	return p == "/" || p == "/-/health" || p == "/api/v4/version"
+	return p == "/" || p == "/-/health" || p == "/-/liveness" || p == "/api/v4/version"
 }
 func (gitlabFingerprinter) Identify(e httpEvidence) *Match {
 	switch e.path {
 	case "/-/health":
 		if e.resp.StatusCode == http.StatusOK && bytes.Contains(e.body, []byte("GitLab OK")) {
 			return &Match{ServiceType: "http", Product: "gitlab"}
+		}
+	case "/-/liveness":
+		// Omnibus workhorse serves this once Rails is up. Body is typically "GitLab OK"
+		// or empty 200; 502 during first boot must not count.
+		if e.resp.StatusCode == http.StatusOK {
+			if len(e.body) == 0 || bytes.Contains(e.body, []byte("GitLab")) || bytes.Contains(e.body, []byte("OK")) {
+				return &Match{ServiceType: "http", Product: "gitlab"}
+			}
 		}
 	case "/api/v4/version":
 		// 200 (with token) or 401 (without) both prove the endpoint
@@ -396,15 +409,97 @@ func (trinoFingerprinter) Identify(e httpEvidence) *Match {
 type odooFingerprinter struct{}
 
 func (odooFingerprinter) Name() string        { return "odoo" }
-func (odooFingerprinter) Wants(p string) bool { return p == "/web/login" }
+func (odooFingerprinter) Wants(p string) bool { return p == "/" || p == "/web/login" }
 func (odooFingerprinter) Identify(e httpEvidence) *Match {
-	if e.resp.StatusCode < 200 || e.resp.StatusCode >= 500 {
+	// Allow redirects to the login form; reject hard 5xx (DB not ready).
+	if e.resp.StatusCode >= 500 {
 		return nil
 	}
-	if !bytes.Contains(bytes.ToLower(e.body), []byte("odoo")) {
+	lowBody := bytes.ToLower(e.body)
+	if bytes.Contains(lowBody, []byte("odoo")) {
+		return &Match{ServiceType: "http", Product: "odoo"}
+	}
+	if loc := strings.ToLower(e.resp.Header.Get("Location")); strings.Contains(loc, "/web") {
+		return &Match{ServiceType: "http", Product: "odoo"}
+	}
+	if e.path == "/web/login" && e.resp.StatusCode >= 200 && e.resp.StatusCode < 400 {
+		// Login route exists even when the body is a minimal shell.
+		if v := strings.ToLower(e.resp.Header.Get("Set-Cookie")); strings.Contains(v, "session_id") {
+			return &Match{ServiceType: "http", Product: "odoo"}
+		}
+	}
+	return nil
+}
+
+// saleorFingerprinter detects Saleor GraphQL API and Dashboard.
+type saleorFingerprinter struct{}
+
+func (saleorFingerprinter) Name() string { return "saleor" }
+func (saleorFingerprinter) Wants(p string) bool {
+	return p == "/" || p == "/graphql/" || p == "/dashboard/"
+}
+func (saleorFingerprinter) Identify(e httpEvidence) *Match {
+	if e.resp.StatusCode >= 500 {
 		return nil
 	}
-	return &Match{ServiceType: "http", Product: "odoo"}
+	server := strings.ToLower(e.resp.Header.Get("Server"))
+	ct := strings.ToLower(e.resp.Header.Get("Content-Type"))
+	lowBody := bytes.ToLower(e.body)
+
+	switch e.path {
+	case "/graphql/":
+		// Unauthenticated GET often 405/400 with GraphQL hints; POST playground may 200.
+		if e.resp.StatusCode == http.StatusOK || e.resp.StatusCode == http.StatusMethodNotAllowed ||
+			e.resp.StatusCode == http.StatusBadRequest {
+			if bytes.Contains(lowBody, []byte("saleor")) ||
+				bytes.Contains(lowBody, []byte("graphql")) ||
+				strings.Contains(ct, "json") {
+				// Prefer positive Saleor markers; plain GraphQL alone is weak.
+				if bytes.Contains(lowBody, []byte("saleor")) ||
+					bytes.Contains(lowBody, []byte("csrf")) ||
+					e.resp.Header.Get("X-Saleor-Version") != "" {
+					return &Match{ServiceType: "http", Product: "saleor"}
+				}
+			}
+		}
+		if e.resp.Header.Get("X-Saleor-Version") != "" {
+			return &Match{
+				ServiceType: "http",
+				Product:     "saleor",
+				Version:     e.resp.Header.Get("X-Saleor-Version"),
+			}
+		}
+	case "/dashboard/":
+		if e.resp.StatusCode < 400 && (bytes.Contains(lowBody, []byte("saleor")) ||
+			bytes.Contains(lowBody, []byte("dashboard"))) {
+			return &Match{ServiceType: "http", Product: "saleor-dashboard"}
+		}
+	case "/":
+		if bytes.Contains(lowBody, []byte("saleor")) || strings.Contains(server, "saleor") {
+			return &Match{ServiceType: "http", Product: "saleor"}
+		}
+	}
+	return nil
+}
+
+// boutiqueFingerprinter detects Google Online Boutique (Hipster Shop) frontend.
+type boutiqueFingerprinter struct{}
+
+func (boutiqueFingerprinter) Name() string        { return "boutique" }
+func (boutiqueFingerprinter) Wants(p string) bool { return p == "/" }
+func (boutiqueFingerprinter) Identify(e httpEvidence) *Match {
+	if e.resp.StatusCode >= 500 {
+		return nil
+	}
+	lowBody := bytes.ToLower(e.body)
+	// Upstream demo branding + cart/product markers.
+	if bytes.Contains(lowBody, []byte("online boutique")) ||
+		bytes.Contains(lowBody, []byte("hipster shop")) ||
+		bytes.Contains(lowBody, []byte("hot products")) ||
+		(bytes.Contains(lowBody, []byte("cart")) && bytes.Contains(lowBody, []byte("currency"))) {
+		return &Match{ServiceType: "http", Product: "boutique"}
+	}
+	return nil
 }
 
 // nginxFingerprinter is the generic fallback for plain nginx-served

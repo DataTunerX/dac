@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+import time as _time
 from contextlib import asynccontextmanager
 from pathlib import Path
 import click
@@ -34,6 +35,8 @@ from a2a.utils import new_agent_text_message, new_task, new_text_artifact
 from .redis_registry import RedisRegistry, HeartbeatService
 from model_sdk import ModelManager
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.tools import StructuredTool
+from .tool_call_utils import invoke_llm_with_tool
 from .schema import ROLE_TYPE, AgentState, Message
 from .prompts import (
     OBSERVE_PROMPT_COMMON_ZH,
@@ -231,6 +234,25 @@ class CapabilityCheckResponse(BaseModel):
     )
     contribution: str = Field(default="", description="Brief description when can_contribute=true.")
     execution_strategy: str = Field(default="single", description="Capability response strategy.")
+    latency_ms: int = Field(
+        default=0,
+        description="Capability check end-to-end latency in milliseconds, measured by the responding agent.",
+        # 由 handle_capability_check 用 _time.monotonic() 计时填充，随响应 JSON 上报给 routing-agent 用于链路耗时观测。
+    )
+
+
+class CapabilityCheckToolResult(BaseModel):
+    """Capability check result for handle_capability_check (tool-call schema).
+
+    与 orchestrator 的 CapabilityCheckToolResult 对齐：LLM 通过 bind_tools 直接输出
+    符合该 schema 的参数，替代原先提示词要求 JSON 字符串的方案。
+    """
+    model_config = {"extra": "ignore"}
+    can_handle: bool = Field(default=False, description="Whether this agent can handle the query")
+    can_contribute: bool = Field(default=False, description="Whether this agent can contribute")
+    contribution: str = Field(default="", description="What this agent can contribute")
+    confidence: float = Field(default=0.0, description="Confidence score from 0.0 to 1.0")
+    reason: str = Field(default="", description="Detailed reasoning")
 
 
 CHART_CAPABILITY_CHECK_PROMPT = """# Role：图表与可视化需求判定器
@@ -912,6 +934,30 @@ class ChartAgent(BaseAgent):
                                 "生成的图表配置不完整（缺少 series 或数据），当前数据或描述可能不适合画图，"
                                 "请补充结构化数据或换一种描述。"
                             )
+                    elif isinstance(raw_answer, str):
+                        # LLM 把 ECharts option 作为字符串输出。仅当 conclusion 为 terminate（表示本次确实
+                        # 生成了图表配置）时才强制校验字符串必须是合法 JSON：剥离 ```chart 围栏后若含未转义
+                        # 控制字符（真实换行等），前端 JSON.parse 会报 Bad control character，此时视为本次
+                        # 生成无效并抛异常触发外层 retry 重新生成。
+                        # 反之若 conclusion 为 continue（如缺数据、需补充信息），answer 是给用户的纯文本解释，
+                        # 直接透传，不做 JSON 校验，避免误伤模型合理的自然语言回复。
+                        conclusion = (data_dict.get("conclusion") or "").strip().lower()
+                        should_validate = conclusion == "terminate"
+                        chart_json = None
+                        if should_validate:
+                            chart_json = self._extract_chart_json(raw_answer)
+                            if chart_json is None:
+                                raise ValueError(
+                                    "chart answer is not valid JSON (control chars / malformed): "
+                                    + raw_answer[:120]
+                                )
+                        if should_validate and isinstance(chart_json, dict):
+                            data_dict["answer"] = (
+                                f"```{CHART_CODE_BLOCK_FENCE}\n{json.dumps(chart_json, ensure_ascii=False, indent=2)}\n```"
+                            )
+                        elif should_validate and chart_json is not None:
+                            # dict 之外（理论上不会走到，防御性）：原样保留
+                            data_dict["answer"] = f"```{CHART_CODE_BLOCK_FENCE}\n{raw_answer}\n```"
                     llm_result = LLMResult(**data_dict)
                     logger.info(" === ChartAgent.invoke_common , llm_result = %s", llm_result)
                     return llm_result
@@ -1196,6 +1242,87 @@ class ChartAgent(BaseAgent):
             conclusion="error",
         )
 
+    def _extract_chart_json(self, raw: str) -> Optional[dict]:
+        """从 LLM 字符串形式的 ECharts option 中提取合法 JSON dict。
+
+        LLM 有时把 ECharts option 作为字符串输出（而非内嵌 dict），且字符串内
+        可能含未转义的控制字符（真实换行等），导致前端 JSON.parse 报
+        ``Bad control character``。这里剥离 ```chart 围栏并重新解析：
+        - 能解析为 dict 则返回 dict（后续用 json.dumps 重新序列化，保证控制字符被转义）；
+        - 否则返回 None，由调用方判定本次生成无效并触发 retry。
+        """
+        if not raw:
+            return None
+        text = raw.strip()
+        # 剥离 ```chart / ```json 围栏
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if len(lines) >= 2:
+                tail = lines[0].strip()
+                # 去掉 ```chart 或 ```json 之类围栏起始行
+                text = "\n".join(lines[1:])
+                if tail.endswith("```") and len(lines) == 1:
+                    text = tail[3:-3]
+            if text.endswith("```"):
+                text = text[:-3].strip()
+        elif text.startswith("```json"):
+            text = text[len("```json"):].strip()
+        text = text.strip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _finalize_chart_answer(self, answer: str) -> str:
+        """在最终交付给前端前，对 ```chart 代码块做一次再解析 + 序列化兜底。
+
+        经过 observe 多轮处理、step 状态拼接等环节后，answer 字符串里可能混入
+        未转义的控制字符（真实换行等），前端 JSON.parse 会报 Bad control character。
+        这里把代码块内的 JSON 重新解析并用 json.dumps 序列化，确保控制字符被转义。
+        若解析失败则原样返回（交由前端容错/展示），不阻塞主流程。
+        """
+        if not answer or "```" not in answer or CHART_CODE_BLOCK_FENCE not in answer:
+            return answer
+        fence = f"```{CHART_CODE_BLOCK_FENCE}"
+        start = answer.find(fence)
+        if start == -1:
+            return answer
+        body_start = answer.find("\n", start)
+        if body_start == -1:
+            return answer
+        body_start += 1
+        end = answer.find("```", body_start)
+        if end == -1:
+            return answer
+        body = answer[body_start:end]
+
+        parsed = self._parse_chart_json_tolerant(body)
+        if not isinstance(parsed, dict):
+            return answer
+        clean = json.dumps(parsed, ensure_ascii=False, indent=2)
+        return f"{answer[:start]}{fence}\n{clean}\n```{answer[end + 3:]}"
+
+    def _parse_chart_json_tolerant(self, body: str) -> Optional[dict]:
+        """宽容解析 chart 代码块 JSON：优先严格解析；失败时用 json_repair 兜底，
+        以修复字符串内未转义的控制字符（真实换行/制表符等）。"""
+        try:
+            parsed = json.loads(body)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            pass
+        if _json_repair is not None:
+            try:
+                repaired = _json_repair(body, return_objects=True)
+                if isinstance(repaired, dict):
+                    return repaired
+                if isinstance(repaired, str):
+                    parsed = json.loads(repaired)
+                    return parsed if isinstance(parsed, dict) else None
+            except Exception as e:  # noqa: BLE001
+                logger.warning("_parse_chart_json_tolerant json_repair failed: %s", e)
+        return None
+
     def _is_valid_echarts_option(self, option: dict) -> bool:
         """校验 ECharts option 至少包含可渲染的 series。
 
@@ -1374,7 +1501,7 @@ class ChartAgent(BaseAgent):
                 answer = "No relevant data to draw the graph"
                 return answer
             else:
-                return llm_result.answer
+                return self._finalize_chart_answer(llm_result.answer)
         else:
             raise ValueError("step can not handle normal!")
 
@@ -1562,6 +1689,9 @@ class ChartAgentExecutor(AgentExecutor):
 
         history_text = _history_text_from_metadata(md)
 
+        # 必须放在 try 之前计时，保证异常分支也能取得有效的 latency_ms。
+        _cc_start = _time.monotonic()
+
         try:
             manager = ModelManager()
             _extra_body = (
@@ -1585,32 +1715,24 @@ class ChartAgentExecutor(AgentExecutor):
                 history=history_text,
                 query=query,
             )
-            trace_id = md.get("trace_id", "") or ""
-            user_id = md.get("user_id", "") or ""
-            run_id = md.get("run_id", "") or ""
-            with langfuse.start_as_current_span(
-                name="chart-capability-check-llm",
-                trace_context={"trace_id": trace_id} if trace_id else {},
-            ) as span:
-                span.update_trace(
-                    user_id=user_id,
-                    session_id=run_id,
-                    input={"query": query, "agent_name": agent_name},
-                )
-                response = await llm.ainvoke(
-                    [HumanMessage(content=prompt)],
-                    config={"callbacks": [langfuse_handler]},
-                )
-                span.update_trace(output={"agent_name": agent_name})
-
-            response_text = (response.content or "").strip()
-            for p, s in [("```json", "```"), ("```", "```")]:
-                if response_text.startswith(p):
-                    response_text = response_text[len(p) :]
-                if response_text.endswith(s):
-                    response_text = response_text[: -len(s)]
-            response_text = response_text.strip()
-            result_data = json.loads(response_text)
+            cap_tool = StructuredTool(
+                name="evaluate_capability",
+                description="评估本智能体能否处理用户问题，输出判定结果和推理过程。",
+                args_schema=CapabilityCheckToolResult,
+                func=None,
+                coroutine=None,
+            )
+            result_data = await invoke_llm_with_tool(
+                llm=llm,
+                tool=cap_tool,
+                messages=[HumanMessage(content=prompt)],
+                metadata=md,
+                tool_choice="evaluate_capability",
+                span_name="chart-capability-check-llm",
+                span_input={"query": query, "agent_name": agent_name},
+            )
+            if result_data is None:
+                raise ValueError("LLM did not call evaluate_capability tool")
             conf = float(result_data.get("confidence", 0.0))
             leaf_path = [agent_name]
             check_response = CapabilityCheckResponse(
@@ -1625,6 +1747,7 @@ class ChartAgentExecutor(AgentExecutor):
                 ],
                 can_contribute=bool(result_data.get("can_contribute", False)),
                 contribution=str(result_data.get("contribution", "")),
+                latency_ms=int((_time.monotonic() - _cc_start) * 1000),
             )
         except Exception as e:
             logger.error("Capability check analysis failed: %s", e, exc_info=True)
@@ -1639,6 +1762,7 @@ class ChartAgentExecutor(AgentExecutor):
                 route_paths=[
                     {"path": leaf_path, "confidence": 0.0, "alias": _path_to_alias(leaf_path)}
                 ],
+                latency_ms=int((_time.monotonic() - _cc_start) * 1000),
             )
 
         logger.info(

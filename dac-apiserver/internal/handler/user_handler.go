@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/protocol"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/hertz-contrib/jwt"
 
+	"github.com/lvyanru/dac-apiserver/internal/config"
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
 	"github.com/lvyanru/dac-apiserver/internal/handler/dto"
@@ -24,12 +26,21 @@ type UserHandler struct {
 }
 
 // NewUserHandler creates a new user handler
-func NewUserHandler(usecase domain.UserUsecase, jwtSecret string, logger *slog.Logger) *UserHandler {
+func NewUserHandler(usecase domain.UserUsecase, jwtCfg config.JWTConfig, logger *slog.Logger) *UserHandler {
+	timeout := jwtCfg.Timeout
+	if timeout == 0 {
+		timeout = 15 * time.Minute
+	}
+	maxRefresh := jwtCfg.MaxRefresh
+	if maxRefresh == 0 {
+		maxRefresh = 168 * time.Hour
+	}
+
 	authMiddleware, err := jwt.New(&jwt.HertzJWTMiddleware{
 		Realm:       "dac-api",
-		Key:         []byte(jwtSecret),
-		Timeout:     time.Hour * 24,     // Token valid for 24 hours
-		MaxRefresh:  time.Hour * 24 * 7, // Refresh period of 7 days
+		Key:         []byte(jwtCfg.Secret),
+		Timeout:     timeout,
+		MaxRefresh:  maxRefresh,
 		IdentityKey: "user_id",
 
 		// Login authentication logic
@@ -91,7 +102,7 @@ func NewUserHandler(usecase domain.UserUsecase, jwtSecret string, logger *slog.L
 		},
 
 		// Login response
-		LoginResponse: func(ctx context.Context, c *app.RequestContext, code int, token string, expire time.Time) {
+		LoginResponse: func(ctx context.Context, c *app.RequestContext, code int, _ string, expire time.Time) {
 			// Get user info from context
 			user, exists := c.Get("user")
 			if !exists {
@@ -106,14 +117,38 @@ func NewUserHandler(usecase domain.UserUsecase, jwtSecret string, logger *slog.L
 			c.JSON(consts.StatusOK, map[string]any{
 				"code": "SUCCESS",
 				"data": dto.LoginResponse{
-					Token:  token,
 					Expire: expire.Format(time.RFC3339),
 					User:   dto.ToUserResponse(userEntity),
 				},
 			})
 		},
 
-		TokenLookup:   "header: Authorization, query: token",
+		// Refresh response
+		RefreshResponse: func(ctx context.Context, c *app.RequestContext, code int, _ string, expire time.Time) {
+			c.JSON(consts.StatusOK, map[string]any{
+				"code": "SUCCESS",
+				"data": map[string]any{
+					"expire": expire.Format(time.RFC3339),
+				},
+			})
+		},
+
+		// Logout response
+		LogoutResponse: func(ctx context.Context, c *app.RequestContext, code int) {
+			c.JSON(consts.StatusOK, map[string]any{
+				"code": "SUCCESS",
+			})
+		},
+
+		SendCookie:     true,
+		CookieHTTPOnly: true,
+		CookieName:     "dac_token",
+		CookieSameSite: protocol.CookieSameSiteLaxMode,
+		CookieMaxAge:   maxRefresh,
+		SecureCookie:   jwtCfg.CookieSecure,
+		CookieDomain:   jwtCfg.CookieDomain,
+
+		TokenLookup:   "header: Authorization, cookie: dac_token",
 		TokenHeadName: "Bearer",
 		TimeFunc:      time.Now,
 	})
@@ -169,7 +204,7 @@ func (h *UserHandler) Register(ctx context.Context, c *app.RequestContext) {
 // Login handles user login (using Hertz JWT LoginHandler)
 //
 //	@Summary		User login
-//	@Description	user名密码登录，返回 JWT Token
+//	@Description	用户名密码登录，通过 HttpOnly cookie 建立会话
 //	@Tags			认证
 //	@Accept			json
 //	@Produce		json
@@ -186,6 +221,12 @@ func (h *UserHandler) Login(ctx context.Context, c *app.RequestContext) {
 // POST /api/v1/auth/refresh
 func (h *UserHandler) RefreshToken(ctx context.Context, c *app.RequestContext) {
 	h.authMiddleware.RefreshHandler(ctx, c)
+}
+
+// Logout clears the JWT cookie
+// POST /api/v1/auth/logout
+func (h *UserHandler) Logout(ctx context.Context, c *app.RequestContext) {
+	h.authMiddleware.LogoutHandler(ctx, c)
 }
 
 // GetCurrentUser retrieves the currently logged-in user's information

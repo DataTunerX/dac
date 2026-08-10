@@ -8,7 +8,7 @@ import { listConfigMaps, getConfigMap, listAllConfigMaps } from "@/lib/configmap
 import { listAgentsAll } from "@/lib/agents-api"
 import { ListPageSearch } from "@/components/list-page-search"
 import { filterListByQuery } from "@/lib/filter-list-by-query"
-import { listDescriptorsAll } from "@/lib/descriptors-api"
+import { listAllDescriptors } from "@/lib/descriptors-api"
 import { apiFetcher } from "@/lib/swr"
 import { Button } from "@/components/ui/button"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
@@ -552,7 +552,7 @@ function ConfigMapsContent() {
         }
       } else {
         // Prompts ConfigMap 由 DataDescriptor 引用：sources[].prompts.configMapName
-        const { items: list } = await listDescriptorsAll()
+        const list = await listAllDescriptors()
         for (const dd of list) {
           const ns = dd.namespace ?? "default"
           if (ns !== cmNamespace) continue

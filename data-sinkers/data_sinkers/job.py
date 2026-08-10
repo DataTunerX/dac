@@ -1,6 +1,7 @@
 import time
 import os
 import json
+from datetime import datetime, timezone
 from data_sinkers import get_reader
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
@@ -1014,7 +1015,7 @@ def write_status(status: str, task_id: str, error: Optional[str] = None, result:
     status_data = {
         'status': status,
         'task_id': task_id,
-        'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
     }
     
     if status == 'success' and result is not None:

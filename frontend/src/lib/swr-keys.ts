@@ -15,3 +15,10 @@ export const descriptorSemanticDomainKey = (namespace: string, name: string) =>
   ["descriptor-semantic-domain", namespace, name] as const
 
 export const semanticGroupKey = (id: string) => ["semantic-group", id] as const
+
+export const discoveryScansKey = (page: number, pageSize: number) =>
+  ["discovery-scans", page, pageSize] as const
+
+export const discoveryScanKey = (id: string) => ["discovery-scan", id] as const
+
+export const discoveryAssociationsKey = ["discovery-associations"] as const

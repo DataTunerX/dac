@@ -24,7 +24,7 @@ import {
   SYSTEM_CONFIG_NAMESPACE,
   SYSTEM_CONFIG_NAMES,
 } from "@/lib/system-config-meta"
-import { getUserRole } from "@/lib/auth"
+import { useAuthHydrated, useUserRole } from "@/lib/use-user-role"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -194,6 +194,9 @@ const TEMPLATE_HISTORY_COLUMNS = [
 ] as const
 
 export function TemplateManagementPanel() {
+  const authHydrated = useAuthHydrated()
+  const userRole = useUserRole()
+  const isViewOnly = !authHydrated || userRole !== "admin"
   const [mounted, setMounted] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [items, setItems] = useState<SystemConfigurationResponse[]>([])
@@ -208,8 +211,6 @@ export function TemplateManagementPanel() {
   const [exists, setExists] = useState(false)
   const [resourceVersion, setResourceVersion] = useState("")
   const [formData, setFormData] = useState<Record<string, string>>({})
-  const [isViewOnly, setIsViewOnly] = useState(true)
-
   const [versions, setVersions] = useState<SystemConfigurationVersionResponse[]>([])
   const [versionTotal, setVersionTotal] = useState(0)
   const [versionPage, setVersionPage] = useState(1)
@@ -230,7 +231,6 @@ export function TemplateManagementPanel() {
 
   useEffect(() => {
     setMounted(true)
-    setIsViewOnly(getUserRole() !== "admin")
   }, [])
 
   const loadList = useCallback(async () => {

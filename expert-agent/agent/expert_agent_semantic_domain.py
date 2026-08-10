@@ -33,6 +33,7 @@ from a2a.utils import new_agent_text_message, new_task, new_text_artifact
 from .redis_registry import RedisRegistry, HeartbeatService
 from model_sdk import ModelManager
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.tools import StructuredTool
 from .dataservices_client import DataServicesClient, MetadataValuesResult  # MetadataValuesResult 用于两阶段 LLM 知识检索
 from .schema import ROLE_TYPE, AgentState, Memory, Message
 from .prompts import ( 
@@ -53,6 +54,7 @@ from .executors.mysql.mysql_reader import AsyncMySQLReaderContextManager, execut
 from .executors.postgres.postgres_reader import AsyncPostgresReaderContextManager, execute_postgres, get_postgres_tables_schema, get_postgres_tables_relationship, get_postgres_tables_sampledata
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
+from .tool_call_utils import invoke_llm_with_tool
 
 try:
     # json_repair is a tolerant JSON parser designed specifically for LLM output.
@@ -192,6 +194,47 @@ def _coerce_standalone_sql_to_llm_dict(text: str) -> Optional[Dict[str, Any]]:
     }
 
 
+_EMBEDDED_JSON_FENCE_RE = re.compile(
+    r"```(?:json)?\s*\n(.*?)\n```",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _extract_embedded_json_fence(text: str) -> Optional[str]:
+    """Extract JSON content from a markdown code fence embedded in the middle of text.
+
+    Unlike ``_strip_markdown_code_fences`` which only handles text that *starts* with
+    a fence, this handles the common LLM pattern of "explanation text + ```json ... ```".
+    Returns the extracted JSON string (without fences), or None if no fence block is found.
+    """
+    match = _EMBEDDED_JSON_FENCE_RE.search(text)
+    if not match:
+        return None
+    inner = match.group(1).strip()
+    if not inner:
+        return None
+    return inner
+
+
+_JSON_OBJECT_RE = re.compile(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", re.DOTALL)
+
+
+def _extract_json_object_from_text(text: str) -> Optional[str]:
+    """Try to extract a balanced JSON object from free-form text.
+
+    Used as a fallback when the LLM embeds JSON inline without any markdown fence,
+    e.g. \"分析完成，结论是 {\"reason\": \"...\", \"conclusion\": \"terminate\"}，可以结束了。\"
+    """
+    for match in _JSON_OBJECT_RE.finditer(text):
+        candidate = match.group(0)
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -254,14 +297,6 @@ New question: What are the main uses of Java?
 **Historical query list as follows:**
 {history_querys}
 
-**Example Reference:**
-
-Output example when a complete answer can be provided:
-{terminate_fewshots}
-
-Output example when more information is needed:
-{continue_fewshots}
-
 **Relevant information:**
 {memory}
 
@@ -319,14 +354,6 @@ NEXT_STEP_PROMPT_ZH = """
 
 {history_querys}
 
-**示例参考：**
-
-可完整回答时的输出示例：
-{terminate_fewshots}
-
-需要更多信息时的输出示例：
-{continue_fewshots}
-
 **相关信息**
 {memory}
 
@@ -376,24 +403,24 @@ class TaskAnalyze(BaseModel):
     )
 
     conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+        description='Task execution mode: sql when SQL generation is required, otherwise nosql.'
     )
 
 class LLMResult(BaseModel):
 
-    answer: Optional[str] = Field(
+    answer: str = Field(
         description='The answer of llm for user question.'
     )
 
-    conclusion: Optional[str] = Field(
+    conclusion: str = Field(
         description='whether the answer meet your question.'
     )
 
-    requery: Optional[str] = Field(
+    requery: str = Field(
         description='The regenerated new user query.'
     )
 
-    reason_code: Optional[str] = Field(
+    reason_code: str = Field(
         default="",
         description='Structured reason code. Use out_of_scope_non_retryable when task is outside this expert domain.'
     )
@@ -405,7 +432,7 @@ class RequeryResult(BaseModel):
     )
 
     conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+        description='terminate when a new requery was generated; continue when no valid requery could be generated.'
     )
 
 class ObserveResult(BaseModel):
@@ -415,7 +442,7 @@ class ObserveResult(BaseModel):
     )
 
     conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+        description='terminate when the answer satisfies the question; otherwise continue.'
     )
 
 
@@ -426,6 +453,17 @@ class SqlFailureKindResult(BaseModel):
 
     sql_failure_kind: str = Field(description='syntax_issue or other')
     reason: str = Field(default="", description="Brief reason in Chinese.")
+
+
+class TableSelectorResult(BaseModel):
+    """LLM output for table selection (invoke_structured_with_table_selector)."""
+
+    model_config = {"extra": "ignore"}
+
+    tables: List[str] = Field(
+        default_factory=list,
+        description="List of relevant database table names selected by the LLM."
+    )
 
 
 class FailureSnapshot(BaseModel):
@@ -497,14 +535,18 @@ class DimensionItem(BaseModel):
 class Dimensions(BaseModel):
     """SQL Dimensions"""
     
-    dimensions: Optional[List[DimensionItem]] = Field(
-        default=None,
-        description='LLM response to user question, containing dimension list'
+    dimensions: List[DimensionItem] = Field(
+        default_factory=list,
+        description=(
+            'Minimal set of textual categorical fields that require SELECT DISTINCT '
+            'to map a user-provided WHERE value. Exclude GROUP BY/output fields, exact '
+            'identifiers, numeric/date/boolean fields, and enums already defined by rules.'
+        )
     )
     
     reason: Optional[str] = Field(
         default=None,
-        description='Regenerated new user query'
+        description='Reason why no dimension extraction is needed, or a brief selection rationale.'
     )
 
 # ============================================================================
@@ -544,14 +586,13 @@ LOCATE_DB_KNOWLEDGE_PROMPT_ZH = """
 - **禁止猜测**：只基于摘要内容进行判断，不要假设摘要未提及的内容。
 - **输出要求**：仅返回标准 JSON，严禁任何 markdown 代码块标识符或多余文字。
 
-# Output Format (JSON)
-{{
-  "knowledge_ids": ["Knowledge ID 1", "Knowledge ID 2", "Knowledge ID 3"],
-  "intent_analysis": "对用户真实意图的理解，以及需要哪些表来满足查询。",
-  "reasoning": "选择这些知识记录的原因，说明各表在回答问题中的作用。",
-  "domain_fit": "fit | mismatch | uncertain",
-  "mismatch_evidence": "当 domain_fit=mismatch 时，简要说明为何当前领域无法处理"
-}}
+# Output Fields
+- `knowledge_ids`：相关 Knowledge ID 的字符串数组。
+- `intent_analysis`：对用户真实意图及所需数据库表的分析。
+- `reasoning`：选择这些知识记录的原因。
+- `domain_fit`：只能取 `fit`、`mismatch` 或 `uncertain`。
+- `mismatch_evidence`：仅在 `domain_fit=mismatch` 时填写具体证据，否则为空字符串。
+- 参数结构以绑定工具的 schema 为准，不要输出 schema 包装或示例占位值。
 
 ---
 # Context: 知识摘要列表
@@ -580,9 +621,9 @@ class KnowledgeSelectionResult(BaseModel):
         description="选择这些知识记录的原因"
     )
 
-    domain_fit: Optional[str] = Field(
+    domain_fit: Literal["fit", "mismatch", "uncertain"] = Field(
         default="uncertain",
-        description="fit | mismatch | uncertain"
+        description="Whether the database knowledge domain fits the query."
     )
 
     mismatch_evidence: Optional[str] = Field(
@@ -637,6 +678,24 @@ class ExpertAgent(BaseAgent):
             model=model,
             temperature=temperature,
             stream=stream,
+            extra_body=_extra_body,
+        )
+        # Tool calls require non-streaming LLM. When stream=True, the LLM returns
+        # AsyncStream instead of AIMessage, causing 'AsyncStream' object has no
+        # attribute 'model_dump'. Create a separate non-streaming instance for tool calls.
+        #
+        # 背景：ExpertAgent 默认使用 stream=True 以支持流式输出（stream() 方法），
+        # 但 ChatOpenAI 在 stream=True 时 ainvoke 返回的是 AsyncStream 对象，
+        # 无法调用 .tool_calls 属性获取工具调用结果。因此创建专门的 stream=False
+        # 实例，供 invoke_llm_with_tool() 使用。
+        # 所有 13 个 LLM 调用点（select_tables、generate_sql 等）均通过此实例执行。
+        self.llm_non_stream = self.manager.get_llm(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=temperature,
+            stream=False,
             extra_body=_extra_body,
         )
         self.query=query
@@ -1488,6 +1547,28 @@ class ExpertAgent(BaseAgent):
         except json.JSONDecodeError as e2:
             logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
 
+        # ── Extract embedded JSON fence from mixed text (e.g. "解释 + ```json\n{...}\n```") ──
+        embedded_json = _extract_embedded_json_fence(cleaned_content)
+        if embedded_json is not None:
+            try:
+                parsed = json.loads(embedded_json)
+                if isinstance(parsed, dict):
+                    logger.info(" === format_llm_output, recovered via embedded JSON fence extraction")
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        # ── Extract bare JSON object from free-form text (no fence) ──
+        bare_json = _extract_json_object_from_text(cleaned_content)
+        if bare_json is not None:
+            try:
+                parsed = json.loads(bare_json)
+                if isinstance(parsed, dict):
+                    logger.info(" === format_llm_output, recovered via embedded bare JSON extraction")
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
         escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
         if escaped_content != cleaned_content:
             try:
@@ -1541,49 +1622,46 @@ class ExpertAgent(BaseAgent):
 
     async def invoke_structured_with_table_selector(self, knowledge, db_type) -> (str, str, str):
         system_template = TABLE_SELECTOR_NEXT_STEP_PROMPT_ZH
-
         human_template = "question：{query}"
 
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["knowledge","current_time"],
+
+        system_text = system_template.format(
+            knowledge=knowledge,
+            current_time=current_time,
+        )
+        human_text = human_template.format(query=self.query)
+
+        messages = [
+            SystemMessage(content=system_text),
+            HumanMessage(content=human_text),
+        ]
+
+        # Tool Call #1: select_tables — 表选择器
+        # 根据用户 query 从数据库 schema 中选择相关表
+        select_tables_tool = StructuredTool(
+            name="select_tables",
+            description="Select the relevant database tables for the user's query.",
+            args_schema=TableSelectorResult,
+            func=None,
+            coroutine=None,
         )
 
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=select_tables_tool,
+            messages=messages,
+            tool_choice="select_tables",
+            span_name="expert-tableselector",
+            span_input={"query": self.query},
+        )
 
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
-
-        answer = None
-
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-tableselector",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": knowledge, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.debug(f" === ExpertAgent.invoke_structured_with_table_selector, llm answer = {answer}")
-
-        tables = self._coerce_table_name_list(self.format_llm_output(answer))
+        if result is None:
+            tables = []
+        else:
+            tables = self._coerce_table_name_list(result)
 
         logger.info(f" === ExpertAgent.invoke_structured_with_table_selector , invoke_structured_with_table_selector, tables = {tables}")
 
@@ -1748,75 +1826,44 @@ class ExpertAgent(BaseAgent):
         if db_type == "postgres":
             system_template = DIMENSION_SELECTOR_NEXT_STEP_PROMPT_ZH
 
-        human_template = "question：{query}"
-
-        dimension_selector_json_prompt_instructions_zh = {
-          "dimensions": [
-            {
-              "name": "性别",
-              "column": "gender",
-              "table": "user_profile", 
-              "sql": "SELECT DISTINCT `gender` FROM `user_profile`"
-            },
-            {
-              "name": "产品分类",
-              "column": "category",
-              "table": "product_catalog",
-              "sql": "SELECT DISTINCT `category` FROM `product_catalog`"
-            },
-            {
-              "name": "城市", 
-              "column": "city",
-              "table": "customer_profile",
-              "sql": "SELECT DISTINCT `city` FROM `customer_profile`"
-            }
-          ],
-          "reason": "table 字段和 sql 中的表名必须来自当前 Tables Schema 中已经出现的真实物理表名，不能猜测或改写表名。"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["knowledge","current_time"],
-            partial_variables={"dimension_selector": dimension_selector_json_prompt_instructions_zh},
+
+        system_text = system_template.format(
+            knowledge=knowledge,
+            current_time=current_time,
+        )
+        human_text = f"question：{self.query}"
+
+        messages = [
+            SystemMessage(content=system_text),
+            HumanMessage(content=human_text),
+        ]
+
+        # Tool Call #2: select_dimensions — 维度选择器
+        # 根据用户 query 和知识库信息，选择维度列并生成 DISTINCT SQL
+        select_dimensions_tool = StructuredTool(
+            name="select_dimensions",
+            description="Select the dimension columns and generate DISTINCT SQL for the user's query.",
+            args_schema=Dimensions,
+            func=None,
+            coroutine=None,
         )
 
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=select_dimensions_tool,
+            messages=messages,
+            tool_choice="select_dimensions",
+            span_name="expert-dimensionselector",
+            span_input={"query": self.query},
+        )
 
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
-
-        answer = None
-
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-dimensionselector",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": knowledge, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.debug(f" === ExpertAgent.invoke_structured_with_dimension_selector, llm answer = {answer}")
-
-        dimensions = self.format_llm_output(answer)
-
-        dimensions_llm_parsed = Dimensions(**dimensions)
+        if result is None:
+            dimensions_llm_parsed = Dimensions()
+        else:
+            dimensions_llm_parsed = Dimensions(**result)
 
         logger.info(f"-------------------- ExpertAgent.invoke_structured_with_dimension_selector , invoke_structured_with_dimension_selector, dimensions = {dimensions_llm_parsed}")
 
@@ -1866,70 +1913,54 @@ class ExpertAgent(BaseAgent):
         system_template = COMMON_NEXT_STEP_PROMPT_ZH
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "answer": "基于背景知识，Java是一种高级、面向对象、跨平台的编程语言...",
-            "conclusion": "terminate",
-            "requery": "",
-            "reason_code": ""
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "answer": "当前背景知识主要涵盖Java和Go语言，无法提供Python相关的详细信息",
-            "conclusion": "continue",
-            "requery": "能否提供Python编程语言的具体介绍和特点？",
-            "reason_code": ""
-        }
-
         agent_domain = self._get_agent_domain_description()
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["current_task","current_time","knowledge","agent_domain"],
-            partial_variables={"current_tasks_status":self.current_tasks_status.tasks, "terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
+            partial_variables={"current_tasks_status": self.current_tasks_status.tasks},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call #3: answer_common — 通用回答（非 SQL 场景）
+        # 根据背景知识回答用户问题，设置 conclusion=terminate/continue
+        answer_common_tool = StructuredTool(
+            name="answer_common",
+            description="Answer the user's question based on background knowledge. Set conclusion to 'terminate' if satisfied, 'continue' if needs requery.",
+            args_schema=LLMResult,
+            func=None,
+            coroutine=None,
+        )
 
-        answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=answer_common_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                current_task=self.query,
+                current_time=current_time,
+                knowledge=knowledge,
+                agent_domain=agent_domain,
+            ).to_messages(),
+            tool_choice="answer_common",
+            span_name="expert-common",
+            span_input={"query": self.query},
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-common",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "current_task": self.query, "current_time":current_time, "knowledge": knowledge, "agent_domain": agent_domain},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.debug(f" === ExpertAgent.invoke_common, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "answer": "System error: Unable to process model response",
                 "conclusion": "error",
                 "requery": "",
                 "reason_code": ""
             }
+        else:
+            data_dict = result
 
         llm_result = LLMResult(**data_dict)
 
@@ -1951,65 +1982,49 @@ class ExpertAgent(BaseAgent):
 
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "task": "从数据库中获取每个商品分类及其对应的商品价格数据",
-            "conclusion": "sql",
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "task": "整理并输出各分类的平均商品价格结果",
-            "conclusion": "nosql",
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["current_task","current_time"],
-            partial_variables={"current_tasks_status":self.current_tasks_status.tasks, "terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
+            partial_variables={"current_tasks_status": self.current_tasks_status.tasks},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
-        history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
+        # Tool Call #4: analyze_task — 任务分析/分类
+        # 分析当前任务，判断是 sql 还是 nosql 类型
+        analyze_task_tool = StructuredTool(
+            name="analyze_task",
+            description="Analyze the current task and classify it as sql or nosql.",
+            args_schema=TaskAnalyze,
+            func=None,
+            coroutine=None,
+        )
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=analyze_task_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                current_task=self.query,
+                current_time=current_time,
+            ).to_messages(),
+            tool_choice="analyze_task",
+            span_name="expert-task_analyze",
+            span_input={"query": self.query},
+        )
 
-        answer = None
-
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-task_analyze",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "current_task": self.query, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.debug(f" === ExpertAgent.invoke_structured_task_analyze, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "task": "System error: Unable to process model response",
                 "conclusion": "error"
             }
+        else:
+            data_dict = result
 
         llm_result = TaskAnalyze(**data_dict)
 
@@ -2050,25 +2065,12 @@ class ExpertAgent(BaseAgent):
 
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "answer": "基于背景知识，Java是一种高级、面向对象、跨平台的编程语言...",
-            "conclusion": "terminate",
-            "requery": ""
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "answer": "当前背景知识主要涵盖Java和Go语言，无法提供Python相关的详细信息",
-            "conclusion": "continue",
-            "requery": "能否提供Python编程语言的具体介绍和特点？"
-        }
-
         step_history = self.get_step_history_for_requery()
 
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["knowledge","original_query","history_querys","memory", "dimensions","current_time", "step_history"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
@@ -2077,43 +2079,44 @@ class ExpertAgent(BaseAgent):
 
         history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call #5: generate_sql — SQL 生成（含数据字典/维度）
+        # 基于数据库 schema、维度和知识，生成 SQL 查询和答案
+        generate_sql_tool = StructuredTool(
+            name="generate_sql",
+            description="Generate SQL query and answer based on database schema, dimensions, and knowledge. Set conclusion to 'terminate' if satisfied, 'continue' if needs requery.",
+            args_schema=LLMResult,
+            func=None,
+            coroutine=None,
+        )
 
-        answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=generate_sql_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                knowledge=tables_knowledge,
+                original_query=self.original_query,
+                history_querys=history_querys,
+                memory=memory,
+                dimensions=dimensions,
+                current_time=current_time,
+                step_history=step_history,
+            ).to_messages(),
+            tool_choice="generate_sql",
+            span_name="expert-sql_generate",
+            span_input={"query": self.query},
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-sql_generate",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": tables_knowledge,"original_query": self.original_query,"history_querys": history_querys,"memory": memory, "dimensions":dimensions, "current_time":current_time, "step_history": step_history},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.invoke_structured_dictionary_mode, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "answer": "System error: Unable to process model response",
                 "conclusion": "error",
                 "requery": ""
             }
+        else:
+            data_dict = result
 
         llm_result = LLMResult(**data_dict)
 
@@ -2148,24 +2151,19 @@ class ExpertAgent(BaseAgent):
 
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "answer": "基于背景知识，Java是一种高级、面向对象、跨平台的编程语言...",
-            "conclusion": "terminate",
-            "requery": ""
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "answer": "当前背景知识主要涵盖Java和Go语言，无法提供Python相关的详细信息",
-            "conclusion": "continue",
-            "requery": "能否提供Python编程语言的具体介绍和特点？"
-        }
-
-
+        step_history = self.get_step_history_for_requery()
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
-            input_variables=["knowledge","original_query","history_querys","memory","current_time"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
+            input_variables=[
+                "knowledge",
+                "original_query",
+                "history_querys",
+                "memory",
+                "dimensions",
+                "current_time",
+                "step_history",
+            ],
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
@@ -2174,43 +2172,44 @@ class ExpertAgent(BaseAgent):
 
         history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call #6: generate_sql_simple — SQL 生成（无数据字典）
+        # 基于数据库知识生成 SQL，无需维度/字典信息
+        generate_sql_simple_tool = StructuredTool(
+            name="generate_sql_simple",
+            description="Generate SQL query and answer based on database knowledge. Set conclusion to 'terminate' if satisfied, 'continue' if needs requery.",
+            args_schema=LLMResult,
+            func=None,
+            coroutine=None,
+        )
 
-        answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=generate_sql_simple_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                knowledge=tables_knowledge,
+                original_query=self.original_query,
+                history_querys=history_querys,
+                memory=memory,
+                dimensions="",
+                current_time=current_time,
+                step_history=step_history,
+            ).to_messages(),
+            tool_choice="generate_sql_simple",
+            span_name="expert-sql_nodict",
+            span_input={"query": self.query},
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-sql_nodict",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": tables_knowledge,"original_query": self.original_query,"history_querys": history_querys,"memory": memory, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.invoke_structured, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "answer": "System error: Unable to process model response",
                 "conclusion": "error",
                 "requery": ""
             }
+        else:
+            data_dict = result
 
         llm_result = LLMResult(**data_dict)
 
@@ -2230,21 +2229,10 @@ class ExpertAgent(BaseAgent):
 
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "requery": "新生成的问题...",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "requery": "",
-            "conclusion": "continue"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["original_query","history_querys","current_time","step_history"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
@@ -2253,41 +2241,39 @@ class ExpertAgent(BaseAgent):
 
         history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call #7: reformulate_query — 重新表述查询（通用场景）
+        # 当前回答不充分时，重新表述 query 以便获取更精确的信息
+        reformulate_query_tool = StructuredTool(
+            name="reformulate_query",
+            description="Reformulate the query when the current answer is insufficient. Set conclusion to 'terminate' when a new requery is produced; set 'continue' only when no valid requery can be generated.",
+            args_schema=RequeryResult,
+            func=None,
+            coroutine=None,
+        )
 
-        answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=reformulate_query_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                original_query=self.original_query,
+                history_querys=history_querys,
+                current_time=current_time,
+                step_history=step_history,
+            ).to_messages(),
+            tool_choice="reformulate_query",
+            span_name="expert-requery",
+            span_input={"query": self.query},
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-requery",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "original_query": self.original_query,"history_querys": history_querys, "current_time":current_time, "step_history":step_history},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.invoke_requery, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {}
+        else:
+            data_dict = result
 
-        # Ensure required fields exist with defaults (json_repair may return incomplete dicts).
+        # Ensure required fields exist with defaults.
         if 'requery' not in data_dict and 'query' in data_dict:
             data_dict['requery'] = data_dict.pop('query')
         data_dict.setdefault('requery', None)
@@ -2307,21 +2293,10 @@ class ExpertAgent(BaseAgent):
 
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "requery": "新生成的问题...",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "requery": "",
-            "conclusion": "continue"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["sql","information","knowledge","original_query","history_querys","current_time","step_history"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
@@ -2330,41 +2305,42 @@ class ExpertAgent(BaseAgent):
 
         history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call #8: reformulate_sql — 重新表述查询（SQL 执行失败后）
+        # SQL 执行失败后，基于错误信息重新表述查询
+        reformulate_sql_tool = StructuredTool(
+            name="reformulate_sql",
+            description="Reformulate the query after SQL execution failure. Set conclusion to 'terminate' when a new requery is produced; set 'continue' only when no valid requery can be generated.",
+            args_schema=RequeryResult,
+            func=None,
+            coroutine=None,
+        )
 
-        answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=reformulate_sql_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                sql=sql,
+                information=information,
+                knowledge=knowledge,
+                original_query=self.original_query,
+                history_querys=history_querys,
+                current_time=current_time,
+                step_history=step_history,
+            ).to_messages(),
+            tool_choice="reformulate_sql",
+            span_name="expert-requery_sql",
+            span_input={"query": self.query},
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-requery_sql",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "sql":sql, "information":information, "knowledge":knowledge, "original_query": self.original_query,"history_querys": history_querys, "current_time":current_time, "step_history":step_history},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.invoke_requery_sql, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {}
+        else:
+            data_dict = result
 
-        # Ensure required fields exist with defaults (json_repair may return incomplete dicts).
+        # Ensure required fields exist with defaults.
         if 'requery' not in data_dict and 'query' in data_dict:
             data_dict['requery'] = data_dict.pop('query')
         data_dict.setdefault('requery', None)
@@ -2382,63 +2358,50 @@ class ExpertAgent(BaseAgent):
 
         human_template = "question: {query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "reason": "满足问题的原因",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "reason": "不满足问题的原因",
-            "conclusion": "continue"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["knowledge","current_time", "sql", "answer"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call #9: observe_sql_result — 评估 SQL 执行结果
+        # 判断 SQL 执行结果是否满足用户问题，设置 conclusion=terminate/continue
+        observe_sql_result_tool = StructuredTool(
+            name="observe_sql_result",
+            description="Evaluate whether the SQL execution result satisfies the user's question. Set conclusion to 'terminate' if satisfied, 'continue' if needs further refinement.",
+            args_schema=ObserveResult,
+            func=None,
+            coroutine=None,
+        )
 
-        llm_answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=observe_sql_result_tool,
+            messages=chat_prompt.format_prompt(
+                query=query,
+                answer=answer,
+                knowledge=knowledge,
+                current_time=current_time,
+                sql=sql,
+            ).to_messages(),
+            tool_choice="observe_sql_result",
+            span_name="expert-observe_sql",
+            span_input={"query": query},
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-observe_sql",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": query}
-            )
-
-            llm_answer = await chain.ainvoke(
-                {"query": query, "answer":answer, "knowledge":knowledge, "current_time":current_time, "sql":sql},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": llm_answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.observe_sql, answer = {llm_answer}")
-
-        data_dict = self.format_llm_output(llm_answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "reason": "System error: Unable to process model response",
                 "conclusion": "error"
             }
+        else:
+            data_dict = result
 
         llm_result = ObserveResult(**data_dict)
 
@@ -2480,44 +2443,44 @@ class ExpertAgent(BaseAgent):
         )
         human_prompt = HumanMessagePromptTemplate.from_template(SQL_EXEC_FAILURE_KIND_HUMAN_ZH)
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-        user_id = self.metadata["user_id"]
-        run_id = self.metadata["run_id"]
-        trace_id = self.metadata["trace_id"]
-        chain = chat_prompt | self.llm
+
+        # Tool Call #10: classify_sql_failure — SQL 执行失败分类
+        # 将 SQL 执行失败分为 syntax_issue 或 other 类别
+        classify_sql_failure_tool = StructuredTool(
+            name="classify_sql_failure",
+            description="Classify the SQL execution failure as syntax_issue or other.",
+            args_schema=SqlFailureKindResult,
+            func=None,
+            coroutine=None,
+        )
+
         try:
-            with langfuse.start_as_current_span(
-                name="expert-sql_exec_failure_kind",
-                trace_context={"trace_id": trace_id},
-            ) as span:
-                span.update_trace(
-                    user_id=user_id,
-                    session_id=run_id,
-                    input={"query": user_query},
-                )
-                llm_answer = await chain.ainvoke(
-                    {
-                        "current_time": current_time,
-                        "db_type": str(db_type or "unknown"),
-                        "user_query": str(user_query or ""),
-                        "generated_sql": str(generated_sql or ""),
-                        "error_text": str(error_text or ""),
-                    },
-                    config={"callbacks": [langfuse_handler]},
-                )
-                span.update_trace(output={"answer": llm_answer})
-            langfuse.flush()
+            result = await invoke_llm_with_tool(
+                llm=self.llm_non_stream,
+                metadata=self.metadata,
+                fallback_formatter=self.format_llm_output,
+                tool=classify_sql_failure_tool,
+                messages=chat_prompt.format_prompt(
+                    current_time=current_time,
+                    db_type=str(db_type or "unknown"),
+                    user_query=str(user_query or ""),
+                    generated_sql=str(generated_sql or ""),
+                    error_text=str(error_text or ""),
+                ).to_messages(),
+                tool_choice="classify_sql_failure",
+                span_name="expert-sql_exec_failure_kind",
+                span_input={"query": user_query},
+            )
         except Exception as e:
             logger.warning("invoke_sql_execution_failure_kind failed | %s", e)
             return "other"
 
-        logger.info(" === ExpertAgent.invoke_sql_execution_failure_kind, answer = %s", llm_answer)
-        data_dict = self.format_llm_output(llm_answer)
-        if data_dict is None:
+        if result is None:
             return "other"
         try:
-            parsed = SqlFailureKindResult(**data_dict)
+            parsed = SqlFailureKindResult(**result)
         except Exception as e:
-            logger.warning("invoke_sql_execution_failure_kind parse failed | %s | data=%s", e, data_dict)
+            logger.warning("invoke_sql_execution_failure_kind parse failed | %s | data=%s", e, result)
             return "other"
         kind = str(parsed.sql_failure_kind or "").strip().lower()
         if kind == "syntax_issue":
@@ -2530,63 +2493,49 @@ class ExpertAgent(BaseAgent):
 
         human_template = "question: {query};\n\nanswer:{answer}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "reason": "满足问题的原因",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "reason": "不满足问题的原因",
-            "conclusion": "continue"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["knowledge","current_time"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call #11: observe_answer — 评估通用回答结果
+        # 判断非 SQL 回答是否满足用户问题，设置 conclusion=terminate/continue
+        observe_answer_tool = StructuredTool(
+            name="observe_answer",
+            description="Evaluate whether the answer satisfies the user's question. Set conclusion to 'terminate' if satisfied, 'continue' if needs further refinement.",
+            args_schema=ObserveResult,
+            func=None,
+            coroutine=None,
+        )
 
-        llm_answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=observe_answer_tool,
+            messages=chat_prompt.format_prompt(
+                query=query,
+                answer=answer,
+                knowledge=knowledge,
+                current_time=current_time,
+            ).to_messages(),
+            tool_choice="observe_answer",
+            span_name="expert-observe_common",
+            span_input={"query": query},
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="expert-observe_common",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": query}
-            )
-
-            llm_answer = await chain.ainvoke(
-                {"query": query, "answer":answer, "knowledge":knowledge, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": llm_answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.observe_common, answer = {llm_answer}")
-
-        data_dict = self.format_llm_output(llm_answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "reason": "System error: Unable to process model response",
                 "conclusion": "error"
             }
+        else:
+            data_dict = result
 
         llm_result = ObserveResult(**data_dict)
 
@@ -2656,40 +2605,36 @@ class ExpertAgent(BaseAgent):
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call #12: select_knowledge — 知识库记录选择（两阶段检索）
+        # 从知识库摘要中选择与用户 query 相关的知识记录 ID
+        select_knowledge_tool = StructuredTool(
+            name="select_knowledge",
+            description="Select relevant knowledge record IDs from the knowledge summaries based on the user's question.",
+            args_schema=KnowledgeSelectionResult,
+            func=None,
+            coroutine=None,
+        )
 
-        chain = chat_prompt | self.llm
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=select_knowledge_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                knowledge=knowledge_summaries,
+                current_time=current_time,
+            ).to_messages(),
+            tool_choice="select_knowledge",
+            span_name="expert-select-db-knowledge",
+            span_input={"query": self.query},
+        )
 
-        with langfuse.start_as_current_span(
-            name="expert-select-db-knowledge",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": self.query}
-            )
-
-            answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": knowledge_summaries, "current_time": current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.select_relevant_knowledge, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             logger.error("select_relevant_knowledge: LLM output parsing failed, returning empty result")
             return KnowledgeSelectionResult(knowledge_ids=[], intent_analysis="", reasoning="parsing failed")
 
-        return KnowledgeSelectionResult(**data_dict)
+        return KnowledgeSelectionResult(**result)
 
     async def get_knowledge(self) -> str:
         """
@@ -3447,20 +3392,39 @@ class ExpertAgent(BaseAgent):
         prompt = (
             "你是一个失败归因判断器。请比较下面两次失败是否本质上是同一个失败模式。"
             "如果它们只是 query 表述略有不同，但错误类型、错误码、SQL 模板或失败根因基本一致，"
-            "请判断 same_failure=true。只输出 JSON，不要输出任何额外文本。\n\n"
-            "输出格式："
-            "{\"same_failure\": true/false, \"confidence\": 0.0-1.0, \"reason\": \"简短原因\"}\n\n"
+            "请判断 same_failure=true。\n\n"
             f"previous={json.dumps(previous.model_dump(), ensure_ascii=False)}\n"
             f"current={json.dumps(current.model_dump(), ensure_ascii=False)}"
         )
-        answer = await self.llm.ainvoke([HumanMessage(content=prompt)])
-        data = self.format_llm_output(answer)
-        if not isinstance(data, dict):
+        messages = [HumanMessage(content=prompt)]
+
+        # Tool Call #13: judge_failure_similarity — 失败归因相似度判断
+        # 比较两次失败快照，判断是否属于同一失败模式，用于防重复查询
+        judge_failure_similarity_tool = StructuredTool(
+            name="judge_failure_similarity",
+            description="Compare two failure snapshots and determine if they represent the same failure mode.",
+            args_schema=FailureSimilarityResult,
+            func=None,
+            coroutine=None,
+        )
+
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=judge_failure_similarity_tool,
+            messages=messages,
+            tool_choice="judge_failure_similarity",
+            span_name="expert-judge-similar-failure",
+            span_input={"query": "failure similarity comparison"},
+        )
+
+        if result is None or not isinstance(result, dict):
             return FailureSimilarityResult()
         return FailureSimilarityResult(**{
-            "same_failure": bool(data.get("same_failure", False)),
-            "confidence": float(data.get("confidence", 0.0) or 0.0),
-            "reason": str(data.get("reason", "") or ""),
+            "same_failure": bool(result.get("same_failure", False)),
+            "confidence": float(result.get("confidence", 0.0) or 0.0),
+            "reason": str(result.get("reason", "") or ""),
         })
 
     @staticmethod

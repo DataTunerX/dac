@@ -982,19 +982,51 @@ class TestLspDocumentSymbol:
         assert result.get("resultCount", 0) >= 5
 
     @pytest.mark.skipif(not HAS_GOPLS, reason="gopls not configured")
-    def test_document_symbol_ignores_line_param(self, lsp_manager_and_plugin):
-        """documentSymbol ignores the line param."""
+    def test_document_symbol_filters_by_name(self, lsp_manager_and_plugin):
+        """Small fixture files return full outline under the shared budget."""
+        plug = lsp_manager_and_plugin
+        filtered = _unmarshal_result(
+            plug.execute(
+                operation="documentSymbol",
+                file_path=str(GO_HANDLER),
+                symbol_name="ProcessRequest",
+            )
+        )
+        _assert_result_has_lines(filtered, "docSymbol filtered ProcessRequest")
+        text = filtered["result"]
+        assert "ProcessRequest" in text
+        assert "full outline" in text or "filtered" in text
+        assert len(text) <= 10000
+
+    @pytest.mark.skipif(not HAS_GOPLS, reason="gopls not configured")
+    def test_document_symbol_filters_by_line(self, lsp_manager_and_plugin):
+        """line focus on small files still returns a usable outline under budget."""
+        plug = lsp_manager_and_plugin
+        line, _ = _find_symbol(
+            GO_HANDLER, "ProcessRequest", line_hint="func (h *Handler) ProcessRequest"
+        )
+        raw = plug.execute(
+            operation="documentSymbol",
+            file_path=str(GO_HANDLER),
+            line=line,
+        )
+        result = _unmarshal_result(raw)
+        _assert_result_has_lines(result, "docSymbol filtered by line")
+        assert "ProcessRequest" in result["result"]
+        assert len(result["result"]) <= 10000
+
+    @pytest.mark.skipif(not HAS_GOPLS, reason="gopls not configured")
+    def test_document_symbol_line_miss_small_file_returns_full(self, lsp_manager_and_plugin):
+        """Under-budget outlines are returned in full even if line misses."""
         plug = lsp_manager_and_plugin
         raw = plug.execute(
             operation="documentSymbol",
-            file_path=str(GO_MAIN),
-            line=999,
-            character=999,
+            file_path=str(GO_HANDLER),
+            line=99999,
         )
         result = _unmarshal_result(raw)
-        _assert_result_has_lines(result, "docSymbol with ignored line")
-        formatted = result["result"]
-        assert "DataProcessor" in formatted
+        _assert_no_error(result, "docSymbol line miss")
+        assert "full outline" in result["result"] or "Handler" in result["result"]
 
 
 # -----------------------------------------------------------------------
@@ -1336,16 +1368,31 @@ class TestLspWorkspaceSymbol:
     def test_workspace_symbol_transform_data(self, lsp_manager_and_plugin):
         """workspaceSymbol for TransformData should find it."""
         plug = lsp_manager_and_plugin
-        # workspaceSymbol needs SKILL.md's 'lsp' plugin to pass the operation through
         raw = plug.execute(
             operation="workspaceSymbol",
             file_path=str(GO_MAIN),
-            # line/character are ignored for workspaceSymbol
+            symbol_name="TransformData",
         )
         result = _unmarshal_result(raw)
         _assert_no_error(result, "workspaceSymbol")
+        assert result.get("query") == "TransformData"
         formatted = result.get("result", "")
-        # workspaceSymbol may return 0 or more symbols; just verify no crash
+        assert isinstance(formatted, str)
+        assert "TransformData" in formatted or "symbol" in formatted.lower()
+
+    def test_workspace_symbol_accepts_directory_root(self, lsp_manager_and_plugin):
+        """workspaceSymbol must accept a workspace directory as file_path."""
+        plug = lsp_manager_and_plugin
+        raw = plug.execute(
+            operation="workspaceSymbol",
+            file_path=str(GO_PROJECT),
+            symbol_name="HandleRequest",
+        )
+        result = _unmarshal_result(raw)
+        _assert_no_error(result, "workspaceSymbol directory root")
+        assert result.get("query") == "HandleRequest"
+        assert "Path is not a file" not in json.dumps(result)
+        formatted = result.get("result", "")
         assert isinstance(formatted, str)
 
 
@@ -2334,18 +2381,17 @@ class TestSkillMdLspOperations:
         )
 
     def test_has_flow_d_call_hierarchy(self):
-        """SKILL.md should have Flow D for call hierarchy."""
-        assert "流程 D" in self.content, "Missing Flow D (call hierarchy)"
+        """SKILL.md should document call hierarchy (示例 5)."""
+        assert "示例 5：调用链分析" in self.content, "Missing call hierarchy example"
         assert "调用链分析" in self.content, "Missing call hierarchy analysis path"
 
     def test_has_scenario_6_call_chain(self):
-        """SKILL.md should have Scenario 6 for call chain exploration."""
-        assert "场景 6" in self.content, (
-            "Missing Scenario 6 (call chain exploration)"
-        )
+        """SKILL.md should document call-chain flow (示例 5)."""
+        assert "示例 5：调用链分析" in self.content, "Missing call hierarchy example"
         assert "调用链是什么样的" in self.content or "调用关系" in self.content, (
-            "Missing call chain scenario"
+            "Missing call chain intent wording"
         )
+        assert "outgoingCalls" in self.content and "incomingCalls" in self.content
 
     def test_distinguishes_find_refs_vs_incoming(self):
         """SKILL.md should explain findReferences vs incomingCalls distinction."""

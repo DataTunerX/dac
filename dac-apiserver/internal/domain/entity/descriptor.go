@@ -34,6 +34,9 @@ type DataDescriptor struct {
 	Namespace string
 	Labels      map[string]string
 	Annotations map[string]string
+	// ResourceVersion is the K8s optimistic-concurrency token from GET.
+	// Required on Update / UpdateStatus; empty on Create.
+	ResourceVersion string
 
 	// Spec
 	DescriptorType string

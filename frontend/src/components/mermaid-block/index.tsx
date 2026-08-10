@@ -61,7 +61,9 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
         const mermaid = (await import("mermaid")).default
         const config = {
           startOnLoad: false,
-          // Disable HTML labels / click callbacks from untrusted LLM diagrams
+          // Mermaid strict mode + DOMPurify (sanitizeSvg) for untrusted LLM diagrams.
+          // Keep default htmlLabels so flowchart text uses foreignObject; sanitizeSvg
+          // allows foreignObject while stripping scripts/event handlers.
           securityLevel: "strict" as const,
           theme: "base",
           themeVariables: {

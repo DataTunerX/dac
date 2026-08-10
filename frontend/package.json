@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node ./next-build.cjs",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -14,6 +14,7 @@
   "dependencies": {
     "@hookform/resolvers": "5.2.2",
     "@radix-ui/react-accordion": "^1.2.2",
+    "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-dialog": "1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.1",
     "@radix-ui/react-label": "^2.1.0",
@@ -27,7 +28,7 @@
     "echarts": "^6.0.0",
     "echarts-for-react": "^3.0.6",
     "isomorphic-dompurify": "^3.18.0",
-    "js-cookie": "^3.0.5",
+    "jose": "^6.2.8",
     "jwt-decode": "^4.0.0",
     "katex": "^0.16.47",
     "lucide-react": "0.561.0",
@@ -50,7 +51,6 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
-    "@types/js-cookie": "^3.0.6",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

@@ -42,11 +42,21 @@ class _FakeLLM:
         self.response = response
         self.calls: List[Any] = []
 
-    async def ainvoke(self, messages: Any) -> Any:
+    def bind_tools(self, tools: Any, **kwargs: Any) -> "_FakeLLM":
+        return self
+
+    async def ainvoke(self, messages: Any, **kwargs: Any) -> Any:
         self.calls.append(messages)
 
         class _Answer:
             content = __import__("json").dumps(self.response)
+            tool_calls = [
+                {
+                    "name": "score_snippets",
+                    "args": self.response,
+                    "id": "call_1",
+                }
+            ]
 
         return _Answer()
 
@@ -130,7 +140,10 @@ async def test_score_snippets_batch_parallel_multiple_batches():
         def __init__(self):
             self.calls = 0
 
-        async def ainvoke(self, messages: Any) -> Any:
+        def bind_tools(self, tools: Any, **kwargs: Any) -> "_BatchLLM":
+            return self
+
+        async def ainvoke(self, messages: Any, **kwargs: Any) -> Any:
             self.calls += 1
             import json
 
@@ -147,6 +160,13 @@ async def test_score_snippets_batch_parallel_multiple_batches():
 
             class _Answer:
                 content = json.dumps({"scores": scores})
+                tool_calls = [
+                    {
+                        "name": "score_snippets",
+                        "args": {"scores": scores},
+                        "id": "call_1",
+                    }
+                ]
 
             return _Answer()
 
@@ -155,7 +175,6 @@ async def test_score_snippets_batch_parallel_multiple_batches():
         snippets,
         query="q",
         llm=llm,
-        parse_output=lambda a: __import__("json").loads(getattr(a, "content")),
     )
     assert len(result) == 6
     assert llm.calls == 2  # batch_size default 5 -> [5,1]

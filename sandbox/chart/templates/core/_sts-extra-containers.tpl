@@ -244,6 +244,10 @@
       value: "127.0.0.1:5050"
     - name: AD_SERVICE_ADDR
       value: "127.0.0.1:9555"
+    # Required by newer frontend images (mustMapEnv); assistant itself is optional
+    # and not deployed in the sandbox — keep ENABLE_ASSISTANT unset/false.
+    - name: SHOPPING_ASSISTANT_SERVICE_ADDR
+      value: "127.0.0.1:80"
     - name: ENABLE_PROFILER
       value: "0"
   ports:
