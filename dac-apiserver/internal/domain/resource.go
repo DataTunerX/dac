@@ -51,6 +51,7 @@ type CreateAgentContainerRequest struct {
 	Labels                    map[string]string
 	DACType                   string
 	DataPolicy                entity.DataPolicy
+	SkillPolicy               entity.SkillPolicy
 	AgentCard                 entity.AgentCard
 	Model                     entity.ModelSpec
 	ExpertAgentMaxSteps       string
@@ -62,6 +63,7 @@ type UpdateAgentContainerRequest struct {
 	Labels                    map[string]string
 	DACType                   *string
 	DataPolicy                *entity.DataPolicy
+	SkillPolicy               *entity.SkillPolicy
 	AgentCard                 *entity.AgentCard
 	Model                     *entity.ModelSpec
 	ExpertAgentMaxSteps       *string

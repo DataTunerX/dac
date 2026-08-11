@@ -471,6 +471,10 @@ executionEngine:
     dataSinkersObserver:
       repository: "data-sinkers-observer"
       tag: "v0.11.0-amd64"
+    # -- Image for dacType=skill single-container skill-agent Deployments
+    skillAgent:
+      repository: "skill-agent"
+      tag: "v0.11.0-amd64"
 
   # -- dac-configuration ConfigMap values (read by DAC controller)
   dacConfig:

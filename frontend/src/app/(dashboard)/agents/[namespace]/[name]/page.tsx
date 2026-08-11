@@ -99,8 +99,11 @@ export default function AgentDetailPage() {
   const dataPolicy = agent?.dataPolicy ?? null
   const dataSourceType = dataPolicy?.dataSourceType ?? ""
   const semanticGroupID = dataPolicy?.semanticGroupID ?? ""
+  // skill DAC：无数据源 / 无编排循环，详情不展示这些字段
+  const isSkillAgent = (agent?.dacType || "").toLowerCase() === "skill"
   const isSemanticGroupAgent =
-    dataSourceType === "SemanticGroup" || (Boolean(semanticGroupID) && dataSourceType !== "SemanticDomain")
+    !isSkillAgent &&
+    (dataSourceType === "SemanticGroup" || (Boolean(semanticGroupID) && dataSourceType !== "SemanticDomain"))
 
   const {
     semanticGroup,
@@ -279,8 +282,17 @@ export default function AgentDetailPage() {
                     </Badge>
                   }
                 />
-                <InfoItem label="规划模型" value={<span className="font-mono text-xs">{model?.plannerLLM ?? "-"}</span>} />
-                <InfoItem label="专家模型" value={<span className="font-mono text-xs">{model?.expertLLM ?? "-"}</span>} />
+                {isSkillAgent ? (
+                  <InfoItem
+                    label="模型"
+                    value={<span className="font-mono text-xs">{model?.expertLLM ?? model?.plannerLLM ?? "-"}</span>}
+                  />
+                ) : (
+                  <>
+                    <InfoItem label="规划模型" value={<span className="font-mono text-xs">{model?.plannerLLM ?? "-"}</span>} />
+                    <InfoItem label="专家模型" value={<span className="font-mono text-xs">{model?.expertLLM ?? "-"}</span>} />
+                  </>
+                )}
                 <InfoItem
                   label="服务地址"
                   value={
@@ -295,12 +307,14 @@ export default function AgentDetailPage() {
                     </HoverHint>
                   }
                 />
+                {!isSkillAgent && (
+                  <InfoItem
+                    label="编排最大循环数"
+                    value={<span>{displayLimitValue(agent?.orchestratorAgentMaxLoops)}</span>}
+                  />
+                )}
                 <InfoItem
-                  label="编排最大循环数"
-                  value={<span>{displayLimitValue(agent?.orchestratorAgentMaxLoops)}</span>}
-                />
-                <InfoItem
-                  label="专家最大步数"
+                  label={isSkillAgent ? "最大步数" : "专家最大步数"}
                   value={<span>{displayLimitValue(agent?.expertAgentMaxSteps)}</span>}
                 />
               </div>
@@ -321,6 +335,7 @@ export default function AgentDetailPage() {
             </Card>
           </div>
 
+          {!isSkillAgent && (
           <div className="space-y-3">
             <div className="text-sm font-medium text-content flex items-center gap-2">
               {isSemanticGroupAgent ? (
@@ -411,6 +426,7 @@ export default function AgentDetailPage() {
               </CardContent>
             </Card>
           </div>
+          )}
 
           <div className="space-y-3">
             <div className="text-sm font-medium text-content flex items-center gap-2">

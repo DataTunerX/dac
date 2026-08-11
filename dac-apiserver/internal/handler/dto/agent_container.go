@@ -12,6 +12,16 @@ type DataPolicyDTO struct {
 	SourceNameSelector []string `json:"sourceNameSelector,omitempty"`
 }
 
+type SkillRefDTO struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Version   string `json:"version,omitempty"`
+}
+
+type SkillPolicyDTO struct {
+	Skills []SkillRefDTO `json:"skills,omitempty"`
+}
+
 type AgentSkillDTO struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
@@ -34,12 +44,13 @@ type ModelSpecDTO struct {
 
 // CreateAgentContainerRequest represents the HTTP request for creating agent container
 type CreateAgentContainerRequest struct {
-	Name                string            `json:"name" binding:"required"`
-	Labels              map[string]string `json:"labels,omitempty"`
-	DACType             string            `json:"dacType,omitempty"`
-	DataPolicy          DataPolicyDTO     `json:"dataPolicy" binding:"required"`
-	AgentCard           AgentCardDTO      `json:"agentCard" binding:"required"`
-	Model               ModelSpecDTO      `json:"model" binding:"required"`
+	Name                      string            `json:"name" binding:"required"`
+	Labels                    map[string]string `json:"labels,omitempty"`
+	DACType                   string            `json:"dacType,omitempty"`
+	DataPolicy                DataPolicyDTO     `json:"dataPolicy" binding:"required"`
+	SkillPolicy               SkillPolicyDTO    `json:"skillPolicy,omitempty"`
+	AgentCard                 AgentCardDTO      `json:"agentCard" binding:"required"`
+	Model                     ModelSpecDTO      `json:"model" binding:"required"`
 	ExpertAgentMaxSteps       string            `json:"expertAgentMaxSteps,omitempty"`
 	OrchestratorAgentMaxLoops string            `json:"orchestratorAgentMaxLoops,omitempty"`
 }
@@ -49,6 +60,7 @@ type UpdateAgentContainerRequest struct {
 	Labels                    map[string]string  `json:"labels,omitempty"`
 	DACType                   *string            `json:"dacType,omitempty"`
 	DataPolicy                *DataPolicyDTO     `json:"dataPolicy,omitempty"`
+	SkillPolicy               *SkillPolicyDTO    `json:"skillPolicy,omitempty"`
 	AgentCard                 *AgentCardDTO      `json:"agentCard,omitempty"`
 	Model                     *ModelSpecDTO      `json:"model,omitempty"`
 	ExpertAgentMaxSteps       *string            `json:"expertAgentMaxSteps,omitempty"`
@@ -62,6 +74,7 @@ type AgentContainerResponse struct {
 	Labels                    map[string]string              `json:"labels,omitempty"`
 	DACType                   string                         `json:"dacType,omitempty"`
 	DataPolicy                DataPolicyResponse             `json:"dataPolicy"`
+	SkillPolicy               SkillPolicyResponse            `json:"skillPolicy,omitempty"`
 	AgentCard                 AgentCardResponse              `json:"agentCard"`
 	Model                     ModelSpecResponse              `json:"model"`
 	ExpertAgentMaxSteps       string                         `json:"expertAgentMaxSteps,omitempty"`
@@ -71,6 +84,16 @@ type AgentContainerResponse struct {
 	Conditions                []ConditionResponse            `json:"conditions,omitempty"`
 	CreatedAt                 string                         `json:"createdAt"`
 	UpdatedAt                 string                         `json:"updatedAt"`
+}
+
+type SkillRefResponse struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Version   string `json:"version,omitempty"`
+}
+
+type SkillPolicyResponse struct {
+	Skills []SkillRefResponse `json:"skills,omitempty"`
 }
 
 type DataPolicyResponse struct {
@@ -137,6 +160,19 @@ func ToAgentContainerResponse(container *entity.AgentContainer) AgentContainerRe
 		DataSourceType:     container.DataPolicy.DataSourceType,
 		SemanticGroupID:    container.DataPolicy.SemanticGroupID,
 		SourceNameSelector: container.DataPolicy.SourceNameSelector,
+	}
+
+	// SkillPolicy (skill DAC binding)
+	if len(container.SkillPolicy.Skills) > 0 {
+		skillRefs := make([]SkillRefResponse, len(container.SkillPolicy.Skills))
+		for i, s := range container.SkillPolicy.Skills {
+			skillRefs[i] = SkillRefResponse{
+				Namespace: s.Namespace,
+				Name:      s.Name,
+				Version:   s.Version,
+			}
+		}
+		resp.SkillPolicy = SkillPolicyResponse{Skills: skillRefs}
 	}
 
 	// AgentCard

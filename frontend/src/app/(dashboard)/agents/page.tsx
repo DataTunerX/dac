@@ -121,13 +121,20 @@ export interface Agent {
   namespace: string;
   description: string;
   dataSource: string;
-  dataSourceType: string;
+  /** UI type key: descriptor | semantic-group | skill */
+  dataSourceType: "descriptor" | "semantic-group" | "skill" | string;
   semanticGroupID?: string;
   plannerLLM?: string;
   expertLLM?: string;
   createdAt?: string;
   status: "AVAILABLE" | "CREATING" | "UNKNOWN";
   raw: unknown;
+}
+
+function agentTypeLabel(dataSourceType: string): string {
+  if (dataSourceType === "skill") return "通用智能体";
+  if (dataSourceType === "semantic-group") return "业务智能体";
+  return "数据智能体";
 }
 
 function deriveAgentStatus(agent: UnknownRecord): Agent["status"] {
@@ -173,10 +180,23 @@ function mapRawToAgent(
   const dataSourceTypeRaw =
     asString((dataPolicy as UnknownRecord | undefined)?.dataSourceType) ||
     asString((dataPolicy as UnknownRecord | undefined)?.data_source_type);
+  const dacType =
+    (asString(item.dacType) || asString(item.dac_type) || "").toLowerCase();
+  const skillPolicyRaw = getItemField(item, "skillPolicy", "skill_policy");
+  const skillPolicy = isRecord(skillPolicyRaw) ? skillPolicyRaw : undefined;
+  const skillRefsRaw = skillPolicy?.skills;
+  const skillNames = Array.isArray(skillRefsRaw)
+    ? skillRefsRaw
+        .map((s) => (isRecord(s) ? asString(s.name) : undefined))
+        .filter((n): n is string => Boolean(n))
+    : [];
+  // Prefer dacType=skill so empty dataPolicy does not fall through as "descriptor"
   const dsType =
-    dataSourceTypeRaw === "SemanticGroup" || Boolean(semanticGroupID)
-      ? "semantic-group"
-      : "descriptor";
+    dacType === "skill"
+      ? "skill"
+      : dataSourceTypeRaw === "SemanticGroup" || Boolean(semanticGroupID)
+        ? "semantic-group"
+        : "descriptor";
   const modelRaw = item.model;
   const model = isRecord(modelRaw) ? modelRaw : undefined;
   const plannerLLM =
@@ -191,7 +211,14 @@ function mapRawToAgent(
     name: displayName,
     namespace,
     description,
-    dataSource: selector.length > 0 ? selector.join(", ") : "-",
+    dataSource:
+      dsType === "skill"
+        ? skillNames.length > 0
+          ? skillNames.join(", ")
+          : "-"
+        : selector.length > 0
+          ? selector.join(", ")
+          : "-",
     dataSourceType: dsType,
     semanticGroupID,
     plannerLLM,
@@ -222,7 +249,7 @@ function agentSearchText(
     sg,
     a.plannerLLM,
     a.expertLLM,
-    a.dataSourceType === "semantic-group" ? "业务智能体" : "数据智能体",
+    agentTypeLabel(a.dataSourceType),
   ]
     .filter(Boolean)
     .join(" ");
@@ -306,6 +333,8 @@ const AgentCard = memo(function AgentCard({
         >
           {a.dataSourceType === "semantic-group" ? (
             <Layers className="h-3.5 w-3.5 shrink-0 text-content-muted" />
+          ) : a.dataSourceType === "skill" ? (
+            <Bot className="h-3.5 w-3.5 shrink-0 text-content-muted" />
           ) : (
             <Database className="h-3.5 w-3.5 shrink-0 text-content-muted" />
           )}
@@ -318,10 +347,17 @@ const AgentCard = memo(function AgentCard({
         </div>
         <div
           className="truncate font-mono text-[11px] text-content-muted"
-          title={[a.plannerLLM, a.expertLLM].filter(Boolean).join(" / ")}
+          title={
+            a.dataSourceType === "skill"
+              ? a.expertLLM || a.plannerLLM || "-"
+              : [a.plannerLLM, a.expertLLM].filter(Boolean).join(" / ")
+          }
         >
-          {a.plannerLLM || "-"}
-          {a.expertLLM && a.expertLLM !== a.plannerLLM ? ` / ${a.expertLLM}` : ""}
+          {a.dataSourceType === "skill"
+            ? a.expertLLM || a.plannerLLM || "-"
+            : `${a.plannerLLM || "-"}${
+                a.expertLLM && a.expertLLM !== a.plannerLLM ? ` / ${a.expertLLM}` : ""
+              }`}
         </div>
         <div className="absolute bottom-3 right-3">
           {a.dataSourceType === "semantic-group" ? (
@@ -330,6 +366,13 @@ const AgentCard = memo(function AgentCard({
               className="h-5 border-indigo-100 bg-indigo-50 px-2 text-[10px] font-normal text-indigo-700"
             >
               业务智能体
+            </Badge>
+          ) : a.dataSourceType === "skill" ? (
+            <Badge
+              variant="secondary"
+              className="h-5 border-emerald-100 bg-emerald-50 px-2 text-[10px] font-normal text-emerald-700"
+            >
+              通用智能体
             </Badge>
           ) : (
             <Badge
@@ -356,7 +399,7 @@ export default function AgentsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<ListViewMode>("list");
   const [typeFilter, setTypeFilter] = useState<
-    "all" | "descriptor" | "semantic-group"
+    "all" | "descriptor" | "semantic-group" | "skill"
   >("semantic-group");
 
   const deferredSearch = useDeferredValue(searchQuery);
@@ -453,6 +496,39 @@ export default function AgentsPage() {
           return { id, name, description, tags, examples };
         })
         .filter((s) => s.id && s.name);
+
+      // skill 分支：dacType=skill，dataPolicy 置空，绑定写入 skillPolicy
+      if (data.dataSourceType === "skill") {
+        // 运行时使用 expertLLM；plannerLLM 同步同值以满足 CRD 必填
+        const llm = data.expertModel || data.plannerModel;
+        const payload = {
+          name: data.name.toLowerCase().replace(/\s+/g, "-"),
+          namespace: data.namespace,
+          dacType: "skill",
+          agentCard: {
+            name: data.name,
+            description: data.description,
+            skills,
+          },
+          dataPolicy: {
+            dataSourceType: "",
+            semanticGroupID: "",
+            sourceNameSelector: [],
+          },
+          skillPolicy: data.skillPolicy ?? { skills: [] },
+          model: {
+            plannerLLM: llm,
+            expertLLM: llm,
+            embedding: "embedding-config",
+          },
+          expertAgentMaxSteps: data.expertAgentMaxSteps || "10",
+          orchestratorAgentMaxLoops: data.orchestratorAgentMaxLoops || "2",
+        };
+        await api.post(`/namespaces/${data.namespace}/agents`, payload);
+        toast.success("智能体创建成功");
+        fetchData();
+        return;
+      }
 
       const isSemanticGroup = data.dataSourceType === "semantic-group";
       const dacType = isSemanticGroup ? "normal" : "ds";
@@ -553,7 +629,7 @@ export default function AgentsPage() {
           <Select
             value={typeFilter}
             onValueChange={(v) =>
-              setTypeFilter(v as "all" | "descriptor" | "semantic-group")
+              setTypeFilter(v as "all" | "descriptor" | "semantic-group" | "skill")
             }
           >
             <SelectTrigger className="h-9 w-[min(10rem,40vw)] bg-surface">
@@ -562,6 +638,7 @@ export default function AgentsPage() {
             <SelectContent align="end">
               <SelectItem value="semantic-group">业务智能体</SelectItem>
               <SelectItem value="descriptor">数据智能体</SelectItem>
+              <SelectItem value="skill">通用智能体</SelectItem>
               <SelectItem value="all">全部类型</SelectItem>
             </SelectContent>
           </Select>
@@ -670,6 +747,13 @@ export default function AgentsPage() {
                           className="border-indigo-100 bg-indigo-50 font-normal text-indigo-700"
                         >
                           业务
+                        </Badge>
+                      ) : a.dataSourceType === "skill" ? (
+                        <Badge
+                          variant="secondary"
+                          className="border-emerald-100 bg-emerald-50 font-normal text-emerald-700"
+                        >
+                          通用
                         </Badge>
                       ) : (
                         <Badge variant="secondary" className="font-normal">

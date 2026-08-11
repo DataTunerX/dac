@@ -160,6 +160,9 @@ func (r *agentContainerRepository) toUnstructured(container *entity.AgentContain
 				"semanticGroupID":    container.DataPolicy.SemanticGroupID,
 				"sourceNameSelector": container.DataPolicy.SourceNameSelector,
 			},
+			"skillPolicy": map[string]interface{}{
+				"skills": r.skillRefsToMap(container.SkillPolicy.Skills),
+			},
 			"agentCard": map[string]interface{}{
 				"name":        container.AgentCard.Name,
 				"description": container.AgentCard.Description,
@@ -220,6 +223,15 @@ func (r *agentContainerRepository) fromUnstructured(unst *unstructured.Unstructu
 		})
 	}
 
+	skillRefs := make([]entity.SkillRef, 0, len(k8sContainer.Spec.SkillPolicy.Skills))
+	for _, s := range k8sContainer.Spec.SkillPolicy.Skills {
+		skillRefs = append(skillRefs, entity.SkillRef{
+			Namespace: s.Namespace,
+			Name:      s.Name,
+			Version:   s.Version,
+		})
+	}
+
 	activeDDs := make([]entity.ActiveDataDescriptor, 0, len(k8sContainer.Status.ActiveDataDescriptors))
 	for _, d := range k8sContainer.Status.ActiveDataDescriptors {
 		activeDDs = append(activeDDs, entity.ActiveDataDescriptor{
@@ -268,6 +280,9 @@ func (r *agentContainerRepository) fromUnstructured(unst *unstructured.Unstructu
 			SemanticGroupID:    k8sContainer.Spec.DataPolicy.SemanticGroupID,
 			SourceNameSelector: k8sContainer.Spec.DataPolicy.SourceNameSelector,
 		},
+		SkillPolicy: entity.SkillPolicy{
+			Skills: skillRefs,
+		},
 		AgentCard: entity.AgentCard{
 			Name:        k8sContainer.Spec.AgentCard.Name,
 			Description: k8sContainer.Spec.AgentCard.Description,
@@ -303,6 +318,18 @@ func (r *agentContainerRepository) skillsToMap(skills []entity.AgentSkill) []int
 			"description": skill.Description,
 			"tags":        skill.Tags,
 			"examples":    skill.Examples,
+		}
+	}
+	return result
+}
+
+func (r *agentContainerRepository) skillRefsToMap(skills []entity.SkillRef) []interface{} {
+	result := make([]interface{}, len(skills))
+	for i, s := range skills {
+		result[i] = map[string]interface{}{
+			"namespace": s.Namespace,
+			"name":      s.Name,
+			"version":   s.Version,
 		}
 	}
 	return result

@@ -36,6 +36,7 @@ export const SYSTEM_CONFIG_META: Record<SystemConfigName, SystemConfigMeta> = {
           "code-agent-image",
           "doc-agent-image",
           "dd-sync-observer-image",
+          "skill-agent-image",
         ],
       },
       {

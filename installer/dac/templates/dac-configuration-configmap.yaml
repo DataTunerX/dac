@@ -20,6 +20,7 @@ data:
   code-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.codeAgent.repository | default "code-agent") "tag" .Values.executionEngine.agentImages.codeAgent.tag) | quote }}
   doc-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.docAgent.repository | default "doc-agent") "tag" .Values.executionEngine.agentImages.docAgent.tag) | quote }}
   dd-sync-observer-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.dataSinkersObserver.repository | default "data-sinkers-observer") "tag" .Values.executionEngine.agentImages.dataSinkersObserver.tag) | quote }}
+  skill-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.skillAgent.repository | default "skill-agent") "tag" .Values.executionEngine.agentImages.skillAgent.tag) | quote }}
   default-planner-llm: {{ .Values.executionEngine.dacConfig.defaultPlannerLLM | default "llm-default" | quote }}
   default-expert-llm: {{ .Values.executionEngine.dacConfig.defaultExpertLLM | default "llm-default" | quote }}
 {{- end }}

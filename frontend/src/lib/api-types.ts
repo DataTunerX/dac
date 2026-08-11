@@ -76,6 +76,19 @@ export type DataPolicyResponse = {
   sourceNameSelector?: string[]
 }
 
+/** Skill-hub package ref for dacType=skill (editable binding: ns/name/version only). */
+export type SkillRef = {
+  namespace: string
+  name: string
+  /** Empty / omitted = always pull latest. */
+  version?: string
+}
+
+/** Symmetric with dataPolicy: skill DACs bind via skillPolicy. */
+export type SkillPolicy = {
+  skills?: SkillRef[]
+}
+
 export type AgentSkillResponse = {
   id: string
   name: string
@@ -122,6 +135,8 @@ export type AgentContainerResponse = {
   labels?: Record<string, string>
   dacType?: string
   dataPolicy: DataPolicyResponse
+  /** Present when dacType=skill. */
+  skillPolicy?: SkillPolicy
   agentCard: AgentCardResponse
   model: ModelSpecResponse
   expertAgentMaxSteps?: string
@@ -131,6 +146,31 @@ export type AgentContainerResponse = {
   conditions?: ConditionResponse[]
   createdAt: string
   updatedAt: string
+}
+
+/** POST /namespaces/:ns/agents create body (aligned with CreateAgentContainerRequest). */
+export type CreateAgentContainerRequest = {
+  name: string
+  labels?: Record<string, string>
+  dacType?: string
+  dataPolicy: DataPolicyResponse
+  skillPolicy?: SkillPolicy
+  agentCard: AgentCardResponse
+  model: ModelSpecResponse
+  expertAgentMaxSteps?: string
+  orchestratorAgentMaxLoops?: string
+}
+
+/** PATCH/PUT agent update body (aligned with UpdateAgentContainerRequest). */
+export type UpdateAgentContainerRequest = {
+  labels?: Record<string, string>
+  dacType?: string
+  dataPolicy?: DataPolicyResponse
+  skillPolicy?: SkillPolicy
+  agentCard?: AgentCardResponse
+  model?: ModelSpecResponse
+  expertAgentMaxSteps?: string
+  orchestratorAgentMaxLoops?: string
 }
 
 /** GET /namespaces/:ns/agents or GET /agents list payload (after unwrap) */

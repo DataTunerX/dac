@@ -105,6 +105,37 @@ spec:
                 type: object
               orchestratorAgentMaxLoops:
                 type: string
+              skillPolicy:
+                description: SkillPolicy is the raw skill-hub selection for dacType=skill
+                  (empty for ds/normal).
+                properties:
+                  skills:
+                    description: |-
+                      Skills is the multi-select list from skill-hub.
+                      Constraint: SkillRef.Name must be unique within one DAC (even across namespaces).
+                    items:
+                      description: |-
+                        SkillRef is a downloadable skill package reference in skill-hub (editable selection).
+                        Only binding identity: namespace + name + optional version. Description lives in agentCard.skills (from hub detail).
+                      properties:
+                        name:
+                          description: Name is the skill name (matches zip / SKILL.md
+                            name). Required.
+                          type: string
+                        namespace:
+                          description: Namespace is the skill-hub namespace (not the
+                            K8s namespace). Required; non-default supported.
+                          type: string
+                        version:
+                          description: Version pins a version; empty means always
+                            fetch latest.
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                    type: array
+                type: object
             required:
             - agentCard
             - dacType
