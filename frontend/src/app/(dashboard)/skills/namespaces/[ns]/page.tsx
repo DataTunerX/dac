@@ -8,9 +8,9 @@ import { toast } from "sonner"
 import {
   ArrowLeft,
   Download,
-  Eye,
   Loader2,
   Package,
+  Pencil,
   Plus,
   RefreshCw,
   Trash2,
@@ -19,6 +19,7 @@ import {
 
 import { RbacButton, RbacWrapper } from "@/components/rbac"
 import { ListPageSearch } from "@/components/list-page-search"
+import { SkillDetailDialog } from "@/components/skill-detail-dialog"
 import { SkillEditDialog } from "@/components/skill-edit-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -99,8 +100,9 @@ export default function SkillNamespaceDetailPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState(EMPTY_FORM)
-  // Opens SkillEditDialog (view + edit pack metadata).
-  const [detailSkill, setDetailSkill] = useState<SkillInfoResponse | null>(null)
+  // Row click → read-only detail; pencil → edit dialog
+  const [viewSkill, setViewSkill] = useState<SkillInfoResponse | null>(null)
+  const [editSkill, setEditSkill] = useState<SkillInfoResponse | null>(null)
 
   const skillsKey = namespace ? `skills:${namespace}` : null
   const {
@@ -220,7 +222,8 @@ export default function SkillNamespaceDetailPage() {
       await deleteSkill(deleteTarget.namespace, deleteTarget.name, deleteTarget.version)
       toast.success(`已删除 ${deleteTarget.name}@${deleteTarget.version}`)
       setDeleteTarget(null)
-      setDetailSkill(null)
+      setViewSkill(null)
+      setEditSkill(null)
       await mutateSkills()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "删除失败")
@@ -338,7 +341,7 @@ export default function SkillNamespaceDetailPage() {
                   <TableRow
                     key={dlKey}
                     className="cursor-pointer"
-                    onClick={() => setDetailSkill(skill)}
+                    onClick={() => setViewSkill(skill)}
                   >
                     <TableCell className="font-medium">{skill.name}</TableCell>
                     <TableCell
@@ -356,10 +359,10 @@ export default function SkillNamespaceDetailPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="查看 / 编辑"
-                          onClick={() => setDetailSkill(skill)}
+                          aria-label="编辑"
+                          onClick={() => setEditSkill(skill)}
                         >
-                          <Eye className="h-4 w-4" />
+                          <Pencil className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -394,13 +397,23 @@ export default function SkillNamespaceDetailPage() {
         </TableWrapper>
       )}
 
-      <SkillEditDialog
-        skill={detailSkill}
+      <SkillDetailDialog
+        skill={viewSkill}
         downloading={
-          !!detailSkill &&
-          downloadingKey === `${detailSkill.namespace}/${detailSkill.name}`
+          !!viewSkill &&
+          downloadingKey === `${viewSkill.namespace}/${viewSkill.name}`
         }
-        onClose={() => setDetailSkill(null)}
+        onClose={() => setViewSkill(null)}
+        onDownload={onDownload}
+      />
+
+      <SkillEditDialog
+        skill={editSkill}
+        downloading={
+          !!editSkill &&
+          downloadingKey === `${editSkill.namespace}/${editSkill.name}`
+        }
+        onClose={() => setEditSkill(null)}
         onDownload={onDownload}
         onSaved={async () => {
           await Promise.all([mutateSkills(), globalMutate(SKILL_NAMESPACES_KEY)])

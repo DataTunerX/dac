@@ -54,8 +54,8 @@ type SkillEditDialogProps = {
 }
 
 /**
- * Namespace skill dialog: view + edit metadata (preserves pack scripts on save).
- * Distinct from marketplace SkillDetailDialog which is read-only.
+ * Namespace skill edit dialog: edit metadata (preserves pack scripts on save).
+ * Row click opens read-only SkillDetailDialog instead.
  */
 export function SkillEditDialog({
   skill,
@@ -163,7 +163,7 @@ export function SkillEditDialog({
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#c7d2fe] bg-[#e0e7ff] text-[#4f46e5]">
               <Package className="h-4 w-4" />
             </span>
-            查看 / 编辑技能
+            编辑技能
           </DialogTitle>
           <DialogDescription>
             命名空间{" "}

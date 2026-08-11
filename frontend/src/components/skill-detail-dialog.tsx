@@ -41,8 +41,7 @@ function DetailField({
 }
 
 /**
- * Read-only skill detail modal (marketplace).
- * Namespace management uses SkillEditDialog for view + edit.
+ * Read-only skill detail modal (marketplace + namespace list row click).
  */
 export function SkillDetailDialog({
   skill,
