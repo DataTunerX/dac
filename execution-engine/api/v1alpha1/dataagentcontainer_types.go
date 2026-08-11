@@ -31,6 +31,25 @@ type DataPolicy struct {
 	SourceNameSelector []string `json:"sourceNameSelector,omitempty"`
 }
 
+// SkillPolicy binds skill-hub packages for dacType=skill DACs.
+// Symmetric with DataPolicy: ds/normal use DataPolicy; skill uses SkillPolicy.
+type SkillPolicy struct {
+	// Skills is the multi-select list from skill-hub.
+	// Constraint: SkillRef.Name must be unique within one DAC (even across namespaces).
+	Skills []SkillRef `json:"skills,omitempty"`
+}
+
+// SkillRef is a downloadable skill package reference in skill-hub (editable selection).
+// Only binding identity: namespace + name + optional version. Description lives in agentCard.skills (from hub detail).
+type SkillRef struct {
+	// Namespace is the skill-hub namespace (not the K8s namespace). Required; non-default supported.
+	Namespace string `json:"namespace"`
+	// Name is the skill name (matches zip / SKILL.md name). Required.
+	Name string `json:"name"`
+	// Version pins a version; empty means always fetch latest.
+	Version string `json:"version,omitempty"`
+}
+
 // AgentCard defines the agent's metadata and capabilities
 type AgentCard struct {
 	Name        string       `json:"name"`
@@ -55,12 +74,14 @@ type ModelSpec struct {
 
 // DataAgentContainerSpec defines the desired state of DataAgentContainer
 type DataAgentContainerSpec struct {
-	DataPolicy                DataPolicy `json:"dataPolicy"`
-	AgentCard                 AgentCard  `json:"agentCard"`
-	DACType                   string     `json:"dacType"`
-	Model                     ModelSpec  `json:"model"`
-	OrchestratorAgentMaxLoops string     `json:"orchestratorAgentMaxLoops"`
-	ExpertAgentMaxSteps       string     `json:"expertAgentMaxSteps"`
+	DataPolicy DataPolicy `json:"dataPolicy"`
+	// SkillPolicy is the raw skill-hub selection for dacType=skill (empty for ds/normal).
+	SkillPolicy               SkillPolicy `json:"skillPolicy,omitempty"`
+	AgentCard                 AgentCard   `json:"agentCard"`
+	DACType                   string      `json:"dacType"`
+	Model                     ModelSpec   `json:"model"`
+	OrchestratorAgentMaxLoops string      `json:"orchestratorAgentMaxLoops"`
+	ExpertAgentMaxSteps       string      `json:"expertAgentMaxSteps"`
 }
 
 // ActiveDataDescriptor tracks which data descriptors are being used

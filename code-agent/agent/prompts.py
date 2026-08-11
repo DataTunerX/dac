@@ -24,17 +24,8 @@ LOCATE_FILES = """
 # Constraints
 - **禁止语义漂移**：严格禁止仅因文件名包含关键字而选中文件。必须在【摘要】中找到能闭环业务逻辑的证据。
 - **极简准确原则**：若文件摘要表明其仅为通用工具类且不包含业务逻辑，请予以排除。
-- **输出要求**：仅返回标准 JSON，严禁任何 markdown 代码块标识符外的废话。
-
-# Output Format (JSON)
-{{
-  "knowledge_files": [
-    {{"knowledge_id": "知识中的Knowledge ID 1", "files": ["该知识下的文件路径1", "该知识下的文件路径2"]}},
-    {{"knowledge_id": "知识中的Knowledge ID 2", "files": ["该知识下的文件路径3"]}}
-  ],
-  "intent_analysis": "对用户真实业务意图的理解及其背后的逻辑链路拆解。",
-  "reasoning_path": "描述从触发点到执行点的逻辑推演过程（体现：因为 A 负责...，且 B 消费了 A 的...，所以...）。"
-}}
+- **输出要求**：请调用 `locate_files` 工具，直接填充工具参数字段（不要输出 JSON Schema 外壳，不要返回 `properties` 包装）。
+- **结果一致性**：如果 `intent_analysis` 或 `reasoning_path` 判断某个文件相关，必须把该文件及其 Knowledge ID 写入 `knowledge_files`；只有确认上下文中不存在相关文件时，`knowledge_files` 才能返回空列表。
 
 ---
 # Context: 系统全局信息
@@ -83,23 +74,8 @@ Task
 - **拒绝关键词陷阱**：禁止仅依靠文件名相似度进行判断；也禁止仅因缺少目标功能实现就剔除。
 - **代码上下文原则**：保留的文件应能共同提供与用户问题相关的代码上下文（数据从哪来、逻辑在哪、如何扩展）；**不要求**已有完整可执行答案。
 - **勿清空列表**：若 Stage 1 已定位文件中**至少有一个与用户问题业务域相关**，audit_results 中至少应 KEEP 一个最相关文件；不得因「理想实现不存在于代码库」而将全部文件 DISCARD。**例外**：若所有候选文件的业务域均与用户问题无关，应全部 DISCARD。
-- **输出要求**：仅返回标准 JSON，严禁任何 markdown 代码块标识符外的废话。
+- **输出要求**：请调用 `observe_locate_files` 工具，工具参数即为输出格式要求。
 
-# Output Format (JSON)
-
-{{
-  "intent_reconstruction": "简述用户意图及回答该问题需要关注哪些代码层面（数据模型/服务/查询逻辑等）。",
-  "audit_results": [
-    {{
-      "knowledge_id": "Knowledge ID",
-      "action": "KEEP | DISCARD",
-      "file_path": "文件路径",
-      "logic_score": "0-10 匹配得分",
-      "reasoning": "基于代码相关性说明保留或剔除原因；若 KEEP，说明含哪些关键实体/字段/方法；若 DISCARD，说明为何与业务域无关而非仅缺现成接口。"
-    }}
-  ],
-  "final_context_summary": "保留下来的文件如何共同提供与用户问题相关的代码上下文。"
-}}
 
 ---
 # Context: 系统全局信息
@@ -130,11 +106,7 @@ REQUERY_PROMPT_ZH = """
 3. 生成新问题的重要依据是历史的执行结果，你需要严格认真分析历史的执行结果，作为生成新问题的依据，来更好的解决问题。
 
 **输出格式：**
-- 必须返回标准 JSON 字符串，确保可被 `json.loads()` 解析
-- 包含两个个必要字段：`requery`、`conclusion`
-- 不包含任何额外文本或解释
-- 不要在外层添加额外的引号
-- 确保是有效的JSON格式
+请调用 `requery` 工具，工具参数即为输出格式要求。
 
 **示例参考：**
 
@@ -161,7 +133,7 @@ REQUERY_PROMPT_ZH = """
 - 历史问题包括： `{history_querys}`
 
 
-**注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
+**注意：** 请调用 `requery` 工具，工具参数即为输出格式要求。
 
 """
 
@@ -183,11 +155,7 @@ OBSERVE_PROMPT_COMMON_ZH = """
 {knowledge}
 
 **输出格式：**
-- 必须返回标准 JSON 字符串，确保可被 `json.loads()` 解析
-- 包含两个个必要字段：`reason`、`conclusion`
-- 不包含任何额外文本或解释
-- 不要在外层添加额外的引号
-- 确保是有效的JSON格式
+请调用 `observe_common` 工具，工具参数即为输出格式要求。
 
 **示例参考：**
 
@@ -198,7 +166,7 @@ OBSERVE_PROMPT_COMMON_ZH = """
 {continue_fewshots}
 
 
-**注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
+**注意：** 请调用 `observe_common` 工具，工具参数即为输出格式要求。
 
 """
 
@@ -274,26 +242,8 @@ SEARCH_CODE_SEGMENTS_PROMPT = """
 - **名称格式**：name 字段只填写函数/方法/类的名称，**不要带类名前缀**
   - 正确: "create_order", "validate_coupon", "Order"
   - 错误: "OrderService.create_order", "CouponService.validate_coupon"
-- **输出要求**：仅返回标准 JSON，严禁任何 markdown 代码块标识符外的废话
+- **输出要求**：请调用 `search_code_segments` 工具，工具参数即为输出格式要求
 
-# Output Format (JSON)
-{{
-  "query": "用户的原始问题",
-  "query_type": "precise | entity | process",
-  "intent_analysis": "对用户意图的分析，说明用户想了解什么",
-  "relevant_segments": [
-    {{
-      "file_path": "文件路径",
-      "segment_type": "entity | function | api_endpoint | global_function",
-      "name": "代码元素名称（只填名称，不带类名前缀）",
-      "line_no": "行号范围，如 100-160 或单行 100",
-      "relevance_score": 7-10,
-      "relevance_reason": "为什么这段代码与用户问题直接相关",
-      "business_meaning": "该代码片段的业务含义"
-    }}
-  ],
-  "summary": "对搜索结果的总结"
-}}
 
 ---
 # Context: 代码分析结果
@@ -347,8 +297,8 @@ QUICK_RELEVANCE_CHECK_PROMPT = """
 - 相关：代码片段直接实现了用户查询的功能，或是该功能的核心依赖
 - 不相关：代码片段只是名字相似，但功能与用户查询无关
 
-# Output (JSON)
-{{"relevant": true/false, "reason": "一句话说明"}}
+# Output
+请调用 `quick_relevance_check` 工具，工具参数即为输出格式要求。
 """
 
 EXTRACT_KEYWORDS_PROMPT = """
@@ -383,12 +333,8 @@ EXTRACT_KEYWORDS_PROMPT = """
 - "用户登录验证" → entity: ["用户", "User"], action: ["登录", "验证"]
 - "支付回调处理" → entity: ["支付", "Payment"], action: ["回调", "callback"]
 
-# Output Format (JSON)
-{{
-    "entity_keywords": ["主体1", "主体2"],
-    "action_keywords": ["动作1"],
-    "reasoning": "简要说明"
-}}
+# Output Format
+请调用 `extract_keywords` 工具，工具参数即为输出格式要求。
 
 # 用户查询
 {query}
@@ -414,16 +360,6 @@ BATCH_SNIPPET_SCORE_PROMPT = """
 # 输出要求
 - 必须为列表中**每个** snippet_id 返回一条结果
 - description：1-2 句话说明该代码块与用户问题的关系
-- 仅返回标准 JSON，不要 markdown 代码块包裹
+- 请调用 `score_snippets` 工具，工具参数即为输出格式要求
 
-# Output Format (JSON)
-{{
-  "scores": [
-    {{
-      "snippet_id": 0,
-      "relevance_score": 9.0,
-      "description": "该代码块与用户问题的关系说明"
-    }}
-  ]
-}}
 """

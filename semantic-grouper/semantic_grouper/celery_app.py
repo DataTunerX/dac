@@ -277,6 +277,23 @@ def _reconcile_groups_from_dd_annotation(
     return last_result
 
 
+def _empty_delete_result(dd_namespace: str, dd_name: str, reason: str) -> Dict[str, Any]:
+    """Idempotent Delete when the DD never had semantic domain data."""
+    logger.info(
+        "Delete semantic group skipped for %s/%s: %s",
+        dd_namespace,
+        dd_name,
+        reason,
+    )
+    return {
+        "status": "success",
+        "action": "SKIPPED",
+        "message": reason,
+        "dd_namespace": dd_namespace,
+        "dd_name": dd_name,
+    }
+
+
 def decremental_semantic_group(descriptor: dict) -> Dict[str, Any]:
     """
     删除 DD 对应的所有语义域与语义组的关联。
@@ -289,7 +306,20 @@ def decremental_semantic_group(descriptor: dict) -> Dict[str, Any]:
         dd_namespace=dd_namespace, dd_name=dd_name
     )
     if semantic_domain is None:
-        raise ValueError(f"未找到对应的语义域数据: {dd_namespace}/{dd_name}")
+        return _empty_delete_result(
+            dd_namespace,
+            dd_name,
+            f"no semantic domain data for {dd_namespace}/{dd_name}",
+        )
+
+    if "data" in semantic_domain:
+        data_list = semantic_domain.get("data", [])
+        if isinstance(data_list, list) and len(data_list) == 0:
+            return _empty_delete_result(
+                dd_namespace,
+                dd_name,
+                f"no semantic domain data for {dd_namespace}/{dd_name}",
+            )
 
     domain_list = _parse_domain_data_all(semantic_domain, dd_namespace, dd_name)
 

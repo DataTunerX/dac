@@ -1,17 +1,28 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
+import useSWR from "swr"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
-import { listDescriptorsAll } from "@/lib/descriptors-api"
+import {
+  appendDescriptorSourcesAndResync,
+  getDescriptor,
+  listAllDescriptors,
+} from "@/lib/descriptors-api"
+import {
+  buildAppendSources,
+  buildCreateDescriptorPayload,
+} from "@/lib/descriptor-payload"
 import type { DataDescriptorResponse, DataSourceResponse } from "@/lib/api-types"
+import { validateSystemLlmConfigMaps } from "@/lib/system-config-meta"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
+import { useAuthHydrated, useHasRole } from "@/lib/use-user-role"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,7 +38,6 @@ import {
   Loader2, 
   RefreshCw, 
   Trash2, 
-  Save, 
   Network, 
   ChevronRight, 
   Activity, 
@@ -38,10 +48,19 @@ import {
   Link as LinkIcon
 } from "lucide-react"
 import type { DiscoveryJobResponse, DiscoveryJobStatus, DiscoveredService } from "@/lib/discovery"
-import { deleteDiscoveryScan, getDiscoveryScan, updateDiscoveryScan } from "@/lib/discovery"
+import {
+  deleteDiscoveryScan,
+  detectCreateType,
+  discoveryMatchType,
+  extractDataSourceEndpoint,
+  getConnectionIdentity,
+  getDiscoveryScan,
+} from "@/lib/discovery"
 import { CreateDataSourceDialog, type DataSourceFormValues } from "@/components/data-source-forms"
 import { cn } from "@/lib/utils"
 import { BrandIcon } from "@/components/brand-icon"
+import { discoveryAssociationsKey, discoveryScanKey } from "@/lib/swr-keys"
+import { getApiErrorMessage } from "@/lib/api-error"
 
 function statusBadgeVariant(status: DiscoveryJobStatus): "secondary" | "destructive" | "outline" {
   if (status === "FAILED") return "destructive"
@@ -116,7 +135,6 @@ function LinkItem({ href, label }: { href: string; label: string }) {
   )
 }
 
-// Helper to normalize strings for comparison
 const normalize = (s?: string) => (s || "").trim().toLowerCase()
 
 type ServiceIconKind =
@@ -182,25 +200,152 @@ function ServiceIconCell({ s }: { s: DiscoveredService }) {
   )
 }
 
-// Helper to generate a unique connection identity string
-// Format: "type://host:port"
-const getConnectionIdentity = (type: string, host: string, port: string | number) => {
-  let t = normalize(type)
-  // Alias mappings can be added here if needed
-  if (t === 'mariadb') t = 'mysql' 
-  
-  const h = normalize(host)
-  const p = String(port).trim()
-  
-  return `${t}://${h}:${p}`
-}
-
 interface DataSourceRef {
   name: string
   namespace: string
+  /** Canonical match type (e.g. coderepo, minio, mysql). */
   type: string
   host: string
   port: string
+  /** Associated database names (mysql/postgres sources only). */
+  databases: string[]
+}
+
+type AppendContext = {
+  namespace: string
+  name: string
+  lockedDatabases: string[]
+  /** Kept out of form inputs — never echoed into the password field */
+  retainedCredentials: { user: string; password: string }
+  connectionType: "mysql" | "postgres"
+  host: string
+  port: string
+  promptsConfigMapName: string
+  gpuEnabled: string
+  descriptorType: string
+}
+
+const INFRA_SERVICES_COLUMNS = [
+  { id: "host", size: 160 },
+  { id: "port", size: 80 },
+  { id: "service", size: 220 },
+  { id: "tls", size: 72 },
+  { id: "details", size: 260 },
+  { id: "actions", size: 200 },
+] as const
+
+/** Prefer human-useful metadata in the details column; skip internal scanner tags. */
+function detailHints(s: DiscoveredService): [string, string][] {
+  const skip = new Set(["fingerprinter", "transport"])
+  const entries = Object.entries(s.metadata ?? {})
+    .filter(([k, v]) => !skip.has(k) && v != null && String(v).trim() !== "")
+    .map(([k, v]) => [k, String(v)] as [string, string])
+  return entries.slice(0, 3)
+}
+
+const linkedActionSegmentClass =
+  "inline-flex h-full items-center justify-center gap-1.5 px-3 text-xs font-medium leading-none transition-colors disabled:pointer-events-none disabled:opacity-50"
+
+/**
+ * Single-height table action for already-linked services:
+ * status + optional CTA as equal halves of one segmented control.
+ */
+function LinkedServiceActions({
+  linkedCount,
+  onView,
+  canAppend,
+  onAppend,
+  isAppendLoading,
+}: {
+  linkedCount: number
+  onView: () => void
+  canAppend: boolean
+  onAppend: () => void
+  isAppendLoading: boolean
+}) {
+  const linkedLabel = linkedCount > 0 ? `已关联 · ${linkedCount}` : "已关联"
+  const authHydrated = useAuthHydrated()
+  const canAppendAsAdmin = useHasRole("admin")
+  const appendEnabled = authHydrated && canAppendAsAdmin
+
+  if (!canAppend) {
+    return (
+      <button
+        type="button"
+        onClick={onView}
+        title="查看已关联数据源"
+        className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-md border border-line bg-surface px-3 text-xs font-medium leading-none text-cta transition-colors hover:bg-cta/5"
+      >
+        <LinkIcon className="size-3.5 shrink-0 opacity-80" />
+        <span className="truncate tabular-nums">{linkedLabel}</span>
+      </button>
+    )
+  }
+
+  return (
+    <div
+      className="inline-flex h-8 max-w-full items-stretch overflow-hidden rounded-md border border-line"
+      role="group"
+      aria-label="数据源关联操作"
+    >
+      <button
+        type="button"
+        onClick={onView}
+        title="查看已关联数据源"
+        className={cn(linkedActionSegmentClass, "min-w-0 bg-surface text-content hover:bg-surface-muted")}
+      >
+        <LinkIcon className="size-3.5 shrink-0 text-cta" />
+        <span className="truncate tabular-nums">{linkedLabel}</span>
+      </button>
+      <span className="w-px shrink-0 self-stretch bg-line" aria-hidden />
+      <button
+        type="button"
+        onClick={onAppend}
+        disabled={!appendEnabled || isAppendLoading}
+        title={
+          !authHydrated
+            ? "继续关联数据库"
+            : canAppendAsAdmin
+              ? "继续关联数据库"
+              : "无权限：仅管理员可继续关联"
+        }
+            className={cn(
+              linkedActionSegmentClass,
+              "shrink-0 bg-btn-primary text-content-inverse hover:bg-btn-primary-hover"
+            )}
+      >
+        {isAppendLoading ? <Loader2 className="size-3.5 animate-spin" /> : null}
+        继续关联
+      </button>
+    </div>
+  )
+}
+
+function buildAssociationIndex(items: DataDescriptorResponse[]): DataSourceRef[] {
+  const byKey = new Map<string, DataSourceRef>()
+  for (const item of items) {
+    for (const s of (item.sources ?? []) as DataSourceResponse[]) {
+      const ep = extractDataSourceEndpoint(s)
+      if (!ep) continue
+      const identity = getConnectionIdentity(ep.matchType, ep.host, ep.port)
+      const key = `${item.namespace ?? "default"}/${item.name}|${identity}`
+      const db = String(s.metadata?.database ?? "").trim()
+      const existing = byKey.get(key)
+      if (existing) {
+        if (db && !existing.databases.includes(db)) existing.databases.push(db)
+      } else {
+        byKey.set(key, {
+          name: item.name,
+          namespace: item.namespace ?? "default",
+          type: ep.matchType,
+          host: ep.host,
+          port: ep.port,
+          databases: db ? [db] : [],
+        })
+      }
+    }
+  }
+  return [...byKey.values()]
 }
 
 export default function InfraDiscoveryDetailPage() {
@@ -208,98 +353,70 @@ export default function InfraDiscoveryDetailPage() {
   const params = useParams<{ id: string }>()
   const id = decodeURIComponent(params?.id || "")
 
-  const [job, setJob] = useState<DiscoveryJobResponse | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isPolling, setIsPolling] = useState(false)
-  const pollTimer = useRef<number | null>(null)
-
-  const [existingDataSources, setExistingDataSources] = useState<DataSourceRef[]>([])
-
-  const fetchExistingDataSources = async () => {
-    try {
-      const { items } = await listDescriptorsAll({ limit: 1000 })
-      // A single DataDescriptor can fan out into N DataSources (one per database
-      // for structured-mysql / structured-postgres). For matching against
-      // discovered services we treat each underlying source as an independent
-      // connection identity, otherwise multi-DB descriptors would only match
-      // the first database.
-      const parsed: DataSourceRef[] = items.flatMap((item: DataDescriptorResponse) => {
-        const sources = item.sources ?? []
-        return sources
-          .map((s: DataSourceResponse) => {
-            const meta = s.metadata ?? {}
-            const host = meta.host
-            const port = meta.port
-            if (!host || !port) return null
-            return {
-              name: item.name,
-              namespace: item.namespace ?? "default",
-              type: s.type ?? "",
-              host: String(host),
-              port: String(port),
-            } satisfies DataSourceRef
-          })
-          .filter((r): r is DataSourceRef => r != null)
-      })
-      // De-dup by (namespace, name, identity) so the same descriptor with N
-      // databases on the same host:port doesn't show up N times in match results.
-      const seen = new Set<string>()
-      const unique: DataSourceRef[] = []
-      for (const r of parsed) {
-        const key = `${r.namespace}/${r.name}|${getConnectionIdentity(r.type, r.host, r.port)}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        unique.push(r)
-      }
-      setExistingDataSources(unique)
-    } catch (e) {
-      console.error("Failed to fetch existing data sources", e)
-    }
-  }
+  const {
+    data: job,
+    error: jobError,
+    isLoading,
+    isValidating,
+    mutate: mutateJob,
+  } = useSWR(
+    id ? discoveryScanKey(id) : null,
+    () => getDiscoveryScan(id),
+    {
+      refreshInterval: (latest) =>
+        latest?.status === "PENDING" || latest?.status === "RUNNING" ? 1200 : 0,
+      revalidateOnFocus: false,
+    },
+  )
 
   useEffect(() => {
-    void fetchExistingDataSources()
-  }, [])
+    if (jobError) toast.error("加载扫描详情失败")
+  }, [jobError])
 
-  const [nameDraft, setNameDraft] = useState("")
-  const [isSavingName, setIsSavingName] = useState(false)
+  const { data: existingDataSources = [], mutate: mutateAssociations } = useSWR(
+    discoveryAssociationsKey,
+    async () => buildAssociationIndex(await listAllDescriptors()),
+    { revalidateOnFocus: false },
+  )
+
+  const isPolling = job?.status === "PENDING" || job?.status === "RUNNING"
 
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
 
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [createInitial, setCreateInitial] = useState<Partial<DataSourceFormValues> | null>(null)
+  const [appendContext, setAppendContext] = useState<AppendContext | null>(null)
+  const [isAppendLoading, setIsAppendLoading] = useState(false)
 
   const services = useMemo(() => {
     const items = job?.services || []
     return [...items].sort((a, b) => (a.port ?? 0) - (b.port ?? 0))
   }, [job?.services])
 
-  const detectCreateType = (s: DiscoveredService): "mysql" | "postgres" | "minio" | "coderepo" | null => {
-    if (s.serviceType === "mysql") return "mysql"
-    if (s.serviceType === "postgres") return "postgres"
-    if ((s.product || "").toLowerCase().includes("minio")) return "minio"
-    // Heuristic: in sandbox, GitLab CE (code repo) is exposed on 8929 and often detected as generic HTTP.
-    if (normalize(s.serviceType) === "http" && Number(s.port) === 8929) return "coderepo"
-    return null
-  }
-
   const findMatchingDataSource = (s: DiscoveredService) => {
-    // 1. Determine service type from discovery result
-    let type = normalize(s.serviceType)
-    const product = normalize(s.product)
-    
-    // Heuristic: MinIO often appears as generic HTTP but has 'minio' in product string
-    if (product.includes("minio")) {
-      type = "minio"
-    }
-
+    const type = discoveryMatchType(s)
     const targetIdentity = getConnectionIdentity(type, s.host, s.port)
 
-    return existingDataSources.find(ds => {
+    return existingDataSources.find((ds) => {
       const dsIdentity = getConnectionIdentity(ds.type, ds.host, ds.port)
       return dsIdentity === targetIdentity
     })
+  }
+
+  /** Union of databases already linked on this host:port across all descriptors. */
+  const getAssociatedDatabases = (s: DiscoveredService): string[] => {
+    const type = discoveryMatchType(s)
+    const targetIdentity = getConnectionIdentity(type, s.host, s.port)
+    const dbs = new Set<string>()
+    for (const ds of existingDataSources) {
+      const dsIdentity = getConnectionIdentity(ds.type, ds.host, ds.port)
+      if (dsIdentity !== targetIdentity) continue
+      for (const db of ds.databases) {
+        if (db) dbs.add(db)
+      }
+    }
+    return [...dbs]
   }
 
   const openCreateFromService = (s: DiscoveredService) => {
@@ -308,6 +425,7 @@ export default function InfraDiscoveryDetailPage() {
       toast.error("该服务类型暂不支持一键创建数据源")
       return
     }
+    setAppendContext(null)
     const safeName = `${t}-${s.host}-${s.port}`
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "-")
@@ -315,12 +433,18 @@ export default function InfraDiscoveryDetailPage() {
       .slice(0, 63)
     if (t === "coderepo") {
       const baseUrl = `http://${s.host}:${String(s.port).trim().replace(/^:/, "")}`
+      const product = normalize(s.product)
+      const codeRepoType = product.includes("gitee")
+        ? "gitee"
+        : product.includes("github")
+          ? "github"
+          : "gitlab"
       setCreateInitial({
         name: safeName,
         namespace: "default",
         type: "coderepo",
         // Best-effort defaults; user can refine to /owner/repo(.git)
-        codeRepoType: "gitlab",
+        codeRepoType,
         codeRepoPath: baseUrl,
         codeRepoBranch: "main",
         codeRepoToken: "",
@@ -337,187 +461,132 @@ export default function InfraDiscoveryDetailPage() {
     setIsCreateOpen(true)
   }
 
+  const openAppendFromService = async (s: DiscoveredService, match: DataSourceRef) => {
+    if (match.type !== "mysql" && match.type !== "postgres") {
+      toast.error("仅 MySQL / Postgres 支持继续关联数据库")
+      return
+    }
+    setIsAppendLoading(true)
+    try {
+      const dd = await getDescriptor(match.namespace, match.name)
+      const identity = getConnectionIdentity(match.type, match.host, match.port)
+      const template = (dd.sources ?? []).find((src) => {
+        const ep = extractDataSourceEndpoint(src)
+        if (!ep) return false
+        return getConnectionIdentity(ep.matchType, ep.host, ep.port) === identity
+      })
+      const meta = template?.metadata ?? {}
+      const lockedDatabases = getAssociatedDatabases(s)
+      const connectionType = match.type as "mysql" | "postgres"
+      setAppendContext({
+        namespace: match.namespace,
+        name: match.name,
+        lockedDatabases,
+        retainedCredentials: {
+          user: String(meta.user ?? ""),
+          password: String(meta.password ?? ""),
+        },
+        connectionType,
+        host: match.host,
+        port: match.port,
+        promptsConfigMapName: template?.prompts?.configMapName ?? "",
+        gpuEnabled: dd.gpuEnabled === "yes" ? "yes" : "no",
+        descriptorType:
+          connectionType === "postgres" ? "structured-postgres" : "structured-mysql",
+      })
+      // Do not put password into form state (avoid echoing secrets into the DOM).
+      setCreateInitial({
+        name: match.name,
+        namespace: match.namespace,
+        type: connectionType,
+        host: match.host,
+        port: match.port,
+        user: String(meta.user ?? ""),
+        password: "",
+        databases: [],
+        gpuEnabled: dd.gpuEnabled === "yes" ? "yes" : "no",
+        promptsConfigMapName: template?.prompts?.configMapName ?? "",
+      })
+      setIsCreateOpen(true)
+    } catch (e) {
+      console.error("Failed to open append dialog", e)
+      toast.error("加载已有数据源失败，无法继续关联")
+    } finally {
+      setIsAppendLoading(false)
+    }
+  }
+
   const handleCreate = async (data: DataSourceFormValues & { enableCodeRepo?: boolean }) => {
-    const namespace = String(data.namespace || "default").trim() || "default"
-    const t = String(data.type || "").trim()
-    const gpuEnabled = data.gpuEnabled === "yes" ? "yes" : "no"
-    const isStructuredDB = t === "mysql" || t === "postgres"
-
-    const promptsName = String(data.promptsConfigMapName || "").trim()
-    const hasPrompts = Boolean(promptsName)
-
-    const repoType = String(data.codeRepoType || "").trim()
-    const repoPath = String(data.codeRepoPath || "").trim()
-    const repoBranch = String(data.codeRepoBranch || "").trim()
-    const repoToken = String(data.codeRepoToken || "").trim()
-
-    // Payload normalization:
-    // - structured DBs: sources[].type = mysql/postgres (+ optional source.codeRepo)
-    // - object store / fileserver: sources[].type = minio/fileserver
-    // - code repo: descriptorType = "code", sources[].type = github/gitee/...（execution-engine 认 descriptorType === "code"）
-    const isCodeRepo = t === "coderepo"
-    const descriptorType = isCodeRepo ? "code" : isStructuredDB ? `structured-${t}` : "unstructured"
-
-    const name = String(data.name || "").trim()
-
-    if (isCodeRepo) {
-      const sourceType = repoType || "github"
-      const metadata: Record<string, string> = {
-        codeRepoPath: repoPath,
-        codeRepoBranch: repoBranch || "main",
-        codeRepoToken: repoToken,
+    // Continue-associate: DD already exists; LLM pre-check was done at create time.
+    if (appendContext) {
+      const locked = new Set(appendContext.lockedDatabases)
+      const newDbs = (data.databases ?? [])
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .filter((db) => !locked.has(db))
+      if (newDbs.length === 0) {
+        toast.error("请至少选择一个尚未关联的数据库")
+        throw new Error("请至少选择一个尚未关联的数据库")
       }
-      const payload = {
-        name,
-        namespace,
-        descriptorType,
-        gpuEnabled,
-        sources: [
+
+      try {
+        const dd = await getDescriptor(appendContext.namespace, appendContext.name)
+        const sources = buildAppendSources({
+          existingSources: dd.sources ?? [],
+          descriptorName: appendContext.name,
+          type: appendContext.connectionType,
+          host: String(data.host ?? appendContext.host),
+          port: String(data.port ?? appendContext.port),
+          user: String(data.user ?? appendContext.retainedCredentials.user),
+          password: String(data.password ?? appendContext.retainedCredentials.password),
+          newDatabases: newDbs,
+          promptsConfigMapName:
+            String(data.promptsConfigMapName || "").trim() || appendContext.promptsConfigMapName,
+        })
+        await appendDescriptorSourcesAndResync(
+          appendContext.namespace,
+          appendContext.name,
+          sources,
           {
-            name: name + "-source",
-            type: sourceType,
-            metadata,
-            ...(hasPrompts ? { prompts: { configMapName: promptsName } } : {}),
-            extract: { tables: [] },
-            processing: { cleaning: [] },
+            gpuEnabled: data.gpuEnabled === "yes" ? "yes" : appendContext.gpuEnabled,
+            descriptorType: appendContext.descriptorType,
           },
-        ],
+        )
+        toast.success(`已关联 ${newDbs.length} 个新数据库，同步已触发`)
+        await mutateAssociations()
+        setAppendContext(null)
+        setIsCreateOpen(false)
+      } catch (err) {
+        console.error("continue-associate append failed", err)
+        toast.error(getApiErrorMessage(err, "继续关联失败"), { duration: 10000 })
+        throw err
       }
-      await api.post(`/namespaces/${namespace}/descriptors`, payload)
-      toast.success("数据源创建成功")
-      setIsCreateOpen(false)
       return
     }
 
-    const hasCodeRepo =
-      Boolean(data.enableCodeRepo) && Boolean(repoType || repoPath || repoBranch || repoToken)
-
-    const baseMetadata: Record<string, string> = {
-      host: String(data.host ?? ""),
-      port: String(data.port ?? ""),
-    }
-    if (t === "minio") {
-      baseMetadata.access_key = String(data.accessKey ?? "")
-      baseMetadata.secret_key = String(data.secretKey ?? "")
-      baseMetadata.bucket = String(data.bucket ?? "")
-    } else if (t === "fileserver") {
-      if (data.path) baseMetadata.path = String(data.path)
+    // Create: check LLM CMs in the form-selected namespace (matches operator PreCheck).
+    const targetNs = String(data.namespace || "default").trim() || "default"
+    const llmErr = await validateSystemLlmConfigMaps(targetNs)
+    if (llmErr) {
+      toast.error(llmErr, { duration: 8000 })
+      throw new Error(llmErr)
     }
 
-    const extractFiles = String(data.extractFiles ?? "")
-      .split(/\r?\n|,/g)
-      .map((s) => s.trim())
-      .filter(Boolean)
-
-    const buildSource = (sourceName: string, metadata: Record<string, string>) => ({
-      name: sourceName,
-      type: t,
-      metadata,
-      ...(hasPrompts ? { prompts: { configMapName: promptsName } } : {}),
-      ...(hasCodeRepo
-        ? {
-            codeRepo: {
-              codeRepoType: repoType,
-              codeRepoPath: repoPath,
-              codeRepoBranch: repoBranch,
-              codeRepoToken: repoToken,
-            },
-          }
-        : {}),
-      extract:
-        t === "minio" || t === "fileserver"
-          ? { files: extractFiles }
-          : { tables: [] },
-      processing: { cleaning: [] },
-    })
-
-    // Fan-out for structured DBs: one logical DataSource per selected database,
-    // sharing the same host/port credentials. Other types keep 1:1 mapping.
-    let sources: ReturnType<typeof buildSource>[]
-    if (isStructuredDB) {
-      const dbs = (data.databases ?? []).map((s) => s.trim()).filter(Boolean)
-      if (dbs.length === 0) {
-        toast.error("请至少选择一个数据库")
-        return
-      }
-      sources = dbs.map((db) => {
-        const suffix = db
-          .toLowerCase()
-          .replace(/[^a-z0-9-]/g, "-")
-          .replace(/-+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 40) || "db"
-        return buildSource(`${name}-${suffix}`, {
-          ...baseMetadata,
-          user: String(data.user ?? ""),
-          password: String(data.password ?? ""),
-          database: db,
-        })
-      })
-    } else {
-      sources = [buildSource(`${name}-source`, baseMetadata)]
-    }
-
-    const payload = {
-      name,
-      namespace,
-      descriptorType,
-      gpuEnabled,
-      sources,
-    }
-
-    await api.post(`/namespaces/${namespace}/descriptors`, payload)
-    toast.success("数据源创建成功")
-    setIsCreateOpen(false)
-  }
-
-  const stopPolling = () => {
-    if (pollTimer.current) {
-      window.clearInterval(pollTimer.current)
-      pollTimer.current = null
-    }
-    setIsPolling(false)
-  }
-
-  const fetchJob = async () => {
-    if (!id) return null
-    setIsLoading(true)
     try {
-      const next = await getDiscoveryScan(id)
-      setJob(next)
-      if (next.status === "SUCCEEDED" || next.status === "FAILED") {
-        stopPolling()
-      }
-      return next
+      const payload = buildCreateDescriptorPayload(data)
+      await api.post(
+        `/namespaces/${encodeURIComponent(payload.namespace)}/descriptors`,
+        payload,
+      )
+      toast.success("数据源创建成功")
+      await mutateAssociations()
+      setIsCreateOpen(false)
     } catch (err) {
-      console.error("Fetch discovery scan failed", err)
-      toast.error("加载扫描详情失败")
-      return null
-    } finally {
-      setIsLoading(false)
+      console.error("create from discovery failed", err)
+      toast.error(getApiErrorMessage(err, "创建失败，请检查输入或日志"))
+      throw err
     }
   }
-
-  const startPolling = () => {
-    stopPolling()
-    setIsPolling(true)
-    pollTimer.current = window.setInterval(() => {
-      fetchJob().catch(() => {
-        // ignore transient
-      })
-    }, 1200)
-  }
-
-  useEffect(() => {
-    void (async () => {
-      const next = await fetchJob()
-      if (next && (next.status === "PENDING" || next.status === "RUNNING")) {
-        startPolling()
-      }
-    })()
-    return () => stopPolling()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id])
 
   const onDelete = async () => {
     if (!id) return
@@ -580,8 +649,13 @@ export default function InfraDiscoveryDetailPage() {
           </div>
           
           <div className="flex items-center gap-2">
-             <Button variant="outline" onClick={() => void fetchJob()} disabled={isLoading} className="bg-surface hover:bg-surface-muted">
-              <RefreshCw className={cn("w-4 h-4 mr-2", (isPolling || isLoading) && "animate-spin")} />
+             <Button
+              variant="outline"
+              onClick={() => void mutateJob()}
+              disabled={isLoading || isValidating}
+              className="bg-surface hover:bg-surface-muted"
+            >
+              <RefreshCw className={cn("w-4 h-4 mr-2", (isPolling || isValidating) && "animate-spin")} />
               刷新
             </Button>
             <RbacWrapper requiredRole="admin">
@@ -675,21 +749,22 @@ export default function InfraDiscoveryDetailPage() {
                </Badge>
              </div>
              
-             <div className="bg-surface rounded-lg border border-line shadow-sm overflow-hidden">
-             <Table>
+             <TableWrapper className="shadow-sm">
+             <Table storageKey="infra-services-list-v2" columns={[...INFRA_SERVICES_COLUMNS]}>
                 <TableHeader>
                   <TableRow className="bg-surface-muted/50">
-                    <TableHead className="w-[180px]">地址</TableHead>
-                    <TableHead className="w-[100px]">端口</TableHead>
-                    <TableHead className="w-[200px]">服务识别</TableHead>
-                    <TableHead className="w-[100px]">TLS</TableHead>
-                    <TableHead>详细信息</TableHead>
+                    <TableHead columnId="host">地址</TableHead>
+                    <TableHead columnId="port">端口</TableHead>
+                    <TableHead columnId="service">服务识别</TableHead>
+                    <TableHead columnId="tls">TLS</TableHead>
+                    <TableHead columnId="details">详细信息</TableHead>
+                    <TableHead columnId="actions">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {services.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="h-32 text-center text-sm text-content-muted">
+                      <TableCell colSpan={6} className="h-32 text-center text-sm text-content-muted">
                         {job?.status === "RUNNING" || job?.status === "PENDING" ? (
                           <div className="flex flex-col items-center gap-2">
                             <Loader2 className="w-6 h-6 animate-spin text-cta" />
@@ -702,13 +777,16 @@ export default function InfraDiscoveryDetailPage() {
                     </TableRow>
                   ) : (
                     services.map((s) => {
-                      const hints = s.metadata ? Object.entries(s.metadata).slice(0, 3) : []
+                      const hints = detailHints(s)
                       const canCreate = !!detectCreateType(s)
+                      const match = findMatchingDataSource(s)
+                      const canAppend = match?.type === "mysql" || match?.type === "postgres"
+                      const linkedDbCount = canAppend ? getAssociatedDatabases(s).length : 0
                       return (
                         <TableRow key={`${s.host}:${s.port}`} className="hover:bg-surface-muted">
-                          <TableCell className="font-mono text-sm">{s.host}</TableCell>
-                          <TableCell className="font-mono text-sm text-content">{s.port}</TableCell>
-                          <TableCell>
+                          <TableCell columnId="host" className="font-mono text-sm">{s.host}</TableCell>
+                          <TableCell columnId="port" className="font-mono text-sm text-content">{s.port}</TableCell>
+                          <TableCell columnId="service">
                             <div className="flex items-center gap-2 min-w-0">
                               <ServiceIconCell s={s} />
                               <Badge variant="outline" className="font-normal text-content bg-surface truncate">
@@ -716,7 +794,7 @@ export default function InfraDiscoveryDetailPage() {
                               </Badge>
                             </div>
                           </TableCell>
-                          <TableCell>
+                          <TableCell columnId="tls">
                              {s.tls ? (
                               <Badge variant="secondary" className="text-xs bg-cta/10 text-cta border-cta/20 hover:bg-cta/20">
                                 TLS
@@ -725,54 +803,49 @@ export default function InfraDiscoveryDetailPage() {
                               <span className="text-content-muted">-</span>
                             )}
                           </TableCell>
-                          <TableCell className="text-sm">
-                             <div className="flex items-start justify-between gap-4">
-                                <div className="space-y-1 pt-1">
-                                  {hints.length === 0 ? (
-                                    <span className="text-content-muted text-xs">-</span>
-                                  ) : (
-                                    hints.map(([k, v]) => (
-                                      <div key={k} className="text-xs text-content flex gap-2">
-                                        <span className="text-content-muted font-medium shrink-0">{k}:</span> 
-                                        <span className="truncate max-w-[200px]" title={String(v)}>{String(v)}</span>
-                                      </div>
-                                    ))
-                                  )}
-                                </div>
-                                {(() => {
-                                  const match = findMatchingDataSource(s)
-                                  if (match) {
-                                    return (
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => router.push(`/datasources/${encodeURIComponent(match.namespace)}/${encodeURIComponent(match.name)}`)}
-                                        className="shrink-0 h-8 text-cta border-cta/20 hover:bg-cta/10 cursor-pointer"
-                                      >
-                                        <LinkIcon className="w-3.5 h-3.5 mr-1.5" />
-                                        已关联
-                                      </Button>
+                          <TableCell columnId="details" className="text-sm">
+                            <div className="space-y-1 min-w-0">
+                              {hints.length === 0 ? (
+                                <span className="text-content-muted text-xs">-</span>
+                              ) : (
+                                hints.map(([k, v]) => (
+                                  <div key={k} className="text-xs text-content flex gap-2 min-w-0">
+                                    <span className="text-content-muted font-medium shrink-0">{k}:</span>
+                                    <span className="truncate" title={v}>{v}</span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell columnId="actions" className="align-middle">
+                            <div className="flex items-center justify-end whitespace-nowrap">
+                              {match ? (
+                                <LinkedServiceActions
+                                  linkedCount={linkedDbCount}
+                                  onView={() =>
+                                    router.push(
+                                      `/datasources/${encodeURIComponent(match.namespace)}/${encodeURIComponent(match.name)}`
                                     )
                                   }
-                                  
-                                  return (
-                                    <RbacButton
-                                      variant={canCreate ? "default" : "ghost"}
-                                      size="sm"
-                                      onClick={() => openCreateFromService(s)}
-                                      disabled={!canCreate}
-                                      className={cn(
-                                        "shrink-0 h-8",
-                                        canCreate ? "bg-[#1e293b] hover:bg-[#0f172a] text-content-inverse" : "text-content-muted"
-                                      )}
-                                      requiredRole="admin"
-                                      fallbackTitle="无权限：仅管理员可创建数据源"
-                                    >
-                                      {canCreate ? "创建数据源" : "暂不支持"}
-                                    </RbacButton>
-                                  )
-                                })()}
-                             </div>
+                                  canAppend={canAppend}
+                                  onAppend={() => void openAppendFromService(s, match)}
+                                  isAppendLoading={isAppendLoading}
+                                />
+                              ) : canCreate ? (
+                                <RbacButton
+                                  variant="default"
+                                  size="sm"
+                                  onClick={() => openCreateFromService(s)}
+                                  className="h-8 bg-btn-primary hover:bg-btn-primary-hover text-content-inverse"
+                                  requiredRole="admin"
+                                  fallbackTitle="无权限：仅管理员可创建数据源"
+                                >
+                                  创建数据源
+                                </RbacButton>
+                              ) : (
+                                <span className="text-xs text-content-muted">暂不支持</span>
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       )
@@ -780,7 +853,7 @@ export default function InfraDiscoveryDetailPage() {
                   )}
                 </TableBody>
               </Table>
-             </div>
+             </TableWrapper>
             </section>
           </div>
         )}
@@ -804,10 +877,18 @@ export default function InfraDiscoveryDetailPage() {
 
       <CreateDataSourceDialog
         open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
+        onOpenChange={(open) => {
+          setIsCreateOpen(open)
+          if (!open) setAppendContext(null)
+        }}
         onSubmit={handleCreate}
         initialValues={createInitial ?? undefined}
-        title="从扫描结果创建数据源"
+        mode={appendContext ? "append" : "create"}
+        lockedDatabases={appendContext?.lockedDatabases ?? []}
+        retainedCredentials={appendContext?.retainedCredentials}
+        title={
+          appendContext ? "从扫描结果继续关联数据库" : "从扫描结果创建数据源"
+        }
       />
     </div>
   )

@@ -80,3 +80,12 @@ pgvector:
     limits:
       cpu: 2000m
       memory: 4Gi
+
+# skill-hub: prefer PVC in multi-node prod (hostPath is node-local).
+skillHub:
+  replicas: 1
+  persistence:
+    enabled: true
+    type: pvc
+    pvc:
+      size: 10Gi

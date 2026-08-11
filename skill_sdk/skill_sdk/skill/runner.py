@@ -24,6 +24,7 @@ from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel, Field
 
 from skill_sdk.api.base import Skill
+from skill_sdk.compaction import CompactionConfig, CompactionGuard, default_compaction_config
 from skill_sdk.plugin.registry import ToolRegistry
 from skill_sdk.skill.lister import SkillLister
 from skill_sdk.skill.loader import SkillLoader
@@ -35,6 +36,37 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+_grep_match_logger = logging.getLogger("skill_sdk.grep_matches")
+
+
+def _log_grep_matches(result: str) -> None:
+    """Log each grep content match line individually for debugging."""
+    if not _grep_match_logger.isEnabledFor(logging.INFO):
+        return
+    try:
+        data = json.loads(result)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    mode = data.get("mode")
+    if mode == "content":
+        content = data.get("content") or ""
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Parse path:line:text or path-line-text
+            _grep_match_logger.info(line)
+    elif mode == "files_with_matches":
+        for fname in data.get("filenames") or []:
+            _grep_match_logger.info(fname)
+    elif mode == "count":
+        content = data.get("content") or ""
+        for line in content.split("\n"):
+            line = line.strip()
+            if line:
+                _grep_match_logger.info(line)
 
 langfuse = get_client()
 
@@ -65,6 +97,7 @@ PLANNER_INSTRUCTIONS_ZH = """# 角色：Skill Planner
 
 ## 使命
 根据用户问题，从「可用技能」中选择最合适的一个 skill。
+你只需要匹配用户的**第一个主要任务**，不需要覆盖用户提到的所有后续步骤。
 
 ## 当前时间
 {current_time}
@@ -73,13 +106,38 @@ PLANNER_INSTRUCTIONS_ZH = """# 角色：Skill Planner
 ## 可用技能
 {skills}
 
+## 核心理念
+1. **skill 的 description 是能力概述，不是完整功能清单**。一个 skill 能做的事情可能比 description 里写的更多。
+   只要 description 表明该 skill 面向的**领域**与用户问题的**领域**一致，就应该选它。
+2. **不要过度分析**。用户提到的后续步骤、附加需求只是噪声，不要因为它们不能
+   被一个 skill 同时覆盖就拒绝。聚焦第一个核心任务。
+3. **不要过度纠结描述细节**。描述是概要，不是 API 文档。只要领域一致就应该选。
+
+## 决策流程
+1. 提取用户问题的**第一个核心需求**（忽略后续步骤和附加需求）。
+2. 逐一阅读可用 skill 的 description，判断它能否解决这个核心需求。
+3. 选最匹配的那个。如果所有都无法解决第一个核心需求，调用 `no_suitable_skill`。
+
+## 常见场景指南
+- 用户的问题往往包含多个步骤（"先做A，然后B，最后C"），你只需要关注**第一个步骤**，为它匹配 skill。
+- 即使后续步骤无法被同一个 skill 覆盖，也不要拒绝。只要第一个步骤有匹配的 skill，就选它。
+- 被噪声包裹的核心需求才是真正的目标。例如：
+  - "生成X然后连接数据库" → 第一个任务是生成X，匹配生成类 skill
+  - "格式化Y然后转格式存数据库" → 第一个任务是格式化Y，匹配格式化/校验类 skill
+  - "计算Z然后上传到云存储" → 第一个任务是计算Z，匹配计算/哈希类 skill
+
+## 模糊查询处理
+- 用户查询可能不包含具体对象（"查点东西"、"验证一下格式"、"生成随机的东西"）。
+- 这种情况下，根据查询的**动词/意图**推断最可能的 skill 领域，做最佳猜测。
+- 不要因为没有具体对象就拒绝——模糊查询是常见场景，根据语义匹配最接近的 skill 即可。
+
 ## 规则
-1. 严格基于 skill 的 name 和 description 做语义匹配。
+1. 基于 skill 的 name 和 description 做**领域级**语义匹配，不要死扣字面。
 2. **必须**二选一调用下面两个工具之一，**不要**直接输出文本/JSON：
    - `select_skill`：选中一个合适的 skill；`skill` 字段必须**严格等于**上面列表中某个 name（区分度不依赖大小写，但拼写必须一致）。
-   - `no_suitable_skill`：当列表中确实没有任何 skill 能胜任当前问题时，用它明确拒绝；请在 `reason` 里写明为什么都不合适。
+   - `no_suitable_skill`：仅当列表中确实**没有任何 skill 的领域**与用户第一个核心需求的领域相关时，才用它拒绝；请在 `reason` 里写明为什么都不合适。
 3. 不要把 `select_skill` 的 `skill` 字段设为空字符串来表示拒绝——请改用 `no_suitable_skill`。
-4. 不要选择明显和用户问题无关的 skill 来凑数；宁可调用 `no_suitable_skill`。
+4. 不要被用户问题中的后续步骤、附加需求带偏；只要第一个核心任务能匹配上某个 skill，就应该选它。
 5. `reason` 简要说明选择理由或拒绝理由。
 """
 
@@ -263,6 +321,87 @@ def _short(text: Any, *, max_len: int = 200) -> str:
     if len(s) > max_len:
         s = f"{s[:max_len]}...(+{len(s) - max_len})"
     return s
+
+
+def _short_tool_args(tool_name: str, tool_args: Any, *, max_len: int = 200) -> str:
+    """Log tool args; for grep, always surface glob/file_type (common 0-match cause)."""
+    if tool_name == "grep" and isinstance(tool_args, dict):
+        keys = (
+            "pattern",
+            "path",
+            "glob",
+            "file_type",
+            "output_mode",
+            "case_insensitive",
+            "head_limit",
+            "multiline",
+        )
+        parts: list[str] = []
+        for k in keys:
+            if k not in tool_args:
+                continue
+            v = tool_args[k]
+            if v is None:
+                continue
+            parts.append(f"{k}={v!r}")
+        # Include any other keys briefly
+        for k, v in tool_args.items():
+            if k in keys or v is None:
+                continue
+            parts.append(f"{k}={v!r}")
+        return _short(", ".join(parts), max_len=max(max_len, 360))
+    return _short(tool_args, max_len=max_len)
+
+
+def _short_filenames_for_log(filenames: Any, *, keep: int = 3) -> Any:
+    """Keep a few paths in logs; full lists blow past max_len and hide (+N)."""
+    if not isinstance(filenames, list):
+        return filenames
+    if len(filenames) <= keep:
+        return filenames
+    return filenames[:keep] + [f"...(+{len(filenames) - keep} more)"]
+
+
+def _short_tool_result(tool_name: str, result: Any, *, max_len: int = 240) -> str:
+    """Log-friendly tool result; keep grep match counts ahead of long content."""
+    raw = str(result)
+    if tool_name != "grep":
+        return _short(raw, max_len=max_len)
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return _short(raw, max_len=max_len)
+    if not isinstance(data, dict):
+        return _short(raw, max_len=max_len)
+    if data.get("error"):
+        return _short(raw, max_len=max_len)
+    meta: dict[str, Any] = {}
+    for k in (
+        "mode",
+        "numMatches",
+        "numLines",
+        "numFiles",
+        "resultLen",
+        "appliedLimit",
+        "appliedOffset",
+        "glob",
+        "downgraded_from",
+        "hint",
+        "filter_notes",
+    ):
+        if k in data:
+            meta[k] = data[k]
+    if "filenames" in data:
+        meta["filenames"] = _short_filenames_for_log(data.get("filenames"))
+    meta_s = json.dumps(meta, ensure_ascii=False)
+    content = data.get("content") or ""
+    if content:
+        # Reserve room for meta + " content="; always apply outer _short for (+N).
+        content_budget = max(40, max_len - min(len(meta_s), max_len // 2) - 12)
+        out = f"{meta_s} content={_short(content, max_len=content_budget)}"
+    else:
+        out = meta_s
+    return _short(out, max_len=max_len)
 
 
 def _stderr_head(stderr: str | None) -> str:
@@ -701,6 +840,13 @@ def finish_tool(final_answer: str) -> str:
     return final_answer
 
 
+# Always retained when a skill declares ``allowed_tools`` so the ReAct loop can end.
+ALWAYS_ALLOWED_TOOLS: frozenset[str] = frozenset({"finish"})
+
+
+_UNSET: Any = object()
+
+
 class SkillRunner:
     def __init__(
         self,
@@ -720,9 +866,33 @@ class SkillRunner:
         blocked_commands: frozenset[str] | None = None,
         extra_destructive_patterns: Sequence[tuple[re.Pattern[str], str]] | None = None,
         tool_registry: ToolRegistry | None = None,
+        use_skill_search: bool = True,
+        skill_search_batch_size: int = 100,
+        skill_search_max_concurrent: int = 5,
+        skill_search_max_steps: int = 5,
+        skill_search_max_retries: int = 3,
+        compaction: CompactionConfig | None = _UNSET,
     ) -> None:
+        """Create a skill planner/executor.
+
+        Args:
+            llm: Chat model used for planning and ReAct execution.
+            skills: Optional initial skill list.
+            max_steps: Max ReAct steps per ``run()``.
+            compaction: Context-compaction config.
+                - Omitted: enabled with 200K window (env-variable driven).
+                - ``None``: explicitly disabled (legacy behavior).
+                - ``CompactionConfig(...)``: custom config.
+        """
+        if compaction is _UNSET:
+            compaction = default_compaction_config()
         self.llm = llm
         self.max_steps = max_steps
+        # Optional context compaction; None keeps legacy unbounded message growth.
+        self._compaction_config = compaction
+        self._compaction_template: CompactionGuard | None = (
+            CompactionGuard(compaction, llm) if compaction is not None else None
+        )
         self.cmd_timeout_sec = cmd_timeout_sec
         self.same_cmd_fail_budget = same_cmd_fail_budget
         self.total_fail_budget = total_fail_budget
@@ -739,20 +909,22 @@ class SkillRunner:
             if extra_destructive_patterns is not None
             else DESTRUCTIVE_FLAG_PATTERNS
         )
+        self.use_skill_search = bool(use_skill_search)
+        self.skill_search_batch_size = max(10, int(skill_search_batch_size))
+        self.skill_search_max_concurrent = max(1, int(skill_search_max_concurrent))
+        self.skill_search_max_steps = max(1, int(skill_search_max_steps))
+        self.skill_search_max_retries = max(0, int(skill_search_max_retries))
         self._loader = SkillLoader()
         self.lister = SkillLister(skills or [])
         self._planner_tools = [select_skill_tool, no_suitable_skill_tool]
-        # ``code_execution`` 是可选能力：注入一个已构造好的 ``CodeExecution`` 实例
-        # 才会把 ``code_exec`` 工具暴露给 LLM。保持 SkillRunner 与模型/key 解耦。
         self.code_execution = code_execution
         self._runner_tools = [
             plan_cmd_tool,
             finish_tool,
         ]
         if self.code_execution is not None:
-            # 插在 finish 之前，便于最终回答时仍以 ``finish`` 收口。
             self._runner_tools.insert(-1, code_exec_tool)
-        # 注入 plugin 工具（也插在 finish 之前）
+
         # 如果调用方未传入 tool_registry，自动扫描 skill_sdk.tool 包发现插件
         if tool_registry is None:
             auto_registry = ToolRegistry()
@@ -761,7 +933,9 @@ class SkillRunner:
             except Exception:
                 logger.debug("Auto-discovery of tool plugins failed", exc_info=True)
             tool_registry = auto_registry
+        self._tool_registry = tool_registry
 
+        # Bind all plugin tools to the runner
         existing_names = {t.name for t in self._runner_tools}
         plugin_tools = [
             t for t in tool_registry.to_langchain_tools()
@@ -777,6 +951,47 @@ class SkillRunner:
         # Lazy-init the semaphore so it binds to the event loop that actually runs it.
         self._cmd_sem: asyncio.Semaphore | None = None
         self._cmd_sem_initialized = False
+
+    def _resolve_allowed_tool_names(self, skill: Skill) -> set[str] | None:
+        """Return the effective allow-set for *skill*, or ``None`` if unrestricted.
+
+        Empty ``skill.allowed_tools`` keeps backward-compatible full tool access.
+        When non-empty, ``finish`` is always merged in so the loop can terminate.
+        """
+        declared = [str(t).strip() for t in (skill.allowed_tools or []) if str(t).strip()]
+        if not declared:
+            return None
+        return set(declared) | set(ALWAYS_ALLOWED_TOOLS)
+
+    def _tools_for_skill(self, skill: Skill) -> list[Any]:
+        """Filter ``_runner_tools`` to the skill's allow-list (if any)."""
+        allowed = self._resolve_allowed_tool_names(skill)
+        if allowed is None:
+            return list(self._runner_tools)
+
+        tools = [t for t in self._runner_tools if getattr(t, "name", None) in allowed]
+        present = {getattr(t, "name", None) for t in tools}
+        missing = sorted(name for name in allowed if name not in present)
+        if missing:
+            logger.warning(
+                "skill=%s allowed_tools missing from runner registry: %s",
+                skill.name,
+                missing,
+            )
+        logger.info(
+            "skill=%s tool allow-list active: bound=%s declared=%s",
+            skill.name,
+            sorted(present - {None}),
+            sorted(allowed),
+        )
+        return tools
+
+    def _is_tool_allowed_for_skill(self, skill: Skill, tool_name: str) -> bool:
+        """Execution-time allow-list check (defense in depth beyond bind_tools)."""
+        allowed = self._resolve_allowed_tool_names(skill)
+        if allowed is None:
+            return True
+        return tool_name in allowed
 
     def _get_cmd_semaphore(self) -> asyncio.Semaphore | None:
         """Return the concurrency-limiting semaphore (or ``None`` if unlimited).
@@ -1174,6 +1389,87 @@ class SkillRunner:
             total_fails=total_fails,
         )
 
+    # Extensions where readline_in_range must follow a prior lsp call (symbol
+    # boundaries). Docs/config (md/toml/yaml/json/...) are exempt — no LSP.
+    _LSP_GATED_SOURCE_EXTENSIONS = frozenset(
+        {
+            ".py",
+            ".pyi",
+            ".go",
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".mjs",
+            ".cjs",
+            ".java",
+            ".rs",
+            ".kt",
+            ".kts",
+            ".c",
+            ".h",
+            ".cpp",
+            ".cc",
+            ".cxx",
+            ".hpp",
+            ".hxx",
+            ".cs",
+            ".rb",
+            ".php",
+            ".swift",
+            ".scala",
+            ".vue",
+            ".svelte",
+            ".m",
+            ".mm",
+            ".zig",
+            ".lua",
+            ".dart",
+            ".r",
+        }
+    )
+
+    @classmethod
+    def _requires_lsp_before_readline(cls, file_path: str = "") -> bool:
+        """Whether ``readline_in_range`` needs a prior ``lsp`` on this path.
+
+        Source files (.py/.go/.ts/...) stay gated so reads use LSP line ranges.
+        Non-source (README.md, pyproject.toml, yaml, json, Dockerfile, ...) may
+        be read directly — they have no useful documentSymbol boundary.
+        """
+        path = (file_path or "").strip()
+        if not path:
+            return True
+        ext = Path(path).suffix.lower()
+        if not ext:
+            return False
+        return ext in cls._LSP_GATED_SOURCE_EXTENSIONS
+
+    @staticmethod
+    def _lsp_document_symbol_focused(
+        tool_history: list[dict], file_path: str = ""
+    ) -> bool:
+        """True if the latest documentSymbol for this file used symbol_name and/or line."""
+        path = (file_path or "").strip()
+        if not path:
+            return False
+        for entry in reversed(tool_history):
+            if entry.get("tool") != "lsp":
+                continue
+            args = entry.get("args") or {}
+            op = str(args.get("operation") or "")
+            if op != "documentSymbol":
+                continue
+            entry_file = (
+                args.get("file_path") or args.get("filePath") or ""
+            ).strip()
+            if entry_file != path:
+                continue
+            name = str(args.get("symbol_name") or "").strip()
+            line = args.get("line")
+            return bool(name) or line is not None
+        return False
+
     @staticmethod
     def _lsp_was_called_or_failed(
         tool_history: list[dict], file_path: str = ""
@@ -1192,7 +1488,8 @@ class SkillRunner:
                 continue
             # If lsp was called for a specific file path and succeeded
             # (no error in result), allow readline_in_range on that file.
-            entry_file = (entry.get("args") or {}).get("file_path", "")
+            args = entry.get("args") or {}
+            entry_file = args.get("file_path") or args.get("filePath") or ""
             if entry_file and entry_file == file_path:
                 if "error" not in result_str.lower():
                     return True
@@ -1226,17 +1523,25 @@ class SkillRunner:
             HumanMessage(content=query),
         ]
         # read_file 已从全局 _runner_tools 移除，由 readline_in_range 替代
-        llm_with_tools = self.llm.bind_tools(self._runner_tools)
-        if skill.name == "read-code":
-            logger.info(
-                "read-code tool-set: bound %d tools: %s",
-                len(self._runner_tools),
-                [t.name for t in self._runner_tools],
-            )
+        skill_tools = self._tools_for_skill(skill)
+        llm_with_tools = self.llm.bind_tools(skill_tools)
+        logger.info(
+            "run skill=%s bound %d/%d tools: %s",
+            skill.name,
+            len(skill_tools),
+            len(self._runner_tools),
+            [t.name for t in skill_tools],
+        )
         tool_history: list[dict[str, Any]] = []
         fail_counts: dict[str, int] = {}
         counters: dict[str, int] = {"total_fails": 0}
         empty_tool_retry_left = self.empty_tool_retry
+        # Fresh per-run guard so overflow-recovery state does not leak across runs.
+        compaction_guard = (
+            self._compaction_template.new_run_guard()
+            if self._compaction_template is not None
+            else None
+        )
 
         with langfuse.start_as_current_span(
             name="skill_sdk-run_skill",
@@ -1256,12 +1561,106 @@ class SkillRunner:
                     self.max_steps,
                     len(messages),
                 )
-                ai_msg = await self._ainvoke(
-                    llm_with_tools,
-                    messages,
-                    config={"callbacks": [langfuse_handler]},
-                )
-                messages.append(ai_msg)
+
+                overflow_retry = False
+                ai_msg: Any = None
+                while True:
+                    pre_compact_events = (
+                        len(compaction_guard.events) if compaction_guard is not None else 0
+                    )
+                    if compaction_guard is not None:
+                        messages = await compaction_guard.before_invoke(messages)
+                        if len(compaction_guard.events) > pre_compact_events:
+                            tool_history.append(
+                                {
+                                    "compaction": True,
+                                    "reason": "threshold",
+                                    "step": step_no,
+                                }
+                            )
+                    try:
+                        ai_msg = await self._ainvoke(
+                            llm_with_tools,
+                            messages,
+                            config={"callbacks": [langfuse_handler]},
+                        )
+                    except Exception as exc:
+                        if compaction_guard is None:
+                            raise
+                        recovery = await compaction_guard.on_invoke_error(messages, exc)
+                        if recovery is None:
+                            raise
+                        if recovery.failed:
+                            result = {
+                                "status": "context_overflow",
+                                "skill": skill.name,
+                                "final_answer": recovery.error_message
+                                or (
+                                    "Context overflow recovery failed after one "
+                                    "compact-and-retry attempt."
+                                ),
+                                "tool_history": tool_history,
+                                "error": str(exc),
+                            }
+                            logger.error(
+                                "run EXIT status=context_overflow step=%d error=%r",
+                                step_no,
+                                recovery.error_message,
+                            )
+                            tool_history.append(
+                                {
+                                    "compaction": True,
+                                    "reason": "overflow",
+                                    "failed": True,
+                                    "error": recovery.error_message,
+                                }
+                            )
+                            span.update_trace(output=result)
+                            langfuse.flush()
+                            return result
+                        if (
+                            recovery.will_retry
+                            and recovery.messages is not None
+                            and not overflow_retry
+                        ):
+                            messages = recovery.messages
+                            overflow_retry = True
+                            tool_history.append(
+                                {
+                                    "compaction": True,
+                                    "reason": "overflow",
+                                    "will_retry": True,
+                                    "step": step_no,
+                                }
+                            )
+                            logger.warning(
+                                "run STEP=%d compaction overflow RETRY",
+                                step_no,
+                            )
+                            continue
+                        raise
+
+                    if compaction_guard is not None:
+                        after = await compaction_guard.after_invoke(messages, ai_msg)
+                        if after.compacted and after.messages is not None:
+                            # Silent overflow: context already includes compacted history.
+                            messages = after.messages
+                            tool_history.append(
+                                {
+                                    "compaction": True,
+                                    "reason": "overflow",
+                                    "silent": True,
+                                    "will_retry": False,
+                                    "step": step_no,
+                                }
+                            )
+                    break
+
+                assert ai_msg is not None
+                # Keep assistant message at the tail for tool-call pairing. Silent
+                # compaction may already have retained it inside ``kept``; avoid dup.
+                if not messages or messages[-1] is not ai_msg:
+                    messages.append(ai_msg)
 
                 thought_text = str(getattr(ai_msg, "content", "") or "").strip()
                 reasoning_text = ""
@@ -1343,7 +1742,7 @@ class SkillRunner:
                         step_no,
                         idx + 1,
                         tool_name,
-                        _short(tool_args),
+                        _short_tool_args(tool_name, tool_args),
                         tool_id,
                     )
 
@@ -1363,31 +1762,66 @@ class SkillRunner:
                         if tool_name == "plan_cmd":
                             plan_cmd_seen = True
 
-                        # read-code skill: readline_in_range requires prior lsp call
-                        # unless lsp was already tried and failed (fallback mode).
-                        if (skill.name == "read-code"
+                        # Skill allow-list: reject tools not declared in _meta.json
+                        if not self._is_tool_allowed_for_skill(skill, tool_name):
+                            tool_result = json.dumps(
+                                {
+                                    "blocked_by_policy": True,
+                                    "error": (
+                                        f"Tool `{tool_name}` is not allowed for skill "
+                                        f"`{skill.name}`. Allowed tools: "
+                                        f"{sorted(self._resolve_allowed_tool_names(skill) or [])}."
+                                    ),
+                                },
+                                ensure_ascii=False,
+                            )
+                        # read-code: source files need prior lsp (or lsp failure
+                        # fallback). Docs/config (md/toml/yaml/...) skip the gate.
+                        elif (
+                            skill.name == "read-code"
                             and tool_name == "readline_in_range"
+                            and self._requires_lsp_before_readline(
+                                tool_args.get("file_path", "")
+                            )
                             and not self._lsp_was_called_or_failed(
                                 tool_history, tool_args.get("file_path", "")
-                            )):
+                            )
+                        ):
                             tool_result = json.dumps(
                                 {
                                     "error": (
                                         "readline_in_range requires a prior lsp call for "
-                                        "this specific file to determine precise line "
+                                        "this specific source file to determine precise line "
                                         "numbers. Call 'lsp documentSymbol' or 'lsp goToDefinition' on this file "
                                         "first to get exact start/end line numbers. If lsp returns an error "
                                         "(server unavailable), you may retry "
-                                        "readline_in_range as a fallback."
+                                        "readline_in_range as a fallback. "
+                                        "Non-source files (md/toml/yaml/json/...) may be "
+                                        "read with readline_in_range directly."
                                     ),
                                     "blocked_by_policy": True,
                                 },
                                 ensure_ascii=False,
                             )
                         else:
+                            # read-code: mark focused readline after documentSymbol
+                            # with symbol_name/line so unfocused large-from-start gate relaxes.
+                            dispatch_args = dict(tool_args)
+                            if (
+                                skill.name == "read-code"
+                                and tool_name == "readline_in_range"
+                                and self._requires_lsp_before_readline(
+                                    dispatch_args.get("file_path", "")
+                                )
+                                and self._lsp_document_symbol_focused(
+                                    tool_history,
+                                    dispatch_args.get("file_path", ""),
+                                )
+                            ):
+                                dispatch_args["focused"] = True
                             tool_result = await self._dispatch_tool(
                                 tool_name,
-                                tool_args,
+                                dispatch_args,
                                 user_id=user_id,
                                 run_id=run_id,
                                 trace_id=trace_id,
@@ -1406,8 +1840,10 @@ class SkillRunner:
                         step_no,
                         idx + 1,
                         tool_name,
-                        _short(tool_result),
+                        _short_tool_result(tool_name, tool_result),
                     )
+                    if tool_name == "grep":
+                        _log_grep_matches(tool_result)
 
                     if tool_name == "finish":
                         result = {
@@ -1645,14 +2081,16 @@ class SkillRunner:
         if target is None:
             logger.warning("_dispatch unknown tool=%s args=%r", tool_name, _short(tool_args))
             return json.dumps({"error": f"Unknown tool: {tool_name}"}, ensure_ascii=False)
-        logger.info("_dispatch tool=%s args=%r", tool_name, _short(tool_args))
+        logger.info("_dispatch tool=%s args=%r", tool_name, _short_tool_args(tool_name, tool_args))
         try:
             result = str(target.invoke(tool_args))
             logger.info(
                 "_dispatch tool=%s result=%r",
                 tool_name,
-                _short(result, max_len=240),
+                _short_tool_result(tool_name, result, max_len=240),
             )
+            if tool_name == "grep":
+                _log_grep_matches(result)
             return result
         except Exception as exc:  # noqa: BLE001
             logger.exception("_dispatch tool=%s invocation failed", tool_name)
@@ -1660,6 +2098,53 @@ class SkillRunner:
                 {"tool": tool_name, "error": f"Tool invocation failed: {exc}"},
                 ensure_ascii=False,
             )
+
+    async def skill_search(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        """Batch+concurrent semantic search for the best matching skill.
+
+        Fully delegates to ``skill_sdk.skill.skill_search.run_skill_search``,
+        which handles BATCH → SELECTOR → validation internally.
+
+        Returns:
+            Dict with ``selected_skill`` (str or None), ``score`` (int),
+            ``reason`` (str), ``candidates`` (list), and ``found`` (bool).
+        """
+        from skill_sdk.skill.skill_search import run_skill_search
+
+        skills = self.lister.skills
+        if not skills:
+            logger.warning("skill_search: no loaded skills")
+            return {"selected_skill": None, "score": 0, "reason": "No skills loaded.", "candidates": [], "found": False}
+
+        logger.info(
+            "skill_search query=%r skills=%d batch_size=%d max_concurrent=%d",
+            _short(query), len(skills),
+            self.skill_search_batch_size, self.skill_search_max_concurrent,
+        )
+
+        try:
+            return await run_skill_search(
+                llm=self.llm,
+                query=query,
+                skills=skills,
+                batch_size=self.skill_search_batch_size,
+                max_concurrent_batches=self.skill_search_max_concurrent,
+                max_retries=self.skill_search_max_retries,
+            )
+        except Exception as exc:
+            logger.exception("skill_search failed")
+            return {
+                "selected_skill": None, "score": 0,
+                "reason": f"skill_search failed: {exc}",
+                "candidates": [], "found": False,
+            }
 
     async def _dispatch_code_exec(
         self, tool_args: dict[str, Any],
@@ -1784,19 +2269,123 @@ class SkillRunner:
         run_id: str,
         trace_id: str,
     ) -> dict[str, Any]:
-        """Select a skill and run it, with up to ``plan_and_run_max_attempts`` replans.
+        """Select a skill and run it.
 
-        Replans happen when:
-        - ``make_plan`` fails to produce a valid selection (but did not explicitly
-          decline via ``no_suitable_skill``);
-        - the selected skill name cannot be resolved against loaded skills; or
-        - ``run()`` returns a non-``completed`` status such as
-          ``completed_without_finish`` or ``max_steps_exceeded``.
-
-        Previously-tried skills are excluded from subsequent picks and the reason
-        for the previous failure is fed back into ``make_plan`` as failure notes.
-        An explicit ``no_suitable_skill`` decline ends the loop immediately.
+        Two modes:
+        - ``use_skill_search=True`` (default): Uses batch+concurrent ``skill_search``
+          when the skill count exceeds ``skill_search_batch_size``. Otherwise falls
+          back to the Planner LLM (single call) since BATCH+SELECTOR adds an extra
+          LLM round-trip with no benefit when all skills fit in one batch.
+        - ``use_skill_search=False``: Always uses the Planner LLM to select a skill
+          via ``make_plan``, with ``plan_and_run_max_attempts`` replans.
         """
+        skill_count = len(self.lister.skills)
+        effective_use_skill_search = (
+            self.use_skill_search and skill_count > self.skill_search_batch_size
+        )
+
+        logger.info(
+            "plan_and_run ENTER query=%r user_id=%s run_id=%s trace_id=%s "
+            "max_attempts=%d use_skill_search=%s skills=%d batch_size=%d "
+            "effective=%s",
+            _short(query),
+            user_id,
+            run_id,
+            trace_id,
+            self.plan_and_run_max_attempts,
+            self.use_skill_search,
+            skill_count,
+            self.skill_search_batch_size,
+            effective_use_skill_search,
+        )
+
+        if effective_use_skill_search:
+            return await self._plan_and_run_with_skill_search(
+                query=query,
+                user_id=user_id,
+                run_id=run_id,
+                trace_id=trace_id,
+            )
+
+        return await self._plan_and_run_with_planner(
+            query=query,
+            user_id=user_id,
+            run_id=run_id,
+            trace_id=trace_id,
+        )
+
+    async def _plan_and_run_with_skill_search(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        """plan_and_run using skill_search (batch+concurrent) as the entry point."""
+        attempts_log: list[dict[str, Any]] = []
+
+        search_result = await self.skill_search(
+            query=query,
+            user_id=user_id,
+            run_id=run_id,
+            trace_id=trace_id,
+        )
+
+        attempts_log.append({
+            "attempt": 1,
+            "skill_search": search_result,
+            "status": "found" if search_result.get("found") else "not_found",
+        })
+
+        if not search_result.get("found"):
+            reason = search_result.get("reason", "No suitable skill found.")
+            return {
+                "status": "no_suitable_skill",
+                "skill_search": search_result,
+                "attempts": attempts_log,
+                "final_answer": reason,
+            }
+
+        skill_name = search_result["selected_skill"]
+        candidates = self.lister.find_by_name(skill_name, match="exact", case_insensitive=True)
+        if not candidates:
+            return {
+                "status": "skill_not_found",
+                "skill_search": search_result,
+                "attempts": attempts_log,
+                "final_answer": f"Skill '{skill_name}' not found in loaded skills.",
+            }
+
+        skill_obj = candidates[0]
+        logger.info(
+            "plan_and_run skill_search selected skill=%s, handing off to run()",
+            skill_obj.name,
+        )
+        run_result = await self.run(
+            query=query,
+            skill=skill_obj,
+            user_id=user_id,
+            run_id=run_id,
+            trace_id=trace_id,
+        )
+        run_result["skill_search"] = search_result
+        run_result["attempts"] = attempts_log
+        logger.info(
+            "plan_and_run EXIT status=%s skill=%s",
+            run_result.get("status"),
+            skill_obj.name,
+        )
+        return run_result
+
+    async def _plan_and_run_with_planner(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+    ) -> dict[str, Any]:
         logger.info(
             "plan_and_run ENTER query=%r user_id=%s run_id=%s trace_id=%s max_attempts=%d",
             _short(query),

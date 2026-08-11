@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import axios from "axios"
 import { api } from "@/lib/api"
-import { getSafeNextPath, navigateAfterAuth, persistAuthToken } from "@/lib/auth-session"
+import { establishSession, getSafeNextPath, navigateAfterAuth } from "@/lib/auth-session"
 import { toast } from "sonner"
 import { Loader2, GalleryVerticalEnd } from "lucide-react"
 
@@ -27,13 +27,13 @@ export default function LoginPage() {
     setLoading(true)
     try {
       const res = await api.post("/auth/login", { username, password })
-      const token = res.data?.token || res.data?.access_token
-      if (token) {
-        persistAuthToken(token)
+      const user = res.data?.user
+      if (user) {
+        establishSession(user)
         toast.success("登录成功")
         navigateAfterAuth(getSafeNextPath(window.location.search || ""))
       } else {
-        toast.error("登录失败：未获取到 token")
+        toast.error("登录失败：未获取到用户信息")
       }
     } catch (err: unknown) {
       console.error("Login failed", err)

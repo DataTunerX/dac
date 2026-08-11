@@ -1,4 +1,4 @@
-FROM --platform=linux/arm64 node:20-alpine AS base
+FROM --platform=linux/arm64 docker.m.daocloud.io/library/node:20-alpine AS base
 
 # Install dependencies only when needed
 FROM base AS deps
@@ -7,13 +7,13 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+# Prefer China mirror inside build (matches local npm config); avoids flaky npmjs TLS.
+RUN npm config set registry https://registry.npmmirror.com \
+  && npm ci
 
 # Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
-# Do not inherit host NODE_OPTIONS (e.g. --no-opt from conda); Next.js Turbopack workers reject them.
-ENV NODE_OPTIONS=
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # Ensure `public/` exists for standalone copy (Next serves static files from here when present).
@@ -23,7 +23,10 @@ RUN mkdir -p public
 # Learn more here: https://nextjs.org/telemetry
 # ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN npm run build
+# Do not call `next build` or next-build.cjs directly here: npm must remain the
+# single build entrypoint so future prebuild/postbuild hooks still run.
+# The wrapper is a no-op unless emulation injects the unsupported --no-opt flag.
+RUN env -u NODE_OPTIONS npm run build
 
 # Production image: nginx listens on 3000; Next.js standalone binds 127.0.0.1:3001 (see entrypoint.sh).
 FROM base AS runner

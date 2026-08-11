@@ -1,4 +1,27 @@
 {{- if .Values.skillHub.enabled }}
+{{- /*
+  Persist uploaded/created skill zips. Without a volume, SKILLS_DIR lives in the
+  container FS and is wiped on restart. hostPath is the default (single-node);
+  set persistence.type=pvc for StorageClass-backed volumes.
+*/ -}}
+{{- $persist := .Values.skillHub.persistence | default dict }}
+{{- $persistEnabled := false }}
+{{- if $persist.enabled }}{{ $persistEnabled = true }}{{ end }}
+{{- $persistType := $persist.type | default "hostPath" }}
+{{- $mountPath := $persist.mountPath | default "/app/skills" }}
+{{- $hostPath := $persist.hostPath | default dict }}
+{{- $pvc := $persist.pvc | default dict }}
+{{- if and $persistEnabled (eq $persistType "hostPath") (gt (int .Values.skillHub.replicas) 1) }}
+{{- fail "skillHub.persistence.type=hostPath requires skillHub.replicas=1 (hostPath is node-local)" }}
+{{- end }}
+{{- /* RWO PVC cannot attach to multiple pods; RWX would be needed for replicas>1. */ -}}
+{{- $accessMode := $pvc.accessMode | default "ReadWriteOnce" }}
+{{- if and $persistEnabled (eq $persistType "pvc") (eq $accessMode "ReadWriteOnce") (gt (int .Values.skillHub.replicas) 1) }}
+{{- fail "skillHub.persistence.type=pvc with accessMode ReadWriteOnce requires skillHub.replicas=1" }}
+{{- end }}
+{{- if and $persistEnabled (ne $persistType "hostPath") (ne $persistType "pvc") }}
+{{- fail (printf "skillHub.persistence.type must be hostPath or pvc, got %q" $persistType) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,6 +33,11 @@ spec:
   selector:
     matchLabels:
       {{- include "dac.selectorLabels" (dict "context" . "name" "skill-hub") | nindent 6 }}
+  {{- if $persistEnabled }}
+  # Avoid rolling updates swapping nodes while hostPath data stays on the old node.
+  strategy:
+    type: Recreate
+  {{- end }}
   template:
     metadata:
       labels:
@@ -18,6 +46,34 @@ spec:
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $persistEnabled }}
+      # Mount volume at /skills-data here so /app/skills from the image remains
+      # the seed source. Main container mounts the same volume at mountPath.
+      initContainers:
+        - name: seed-default-skills
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.skillHub.image.repository "tag" .Values.skillHub.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              DEST="/skills-data"
+              SRC="/app/skills"
+              mkdir -p "${DEST}/default"
+              # Always sync image-baked default skills onto the volume so image
+              # upgrades refresh built-in zips. Overwrites same-named files only;
+              # does not delete extra zips users added under default/, and never
+              # touches other namespaces (e.g. team-a/).
+              if [ -d "${SRC}/default" ]; then
+                echo "[skill-hub] syncing default skills from image into persistent volume"
+                cp -a "${SRC}/default/." "${DEST}/default/"
+              else
+                echo "[skill-hub] skip seed (image has no ${SRC}/default)"
+              fi
+          volumeMounts:
+            - name: skills-data
+              mountPath: /skills-data
       {{- end }}
       containers:
         - name: skill-hub
@@ -32,25 +88,20 @@ spec:
             # real langfuse instance is wired up.
             - name: LANGFUSE_ENABLED
               value: {{ .Values.skillHub.config.langfuseEnabled | quote }}
+            {{- if $persistEnabled }}
             - name: SKILLS_DIR
-              value: {{ default (ternary "/var/lib/skill-hub" "/app/skills" .Values.skillHub.persistence.enabled) .Values.skillHub.config.skillsDir | quote }}
-            {{- if .Values.skillHub.persistence.enabled }}
-            - name: SKILL_HUB_SEED_DIR
-              value: "/app/skills"
+              value: {{ $mountPath | quote }}
+            {{- else }}
+            {{- with .Values.skillHub.config.skillsDir }}
+            - name: SKILLS_DIR
+              value: {{ . | quote }}
             {{- end }}
-            - name: SKILL_HUB_MAX_UPLOAD_BYTES
-              value: {{ .Values.skillHub.config.maxUploadBytes | quote }}
-            - name: SKILL_HUB_MAX_EXTRACTED_BYTES
-              value: {{ .Values.skillHub.config.maxExtractedBytes | quote }}
-            - name: SKILL_HUB_MAX_ARCHIVE_ENTRIES
-              value: {{ .Values.skillHub.config.maxArchiveEntries | quote }}
-            {{- if or .Values.skillHub.auth.pushToken .Values.skillHub.auth.existingSecret }}
-            - name: SKILL_HUB_PUSH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ default (printf "%s-auth" (include "dac.skillHub.serviceName" .)) .Values.skillHub.auth.existingSecret | quote }}
-                  key: {{ .Values.skillHub.auth.existingSecretKey | quote }}
             {{- end }}
+          {{- if $persistEnabled }}
+          volumeMounts:
+            - name: skills-data
+              mountPath: {{ $mountPath | quote }}
+          {{- end }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -65,15 +116,17 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.skillHub.resources | nindent 12 }}
-          {{- if .Values.skillHub.persistence.enabled }}
-          volumeMounts:
-            - name: skills
-              mountPath: /var/lib/skill-hub
-          {{- end }}
-      {{- if .Values.skillHub.persistence.enabled }}
+      {{- if $persistEnabled }}
       volumes:
-        - name: skills
+        - name: skills-data
+          {{- if eq $persistType "pvc" }}
           persistentVolumeClaim:
-            claimName: {{ default (include "dac.skillHub.serviceName" .) .Values.skillHub.persistence.existingClaim }}
+            claimName: {{ $pvc.existingClaim | default (printf "%s-skills" (include "dac.skillHub.serviceName" .)) }}
+          {{- else }}
+          # hostPath keeps uploads across pod restarts on the same node.
+          hostPath:
+            path: {{ $hostPath.path | default "/var/lib/dac/skill-hub/skills" | quote }}
+            type: {{ $hostPath.type | default "DirectoryOrCreate" | quote }}
+          {{- end }}
       {{- end }}
 {{- end }}

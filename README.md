@@ -2,7 +2,26 @@
 
 ## Deployment
 
-For specific deployment steps, please refer to the README.md file under the `installer` folder.
+### Platform (DAC)
+
+For platform deployment (apiserver, frontend, agents, middleware), see [`installer/README.md`](installer/README.md):
+
+```bash
+helm upgrade --install dac ./installer/dac -n dac --create-namespace -f my-values.yaml
+```
+
+### Sandbox (enterprise scan fixture)
+
+For the **demo data plane** used to simulate enterprise IPs for asset discovery (MySQL/Postgres/Redis/MinIO/GitLab/Odoo/Saleor/Boutique), see [`sandbox/README.md`](sandbox/README.md). It is a **separate** Helm chart — not part of the platform chart:
+
+```bash
+cd sandbox
+make offline-prep   # online build machine (once)
+make apply          # helm install ./chart -n dac-sandbox
+make scan-targets   # IPs/ports for frontend /infra scan
+```
+
+Typical flow: install **platform** → install **sandbox** → scan sandbox Pod IPs in the UI → create data sources → run agents.
 
 ## Usage
 
@@ -16,7 +35,7 @@ Default account: admin/changeme
 
 ### Configure the Default Model
 
-Go to 【Configuration Management】, select 【Model Management】, and then click 【New Configuration】.
+select 【Model Management】, and then click 【New Configuration】.
 
 1. Name: `llm-default`
 

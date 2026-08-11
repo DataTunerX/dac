@@ -46,6 +46,9 @@ data:
       orchestrator_base_url: "http://orchestrator-registry.dac.svc.cluster.local:8000"
       biz_orchestrator_base_url: "http://biz-orchestrator-registry.dac.svc.cluster.local:8000"
       timeout: 10s
+
+    skill_hub:
+      timeout: 120s
     
     database:
       driver: "mysql"
@@ -99,6 +102,11 @@ data:
     p, user, /api/v1/discovery/scans, GET
     p, user, /api/v1/discovery/scans/*, GET
     p, user, /api/v1/knowledge-graph/*, POST
+    p, user, /api/v1/skills/namespaces, GET
+    p, user, /api/v1/skills/namespaces/*/exists, GET
+    p, user, /api/v1/skills/namespaces/*/skills, GET
+    p, user, /api/v1/skills/namespaces/*/skills/*, GET
+    p, user, /api/v1/skills/namespaces/*/skills/*/download, GET
     p, user, /v1/chat/completions, POST
 
     g, admin, admin

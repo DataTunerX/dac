@@ -1,14 +1,17 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import useSWR from "swr"
 import axios from "axios"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
+import { discoveryScansKey } from "@/lib/swr-keys"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { PaginationBar } from "@/components/pagination-bar"
 import {
@@ -24,6 +27,7 @@ import {
 import { Loader2, Plus, RefreshCw, Trash2, Eye, Target } from "lucide-react"
 import type { DiscoveryJobResponse, DiscoveryJobStatus } from "@/lib/discovery"
 import { deleteDiscoveryScan, listDiscoveryScans, startDiscoveryScan, updateDiscoveryScan } from "@/lib/discovery"
+import { getApiErrorMessage as getApiErrorMessageBase } from "@/lib/api-error"
 
 function statusLabel(status: DiscoveryJobStatus) {
   switch (status) {
@@ -62,26 +66,21 @@ function fmtTs(sec?: number) {
 }
 
 function getApiErrorMessage(err: unknown): string | null {
-  if (axios.isAxiosError(err)) {
-    const data = err.response?.data
-    if (data && typeof data === "object") {
-      const r = data as Record<string, unknown>
-      const msg = r.message
-      if (typeof msg === "string" && msg.trim()) return msg.trim()
-    }
-    if (typeof err.message === "string" && err.message.trim()) return err.message.trim()
-    return null
-  }
-  if (err instanceof Error && err.message.trim()) return err.message.trim()
-  return null
+  const msg = getApiErrorMessageBase(err, "")
+  return msg.trim() ? msg : null
 }
+
+const INFRA_JOBS_COLUMNS = [
+  { id: "name", size: 220 },
+  { id: "target", size: 200 },
+  { id: "status", size: 120 },
+  { id: "started", size: 200 },
+  { id: "finished", size: 200 },
+  { id: "actions", size: 160 },
+] as const
 
 export default function InfraDiscoveryListPage() {
   const router = useRouter()
-
-  const [items, setItems] = useState<DiscoveryJobResponse[]>([])
-  const [total, setTotal] = useState(0)
-  const [isLoading, setIsLoading] = useState(false)
 
   const [pageSize, setPageSize] = useState(20)
   const [page, setPage] = useState(1)
@@ -97,30 +96,29 @@ export default function InfraDiscoveryListPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
-  const fetchData = async () => {
-    setIsLoading(true)
-    try {
-      const offset = (page - 1) * pageSize
-      const res = await listDiscoveryScans({ limit: pageSize, offset })
-      setItems(res.items || [])
-      setTotal(res.totalCount || 0)
-    } catch (err) {
-      console.error("List discovery scans failed", err)
-      toast.error("获取扫描记录失败")
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  const offset = (page - 1) * pageSize
+  const {
+    data,
+    error,
+    isLoading,
+    isValidating,
+    mutate: mutateList,
+  } = useSWR(
+    discoveryScansKey(page, pageSize),
+    () => listDiscoveryScans({ limit: pageSize, offset }),
+    { revalidateOnFocus: false },
+  )
 
   useEffect(() => {
-    void fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize])
+    if (error) toast.error("获取扫描记录失败")
+  }, [error])
 
-  // Backend returns stable order (created_at desc). Use items directly to avoid redundant useMemo (Vercel React Best Practices 5.3).
-  const ordered = items ?? []
-
+  const items = data?.items ?? []
+  const total = data?.totalCount ?? 0
+  const ordered = items
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  const fetchData = () => void mutateList()
 
   const openDetail = (id: string) => {
     router.push(`/infra/${encodeURIComponent(id)}`)
@@ -153,7 +151,7 @@ export default function InfraDiscoveryListPage() {
       setIsCreateOpen(false)
       setCreateName("")
       setPage(1)
-      await fetchData()
+      await mutateList()
       openDetail(res.id)
     } catch (err) {
       console.error("Create discovery scan failed", err)
@@ -174,7 +172,7 @@ export default function InfraDiscoveryListPage() {
       const remaining = Math.max(0, total - 1)
       const nextTotalPages = Math.max(1, Math.ceil(remaining / pageSize))
       if (page > nextTotalPages) setPage(nextTotalPages)
-      await fetchData()
+      await mutateList()
     } catch (err) {
       console.error("Delete discovery scan failed", err)
       toast.error("删除失败")
@@ -190,8 +188,14 @@ export default function InfraDiscoveryListPage() {
           <span className="text-content font-semibold">资产探测</span>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading} aria-label="刷新">
-            <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={fetchData}
+            disabled={isLoading || isValidating}
+            aria-label="刷新"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading || isValidating ? "animate-spin" : ""}`} />
           </Button>
           <RbacButton 
             className="flex items-center gap-2" 
@@ -205,16 +209,16 @@ export default function InfraDiscoveryListPage() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-line bg-surface overflow-hidden">
-        <Table>
+      <TableWrapper>
+        <Table storageKey="infra-jobs-list" columns={[...INFRA_JOBS_COLUMNS]}>
           <TableHeader>
             <TableRow className="bg-surface-muted">
-              <TableHead className="w-[220px]">名称</TableHead>
-              <TableHead className="w-[200px]">目标</TableHead>
-              <TableHead className="w-[120px]">状态</TableHead>
-              <TableHead className="w-[200px]">开始时间</TableHead>
-              <TableHead className="w-[200px]">结束时间</TableHead>
-              <TableHead className="w-[160px] text-right">操作</TableHead>
+              <TableHead columnId="name">名称</TableHead>
+              <TableHead columnId="target">目标</TableHead>
+              <TableHead columnId="status">状态</TableHead>
+              <TableHead columnId="started">开始时间</TableHead>
+              <TableHead columnId="finished">结束时间</TableHead>
+              <TableHead columnId="actions" className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -235,7 +239,7 @@ export default function InfraDiscoveryListPage() {
             ) : (
               ordered.map((job) => (
                 <TableRow key={job.id} className="cursor-pointer hover:bg-surface-muted" onClick={() => openDetail(job.id)}>
-                  <TableCell className="text-sm text-content">
+                  <TableCell columnId="name" className="text-sm text-content">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="w-9 h-9 rounded-xl bg-cta/10 flex items-center justify-center text-cta shrink-0 mt-0.5">
                         <Target className="w-4 h-4" />
@@ -250,15 +254,15 @@ export default function InfraDiscoveryListPage() {
                       </div>
                     </div>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{job.target}</TableCell>
-                  <TableCell>
+                  <TableCell columnId="target" className="font-mono text-xs">{job.target}</TableCell>
+                  <TableCell columnId="status">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusPillClass(job.status)}`}>
                       {statusLabel(job.status)}
                     </span>
                   </TableCell>
-                  <TableCell className="text-xs text-content">{fmtTs(job.startedAt)}</TableCell>
-                  <TableCell className="text-xs text-content">{fmtTs(job.finishedAt)}</TableCell>
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                  <TableCell columnId="started" className="text-xs text-content">{fmtTs(job.startedAt)}</TableCell>
+                  <TableCell columnId="finished" className="text-xs text-content">{fmtTs(job.finishedAt)}</TableCell>
+                  <TableCell columnId="actions" className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-2">
                       <Button variant="ghost" size="icon" onClick={() => openDetail(job.id)} aria-label="查看">
                         <Eye className="w-4 h-4 text-content-muted" />
@@ -275,7 +279,7 @@ export default function InfraDiscoveryListPage() {
             )}
           </TableBody>
         </Table>
-      </div>
+      </TableWrapper>
 
       <PaginationBar
         total={total}

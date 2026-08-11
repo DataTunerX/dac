@@ -50,11 +50,21 @@ class Skill(BaseModel):
             "pointing an LLM runtime at bundled docs / configs."
         ),
     )
+    allowed_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional allow-list of tool names declared in ``_meta.json``. "
+            "When non-empty, the runner only binds/allows these tools "
+            "(plus the always-available ``finish`` tool). "
+            "Empty list means unrestricted (backward compatible)."
+        ),
+    )
 
     def to_json(self, *, indent: int = 2, ensure_ascii: bool = False) -> str:
         """
         Serialize to a JSON object string with keys
         ``name``, ``description``, ``detail``, ``version``, ``scripts``,
-        ``base_dir``, ``resource_dirs`` (same shape as skill pack exports).
+        ``base_dir``, ``resource_dirs``, ``allowed_tools``
+        (same shape as skill pack exports).
         """
         return self.model_dump_json(indent=indent, ensure_ascii=ensure_ascii)

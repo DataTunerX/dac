@@ -28,6 +28,33 @@ import { EMPTY_PROGRESS } from "@/components/chat/chat-message-types"
 function chevronIcon(open: boolean, className = "w-4 h-4 text-content-muted shrink-0") {
   return open ? <ChevronDown className={className} /> : <ChevronRight className={className} />
 }
+function CollapsibleSectionInner({
+  defaultOpen,
+  summary,
+  children,
+  className,
+  summaryClassName,
+}: {
+  defaultOpen: boolean
+  summary: (open: boolean) => ReactNode
+  children: ReactNode
+  className: string
+  summaryClassName: string
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <details
+      className={className}
+      open={open}
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary className={summaryClassName}>{summary(open)}</summary>
+      {children}
+    </details>
+  )
+}
+
+/** Remount when defaultOpen changes instead of syncing via useEffect. */
 function CollapsibleSection({
   defaultOpen = false,
   summary,
@@ -41,19 +68,91 @@ function CollapsibleSection({
   className?: string
   summaryClassName?: string
 }) {
-  const [open, setOpen] = useState(defaultOpen)
-  useEffect(() => {
-    setOpen(defaultOpen)
-  }, [defaultOpen])
   return (
-    <details
+    <CollapsibleSectionInner
+      key={defaultOpen ? "open" : "closed"}
+      defaultOpen={defaultOpen}
+      summary={summary}
       className={className}
-      open={open}
-      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+      summaryClassName={summaryClassName}
     >
-      <summary className={summaryClassName}>{summary(open)}</summary>
       {children}
-    </details>
+    </CollapsibleSectionInner>
+  )
+}
+
+function Chip({
+  children,
+  tone = "neutral",
+}: {
+  children: ReactNode
+  tone?: "neutral" | "success"
+}) {
+  return (
+    <span
+      className={
+        tone === "success"
+          ? "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200"
+          : "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-muted text-content border border-line"
+      }
+    >
+      {children}
+    </span>
+  )
+}
+
+function AgentChip({ name }: { name: string }) {
+  return (
+    <Chip>
+      <Bot className="w-3 h-3 text-content-muted" />
+      <span className="text-[11px] leading-5">{name}</span>
+    </Chip>
+  )
+}
+
+function StatusMark({ state }: { state: "idle" | "running" | "done" | "warn" | "fail" }) {
+  if (state === "running") return <Loader2 className="w-3.5 h-3.5 animate-spin text-content-muted" />
+  if (state === "done") return <Check className="w-3.5 h-3.5 text-emerald-600" />
+  if (state === "warn") return <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+  if (state === "fail") return <XCircle className="w-3.5 h-3.5 text-rose-600" />
+  return <span className="w-3.5 h-3.5 inline-block" />
+}
+
+function SummaryRow({
+  title,
+  right,
+  tone = "default",
+  icon,
+}: {
+  title: ReactNode
+  right?: ReactNode
+  tone?: "default" | "success"
+  icon?: ReactNode
+}) {
+  return (
+    <div
+      className={
+        tone === "success"
+          ? "flex items-center gap-2 py-1 text-emerald-900"
+          : "flex items-center gap-2 py-1 text-content"
+      }
+    >
+      {icon !== undefined ? (
+        icon
+      ) : (
+        <ChevronRight className="w-4 h-4 text-content-muted shrink-0 group-open/section:rotate-90 transition-transform" />
+      )}
+      <div className="flex-1 text-[12px] font-medium">{title}</div>
+      {right ? <div className="shrink-0">{right}</div> : null}
+    </div>
+  )
+}
+
+function ShimmerLine({ w = "w-full" }: { w?: string }) {
+  return (
+    <div className={`relative overflow-hidden h-3 rounded bg-surface-active/60 ${w}`}>
+      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent [animation:dacShimmer_1.5s_ease-in-out_infinite] will-change-transform" />
+    </div>
   )
 }
 
@@ -69,12 +168,18 @@ export const ThinkingProcess = ({
   isThinking,
   isLive,
   progressList = EMPTY_PROGRESS,
+  startedAt,
+  elapsedSec,
 }: {
   content: string
   isThinking?: boolean
   isLive?: boolean
   /** Progress events shown under "思考中" (cards with event · agent · message). */
   progressList?: readonly ChatProgressPayload[]
+  /** Session-level stream start (ms); survives conversation switches. */
+  startedAt?: number | null
+  /** Frozen duration (seconds) after stream ends. */
+  elapsedSec?: number | null
 }) => {
   const [userExpanded, setUserExpanded] = useState(false)
   const wasThinkingOrLiveRef = useRef(false)
@@ -83,8 +188,9 @@ export const ThinkingProcess = ({
     if (now && !wasThinkingOrLiveRef.current) setUserExpanded(true)
     wasThinkingOrLiveRef.current = now
   }, [isThinking, isLive])
-  const startedAtRef = useRef<number | null>(null)
-  const [duration, setDuration] = useState(0)
+  const [duration, setDuration] = useState(() =>
+    elapsedSec != null && elapsedSec > 0 ? elapsedSec : 0
+  )
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null)
   const [openProgressSteps, setOpenProgressSteps] = useState<string[]>([])
   const previousProgressCountRef = useRef(0)
@@ -537,27 +643,21 @@ export const ThinkingProcess = ({
   }, [content, isThinking])
 
   useEffect(() => {
-    if (isThinking) {
-      startedAtRef.current = Date.now()
+    if (!isThinking) {
+      if (elapsedSec != null && elapsedSec > 0) {
+        setDuration(elapsedSec)
+      }
       return
     }
-    startedAtRef.current = null
-  }, [isThinking])
 
-  useEffect(() => {
-    if (!isThinking) return
-
-    // Avoid setState synchronously inside effect body (eslint rule).
-    setTimeout(() => setDuration(0), 0)
-
-    const timer = setInterval(() => {
-      const startedAt = startedAtRef.current
-      if (!startedAt) return
-      const secs = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
-      setDuration(secs)
-    }, 1000)
+    const anchor = startedAt ?? Date.now()
+    const tick = () => {
+      setDuration(Math.max(0, Math.floor((Date.now() - anchor) / 1000)))
+    }
+    tick()
+    const timer = setInterval(tick, 1000)
     return () => clearInterval(timer)
-  }, [isThinking])
+  }, [isThinking, startedAt, elapsedSec])
 
   // IMPORTANT: Don't "guess" reasoning lifecycle on the frontend.
   // The backend decides when reasoning ends; on UI we treat reasoning as "running"
@@ -572,73 +672,6 @@ export const ThinkingProcess = ({
   if (!isThinking && !hasReasoning && !hasProgress) return null
 
   const isExpanded = userExpanded
-  const Chip = ({
-    children,
-    tone = "neutral",
-  }: {
-    children: ReactNode
-    tone?: "neutral" | "success"
-  }) => (
-    <span
-      className={
-        tone === "success"
-          ? "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200"
-          : "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-muted text-content border border-line"
-      }
-    >
-      {children}
-    </span>
-  )
-
-  const AgentChip = ({ name }: { name: string }) => (
-    <Chip>
-      <Bot className="w-3 h-3 text-content-muted" />
-      <span className="text-[11px] leading-5">{name}</span>
-    </Chip>
-  )
-
-  const StatusMark = ({
-    state,
-  }: {
-    state: "idle" | "running" | "done" | "warn" | "fail"
-  }) => {
-    if (state === "running") return <Loader2 className="w-3.5 h-3.5 animate-spin text-content-muted" />
-    if (state === "done") return <Check className="w-3.5 h-3.5 text-emerald-600" />
-    if (state === "warn") return <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-    if (state === "fail") return <XCircle className="w-3.5 h-3.5 text-rose-600" />
-    return <span className="w-3.5 h-3.5 inline-block" />
-  }
-
-  const SummaryRow = ({
-    title,
-    right,
-    tone = "default",
-    icon,
-  }: {
-    title: ReactNode
-    right?: ReactNode
-    tone?: "default" | "success"
-    /** 传入则用该图标，否则用默认 ChevronRight + group-open；与 CollapsibleSection 配合可实现展开/闭合与图标一致 */
-    icon?: ReactNode
-  }) => (
-    <div
-      className={
-        tone === "success"
-          ? "flex items-center gap-2 py-1 text-emerald-900"
-          : "flex items-center gap-2 py-1 text-content"
-      }
-    >
-      {icon !== undefined ? icon : <ChevronRight className="w-4 h-4 text-content-muted shrink-0 group-open/section:rotate-90 transition-transform" />}
-      <div className="flex-1 text-[12px] font-medium">{title}</div>
-      {right ? <div className="shrink-0">{right}</div> : null}
-    </div>
-  )
-
-  const ShimmerLine = ({ w = "w-full" }: { w?: string }) => (
-    <div className={`relative overflow-hidden h-3 rounded bg-surface-active/60 ${w}`}>
-      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent [animation:dacShimmer_1.5s_ease-in-out_infinite] will-change-transform" />
-    </div>
-  )
 
   return (
     <div className="mb-3 min-w-0 overflow-hidden">

@@ -38,6 +38,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import Link from "next/link"
+import {
+  getPdfLoaderDescription,
+  PDF_LOADER_OPTIONS,
+  type PdfLoaderPolicy,
+} from "@/lib/pdf-loader"
 
 // --- Schemas ---
 
@@ -72,6 +77,7 @@ const dataSourceSchema = z.object({
   // Optional: prompts configmap
   promptsConfigMapName: z.string().optional(),
   gpuEnabled: z.enum(["yes", "no"]),
+  pdfLoader: z.enum(["auto", "ocr", "text"]),
 
   // Code repo config (only for type=coderepo)
   codeRepoType: z.string().optional(),
@@ -173,6 +179,52 @@ const dataSourceSchema = z.object({
 
 export type DataSourceFormValues = z.infer<typeof dataSourceSchema>
 
+/** Append mode: password may be omitted when caller supplies retainedCredentials. */
+const dataSourceAppendSchema = z.object({
+  name: z.string().min(2, "名称至少 2 个字符"),
+  namespace: z.string().min(1, "命名空间必填"),
+  type: z.enum(["mysql", "postgres", "minio", "fileserver", "coderepo"], { message: "请选择类型" }),
+  host: z.string().optional(),
+  port: z.string().optional(),
+  user: z.string().optional(),
+  password: z.string().optional(),
+  databases: z.array(z.string().min(1, "数据库名不能为空")).optional(),
+  accessKey: z.string().optional(),
+  secretKey: z.string().optional(),
+  bucket: z.string().optional(),
+  path: z.string().optional(),
+  extractFiles: z.string().optional(),
+  promptsConfigMapName: z.string().optional(),
+  gpuEnabled: z.enum(["yes", "no"]),
+  pdfLoader: z.enum(["auto", "ocr", "text"]),
+  codeRepoType: z.string().optional(),
+  codeRepoPath: z.string().optional(),
+  codeRepoBranch: z.string().optional(),
+  codeRepoToken: z.string().optional(),
+}).superRefine((v, ctx) => {
+  if (v.type !== "coderepo") {
+    if (!v.host?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["host"], message: "主机必填" })
+    }
+    if (!v.port?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["port"], message: "端口必填" })
+    }
+  }
+  if (v.type === "mysql" || v.type === "postgres") {
+    if (!v.user?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["user"], message: "用户名必填" })
+    }
+    const dbs = (v.databases ?? []).map((s) => s.trim()).filter(Boolean)
+    if (dbs.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["databases"],
+        message: "请至少选择或填写一个数据库",
+      })
+    }
+  }
+})
+
 const defaultFormValues: DataSourceFormValues = {
   name: "",
   namespace: "default",
@@ -189,6 +241,7 @@ const defaultFormValues: DataSourceFormValues = {
   extractFiles: "",
   promptsConfigMapName: "",
   gpuEnabled: "no",
+  pdfLoader: "auto",
   codeRepoType: "",
   codeRepoPath: "",
   codeRepoBranch: "main",
@@ -202,6 +255,10 @@ type DatabaseMultiSelectProps = {
   onChange: (next: string[]) => void
   buildProbeRequest: () => { ok: true; req: ProbeRequest } | { ok: false; reason: string }
   disabled?: boolean
+  /** Already-associated databases: shown as locked chips, not part of `value`. */
+  lockedValues?: string[]
+  /** Hint under the label (defaults to create-time copy). */
+  hint?: string
 }
 
 /**
@@ -217,6 +274,8 @@ function DatabaseMultiSelect({
   onChange,
   buildProbeRequest,
   disabled,
+  lockedValues = [],
+  hint,
 }: DatabaseMultiSelectProps) {
   const [isProbing, setIsProbing] = useState(false)
   const [probeError, setProbeError] = useState<string | null>(null)
@@ -225,15 +284,22 @@ function DatabaseMultiSelect({
   const [manualInput, setManualInput] = useState("")
 
   const selectedSet = useMemo(() => new Set(value), [value])
+  const lockedSet = useMemo(() => new Set(lockedValues), [lockedValues])
 
-  // The chip pool is the union of probed databases and currently-selected
+  // The chip pool is the union of locked, probed, and currently-selected
   // databases. Probed entries persist in the pool whether selected or not, so
   // operators can toggle them on and off. Manually-typed entries only appear
   // while they remain selected; deselecting a manual entry removes it from
-  // both the selection and the pool.
+  // both the selection and the pool. Locked entries stay visible and non-toggleable.
   const knownList = useMemo(() => {
     const seen = new Set<string>()
     const out: string[] = []
+    for (const name of lockedValues) {
+      if (!seen.has(name)) {
+        seen.add(name)
+        out.push(name)
+      }
+    }
     if (available) {
       for (const name of available) {
         if (!seen.has(name)) {
@@ -249,7 +315,7 @@ function DatabaseMultiSelect({
       }
     }
     return out
-  }, [available, value])
+  }, [available, value, lockedValues])
 
   const handleProbe = async () => {
     const built = buildProbeRequest()
@@ -276,6 +342,7 @@ function DatabaseMultiSelect({
   }
 
   const toggle = (name: string) => {
+    if (lockedSet.has(name)) return
     if (selectedSet.has(name)) {
       onChange(value.filter((v) => v !== name))
     } else {
@@ -288,7 +355,7 @@ function DatabaseMultiSelect({
     if (!trimmed) {
       return
     }
-    if (selectedSet.has(trimmed)) {
+    if (lockedSet.has(trimmed) || selectedSet.has(trimmed)) {
       setManualInput("")
       return
     }
@@ -298,6 +365,7 @@ function DatabaseMultiSelect({
 
   const hasProbed = available !== null
   const probeButtonLabel = hasProbed ? "重新探测" : "探测数据库"
+  const selectableCount = knownList.filter((n) => !lockedSet.has(n)).length
 
   return (
     <div className="space-y-3">
@@ -305,7 +373,7 @@ function DatabaseMultiSelect({
         <div className="space-y-0.5">
           <FormLabel className="m-0">数据库</FormLabel>
           <div className="text-xs text-content-muted">
-            每个选中的数据库会创建一个独立的数据源
+            {hint ?? "每个选中的数据库会创建一个独立的数据源"}
           </div>
         </div>
         <Button
@@ -336,32 +404,43 @@ function DatabaseMultiSelect({
         <div className="flex items-center justify-between text-xs text-content-muted">
           <span>
             {hasProbed
-              ? "点击切换选中状态"
+              ? lockedValues.length > 0
+                ? "灰色为已关联（不可取消），点击其余项追加"
+                : "点击切换选中状态"
               : "尚未探测，可点击右上方按钮探测，或在下方手动添加"}
           </span>
           <span>
-            已选 {value.length}
-            {knownList.length > 0 ? ` / 共 ${knownList.length}` : ""}
+            新选 {value.length}
+            {lockedValues.length > 0 ? ` · 已关联 ${lockedValues.length}` : ""}
+            {selectableCount > 0 || lockedValues.length > 0
+              ? ` / 共 ${knownList.length}`
+              : ""}
           </span>
         </div>
 
         {knownList.length > 0 ? (
           <div className="flex flex-wrap gap-1.5">
             {knownList.map((name) => {
-              const isSelected = selectedSet.has(name)
+              const isLocked = lockedSet.has(name)
+              const isSelected = isLocked || selectedSet.has(name)
               return (
                 <button
                   type="button"
                   key={name}
                   onClick={() => toggle(name)}
+                  disabled={disabled || isLocked}
+                  title={isLocked ? "已关联，不可取消" : undefined}
                   className={cn(
-                    "px-2 py-1 rounded-md border text-xs cursor-pointer transition-colors",
-                    isSelected
-                      ? "border-cta bg-cta/10 text-cta"
-                      : "border-line bg-surface text-content hover:border-cta/50"
+                    "px-2 py-1 rounded-md border text-xs transition-colors",
+                    isLocked
+                      ? "border-line bg-surface-muted text-content-muted cursor-not-allowed"
+                      : isSelected
+                        ? "border-cta bg-cta/10 text-cta cursor-pointer"
+                        : "border-line bg-surface text-content hover:border-cta/50 cursor-pointer",
+                    disabled && !isLocked && "pointer-events-none opacity-50"
                   )}
                 >
-                  {name}
+                  {isLocked ? `${name} · 已关联` : name}
                 </button>
               )
             })}
@@ -385,8 +464,14 @@ function DatabaseMultiSelect({
                 addManual()
               }
             }}
+            disabled={disabled}
           />
-          <Button type="button" variant="outline" onClick={addManual} disabled={!manualInput.trim()}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={addManual}
+            disabled={disabled || !manualInput.trim()}
+          >
             添加
           </Button>
         </div>
@@ -401,13 +486,25 @@ export function CreateDataSourceDialog({
   onSubmit,
   initialValues,
   title,
+  mode = "create",
+  lockedDatabases = [],
+  retainedCredentials,
+  description,
 }: { 
   open: boolean; 
   onOpenChange: (open: boolean) => void;
   onSubmit: (data: DataSourceFormValues) => void | Promise<void>;
   initialValues?: Partial<DataSourceFormValues>;
   title?: string;
+  /** append: add databases via PUT + resync (no delete) */
+  mode?: "create" | "append";
+  /** Databases already linked on this connection; not selectable again */
+  lockedDatabases?: string[];
+  /** Kept out of form state so secrets are not echoed into inputs */
+  retainedCredentials?: { user?: string; password?: string };
+  description?: string;
 }) {
+  const isAppend = mode === "append"
   const [namespaces, setNamespaces] = useState<string[]>([])
   const [isLoadingNs, setIsLoadingNs] = useState(false)
   const [nsLoadError, setNsLoadError] = useState<string | null>(null)
@@ -424,7 +521,7 @@ export function CreateDataSourceDialog({
   const [gpuLoadError, setGPULoadError] = useState<string | null>(null)
 
   const form = useForm<DataSourceFormValues>({
-    resolver: zodResolver(dataSourceSchema),
+    resolver: zodResolver(isAppend ? dataSourceAppendSchema : dataSourceSchema),
     defaultValues: defaultFormValues,
   })
 
@@ -443,7 +540,20 @@ export function CreateDataSourceDialog({
     if (isSubmitting) return
     setIsSubmitting(true)
     try {
-      await onSubmit(data)
+      const merged: DataSourceFormValues = {
+        ...data,
+        user: data.user?.trim() || retainedCredentials?.user || "",
+        password: data.password?.trim() || retainedCredentials?.password || "",
+      }
+      if (
+        isAppend &&
+        (merged.type === "mysql" || merged.type === "postgres") &&
+        !String(merged.password ?? "").trim()
+      ) {
+        form.setError("password", { message: "请填写密码，或确保已有数据源仍保留凭证" })
+        return
+      }
+      await onSubmit(merged)
       onOpenChange(false)
       form.reset(defaultFormValues)
       setShowPassword(false)
@@ -454,6 +564,7 @@ export function CreateDataSourceDialog({
 
   const typeValue = form.watch("type")
   const namespaceValue = form.watch("namespace")
+  const showPdfLoader = typeValue === "minio" || typeValue === "fileserver"
   const gpuSelectable = Boolean(gpuAvailability?.available)
 
   const loadNamespaces = async () => {
@@ -539,9 +650,14 @@ export function CreateDataSourceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[720px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
-          <DialogTitle>{title || "新建数据源"}</DialogTitle>
+          <DialogTitle>
+            {title || (isAppend ? "继续关联数据库" : "新建数据源")}
+          </DialogTitle>
           <DialogDescription>
-            配置连接信息以创建新的数据源（系统会基于该数据源生成指纹与知识分片）。
+            {description ||
+              (isAppend
+                ? "选择尚未关联的数据库后，将增量写入已有数据源并触发同步（不会删除原资源）。已关联库保持不变。"
+                : "配置连接信息以创建新的数据源（系统会基于该数据源生成指纹与知识分片）。")}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -555,7 +671,11 @@ export function CreateDataSourceDialog({
                     <FormItem>
                       <FormLabel>名称</FormLabel>
                       <FormControl>
-                        <Input placeholder="例如：datadescriptor-00003（唯一标识）" {...field} />
+                        <Input
+                          placeholder="例如：datadescriptor-00003（唯一标识）"
+                          disabled={isAppend || isSubmitting}
+                          {...field}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -572,7 +692,7 @@ export function CreateDataSourceDialog({
                           <Select
                             value={field.value || "default"}
                             onValueChange={field.onChange}
-                            disabled={isSubmitting || isLoadingNs}
+                            disabled={isAppend || isSubmitting || isLoadingNs}
                           >
                             <SelectTrigger className="w-full">
                               <SelectValue placeholder="选择命名空间" />
@@ -621,8 +741,8 @@ export function CreateDataSourceDialog({
                             {isLoadingGPU
                               ? "正在检查集群 GPU 能力…"
                               : gpuSelectable
-                                ? `检测到 ${gpuAvailability?.nodeCount ?? 0} 个 GPU 节点，共 ${gpuAvailability?.totalGPUs ?? 0} 张 GPU，可按需启用。`
-                                : gpuLoadError || "当前环境未检测到 GPU，已固定为不使用 GPU。"}
+                                ? `检测到 ${gpuAvailability?.nodeCount ?? 0} 个 GPU 节点、共 ${gpuAvailability?.totalGPUs ?? 0} 张 GPU，可按需启用。`
+                                : gpuLoadError || "当前环境未检测到 GPU，已固定为不启用。"}
                           </FormDescription>
                         </div>
                         <FormControl>
@@ -656,6 +776,46 @@ export function CreateDataSourceDialog({
                   )
                 }}
               />
+
+              {showPdfLoader ? (
+                <div className="space-y-4 rounded-lg border border-line p-4">
+                  <div className="text-xs font-semibold text-content-muted">PDF 处理</div>
+                  <p className="text-xs text-content-muted -mt-2">
+                    仅对 MinIO / 文件服务中的 PDF 文件生效，与上方 GPU 开关独立配置。
+                  </p>
+                  <FormField
+                    control={form.control}
+                    name="pdfLoader"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>处理方式</FormLabel>
+                        <Select
+                          value={field.value}
+                          onValueChange={field.onChange}
+                          disabled={isSubmitting}
+                        >
+                          <FormControl>
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="选择 PDF 处理方式" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
+                            {PDF_LOADER_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormDescription className="text-xs">
+                          {getPdfLoaderDescription(field.value as PdfLoaderPolicy)}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              ) : null}
             
               <div className="space-y-4">
                 <div className="text-xs font-semibold text-content-muted">连接配置</div>
@@ -685,7 +845,7 @@ export function CreateDataSourceDialog({
                             }}
                             key={field.value}
                             value={field.value}
-                            disabled={!!initialValues?.type}
+                            disabled={isAppend || !!initialValues?.type}
                           >
                             <FormControl>
                               <SelectTrigger className="w-full">
@@ -746,7 +906,11 @@ export function CreateDataSourceDialog({
                         <FormItem>
                           <FormLabel>主机</FormLabel>
                           <FormControl>
-                            <Input placeholder="例如：mysql-server 或 127.0.0.1" {...field} />
+                            <Input
+                              placeholder="例如：mysql-server 或 127.0.0.1"
+                              disabled={isAppend || isSubmitting}
+                              {...field}
+                            />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -759,7 +923,12 @@ export function CreateDataSourceDialog({
                         <FormItem>
                           <FormLabel>端口</FormLabel>
                           <FormControl>
-                            <Input inputMode="numeric" placeholder="例如：3306" {...field} />
+                            <Input
+                              inputMode="numeric"
+                              placeholder="例如：3306"
+                              disabled={isAppend || isSubmitting}
+                              {...field}
+                            />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -814,7 +983,13 @@ export function CreateDataSourceDialog({
                               <div className="relative">
                                 <Input
                                   type={showPassword ? "text" : "password"}
-                                  placeholder="输入密码"
+                                  placeholder={
+                                    isAppend
+                                      ? retainedCredentials?.password
+                                        ? "留空则沿用已有密码"
+                                        : "输入密码"
+                                      : "输入密码"
+                                  }
                                   autoComplete="current-password"
                                   className="pr-10"
                                   {...field}
@@ -900,21 +1075,29 @@ export function CreateDataSourceDialog({
                               field.onChange(next.length > 0 ? next : [])
                             }
                             disabled={isSubmitting}
+                            lockedValues={lockedDatabases}
+                            hint={
+                              isAppend
+                                ? "选择尚未关联的数据库；确认后将增量关联并触发同步（不会删除原数据源）"
+                                : undefined
+                            }
                             buildProbeRequest={() => {
                               // Validate just enough to attempt a probe; the full
                               // form will still re-validate on submit.
                               const v = form.getValues()
                               const portNum = Number(v.port)
+                              const user = v.user?.trim() || retainedCredentials?.user || ""
+                              const password = v.password?.trim() || retainedCredentials?.password || ""
                               if (!v.host?.trim()) {
                                 return { ok: false, reason: "请先填写主机" }
                               }
                               if (!v.port?.trim() || !Number.isFinite(portNum) || portNum <= 0 || portNum > 65535) {
                                 return { ok: false, reason: "请先填写有效的端口 (1-65535)" }
                               }
-                              if (!v.user?.trim()) {
+                              if (!user) {
                                 return { ok: false, reason: "请先填写用户名" }
                               }
-                              if (!v.password?.trim()) {
+                              if (!password) {
                                 return { ok: false, reason: "请先填写密码" }
                               }
                               return {
@@ -923,8 +1106,8 @@ export function CreateDataSourceDialog({
                                   type: v.type,
                                   host: v.host.trim(),
                                   port: portNum,
-                                  user: v.user.trim(),
-                                  password: v.password,
+                                  user,
+                                  password,
                                 },
                               }
                             }}
@@ -1083,7 +1266,13 @@ export function CreateDataSourceDialog({
                 取消
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "创建中..." : "创建数据源"}
+                {isSubmitting
+                  ? isAppend
+                    ? "关联中..."
+                    : "创建中..."
+                  : isAppend
+                    ? "确认关联"
+                    : "创建数据源"}
               </Button>
             </DialogFooter>
           </form>

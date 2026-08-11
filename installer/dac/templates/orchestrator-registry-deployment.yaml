@@ -19,6 +19,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if not .Values.redis.external.host }}
+      initContainers:
+        {{- include "dac.initWait" (list (dict "name" "redis" "host" (printf "%s.%s.svc.cluster.local" (include "dac.redis.serviceName" .) .Release.Namespace) "port" (.Values.redis.port | toString))) | nindent 8 }}
+      {{- end }}
       containers:
         - name: orchestrator-registry
           image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.orchestratorRegistry.image.repository "tag" .Values.orchestratorRegistry.image.tag) }}
@@ -31,14 +35,7 @@ spec:
             - name: COLLECTION_NAME
               value: {{ .Values.orchestratorRegistry.config.collectionName | quote }}
           args:
-            - "--redis-host"
-            - {{ include "dac.redis.serviceName" . | quote }}
-            - "--redis-port"
-            - {{ .Values.redis.port | quote }}
-            - "--redis-db"
-            - {{ .Values.orchestratorRegistry.config.redisDb | quote }}
-            - "--password"
-            - {{ .Values.redis.password | quote }}
+            {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.orchestratorRegistry.config.redisDb) | nindent 12 }}
           resources:
             {{- toYaml .Values.orchestratorRegistry.resources | nindent 12 }}
 {{- end }}

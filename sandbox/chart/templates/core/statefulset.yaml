@@ -1,0 +1,332 @@
+{{/*
+  Single Pod: MySQL + Postgres + Redis + MinIO + FileServer + GitLab + Odoo + Saleor API
+  One Pod IP for enterprise "give us a host" scan demos.
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dac-sandbox
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+spec:
+  serviceName: dac-sandbox
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dac-sandbox.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac-sandbox.selectorLabels" . | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 20
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        # ---------- MySQL ----------
+        - name: mysql
+          image: {{ include "dac-sandbox.sandboxImage" (dict "Values" .Values "name" "sandbox-mysql") }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: {{ .Values.credentials.mysqlRootPassword | quote }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            tcpSocket:
+              port: 3306
+            initialDelaySeconds: 20
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources.mysql | nindent 12 }}
+
+        # ---------- PostgreSQL (shared: demo DBs + odoo_demo + saleor) ----------
+        - name: postgres
+          image: {{ include "dac-sandbox.sandboxImage" (dict "Values" .Values "name" "sandbox-postgres") }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.credentials.postgresPassword | quote }}
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          ports:
+            - name: postgres
+              containerPort: 5432
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"]
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources.postgres | nindent 12 }}
+
+        # ---------- Redis / Valkey (Saleor + Boutique cart) ----------
+        - name: redis
+          image: {{ include "dac-sandbox.redisImage" . }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources.redis | nindent 12 }}
+
+        # ---------- MinIO ----------
+        - name: minio
+          image: {{ include "dac-sandbox.minioImage" . }}
+          imagePullPolicy: IfNotPresent
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              value: {{ .Values.credentials.minioRootUser | quote }}
+            - name: MINIO_ROOT_PASSWORD
+              value: {{ .Values.credentials.minioRootPassword | quote }}
+          ports:
+            - name: s3
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources.minio | nindent 12 }}
+
+        # ---------- FileServer ----------
+        - name: fileserver
+          image: {{ include "dac-sandbox.sandboxImage" (dict "Values" .Values "name" "sandbox-fileserver") }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: files
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources.fileserver | nindent 12 }}
+
+        # ---------- GitLab CE ----------
+        # Omnibus first boot is slow (often 10–20m). Shared STS Pod Ready requires
+        # ALL containers Ready — so GitLab must not use readiness/startup/liveness
+        # probes. Otherwise MinIO/Postgres stay off ClusterIP endpoints and seed
+        # Jobs fail even though those containers are healthy.
+        - name: gitlab
+          image: {{ include "dac-sandbox.gitlabImage" . }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GITLAB_ROOT_PASSWORD
+              value: {{ .Values.credentials.gitlabRootPassword | quote }}
+            - name: GITLAB_OMNIBUS_CONFIG
+              value: |
+                external_url 'http://gitlab:8929'
+                gitlab_rails['initial_root_password'] = '{{ .Values.credentials.gitlabRootPassword }}'
+                gitlab_rails['gitlab_shell_ssh_port'] = 22
+                prometheus_monitoring['enable'] = false
+                alertmanager['enable'] = false
+                node_exporter['enable'] = false
+                redis_exporter['enable'] = false
+                postgres_exporter['enable'] = false
+                gitlab_exporter['enable'] = false
+                mattermost['enable'] = false
+                registry['enable'] = false
+                gitlab_kas['enable'] = false
+                gitlab_pages['enable'] = false
+                gitlab_rails['monitoring_whitelist'] = ['0.0.0.0/0']
+                # Same Pod network NS as Online Boutique frontend (:8080).
+                # Default puma['port']=8080 → EADDRINUSE → Puma crash-loop → workhorse 502.
+                puma['port'] = 18080
+                puma['worker_processes'] = 1
+                puma['min_threads'] = 1
+                puma['max_threads'] = 4
+                sidekiq['max_concurrency'] = 5
+                gitlab_rails['env'] = { 'GITLAB_LOG_LEVEL' => 'WARN' }
+          ports:
+            - name: gitlab-http
+              containerPort: 8929
+          volumeMounts:
+            - name: gitlab-config
+              mountPath: /etc/gitlab
+            - name: gitlab-logs
+              mountPath: /var/log/gitlab
+            - name: gitlab-data
+              mountPath: /var/opt/gitlab
+          # No probes: GitLab omnibus stays "Running" while Rails boots for a long
+          # time; any readiness/startup here would keep the whole STS Pod NotReady
+          # and empty ClusterIP endpoints for MinIO/Postgres seed Jobs.
+          resources:
+            {{- toYaml .Values.resources.gitlab | nindent 12 }}
+
+        # ---------- Odoo (shared STS Postgres) ----------
+        # NOTE: K8s `command` replaces the image ENTRYPOINT (/entrypoint.sh), which is
+        # what normally turns HOST/USER/PASSWORD into --db_host/--db_user/--db_password.
+        # Pass those flags explicitly here, or Odoo falls back to a local Unix socket
+        # (log: database: default@default:default).
+        - name: odoo
+          image: {{ include "dac-sandbox.odooImage" . }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HOST
+              value: "127.0.0.1"
+            - name: PORT
+              value: "5432"
+            - name: USER
+              value: {{ .Values.credentials.odooUser | quote }}
+            - name: PASSWORD
+              value: {{ .Values.credentials.odooPassword | quote }}
+            - name: ODOO_DB
+              value: {{ .Values.credentials.odooDatabase | quote }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              DB_HOST="${HOST:-127.0.0.1}"
+              DB_PORT="${PORT:-5432}"
+              DB_USER="${USER:-odoo}"
+              DB_PASSWORD="${PASSWORD:-odopass}"
+              ODOO_DB="${ODOO_DB:-odoo_demo}"
+              DB_ARGS=(--db_host="$DB_HOST" --db_port="$DB_PORT" --db_user="$DB_USER" --db_password="$DB_PASSWORD")
+
+              echo "waiting for postgres at ${DB_HOST}:${DB_PORT} (user=${DB_USER})..."
+              # Image ships wait-for-psql.py; retry until STS postgres finishes init (~minutes).
+              ready=0
+              for i in $(seq 1 90); do
+                if wait-for-psql.py "${DB_ARGS[@]}" --timeout=3; then
+                  ready=1
+                  break
+                fi
+                sleep 3
+              done
+              if [ "$ready" -ne 1 ]; then
+                echo "ERROR: postgres not ready after ~270s" >&2
+                exit 1
+              fi
+
+              if [ ! -f /var/lib/odoo/.sandbox_init_v2 ]; then
+                echo "initializing $ODOO_DB (base,sale,stock,account,point_of_sale,pos_restaurant)..."
+                odoo "${DB_ARGS[@]}" -d "$ODOO_DB" -i base,sale,stock,account,point_of_sale,pos_restaurant --stop-after-init
+                touch /var/lib/odoo/.sandbox_init_v2
+              fi
+              exec odoo "${DB_ARGS[@]}" -d "$ODOO_DB"
+          ports:
+            - name: odoo
+              containerPort: {{ .Values.odoo.httpPort }}
+          volumeMounts:
+            - name: odoo-filestore
+              mountPath: /var/lib/odoo
+          readinessProbe:
+            httpGet:
+              path: /web/login
+              port: {{ .Values.odoo.httpPort }}
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.resources.odoo | nindent 12 }}
+
+        # ---------- Saleor API (port 8001 — FileServer keeps 8000) ----------
+        - name: saleor-api
+          image: {{ include "dac-sandbox.saleorImage" . }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DATABASE_URL
+              value: {{ include "dac-sandbox.saleorDatabaseUrl" . | quote }}
+            - name: CACHE_URL
+              value: "redis://127.0.0.1:6379/0"
+            - name: CELERY_BROKER_URL
+              value: "redis://127.0.0.1:6379/1"
+            - name: SECRET_KEY
+              value: {{ .Values.credentials.saleorSecretKey | quote }}
+            - name: ALLOWED_HOSTS
+              value: "*"
+            - name: DEBUG
+              value: "True"
+            - name: DEFAULT_CHANNEL_SLUG
+              value: default-channel
+            - name: HTTP_IP_FILTER_ENABLED
+              value: "False"
+            - name: DASHBOARD_URL
+              value: http://127.0.0.1:9002/
+            - name: PORT
+              value: {{ .Values.saleor.apiPort | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "waiting for local postgres + redis..."
+              i=0
+              while [ "$i" -lt 90 ]; do
+                python3 -c "import socket; s=socket.create_connection(('127.0.0.1',5432),2); s.close(); s=socket.create_connection(('127.0.0.1',6379),2); s.close()" 2>/dev/null && break
+                i=$((i+1))
+                sleep 3
+              done
+              i=0
+              while [ "$i" -lt 60 ]; do
+                python3 manage.py showmigrations >/dev/null 2>&1 && break
+                i=$((i+1))
+                sleep 3
+              done
+              python3 manage.py migrate --noinput
+              if command -v uvicorn >/dev/null 2>&1; then
+                exec uvicorn saleor.asgi:application --host 0.0.0.0 --port {{ .Values.saleor.apiPort }}
+              fi
+              exec gunicorn saleor.asgi:application -k uvicorn.workers.UvicornWorker -b 0.0.0.0:{{ .Values.saleor.apiPort }} --workers 2
+          ports:
+            - name: saleor-api
+              containerPort: {{ .Values.saleor.apiPort }}
+          readinessProbe:
+            httpGet:
+              path: /graphql/
+              port: {{ .Values.saleor.apiPort }}
+              httpHeaders:
+                - name: Host
+                  value: saleor-api
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.resources.saleorApi | nindent 12 }}
+
+        {{- include "dac-sandbox.stsExtraContainers" . | nindent 8 }}
+
+      volumes:
+        - name: mysql-data
+          emptyDir: {}
+        - name: postgres-data
+          emptyDir: {}
+        - name: minio-data
+          emptyDir: {}
+        - name: gitlab-config
+          emptyDir: {}
+        - name: gitlab-logs
+          emptyDir: {}
+        - name: gitlab-data
+          emptyDir: {}
+        - name: odoo-filestore
+          emptyDir: {}
+        - name: saleor-dashboard-nginx
+          configMap:
+            name: saleor-dashboard-nginx

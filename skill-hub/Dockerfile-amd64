@@ -15,7 +15,7 @@ RUN mkdir /app/sdks
 
 COPY sdks/model_sdk-0.2.0-py3-none-any.whl /app/sdks/model_sdk-0.2.0-py3-none-any.whl
 
-COPY sdks/skill_sdk-0.2.0-py3-none-any.whl /app/sdks/skill_sdk-0.2.0-py3-none-any.whl
+COPY sdks/skill_sdk-0.3.1-py3-none-any.whl /app/sdks/skill_sdk-0.3.1-py3-none-any.whl
 
 # Enable bytecode compilation
 ENV UV_COMPILE_BYTECODE=1
@@ -47,7 +47,11 @@ COPY --from=uv --chown=app:app /app/.venv /app/.venv
 # Place executables in the environment at the front of the path
 ENV PATH="/app/.venv/bin:$PATH"
 
-COPY skills /app/skills
+# The built-in default namespace lives in /app/skills/default/.
+# Repo layout is skills/default/*.zip, so copy that dir (not skills/) to avoid
+# nesting as /app/skills/default/default/.
+RUN mkdir -p /app/skills/default
+COPY skills/default /app/skills/default
 
 # Place executables in the environment at the front of the path
 ENV PATH="/app/.venv/bin:$PATH"

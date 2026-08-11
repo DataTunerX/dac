@@ -14,6 +14,7 @@ type CreateDataDescriptorRequest struct {
 	Labels         map[string]string   `json:"labels"`
 	DescriptorType string              `json:"descriptorType" validate:"required"`
 	GPUEnabled     string              `json:"gpuEnabled"`
+	PDFLoader      string              `json:"pdfLoader"`
 	Sources        []entity.DataSource `json:"sources" validate:"required"`
 }
 
@@ -23,6 +24,7 @@ type UpdateDataDescriptorRequest struct {
 	Labels         map[string]string   `json:"labels"`
 	DescriptorType string              `json:"descriptorType"`
 	GPUEnabled     string              `json:"gpuEnabled"`
+	PDFLoader      string              `json:"pdfLoader"`
 	Sources        []entity.DataSource `json:"sources"`
 }
 
@@ -35,6 +37,7 @@ type DataDescriptorResponse struct {
 	Labels            map[string]string         `json:"labels,omitempty"`
 	DescriptorType    string                    `json:"descriptor_type"`
 	GPUEnabled        string                    `json:"gpuEnabled"`
+	PDFLoader         string                    `json:"pdfLoader,omitempty"`
 	Sources           []DataSourceResponse      `json:"sources"`
 	OverallPhase      string                    `json:"overall_phase"`
 	SourceStatuses    []SourceStatusResponse    `json:"source_statuses,omitempty"`
@@ -134,6 +137,7 @@ func ToDataDescriptorResponse(d *entity.DataDescriptor) DataDescriptorResponse {
 		Labels:            d.Labels,
 		DescriptorType:    d.DescriptorType,
 		GPUEnabled:        d.GPUEnabled,
+		PDFLoader:         displayPDFLoader(d.PDFLoader),
 		Sources:           sources,
 		OverallPhase:      d.OverallPhase,
 		SourceStatuses:    statuses,
@@ -143,6 +147,13 @@ func ToDataDescriptorResponse(d *entity.DataDescriptor) DataDescriptorResponse {
 		Deleting:          d.Deleting,
 		DeletionTimestamp: d.DeletionTimestamp,
 	}
+}
+
+func displayPDFLoader(value string) string {
+	if normalized := entity.NormalizePDFLoader(value); normalized != "" {
+		return normalized
+	}
+	return "auto"
 }
 
 func toDataSourceResponse(s entity.DataSource) DataSourceResponse {

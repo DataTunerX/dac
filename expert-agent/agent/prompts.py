@@ -31,18 +31,11 @@ TASK_ANALYZE_NEXT_STEP_PROMPT_ZH = """
 
 **输出格式：**
 - 必须返回标准 JSON 字符串，确保可被 `json.loads()` 解析
-- 包含三个必要字段：`task`、`conclusion`
+- 包含两个必要字段：`task`、`conclusion`
 - 不包含任何额外文本或解释
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
-
-**示例参考：**
-
-当能够提供完整回答时的输出示例：
-{terminate_fewshots}
-
-当需要更多信息时的输出示例：
-{continue_fewshots}
+- `conclusion` 只能是 `sql` 或 `nosql`，参数结构以绑定工具的 schema 为准
 
 
 **注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
@@ -76,18 +69,11 @@ I will provide you with a complete list of planned tasks and their statuses. The
 
 **Output Format:**
 - Must return a standard JSON string that can be parsed by `json.loads()`
-- Contains three required fields: `task`, `conclusion`
+- Contains two required fields: `task`, `conclusion`
 - Does not contain any additional text or explanation
 - Do not add extra quotes around the output
 - Ensure it is valid JSON format
-
-**Example Reference:**
-
-Output example when a complete answer can be provided:
-{terminate_fewshots}
-
-Output example when more information is needed:
-{continue_fewshots}
+- `conclusion` must be either `sql` or `nosql`; follow the bound tool schema
 
 **Note:** Please strictly adhere to the JSON format for output. Do not include any additional explanations or text.
 """
@@ -105,8 +91,8 @@ MYSQL_NEXT_STEP_PROMPT_ZH = """
 
 **SQL 生成要求：**
 1. 生成完整的、符合 MySQL 语法的查询，可直接运行
-2. 仅查询必要列，使用双引号包裹列名作为分隔标识符
-3. 使用 date('now') 作为当前日期参考
+2. 仅查询必要列；标识符需要引用时使用反引号
+3. 使用 CURDATE()、CURRENT_DATE 或相应 MySQL 日期函数作为当前日期参考
 4. 响应为纯 SQL，不含任何特殊字符（如 ```、\n、\" 等）
 5. 使用适当的 SQL 函数进行计算（SUM、COUNT 等）
 6. MySQL的标准是使用反引号 ` 或者不使用引号来引用字段名和表名
@@ -164,6 +150,7 @@ MYSQL_NEXT_STEP_PROMPT_ZH = """
 **回答决策规则：**
 1. 若背景知识足以提供信息来生成准确的sql，在conclusion字段设置 `terminate`，requery字段设置空字符串，answer中设置生成的sql。
 2. 若背景知识和问题无关，或者背景知识不足以提供信息来生成准确的sql，你就基于原始问题生成5个语义相似但表述不同的新问题，从中选择与历史查询不重复的问题作为下次提问。并在conclusion字段设置 `continue`，requery字段设置新选择的query，answer中设置生成空字符串。
+3. 如果回答核心指标所必需的表或字段在背景知识中不存在（例如问题要求退款率，但 schema 没有退款标记、退款状态或退款记录），属于信息不足。禁止用订单数量、状态猜测或编造该指标，必须按第2条返回 `continue`。
 
 **输出格式：**
 - 必须返回标准 JSON 字符串，确保可被 `json.loads()` 解析
@@ -172,21 +159,7 @@ MYSQL_NEXT_STEP_PROMPT_ZH = """
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
 - 【重要】必须使用双引号包裹键名和字符串值，禁止使用 Python 字典格式（单引号）。answer 中的 SQL 字符串字面量（如 `'广州农商银行总行'`）可以保留单引号，但外层 JSON 结构必须用双引号。
-
-正确示例（answer 含 SQL 时）：
-{{"answer": "SELECT retail_deposit_total FROM deposit_data WHERE branch_name = '广州农商银行总行' AND data_date = '2024-12-31'", "conclusion": "terminate", "requery": ""}}
-
-错误示例（禁止）：
-{{'answer': 'SELECT ... WHERE branch_name = '广州农商银行总行'...', 'conclusion': 'terminate', 'requery': ''}}  // 单引号格式无法解析
-
-**示例参考：**
-
-当能够提供完整回答时的输出示例：
-{terminate_fewshots}
-
-当需要更多信息时的输出示例：
-{continue_fewshots}
-
+- 参数结构以绑定工具的 schema 为准；`conclusion` 只能取 `terminate` 或 `continue`
 
 **requery 生成示例参考：**
 原始问题：农商银行总行2025年1月份的存款总额是多少？
@@ -360,23 +333,9 @@ POSTGRES_NEXT_STEP_PROMPT_ZH = """
 - 环比变化率 = (本期数值 - 上期数值) / 上期数值 × 100%
 
 **回答决策规则：**
-1. 若背景知识足以解答问题，提供完整答案并在结论字段返回 `terminate`
-2. 若背景知识不相关或不足：
-   - 不直接回答原问题
-   - 保留原问题语义，重新生成一个更清晰易懂的新问题
-   - 检查历史提问记录，避免生成重复问题（从5个相似问题中选择一个不同的）
-   - 不在问题中要求用户补充材料
-   - 在 `answer` 字段说明无法回答的原因并提示需要更相关信息
-   - 将新问题放入 `requery` 字段
-
-**计算规则：**
-- 年度统计累加全年数据，季度统计累加当季数据，月度统计累加当月数据
-- 同比变化率 = (本期数值 - 去年同期数值) / 去年同期数值 × 100%
-- 环比变化率 = (本期数值 - 上期数值) / 上期数值 × 100%
-
-**回答决策规则：**
 1. 若背景知识足以提供信息来生成准确的sql，在conclusion字段设置 `terminate`，requery字段设置空字符串，answer中设置生成的sql。
 2. 若背景知识和问题无关，或者背景知识不足以提供信息来生成准确的sql，你就基于原始问题生成5个语义相似但表述不同的新问题，从中选择与历史查询不重复的问题作为下次提问。并在conclusion字段设置 `continue`，requery字段设置新选择的query，answer中设置生成空字符串。
+3. 如果回答核心指标所必需的表或字段在背景知识中不存在（例如问题要求退款率，但 schema 没有退款标记、退款状态或退款记录），属于信息不足。禁止用订单数量、状态猜测或编造该指标，必须按第2条返回 `continue`。
 
 
 **输出格式：**
@@ -387,19 +346,7 @@ POSTGRES_NEXT_STEP_PROMPT_ZH = """
 - 确保是有效的JSON格式
 - 【重要】必须使用双引号包裹键名和字符串值，禁止使用 Python 字典格式（单引号）。answer 中的 SQL 可含单引号字符串字面量，但外层 JSON 必须用双引号。
 
-请严格按照以下JSON格式响应，使用双引号：
-
-正确格式：
-{{"answer": "内容", "conclusion": "terminate|continue", "requery": "问题"}}
-
-
-**示例参考：**
-
-当能够提供完整回答时的输出示例：
-{terminate_fewshots}
-
-当需要更多信息时的输出示例：
-{continue_fewshots}
+参数结构以绑定工具的 schema 为准；`conclusion` 只能取 `terminate` 或 `continue`。
 
 
 **requery 生成示例参考：**
@@ -543,14 +490,11 @@ TABLE_SELECTOR_NEXT_STEP_PROMPT_ZH = """
 **硬性规则**
 1. 只能返回在上方 `knowledge` 中明确出现过的真实物理表名。
 2. 禁止根据语义猜测、改写或简化表名。例如，不能把 `sys_user`、`users`、`user_info` 这类真实表名改写成 `user`。
-3. 如果无法从 `knowledge` 中确认真实表名，返回空数组 `[]`，不要猜测。
-
-**返回的样本数据**
-["ods_user_account", "dim_branch_info"]
+3. 如果无法从 `knowledge` 中确认真实表名，将绑定工具的 `tables` 字段设为空数组，不要猜测。
 
 
 **输出格式：**
-- 返回包含需要的数据表名称的数组
+- 调用绑定工具，并将需要的数据表名称写入 `tables` 字段
 - 必须返回标准 JSON 字符串，确保可被 `json.loads()` 解析
 - 确保是有效的JSON格式
 
@@ -568,11 +512,8 @@ You are a database analysis expert. Your task is to analyze the user's question 
 **Data about tables and their relationships**
 {knowledge}
 
-**Sample return data**
-["user", "product"]
-
 **Output format:**
-- Return an array containing the required table names
+- Populate the bound tool's `tables` field with the required table names
 - Must return a standard JSON string that can be parsed by `json.loads()`
 - Ensure it is valid JSON format
 
@@ -638,26 +579,29 @@ DIMENSION_SELECTOR_NEXT_STEP_PROMPT_ZH = """
 
 **生成sql的规则**
 
-- 要观察给出来的样本数据，如果是数字类型的字段，不能作为维度字段，一定不要id之类的字段，比如userid，productid这种没有业务含义的编号的字段。
+- `dimensions` 只用于生成最终 SQL 的 WHERE 过滤候选值，必须输出“最小必要集合”，不要输出仅仅可能相关的字段。
+- 只有当用户使用的自然语言过滤值可能与数据库真实值不同、确实需要先查候选值做映射时，才提取该维度。
+- 用户明确给出了地域、机构、会员等级、产品名称等自然语言过滤条件，而 schema/业务规则没有给出该词对应的精确数据库值时，必须提取对应的文本字段。
+- 数字、金额、ID、日期、时间戳、布尔字段都不能作为维度字段。
 - 一定不要连接多表来完成。
 - 一定不要设置过滤条件。
 - 一定不要设置数值字段。
 - 不能查询所有的字段，比如使用select *。
-- 当需要查询所有的，或者每一个相关维度的时候，就不要提取这个维度字段了，因为要处理所有的这个维度的数据，提取就没有实际意义了。
-
-** 对于不需要提取维度数据的场景举例 **
-
-- 可以通过模糊查询就能非常好的完成查询任务的就不需要生成sql了，只要说明原因。
+- 当问题要求“每个”“各个”“全部”“按某字段”分组展示时，该字段是 GROUP BY/输出维度，不是 WHERE 过滤值，严禁为它生成 DISTINCT 查询。
+- 例如“统计各套餐的 MRR”中的 `plan_code/plan_name`、以及“统计各地区退款率”中的 `region` 都是分组维度，必须从 `dimensions` 中排除。
+- 若同一问题同时包含过滤维度和分组维度，只排除分组字段，仍必须保留过滤字段。例如“统计华东区域各套餐 MRR”应提取 WHERE 使用的 `region`，但排除 GROUP BY 使用的 `plan_code/plan_name`。
+- 用户问题已经给出可直接用于 WHERE 的精确业务标识（如完整订单编号 `ORD-2026-00018`）时，不需要查询其候选值，不要生成 DISTINCT 查询。
+- 当 schema 或业务规则已经明确给出可直接使用的数据库枚举值映射（如“有效状态为 ACTIVE”“人工发送者为 AGENT”“P1 对应 P1”）时，直接使用该值，不要再对状态字段生成 DISTINCT 查询。
 
 
 **数据表和表关系的数据**
 {knowledge}
 
-**返回的样本数据**
-{dimension_selector}
-
 **输出格式：**
-- 返回包含需要的数据表名称的数组
+- 调用绑定工具，将每个维度写入 `dimensions` 数组
+- `dimensions` 的每个元素必须包含 `name`、`column`、`table`、`sql`
+- `sql` 必须是仅查询该字段的 `SELECT DISTINCT` 语句
+- 若无需提取维度，将 `dimensions` 设为空数组，并在 `reason` 中说明原因
 - 必须返回标准 JSON 字符串，确保可被 `json.loads()` 解析
 - 确保是有效的JSON格式
 
@@ -734,10 +678,6 @@ MYSQL_DIMENSION_SELECTOR_NEXT_STEP_PROMPT_ZH_BAK = """
 - 一定不要设置数值字段。
 - 不能查询所有的字段，比如使用select *。
 - 当需要查询所有的，或者每一个相关维度的时候，就不要提取这个维度字段了，因为要处理所有的这个维度的数据，提取就没有实际意义了。
-
-** 对于不需要提取维度数据的场景举例 **
-
-- 可以通过模糊查询就能非常好的完成查询任务的就不需要生成sql了，只要说明原因。
 
 
 **数据表和表关系的数据**
@@ -820,10 +760,6 @@ POSTGRES_DIMENSION_SELECTOR_NEXT_STEP_PROMPT_ZH_BAK = """
 - 一定不要设置数值字段。
 - 不能查询所有的字段，比如使用select *。
 
-** 对于不需要提取维度数据的场景举例 **
-
-- 可以通过模糊查询就能非常好的完成查询任务的就不需要生成sql了，只要说明原因。
-
 
 **数据表和表关系的数据**
 {knowledge}
@@ -887,15 +823,6 @@ COMMON_NEXT_STEP_PROMPT_ZH = """
 - 必须返回标准的 JSON 格式字符串
 - 确保输出可直接被 `json.loads()` 解析
 - 包含四个字段：`answer`, `conclusion`, `requery`, `reason_code`
-
-
-**示例参考：**
-
-可完整回答时的输出示例：
-{terminate_fewshots}
-
-需要更多信息时的输出示例：
-{continue_fewshots}
 
 
 **注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
@@ -1038,15 +965,6 @@ REQUERY_PROMPT_ZH = """
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
 
-**示例参考：**
-
-当能够提供完整回答时的输出示例：
-{terminate_fewshots}
-
-当需要更多信息时的输出示例：
-{continue_fewshots}
-
-
 **requery 生成示例参考：**
 原始问题：农商银行总行2025年1月份的存款总额是多少？
 
@@ -1159,15 +1077,6 @@ REQUERY_SQL_PROMPT_ZH = """
 - 不包含任何额外文本或解释
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
-
-**示例参考：**
-
-当能够提供完整回答时的输出示例：
-{terminate_fewshots}
-
-当需要更多信息时的输出示例：
-{continue_fewshots}
-
 
 **requery 生成示例参考：**
 原始问题：农商银行总行2025年1月份的存款总额是多少？
@@ -1305,6 +1214,7 @@ SQL_EXEC_FAILURE_KIND_HUMAN_ZH = """请按系统说明归类（只输出 JSON）
 OBSERVE_PROMPT_SQL_ZH = """
 您是一位问题解答专家。您的任务是根据问题和答案，来分析这个答案是不是已经能满足当前的问题了。不管是不是满足，最后都要给出的分析的依据。审查的时候一定要严格。
 
+【必须遵守的输出规则】你的整个回答必须是一个纯 JSON 字符串，**严禁**在 JSON 之外输出任何分析文字、解释说明或 markdown 代码块标记（如 ```json 或 ```）。不要把分析过程写在 JSON 外面，把分析依据写到 reason 字段里即可。
 
 **当前时间**
 {current_time}
@@ -1319,7 +1229,7 @@ OBSERVE_PROMPT_SQL_ZH = """
 
 **回答决策规则：**
 1. 如果当前的答案已经完全满足问题，那就设置conclusion字段设置 `terminate`，设置reason字段为你分析的依据。
-2. 若新的问题无法正常生成出来，那就设置conclusion字段设置 `continue`，设置reason字段为你分析的依据。
+2. 如果当前答案未完全满足问题，或 SQL 与问题、上下文中的业务规则不一致，就设置conclusion字段为 `continue`，设置reason字段为分析依据。
 
 
 **SQL分析的要求**
@@ -1359,16 +1269,7 @@ OBSERVE_PROMPT_SQL_ZH = """
 - 确保是有效的JSON格式
 - 【重要】reason 中引用问题原文时请用单引号如 '某某银行总行2024年零售存款的总额'，勿在 JSON 字符串内使用未转义的双引号
 
-**示例参考：**
-
-当能够提供完整回答时的输出示例：
-{terminate_fewshots}
-
-当需要更多信息时的输出示例：
-{continue_fewshots}
-
-
-**注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
+**再次强调：** 你的整个回答中**只能包含** JSON 对象，**严禁**在 JSON 之外输出任何内容。不要输出 markdown 代码块标记（如 ```json 或 ```）。不要输出任何分析文字、解释说明或总结。把分析依据写到 reason 字段即可。
 
 """
 
@@ -1387,7 +1288,7 @@ You are a problem-solving expert. Your task is to analyze whether the provided a
 
 **Answer Decision Rules:**  
 1. If the current answer fully satisfies the question, set the `conclusion` field to `terminate` and the `reason` field to the basis of your analysis.  
-2. If a new question cannot be generated properly, set the `conclusion` field to `continue` and the `reason` field to the basis of your analysis.  
+2. If the answer does not fully satisfy the question, or the SQL conflicts with the question or contextual business rules, set `conclusion` to `continue` and explain why in `reason`.
 
 **SQL Analysis Requirements**  
 Our goal is to rigorously analyze whether the generated SQL accurately reflects the user's question intent. Specific review dimensions include:  
@@ -1447,7 +1348,7 @@ OBSERVE_PROMPT_COMMON_ZH = """
 
 **回答决策规则：**
 1. 如果当前的答案已经完全满足问题，那就设置conclusion字段设置 `terminate`，设置reason字段为你分析的依据。
-2. 若新的问题无法正常生成出来，那就设置conclusion字段设置 `continue`，设置reason字段为你分析的依据。
+2. 如果当前答案未完全满足问题，就设置conclusion字段为 `continue`，设置reason字段为分析依据。
 3. 你在分析的时候，一定要结合下面给出来的上下文信息，进行严格的审查。特别是上下文中有关键信息的部分，一定要严格遵守。
 
 
@@ -1460,15 +1361,6 @@ OBSERVE_PROMPT_COMMON_ZH = """
 - 不包含任何额外文本或解释
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
-
-**示例参考：**
-
-当能够提供完整回答时的输出示例：
-{terminate_fewshots}
-
-当需要更多信息时的输出示例：
-{continue_fewshots}
-
 
 **注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
 

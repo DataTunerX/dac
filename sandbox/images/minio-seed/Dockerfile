@@ -3,7 +3,7 @@
 # 把 seed/datasets 灌入 bucket dac-datasets。
 #
 # 构建上下文必须是 sandbox/ 根目录:
-#   docker build -t release.daocloud.io/dac/sandbox-minio-seed:v0.10.0 -f images/minio-seed/Dockerfile .
+#   docker build -t release.daocloud.io/dac/sandbox-minio-seed:v0.11.0 -f images/minio-seed/Dockerfile .
 
 FROM minio/mc:latest
 

@@ -7,24 +7,26 @@ import (
 	"strings"
 )
 
+// DefaultPorts returns a practical default port set for asset discovery
+// when the caller omits portsSpec. Includes common enterprise services
+// plus DAC sandbox fixtures (GitLab/Odoo/Saleor/Boutique/fileserver).
+//
+// Callers that truly need a full sweep should pass "1-65535" or "*".
 func DefaultPorts() []int {
-	// Small but useful defaults; user can override with portsSpec.
-	// Include DAC sandbox common ports (GitLab/Odoo + multiple Postgres).
 	return []int{
 		22, 80, 443,
-		3306, // mysql/mariadb
-		5432, 5433, 5434, // postgres (main/metastore/odoo)
-		6379, // redis
-		8069, // odoo
-		8080, // trino
-		8929, // gitlab (sandbox custom port)
-		9000, 9001, // minio api/console
-		9083, // hive metastore thrift
+		1433, 1521, 2049, 2181, 2375, 2376, 27017, 3000, 3306,
+		5000, 5432, 5433, 5434, 5672, 5900, 5984, 6379, 6443,
+		8000, 8001, // fileserver / Saleor API
+		8069,       // Odoo
+		8080, 8081, 8443, // HTTP alts / Boutique / Trino
+		8888, 8929, // Jupyter / GitLab CE (sandbox)
+		9000, 9001, 9002, // MinIO API/console / Saleor dashboard
+		9092, 9200, 9418, 11211,
 	}
 }
 
 // AllPorts returns all valid TCP ports 1..65535.
-// NOTE: This is potentially heavy; use with appropriate timeout/concurrency.
 func AllPorts() []int {
 	out := make([]int, 0, 65535)
 	for p := 1; p <= 65535; p++ {
@@ -34,12 +36,17 @@ func AllPorts() []int {
 }
 
 // ParsePortSpec parses a port spec like:
-// "80,443,5432" or "1-1024" or "80,443,1000-1100"
+// "80,443,5432" or "1-1024" or "80,443,1000-1100" or "*" / "all"
 // Returns a sorted, deduplicated list of ports.
+// Empty spec returns nil (caller should use DefaultPorts).
 func ParsePortSpec(spec string) ([]int, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return nil, nil
+	}
+	low := strings.ToLower(spec)
+	if low == "*" || low == "all" {
+		return AllPorts(), nil
 	}
 	ports := make(map[int]struct{})
 	for _, part := range strings.Split(spec, ",") {
@@ -81,4 +88,3 @@ func ParsePortSpec(spec string) ([]int, error) {
 	sort.Ints(out)
 	return out, nil
 }
-

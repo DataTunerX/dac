@@ -4,7 +4,7 @@ import dynamic from "next/dynamic"
 import { memo, useMemo } from "react"
 import type { ChatProgressPayload } from "@/lib/api-types"
 import { ChatMarkdown } from "@/components/markdown-chat"
-import { stripModelLeakTags } from "@/lib/strip-model-leak-tags"
+import { stripModelLeakTags, stripModelLeakLines } from "@/lib/strip-model-leak-tags"
 import { ChatMessage, EMPTY_PROGRESS } from "@/components/chat/chat-message-types"
 
 const ThinkingProcess = dynamic(
@@ -21,6 +21,8 @@ export interface AssistantMessageBodyProps {
   readonly messagesLength: number
   readonly isStreaming: boolean
   readonly streamProgressList: readonly ChatProgressPayload[]
+  readonly streamStartedAt?: number | null
+  readonly thinkingElapsedSec?: number | null
 }
 
 /** Renders one assistant message: progress list, thinking block, then answer. */
@@ -30,9 +32,11 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
   messagesLength,
   isStreaming,
   streamProgressList,
+  streamStartedAt,
+  thinkingElapsedSec,
 }: AssistantMessageBodyProps) {
   const thinking = stripModelLeakTags((msg.reasoning_content ?? "").trim())
-  const answer = stripModelLeakTags(msg.content ?? "")
+  const answer = stripModelLeakLines(stripModelLeakTags(msg.content ?? ""))
   const isLastMessage = index === messagesLength - 1
   const hasVisibleAnswer = answer.trim().length > 0
   const isThinkingNow = isLastMessage && isStreaming && !hasVisibleAnswer
@@ -55,6 +59,8 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
           isThinking={isThinkingNow}
           isLive={isLastMessage && isStreaming}
           progressList={progressList}
+          startedAt={isLastMessage ? streamStartedAt : undefined}
+          elapsedSec={isLastMessage ? thinkingElapsedSec : undefined}
         />
       ) : null}
       <ChatMarkdown source={answer} isStreaming={isLastMessage && isStreaming} />

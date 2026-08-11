@@ -1,10 +1,24 @@
-import Cookies from "js-cookie"
+/** Fired after login/logout/session hydrate so client UX gates can refresh without a full remount. */
+export const AUTH_CHANGE_EVENT = "dac:auth-change"
 
-const AUTH_COOKIE_NAME = "dac_token"
-const AUTH_COOKIE_OPTIONS = {
-  expires: 7,
-  path: "/",
-  sameSite: "lax" as const,
+export type ClientSessionUser = {
+  role?: string
+  username?: string
+}
+
+export type ClientSession = {
+  role: string
+  username: string
+}
+
+let clientSession: ClientSession | null = null
+
+/** Single-flight refresh shared by axios + authFetch. */
+let refreshPromise: Promise<boolean> | null = null
+
+function notifyAuthChange() {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(new Event(AUTH_CHANGE_EVENT))
 }
 
 function normalizeRelativePath(rawPath: string): string {
@@ -13,17 +27,70 @@ function normalizeRelativePath(rawPath: string): string {
   return rawPath
 }
 
-export function getAuthToken(): string {
-  return Cookies.get(AUTH_COOKIE_NAME) ?? ""
+function normalizeSessionUser(user: ClientSessionUser): ClientSession {
+  const role =
+    typeof user.role === "string" && user.role.trim() ? user.role.trim() : "user"
+  const username = typeof user.username === "string" ? user.username : ""
+  return { role, username }
 }
 
-export function persistAuthToken(token: string): void {
-  Cookies.set(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS)
+/** In-memory UX snapshot only — JWT lives in HttpOnly `dac_token` set by the backend. */
+export function getClientSession(): ClientSession | null {
+  return clientSession
 }
 
-export function clearAuthToken(): void {
-  Cookies.remove(AUTH_COOKIE_NAME, { path: "/" })
-  Cookies.remove(AUTH_COOKIE_NAME)
+export function establishSession(user: ClientSessionUser): void {
+  clientSession = normalizeSessionUser(user)
+  notifyAuthChange()
+}
+
+export function clearClientSession(): void {
+  clientSession = null
+  notifyAuthChange()
+}
+
+/**
+ * POST /api/v1/auth/logout with credentials so the backend clears HttpOnly dac_token,
+ * then drop the client UX snapshot.
+ */
+export async function logout(): Promise<void> {
+  try {
+    await fetch("/api/v1/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    })
+  } catch {
+    // Still clear local UX state if the network call fails.
+  }
+  clearClientSession()
+}
+
+/**
+ * Attempt cookie-based token refresh. Concurrent callers share one in-flight request.
+ * Returns true when the refresh response is OK (Set-Cookie updates dac_token).
+ */
+export function refreshAuthSession(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = fetch("/api/v1/auth/refresh", {
+      method: "POST",
+      credentials: "include",
+    })
+      .then((res) => res.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshPromise = null
+      })
+  }
+  return refreshPromise
+}
+
+export function isAuthRefreshPath(url: string): boolean {
+  return (
+    url.includes("/auth/login") ||
+    url.includes("/auth/register") ||
+    url.includes("/auth/refresh") ||
+    url.includes("/auth/logout")
+  )
 }
 
 export function getSafeNextPath(search: string): string {

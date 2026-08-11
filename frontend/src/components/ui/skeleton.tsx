@@ -1,6 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 
 function Skeleton({
   className,
@@ -51,7 +52,7 @@ function TableRowSkeleton({ cells = 6 }: { cells?: number }) {
 
 function TableSkeleton({ rows = 5, cells = 6 }: { rows?: number; cells?: number }) {
   return (
-    <div className="rounded-lg border border-line bg-surface overflow-hidden">
+    <TableWrapper>
       <div className="flex items-center gap-4 px-4 py-3 bg-surface-muted border-b border-line">
         {Array.from({ length: cells }).map((_, i) => (
           <Skeleton key={`header-${i}`} className="h-4" style={{ width: `${Math.random() * 30 + 15}%` }} />
@@ -60,7 +61,7 @@ function TableSkeleton({ rows = 5, cells = 6 }: { rows?: number; cells?: number 
       {Array.from({ length: rows }).map((_, rowIndex) => (
         <TableRowSkeleton key={rowIndex} cells={cells} />
       ))}
-    </div>
+    </TableWrapper>
   )
 }
 

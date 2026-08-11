@@ -35,11 +35,21 @@ class _FakeLLM:
         self.response = response
         self.calls: List[Any] = []
 
-    async def ainvoke(self, messages: Any) -> Any:
+    def bind_tools(self, tools: Any, **kwargs: Any) -> "_FakeLLM":
+        return self
+
+    async def ainvoke(self, messages: Any, **kwargs: Any) -> Any:
         self.calls.append(messages)
 
         class _Answer:
             content = __import__("json").dumps(self.response)
+            tool_calls = [
+                {
+                    "name": "score_knowledge_blocks",
+                    "args": self.response,
+                    "id": "call_1",
+                }
+            ]
 
         return _Answer()
 
@@ -151,7 +161,10 @@ async def test_get_text_by_ids_applies_score_select_when_over_budget(monkeypatch
     )
 
     class _BatchLLM:
-        async def ainvoke(self, messages: Any) -> Any:
+        def bind_tools(self, tools: Any, **kwargs: Any) -> "_BatchLLM":
+            return self
+
+        async def ainvoke(self, messages: Any, **kwargs: Any) -> Any:
             import json
 
             prompt = messages[0].content if messages else ""
@@ -167,6 +180,13 @@ async def test_get_text_by_ids_applies_score_select_when_over_budget(monkeypatch
 
             class _Answer:
                 content = json.dumps({"scores": scores})
+                tool_calls = [
+                    {
+                        "name": "score_knowledge_blocks",
+                        "args": {"scores": scores},
+                        "id": "call_1",
+                    }
+                ]
 
             return _Answer()
 

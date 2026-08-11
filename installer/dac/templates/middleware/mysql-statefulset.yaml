@@ -1,4 +1,4 @@
-{{- if .Values.mysql.enabled }}
+{{- if and .Values.mysql.enabled (not .Values.mysql.external.host) }}
 {{- $registry := .Values.global.imageRegistry }}
 {{- if hasKey .Values.mysql.image "registry" }}
 {{- $registry = .Values.mysql.image.registry }}

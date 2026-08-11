@@ -14,6 +14,7 @@ import useSWR from "swr";
 import { api } from "@/lib/api";
 import { listAllAgentContainers } from "@/lib/agents-api";
 import { apiFetcherWithParams } from "@/lib/swr";
+import { AGENTS_LIST_KEY } from "@/lib/swr-keys";
 import { filterListByQuery } from "@/lib/filter-list-by-query";
 import { RbacButton, RbacWrapper } from "@/components/rbac";
 import { StatusBadge } from "@/components/status-badge";
@@ -45,7 +46,8 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
+} from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper";
 import {
   Plus,
   Trash2,
@@ -80,7 +82,15 @@ import { ListSkeleton } from "@/components/ui/skeleton";
 
 type UnknownRecord = Record<string, unknown>;
 
-const AGENTS_LIST_KEY = ["agents-list-all"] as const;
+const AGENTS_LIST_COLUMNS = [
+  { id: "name", size: 220 },
+  { id: "namespace", size: 140 },
+  { id: "type", size: 100 },
+  { id: "status", size: 110 },
+  { id: "binding", size: 220 },
+  { id: "created", size: 160 },
+  { id: "actions", size: 120 },
+] as const
 
 function isRecord(v: unknown): v is UnknownRecord {
   return typeof v === "object" && v !== null;
@@ -88,6 +98,13 @@ function isRecord(v: unknown): v is UnknownRecord {
 
 function asString(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
+}
+
+function formatCreatedAt(input?: string): string {
+  if (!input) return "-";
+  const date = new Date(input);
+  if (!Number.isFinite(date.getTime())) return "-";
+  return date.toLocaleString("zh-CN", { hour12: false });
 }
 
 function getItemField(
@@ -104,12 +121,20 @@ export interface Agent {
   namespace: string;
   description: string;
   dataSource: string;
-  dataSourceType: string;
+  /** UI type key: descriptor | semantic-group | skill */
+  dataSourceType: "descriptor" | "semantic-group" | "skill" | string;
   semanticGroupID?: string;
   plannerLLM?: string;
   expertLLM?: string;
+  createdAt?: string;
   status: "AVAILABLE" | "CREATING" | "UNKNOWN";
   raw: unknown;
+}
+
+function agentTypeLabel(dataSourceType: string): string {
+  if (dataSourceType === "skill") return "通用智能体";
+  if (dataSourceType === "semantic-group") return "业务智能体";
+  return "数据智能体";
 }
 
 function deriveAgentStatus(agent: UnknownRecord): Agent["status"] {
@@ -155,10 +180,23 @@ function mapRawToAgent(
   const dataSourceTypeRaw =
     asString((dataPolicy as UnknownRecord | undefined)?.dataSourceType) ||
     asString((dataPolicy as UnknownRecord | undefined)?.data_source_type);
+  const dacType =
+    (asString(item.dacType) || asString(item.dac_type) || "").toLowerCase();
+  const skillPolicyRaw = getItemField(item, "skillPolicy", "skill_policy");
+  const skillPolicy = isRecord(skillPolicyRaw) ? skillPolicyRaw : undefined;
+  const skillRefsRaw = skillPolicy?.skills;
+  const skillNames = Array.isArray(skillRefsRaw)
+    ? skillRefsRaw
+        .map((s) => (isRecord(s) ? asString(s.name) : undefined))
+        .filter((n): n is string => Boolean(n))
+    : [];
+  // Prefer dacType=skill so empty dataPolicy does not fall through as "descriptor"
   const dsType =
-    dataSourceTypeRaw === "SemanticGroup" || Boolean(semanticGroupID)
-      ? "semantic-group"
-      : "descriptor";
+    dacType === "skill"
+      ? "skill"
+      : dataSourceTypeRaw === "SemanticGroup" || Boolean(semanticGroupID)
+        ? "semantic-group"
+        : "descriptor";
   const modelRaw = item.model;
   const model = isRecord(modelRaw) ? modelRaw : undefined;
   const plannerLLM =
@@ -173,11 +211,23 @@ function mapRawToAgent(
     name: displayName,
     namespace,
     description,
-    dataSource: selector.length > 0 ? selector.join(", ") : "-",
+    dataSource:
+      dsType === "skill"
+        ? skillNames.length > 0
+          ? skillNames.join(", ")
+          : "-"
+        : selector.length > 0
+          ? selector.join(", ")
+          : "-",
     dataSourceType: dsType,
     semanticGroupID,
     plannerLLM,
     expertLLM,
+    createdAt:
+      asString(item.createdAt) ??
+      asString(item.created_at) ??
+      asString(item.creationTimestamp) ??
+      asString(item.creation_timestamp),
     status: deriveAgentStatus(item),
     raw: item,
   };
@@ -199,7 +249,7 @@ function agentSearchText(
     sg,
     a.plannerLLM,
     a.expertLLM,
-    a.dataSourceType === "semantic-group" ? "业务智能体" : "数据智能体",
+    agentTypeLabel(a.dataSourceType),
   ]
     .filter(Boolean)
     .join(" ");
@@ -283,6 +333,8 @@ const AgentCard = memo(function AgentCard({
         >
           {a.dataSourceType === "semantic-group" ? (
             <Layers className="h-3.5 w-3.5 shrink-0 text-content-muted" />
+          ) : a.dataSourceType === "skill" ? (
+            <Bot className="h-3.5 w-3.5 shrink-0 text-content-muted" />
           ) : (
             <Database className="h-3.5 w-3.5 shrink-0 text-content-muted" />
           )}
@@ -295,10 +347,17 @@ const AgentCard = memo(function AgentCard({
         </div>
         <div
           className="truncate font-mono text-[11px] text-content-muted"
-          title={[a.plannerLLM, a.expertLLM].filter(Boolean).join(" / ")}
+          title={
+            a.dataSourceType === "skill"
+              ? a.expertLLM || a.plannerLLM || "-"
+              : [a.plannerLLM, a.expertLLM].filter(Boolean).join(" / ")
+          }
         >
-          {a.plannerLLM || "-"}
-          {a.expertLLM && a.expertLLM !== a.plannerLLM ? ` / ${a.expertLLM}` : ""}
+          {a.dataSourceType === "skill"
+            ? a.expertLLM || a.plannerLLM || "-"
+            : `${a.plannerLLM || "-"}${
+                a.expertLLM && a.expertLLM !== a.plannerLLM ? ` / ${a.expertLLM}` : ""
+              }`}
         </div>
         <div className="absolute bottom-3 right-3">
           {a.dataSourceType === "semantic-group" ? (
@@ -307,6 +366,13 @@ const AgentCard = memo(function AgentCard({
               className="h-5 border-indigo-100 bg-indigo-50 px-2 text-[10px] font-normal text-indigo-700"
             >
               业务智能体
+            </Badge>
+          ) : a.dataSourceType === "skill" ? (
+            <Badge
+              variant="secondary"
+              className="h-5 border-emerald-100 bg-emerald-50 px-2 text-[10px] font-normal text-emerald-700"
+            >
+              通用智能体
             </Badge>
           ) : (
             <Badge
@@ -333,7 +399,7 @@ export default function AgentsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<ListViewMode>("list");
   const [typeFilter, setTypeFilter] = useState<
-    "all" | "descriptor" | "semantic-group"
+    "all" | "descriptor" | "semantic-group" | "skill"
   >("semantic-group");
 
   const deferredSearch = useDeferredValue(searchQuery);
@@ -430,6 +496,39 @@ export default function AgentsPage() {
           return { id, name, description, tags, examples };
         })
         .filter((s) => s.id && s.name);
+
+      // skill 分支：dacType=skill，dataPolicy 置空，绑定写入 skillPolicy
+      if (data.dataSourceType === "skill") {
+        // 运行时使用 expertLLM；plannerLLM 同步同值以满足 CRD 必填
+        const llm = data.expertModel || data.plannerModel;
+        const payload = {
+          name: data.name.toLowerCase().replace(/\s+/g, "-"),
+          namespace: data.namespace,
+          dacType: "skill",
+          agentCard: {
+            name: data.name,
+            description: data.description,
+            skills,
+          },
+          dataPolicy: {
+            dataSourceType: "",
+            semanticGroupID: "",
+            sourceNameSelector: [],
+          },
+          skillPolicy: data.skillPolicy ?? { skills: [] },
+          model: {
+            plannerLLM: llm,
+            expertLLM: llm,
+            embedding: "embedding-config",
+          },
+          expertAgentMaxSteps: data.expertAgentMaxSteps || "10",
+          orchestratorAgentMaxLoops: data.orchestratorAgentMaxLoops || "2",
+        };
+        await api.post(`/namespaces/${data.namespace}/agents`, payload);
+        toast.success("智能体创建成功");
+        fetchData();
+        return;
+      }
 
       const isSemanticGroup = data.dataSourceType === "semantic-group";
       const dacType = isSemanticGroup ? "normal" : "ds";
@@ -530,7 +629,7 @@ export default function AgentsPage() {
           <Select
             value={typeFilter}
             onValueChange={(v) =>
-              setTypeFilter(v as "all" | "descriptor" | "semantic-group")
+              setTypeFilter(v as "all" | "descriptor" | "semantic-group" | "skill")
             }
           >
             <SelectTrigger className="h-9 w-[min(10rem,40vw)] bg-surface">
@@ -539,6 +638,7 @@ export default function AgentsPage() {
             <SelectContent align="end">
               <SelectItem value="semantic-group">业务智能体</SelectItem>
               <SelectItem value="descriptor">数据智能体</SelectItem>
+              <SelectItem value="skill">通用智能体</SelectItem>
               <SelectItem value="all">全部类型</SelectItem>
             </SelectContent>
           </Select>
@@ -600,16 +700,17 @@ export default function AgentsPage() {
           </div>
         </div>
       ) : viewMode === "list" ? (
-        <div className="overflow-hidden rounded-lg border border-line bg-surface">
-          <Table>
+        <TableWrapper>
+          <Table storageKey="agents-list" columns={[...AGENTS_LIST_COLUMNS]}>
             <TableHeader>
               <TableRow className="bg-surface-muted">
-                <TableHead>名称</TableHead>
-                <TableHead className="whitespace-nowrap">命名空间</TableHead>
-                <TableHead className="whitespace-nowrap">类型</TableHead>
-                <TableHead className="whitespace-nowrap">状态</TableHead>
-                <TableHead>关联</TableHead>
-                <TableHead className="text-right">操作</TableHead>
+                <TableHead columnId="name">名称</TableHead>
+                <TableHead columnId="namespace" className="whitespace-nowrap">命名空间</TableHead>
+                <TableHead columnId="type" className="whitespace-nowrap">类型</TableHead>
+                <TableHead columnId="status" className="whitespace-nowrap">状态</TableHead>
+                <TableHead columnId="binding">关联语义组</TableHead>
+                <TableHead columnId="created" className="whitespace-nowrap">创建时间</TableHead>
+                <TableHead columnId="actions" className="text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -626,7 +727,7 @@ export default function AgentsPage() {
                     className="cursor-pointer hover:bg-surface-muted/60 [content-visibility:auto]"
                     onClick={() => openDetail(a)}
                   >
-                    <TableCell className="max-w-[14rem] font-medium">
+                    <TableCell columnId="name" className="max-w-[14rem] font-medium">
                       <div className="flex min-w-0 items-center gap-2">
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#c7d2fe] bg-[#e0e7ff] text-[#4f46e5]">
                           <Bot className="h-4 w-4" />
@@ -636,10 +737,10 @@ export default function AgentsPage() {
                         </span>
                       </div>
                     </TableCell>
-                    <TableCell className="font-mono text-sm text-content-muted">
+                    <TableCell columnId="namespace" className="font-mono text-sm text-content-muted">
                       {a.namespace}
                     </TableCell>
-                    <TableCell>
+                    <TableCell columnId="type">
                       {a.dataSourceType === "semantic-group" ? (
                         <Badge
                           variant="secondary"
@@ -647,19 +748,32 @@ export default function AgentsPage() {
                         >
                           业务
                         </Badge>
+                      ) : a.dataSourceType === "skill" ? (
+                        <Badge
+                          variant="secondary"
+                          className="border-emerald-100 bg-emerald-50 font-normal text-emerald-700"
+                        >
+                          通用
+                        </Badge>
                       ) : (
                         <Badge variant="secondary" className="font-normal">
                           数据
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell columnId="status">
                       <StatusBadge status={a.status} />
                     </TableCell>
-                    <TableCell className="max-w-[16rem] truncate text-sm text-content" title={binding}>
+                    <TableCell columnId="binding" className="max-w-[16rem] truncate text-sm text-content" title={binding}>
                       {binding}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell
+                      columnId="created"
+                      className="whitespace-nowrap tabular-nums text-sm text-content-muted"
+                    >
+                      {formatCreatedAt(a.createdAt)}
+                    </TableCell>
+                    <TableCell columnId="actions" className="text-right">
                       <div
                         className="inline-flex items-center gap-1"
                         onClick={(e) => e.stopPropagation()}
@@ -692,7 +806,7 @@ export default function AgentsPage() {
               })}
             </TableBody>
           </Table>
-        </div>
+        </TableWrapper>
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
           {paged.map((a) => (

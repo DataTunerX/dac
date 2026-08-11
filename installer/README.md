@@ -71,6 +71,42 @@ neo4j:
   password: "changeme"
 ```
 
+### 1.1 使用外部中间件（可选）
+
+如果已有 MySQL / Redis / PGVector / Neo4j 实例，配置对应的 `external` 字段即可：连接会指向外部实例，且**不会**再渲染内置 StatefulSet / Service。
+
+```yaml
+mysql:
+  external:
+    host: "192.168.1.100"
+    port: 3306
+    password: "your-mysql-password"
+
+redis:
+  external:
+    host: "redis-ha.example.com"
+    port: 6379
+    password: "your-redis-password"
+
+pgvector:
+  external:
+    host: "pg.example.com"
+    port: 5432
+    password: "your-pg-password"
+
+neo4j:
+  external:
+    host: "neo4j.example.com"
+    boltPort: 7687
+    password: "your-neo4j-password"
+```
+
+> **说明**：
+> - 设置 `external.host` 后自动跳过对应中间件的内置部署（无需再设 `enabled: false`；`enabled` 在此时被忽略）。
+> - 端口可省略：MySQL 默认 3306、Redis 6379、PGVector 5432、Neo4j Bolt 7687。
+> - Neo4j 的 `bolt://` / `neo4j://` URL 会由 `external.host` + `boltPort` 自动生成，无需再改 `dataServices.config.neo4j.boltUrl` / `neo4jUrl`。
+> - 请确保集群内 Pod 能访问这些外部地址，且目标库已提前创建（内置 initdb 脚本不会对外部实例执行）。
+
 ### 2. 安装
 
 #### 2.1 预先pull 镜像
@@ -164,7 +200,7 @@ global:
 
 # =============================================================================
 # Middleware - Built-in single-node StatefulSet instances
-# Set enabled: false to use an external instance instead.
+# Set <svc>.external.host to use an external instance (skips built-in deploy).
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -333,7 +369,7 @@ frontend:
   # -- Enable frontend deployment
   enabled: true
   image:
-    registry: release.daocloud.io/dac
+    registry: ""
     repository: frontend
     tag: "12"
   # -- Number of replicas
@@ -682,6 +718,20 @@ helm get notes dac -n dac
 > kubectl apply -f ./installer/dac/crds/
 > ```
 
+## 配套：Sandbox（企业扫描演示数据面）
+
+平台 Chart **不包含**演示库 / Odoo / Saleor / Boutique。验证「资产探测 → 建数据源」时，另装独立沙盒 Chart：
+
+```bash
+cd sandbox
+make offline-prep   # 有网机构建/推送镜像（一次）
+make apply          # helm upgrade --install ./chart -n dac-sandbox
+make scan-targets   # 复制 IP/端口到前端 /infra
+```
+
+详见 [`sandbox/README.md`](../sandbox/README.md) 与 [`sandbox/chart/SPEC.md`](../sandbox/chart/SPEC.md)。  
+Sandbox 与本 Chart 命名空间分离（默认 `dac-sandbox` vs `dac`），互不共用 MySQL/Redis。
+
 ## 安装后验证
 
 ```bash
@@ -705,9 +755,10 @@ helm status dac -n dac
 | `biz-chart-agent-*` | 图表 Agent |
 | `biz-skill-agent-*` | 技能 Agent |
 | `skill-hub-*` | 技能 zip 包索引 / 下载服务（biz-skill-agent 启动时从这里按 `SKILLS` 拉取 zip） |
-| `mysql-0` | MySQL StatefulSet |
-| `redis-0` | Redis StatefulSet |
-| `pgvector-0` | PGVector StatefulSet |
+| `mysql-0` | MySQL StatefulSet（配置了 `mysql.external.host` 时不部署） |
+| `redis-0` | Redis StatefulSet（配置了 `redis.external.host` 时不部署） |
+| `pgvector-0` | PGVector StatefulSet（配置了 `pgvector.external.host` 时不部署） |
+| `neo4j-0` | Neo4j StatefulSet（配置了 `neo4j.external.host` 时不部署） |
 
 所有 Pod 进入 `Running` / `Ready` 后，按 NOTES 中的说明访问前端（NodePort / Ingress / port-forward）。
 
@@ -723,9 +774,11 @@ helm status dac -n dac
 | `global.embedding.apiKey` | Embedding 服务 API Key | `sk-xxx`（占位符） |
 | `executionEngine.llmConfigs[].apiKey` | Operator 管理的 Agent LLM API Key | `sk-xxx`（占位符） |
 | `apiserver.config.jwt.secret` | JWT 签名密钥 | `dac-jwt-secret-change-me` |
-| `mysql.rootPassword` | MySQL root 密码 | `dac123` |
-| `redis.password` | Redis 密码 | `123` |
-| `pgvector.password` | PostgreSQL 密码 | `postgres` |
+| `mysql.rootPassword` | MySQL root 密码（内置实例） | `dac123` |
+| `redis.password` | Redis 密码（内置实例） | `123` |
+| `pgvector.password` | PostgreSQL 密码（内置实例） | `postgres` |
+| `neo4j.password` | Neo4j 密码（内置实例） | `test123456` |
+| `*.external.password` | 外部中间件密码（设置 `external.host` 时使用） | `""` |
 
 > **注意**：所有 `sk-xxx` 均为占位符，部署前必须替换为真实 API Key。数据库密码和 JWT Secret 同样不应使用默认值。
 
@@ -736,7 +789,7 @@ helm status dac -n dac
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `global.imageRegistry` | 镜像仓库前缀 | `registry.cn-shanghai.aliyuncs.com/jamesxiong` |
-| `frontend.image.registry` | 前端仓库（覆盖 global） | `release.daocloud.io/dac` |
+| `frontend.image.registry` | 前端仓库（空则用 global） | `""` → `global.imageRegistry` |
 | `global.imagePullPolicy` | 拉取策略 | `IfNotPresent` |
 | `global.imagePullSecrets` | 私有仓库认证 Secret | `[]` |
 
@@ -745,8 +798,14 @@ helm status dac -n dac
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `global.storageClass` | 所有中间件 PVC 的 StorageClass | `nfs-csi` |
+| `skillHub.persistence.enabled` | 持久化 skill zip（上传/创建），避免 Pod 重启丢失 | `true` |
+| `skillHub.persistence.type` | `hostPath`（单节点）或 `pvc` | `hostPath` |
+| `skillHub.persistence.hostPath.path` | 节点本地目录 | `/var/lib/dac/skill-hub/skills` |
+| `skillHub.persistence.pvc.size` | type=pvc 时的声明大小 | `5Gi` |
 
 各中间件可通过 `mysql.persistence.storageClass` / `redis.persistence.storageClass` / `pgvector.persistence.storageClass` 单独覆盖；留空则使用 `global.storageClass`。将 `global.storageClass` 设为 `""` 可使用集群默认 StorageClass。
+
+`skillHub.persistence.type=hostPath` 时数据在**节点本地**，要求 `replicas: 1`；多节点生产环境建议改为 `type: pvc`。每次 Pod 启动时 initContainer 会把镜像内置的 `default/` skill **同步覆盖**到持久卷（同名 zip 随镜像升级刷新；用户在 `default/` 下额外上传的其它 zip、以及其它命名空间不会被删）。
 
 ### 前端访问
 
@@ -758,31 +817,34 @@ helm status dac -n dac
 
 ### 使用外部中间件
 
-Chart 内置的 MySQL、Redis、PGVector 均为单节点实例，适合开发和测试。生产环境建议对接外部托管实例。
+Chart 内置的 MySQL、Redis、PGVector、Neo4j 均为单节点实例，适合开发和测试。生产环境建议对接外部托管实例。
 
-以 MySQL 为例，在 `my-values.yaml` 中：
+推荐方式：在 `my-values.yaml` 中配置 `external`（见 [1.1](#11-使用外部中间件可选)）。设置 `external.host` 后，Chart 会跳过内置部署，并将 apiserver / data-services / agents 等组件的连接信息解析到外部地址。
 
 ```yaml
 mysql:
-  enabled: false
+  external:
+    host: "mysql.example.com"
+    port: 3306
+    password: "your-mysql-password"
 
-apiserver:
-  config:
-    database:
-      user: "your-user"
-      database: "dac_db"
-      # host 和 password 通过 Helm 模板中的 service name 解析，
-      # 禁用内置 MySQL 后需确保网络可达
+redis:
+  external:
+    host: "redis.example.com"
+    password: "your-redis-password"
 
-dataServices:
-  config:
-    mysql:
-      user: "your-user"
-      fingerprintDatabase: "fingerprint"
-      historyDatabase: "history"
+pgvector:
+  external:
+    host: "pg.example.com"
+    password: "your-pg-password"
+
+neo4j:
+  external:
+    host: "neo4j.example.com"
+    password: "your-neo4j-password"
 ```
 
-Redis 和 PGVector 同理：设置 `redis.enabled: false` 或 `pgvector.enabled: false`，并在相关组件的 config 中填写外部连接信息。
+如需同时改数据库用户名等，再覆盖 `apiserver.config.database.user`、`dataServices.config.mysql.user`、`dataServices.config.neo4j.username` 等字段即可。
 
 ## 升级
 
@@ -870,12 +932,12 @@ kubectl get sc
 
 | 层级 | 组件 | 说明 |
 |------|------|------|
-| **中间件** | MySQL、Redis、PGVector | 内置单节点 StatefulSet，可设 `enabled: false` 对接外部实例 |
+| **中间件** | MySQL、Redis、PGVector、Neo4j | 内置单节点 StatefulSet；设 `*.external.host` 对接外部实例并跳过内置部署 |
 | **平台服务** | apiserver、frontend、data-services | API 网关 / 前端 UI / 数据与向量服务 |
 | **Operator** | execution-engine | 监听 `DataAgentContainer` / `DataDescriptor` CRD，动态创建 Agent 工作负载 |
 | **语义分组** | semantic-grouper（API + Worker） | Celery 异步语义分组 |
 | **Agent 注册中心** | orchestrator-registry、biz-orchestrator-registry | A2A Agent Card 发现 |
 | **Agent** | biz-routing-agent、biz-chart-agent、biz-skill-agent | 路由 / 图表生成 / 技能执行等业务 Agent |
-| **Skill Hub** | skill-hub | 技能 zip 包索引 / 下载 HTTP 服务，供 biz-skill-agent 启动时按 `SKILLS` 拉取 |
+| **Skill Hub** | skill-hub | 技能 zip 包索引 / 下载 HTTP 服务，供 biz-skill-agent 启动时按 `SKILLS` 拉取；上传/创建的 zip 默认落在节点 hostPath（`skillHub.persistence`），避免 Pod 重启丢失 |
 
 > `orchestrator-agent`、`expert-agent`、`code-agent`、`doc-agent`、`data-sinkers-job` 、`data-sinkers-observer` 等组件**不在 Helm 中静态部署**，由 execution-engine Operator 根据 CR 动态管理。

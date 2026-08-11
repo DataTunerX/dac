@@ -471,7 +471,7 @@ class PGVector(BaseVector):
 
         with self._get_cursor() as cur:
             cur.execute(
-                f"SELECT meta, text, embedding <=> %s AS distance FROM {self.table_name}"
+                f"SELECT id, meta, text, embedding <=> %s AS distance FROM {self.table_name}"
                 f" {where_clause}"
                 f" ORDER BY distance LIMIT {top_k}",
                 (json.dumps(query_vector),),
@@ -479,9 +479,10 @@ class PGVector(BaseVector):
             docs = []
             score_threshold = float(kwargs.get("score_threshold") or 0.0)
             for record in cur:
-                metadata, text, distance = record
+                _id, metadata, text, distance = record
                 score = 1 - distance
                 metadata["score"] = score
+                metadata["id"] = str(_id)
                 if score > score_threshold:
                     docs.append(Document(page_content=text, metadata=metadata))
         return docs
@@ -502,7 +503,7 @@ class PGVector(BaseVector):
         conn = await self._get_async_connection()
         try:
             records = await conn.fetch(
-                f"SELECT meta, text, embedding <=> $1::vector AS distance FROM {self.table_name}"
+                f"SELECT id, meta, text, embedding <=> $1::vector AS distance FROM {self.table_name}"
                 f" {where_clause}"
                 f" ORDER BY distance LIMIT {top_k}",
                 vector_str  # Pass the string representation
@@ -511,10 +512,11 @@ class PGVector(BaseVector):
             docs = []
             score_threshold = float(kwargs.get("score_threshold") or 0.0)
             for record in records:
-                metadata_str, text, distance = record  # metadata is returned as a string
+                _id_str, metadata_str, text, distance = record  # metadata is returned as a string
                 metadata = json.loads(metadata_str)    # parse the JSON string to a dict
                 score = 1 - distance
                 metadata["score"] = score
+                metadata["id"] = str(_id_str)
                 if score > score_threshold:
                     docs.append(Document(page_content=text, metadata=metadata))
             return docs
@@ -534,7 +536,7 @@ class PGVector(BaseVector):
             if self.pg_bigm:
                 cur.execute("SET pg_bigm.similarity_limit TO 0.000001")
                 cur.execute(
-                    f"""SELECT meta, text, bigm_similarity(unistr(%s), coalesce(text, '')) AS score
+                    f"""SELECT id, meta, text, bigm_similarity(unistr(%s), coalesce(text, '')) AS score
                     FROM {self.table_name}
                     WHERE text =%% unistr(%s)
                     {where_clause}
@@ -545,7 +547,7 @@ class PGVector(BaseVector):
                 )
             else:
                 cur.execute(
-                    f"""SELECT meta, text, ts_rank(to_tsvector(coalesce(text, '')), plainto_tsquery(%s)) AS score
+                    f"""SELECT id, meta, text, ts_rank(to_tsvector(coalesce(text, '')), plainto_tsquery(%s)) AS score
                     FROM {self.table_name}
                     WHERE to_tsvector(text) @@ plainto_tsquery(%s)
                     {where_clause}
@@ -558,8 +560,9 @@ class PGVector(BaseVector):
             docs = []
 
             for record in cur:
-                metadata, text, score = record
+                _id, metadata, text, score = record
                 metadata["score"] = score
+                metadata["id"] = str(_id)
                 docs.append(Document(page_content=text, metadata=metadata))
 
         return docs
@@ -579,7 +582,7 @@ class PGVector(BaseVector):
             if self.pg_bigm:
                 await conn.execute("SET pg_bigm.similarity_limit TO 0.000001")
                 records = await conn.fetch(
-                    f"""SELECT meta, text, bigm_similarity($1, coalesce(text, '')) AS score
+                    f"""SELECT id, meta, text, bigm_similarity($1, coalesce(text, '')) AS score
                     FROM {self.table_name}
                     WHERE text =%% $1
                     {where_clause}
@@ -589,7 +592,7 @@ class PGVector(BaseVector):
                 )
             else:
                 records = await conn.fetch(
-                    f"""SELECT meta, text, ts_rank(to_tsvector(coalesce(text, '')), plainto_tsquery($1)) AS score
+                    f"""SELECT id, meta, text, ts_rank(to_tsvector(coalesce(text, '')), plainto_tsquery($1)) AS score
                     FROM {self.table_name}
                     WHERE to_tsvector(text) @@ plainto_tsquery($1)
                     {where_clause}
@@ -600,10 +603,11 @@ class PGVector(BaseVector):
             
             docs = []
             for record in records:
-                metadata_str, text, score = record
+                _id_str, metadata_str, text, score = record
                 # Parse the JSON string into a dictionary
                 metadata = json.loads(metadata_str)
                 metadata["score"] = score
+                metadata["id"] = str(_id_str)
                 docs.append(Document(page_content=text, metadata=metadata))
             return docs
         finally:
@@ -650,42 +654,51 @@ class PGVector(BaseVector):
     async def afind_metadata_values_in_collection(self, metadata_key: str = "summary") -> list[dict]:
         """
         异步在当前collection中查找指定metadata字段的所有值
-        
+
         Args:
             metadata_key: 要查找的metadata字段名，默认为"summary"
-            
+
         Returns:
-            返回字典列表，每个字典包含id、text和metadata_value字段
+            返回字典列表，每个字典包含 id、text、metadata_value 字段；
+            额外附带 source / file_name / document_id（取自 meta，缺失则为 None），
+            供上游识别块所属文件，与 metadata_key 解耦，向后兼容。
         """
         results = []
-        
+
         try:
             conn = await self._get_async_connection()
             try:
-                # 查询指定metadata字段的所有记录
+                # 查询指定metadata字段的所有记录；同时附带文件归属字段，与 metadata_key 无关
                 records = await conn.fetch(
                     f"""
-                    SELECT id, text, meta->>$1 as metadata_value 
-                    FROM {self.table_name} 
+                    SELECT id, text,
+                           meta->>$1 as metadata_value,
+                           meta->>'source'      as source,
+                           meta->>'file_name'   as file_name,
+                           meta->>'document_id' as document_id
+                    FROM {self.table_name}
                     WHERE meta ? $1
                     """,
                     metadata_key
                 )
-                
+
                 for record in records:
-                    doc_id, text, metadata_value = record
+                    doc_id, text, metadata_value, source, file_name, document_id = record
                     results.append({
                         "id": str(doc_id),
                         "text": text,
-                        "metadata_value": metadata_value
+                        "metadata_value": metadata_value,
+                        "source": source,
+                        "file_name": file_name,
+                        "document_id": document_id,
                     })
-                    
+
             finally:
                 await conn.close()
-                
+
         except Exception as e:
             logger.warning(f"Error querying table {self.table_name} for metadata key '{metadata_key}': {e}")
-        
+
         return results
 
 

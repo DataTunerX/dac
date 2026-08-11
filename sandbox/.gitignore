@@ -1,5 +1,14 @@
 scripts/.vendor-cache/
 seed/datasets/ml-1m/
+seed/mysql/50-northwind.sql
+seed/mysql/51-classicmodels.sql
+seed/mysql/52-chinook.sql
+seed/mysql/53-employees.sh
+seed/mysql/53-employees-schema.sql
+seed/mysql/54-world.sql
+seed/mysql/employees-dumps/*.dump
 seed/mysql/99-sakila.sql
+seed/postgres/50-northwind.sql
 seed/postgres/98-pagila.sql
 seed/postgres/99-chinook.sql
+scripts/.vendor-cache/online-boutique-kubernetes-manifests.yaml

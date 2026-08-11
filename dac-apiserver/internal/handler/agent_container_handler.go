@@ -73,6 +73,7 @@ func (h *AgentContainerHandler) Create(ctx context.Context, c *app.RequestContex
 			SemanticGroupID:    req.DataPolicy.SemanticGroupID,
 			SourceNameSelector: req.DataPolicy.SourceNameSelector,
 		},
+		SkillPolicy: skillPolicyFromDTO(req.SkillPolicy),
 		AgentCard: entity.AgentCard{
 			Name:        req.AgentCard.Name,
 			Description: req.AgentCard.Description,
@@ -274,6 +275,12 @@ func (h *AgentContainerHandler) Update(ctx context.Context, c *app.RequestContex
 		}
 	}
 
+	var skillPolicy *entity.SkillPolicy
+	if req.SkillPolicy != nil {
+		sp := skillPolicyFromDTO(*req.SkillPolicy)
+		skillPolicy = &sp
+	}
+
 	var agentCard *entity.AgentCard
 	if req.AgentCard != nil {
 		skills := make([]entity.AgentSkill, 0, len(req.AgentCard.Skills))
@@ -306,6 +313,7 @@ func (h *AgentContainerHandler) Update(ctx context.Context, c *app.RequestContex
 		Labels:                    req.Labels,
 		DACType:                   req.DACType,
 		DataPolicy:                dataPolicy,
+		SkillPolicy:               skillPolicy,
 		AgentCard:                 agentCard,
 		Model:                     model,
 		ExpertAgentMaxSteps:       req.ExpertAgentMaxSteps,
@@ -357,4 +365,17 @@ func (h *AgentContainerHandler) Delete(ctx context.Context, c *app.RequestContex
 	SuccessResponse(c, map[string]string{
 		"message": "agent container deleted successfully",
 	})
+}
+
+// skillPolicyFromDTO maps API skillPolicy into the domain entity.
+func skillPolicyFromDTO(p dto.SkillPolicyDTO) entity.SkillPolicy {
+	skills := make([]entity.SkillRef, 0, len(p.Skills))
+	for _, s := range p.Skills {
+		skills = append(skills, entity.SkillRef{
+			Namespace: s.Namespace,
+			Name:      s.Name,
+			Version:   s.Version,
+		})
+	}
+	return entity.SkillPolicy{Skills: skills}
 }

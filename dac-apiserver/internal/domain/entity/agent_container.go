@@ -10,11 +10,12 @@ type AgentContainer struct {
 	Labels    map[string]string
 
 	// Spec
-	DACType             string
-	DataPolicy          DataPolicy
-	AgentCard           AgentCard
-	Model               ModelSpec
-	ExpertAgentMaxSteps     string
+	DACType                   string
+	DataPolicy                DataPolicy
+	SkillPolicy               SkillPolicy // skill DAC: raw skill-hub selection
+	AgentCard                 AgentCard
+	Model                     ModelSpec
+	ExpertAgentMaxSteps       string
 	OrchestratorAgentMaxLoops string
 
 	// Status
@@ -32,6 +33,18 @@ type DataPolicy struct {
 	DataSourceType     string
 	SemanticGroupID    string
 	SourceNameSelector []string
+}
+
+// SkillPolicy binds skill-hub packages for dacType=skill.
+type SkillPolicy struct {
+	Skills []SkillRef
+}
+
+// SkillRef is a skill-hub package reference (namespace/name/version).
+type SkillRef struct {
+	Namespace string
+	Name      string
+	Version   string
 }
 
 // AgentCard defines the agent's metadata and capabilities

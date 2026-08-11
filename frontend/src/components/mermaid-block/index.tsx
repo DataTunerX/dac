@@ -4,6 +4,7 @@ import { memo, useEffect, useRef, useState, useId } from "react"
 import { Maximize2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { sanitizeSvg } from "@/lib/sanitize-svg"
 
 type MermaidBlockProps = {
   value: string
@@ -13,6 +14,8 @@ type MermaidBlockProps = {
 /** 修复大模型常输出的错误 Mermaid 语法（引号、subgraph 格式） */
 function normalizeMermaidFromLLM(source: string): string {
   let s = source
+  // Strip diagram-level init overrides (can re-enable unsafe securityLevel)
+  s = s.replace(/%%\{[\s\S]*?\}%%/g, "")
   // 1. 统一引号：中文/Unicode 弯引号 → ASCII
   s = s.replace(/\u201C|\u201D/g, '"')
   s = s.replace(/\u2018|\u2019/g, "'")
@@ -58,7 +61,10 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
         const mermaid = (await import("mermaid")).default
         const config = {
           startOnLoad: false,
-          securityLevel: "loose",
+          // Mermaid strict mode + DOMPurify (sanitizeSvg) for untrusted LLM diagrams.
+          // Keep default htmlLabels so flowchart text uses foreignObject; sanitizeSvg
+          // allows foreignObject while stripping scripts/event handlers.
+          securityLevel: "strict" as const,
           theme: "base",
           themeVariables: {
             primaryColor: "#e0f2fe",
@@ -81,7 +87,7 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
         mermaid.initialize(config as Parameters<typeof mermaid.initialize>[0])
         const uid = `mermaid-${id}-${Math.random().toString(36).slice(2, 9)}`
         const { svg: out } = await mermaid.render(uid, normalized)
-        if (!cancelled) setSvg(out)
+        if (!cancelled) setSvg(sanitizeSvg(out))
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         if (!cancelled) {
@@ -155,14 +161,14 @@ export const MermaidBlock = memo(function MermaidBlock({ value, className }: Mer
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] rounded-2xl border-line/90 shadow-xl">
-          <DialogHeader className="flex flex-row items-center justify-between gap-3 pb-2">
-            <DialogTitle className="text-content">Mermaid 图表预览</DialogTitle>
-            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭" className="rounded-lg hover:bg-surface-muted">
+        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50 flex-shrink-0 flex flex-row items-center justify-between gap-3">
+            <DialogTitle>Mermaid 图表预览</DialogTitle>
+            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭" title="关闭">
               <X className="w-4 h-4" />
             </Button>
           </DialogHeader>
-          <div className="px-6 pb-6 pt-2 overflow-auto max-h-[calc(90vh-4rem)] bg-gradient-to-br from-slate-50/80 to-white rounded-xl">
+          <div className="p-6 overflow-auto flex-1 min-h-0 bg-gradient-to-br from-slate-50/80 to-white">
             <div
               className="p-8 [&_svg]:max-w-full [&_svg]:h-auto [&_svg]:drop-shadow-sm"
               dangerouslySetInnerHTML={{ __html: svg }}

@@ -1,11 +1,12 @@
-# DAC sandbox PostgreSQL — 启动即包含演示用 4 个 database
-#   dac_sandbox / relationship / pagila / chinook
+# DAC sandbox PostgreSQL — 启动即包含演示用 database
+#   手工库: dac_sandbox / relationship
+#   开源库: pagila / chinook / northwind
 #
 # 构建上下文必须是 sandbox/ 根目录:
-#   docker build -t release.daocloud.io/dac/sandbox-postgres:v0.10.0 -f images/postgres/Dockerfile .
+#   docker build -t release.daocloud.io/dac/sandbox-postgres:v0.11.0 -f images/postgres/Dockerfile .
 #
 # 运行:
-#   docker run -d -p 5432:5432 release.daocloud.io/dac/sandbox-postgres:v0.10.0
+#   docker run -d -p 5432:5432 release.daocloud.io/dac/sandbox-postgres:v0.11.0
 
 FROM postgres:16
 

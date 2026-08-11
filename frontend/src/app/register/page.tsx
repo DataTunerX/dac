@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import axios from "axios"
 import { api } from "@/lib/api"
-import { navigateAfterAuth, persistAuthToken } from "@/lib/auth-session"
+import { establishSession, navigateAfterAuth } from "@/lib/auth-session"
 import { toast } from "sonner"
 import { Loader2, GalleryVerticalEnd } from "lucide-react"
 
@@ -31,16 +31,16 @@ export default function RegisterPage() {
 
     setLoading(true)
     try {
-      // Register returns user info (no token). After registering, login once to obtain JWT.
+      // Register returns user info (no token). Login sets HttpOnly dac_token via Set-Cookie.
       await api.post("/auth/register", { username, password })
       const loginRes = await api.post("/auth/login", { username, password })
-      const token = loginRes.data?.token || loginRes.data?.access_token
-      if (!token) {
+      const user = loginRes.data?.user
+      if (!user) {
         toast.success("注册成功，请登录")
         navigateAfterAuth("/login")
         return
       }
-      persistAuthToken(token)
+      establishSession(user)
       toast.success("注册成功")
       navigateAfterAuth("/")
     } catch (err: unknown) {

@@ -1,16 +1,32 @@
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { prepareMarkdown } from "@/lib/prepare-markdown"
+import { isExternalMarkdownHref, sanitizeMarkdownHref } from "@/lib/markdown-url"
 
-export { prepareMarkdown, normalizeMarkdown, normalizeMarkdownTables } from "@/lib/prepare-markdown"
+export { prepareMarkdown } from "@/lib/prepare-markdown"
 
 type Components = Parameters<typeof ReactMarkdown>[0]["components"]
 
 export const defaultMarkdownComponents: Components = {
   p: (props) => <p className="text-sm text-content leading-6 mb-2 last:mb-0" {...props} />,
-  a: (props) => (
-    <a className="text-cta hover:underline cursor-pointer" target="_blank" rel="noopener noreferrer" {...props} />
-  ),
+  a: ({ href, children, ...props }) => {
+    const safeHref = sanitizeMarkdownHref(href)
+    if (!safeHref) {
+      return <span className="text-content">{children}</span>
+    }
+    const external = isExternalMarkdownHref(safeHref)
+    return (
+      <a
+        {...props}
+        href={safeHref}
+        className="text-cta hover:underline cursor-pointer"
+        target={external ? "_blank" : undefined}
+        rel={external ? "noopener noreferrer" : undefined}
+      >
+        {children}
+      </a>
+    )
+  },
   code: (props) => (
     <code className="bg-surface-muted rounded px-1 py-0.5 font-mono text-[12px] text-content" {...props} />
   ),
@@ -64,7 +80,11 @@ export function Markdown({
   const shouldNormalize = normalizeTables ?? normalize
   const content = shouldNormalize ? prepareMarkdown(children) : children
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components || defaultMarkdownComponents}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      urlTransform={(url) => sanitizeMarkdownHref(url) ?? ""}
+      components={components || defaultMarkdownComponents}
+    >
       {content}
     </ReactMarkdown>
   )

@@ -26,6 +26,7 @@ class UnstructuredFileRecord:
     minio_path: str
     file_size: int
     file_summary: Optional[str] = None
+    content_hash: Optional[str] = None
     id: Optional[int] = None
 
     def to_upsert_dict(self) -> Dict[str, Any]:
@@ -42,6 +43,12 @@ class UnstructuredFileRecord:
         # runs that do not re-summarize a file will not blank out its stored summary.
         if self.file_summary is not None and str(self.file_summary).strip():
             d["file_summary"] = str(self.file_summary).strip()
+        # content_hash (MinIO etag) drives per-file change detection in the job's
+        # incremental diff. Only send it when we have a real value so a caller that
+        # upserts without it does not clobber a previously-stored hash (data-services
+        # keeps the old value when the incoming content_hash is NULL).
+        if self.content_hash is not None and str(self.content_hash).strip():
+            d["content_hash"] = str(self.content_hash).strip()
         return d
 
 

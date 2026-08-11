@@ -1,4 +1,4 @@
-{{- if .Values.neo4j.enabled }}
+{{- if and .Values.neo4j.enabled (not .Values.neo4j.external.host) }}
 {{- $registry := .Values.global.imageRegistry }}
 {{- if hasKey .Values.neo4j.image "registry" }}
 {{- $registry = .Values.neo4j.image.registry }}

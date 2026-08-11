@@ -28,6 +28,45 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// PreCheckLLMConfig validates that the LLM ConfigMap referenced by the DD's configuration
+// exists before finalizer is added. This prevents the situation where a DD gets a finalizer
+// but can never complete (and therefore can never be deleted) because the LLM ConfigMap is missing.
+func (h *DataDescriptorHandler) PreCheckLLMConfig(ctx context.Context, dd *dacv1alpha1.DataDescriptor) error {
+	// Read the global dd-configuration to find the LLM ConfigMap name
+	configMap := &corev1.ConfigMap{}
+	err := h.Kubeclient.Get(ctx, client.ObjectKey{Name: "dd-configuration", Namespace: "dac"}, configMap)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name).
+				Info("dd-configuration ConfigMap not found in dac namespace, will check later during deployment generation")
+			return nil
+		}
+		return fmt.Errorf("failed to get dd-configuration ConfigMap: %w", err)
+	}
+
+	llmConfigName := configMap.Data["llm-config"]
+	if llmConfigName == "" {
+		h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name).
+			Info("llm-config not configured in dd-configuration, will use default during deployment generation")
+		return nil
+	}
+
+	// Validate that the referenced LLM ConfigMap exists in the DD's namespace
+	llmConfigMap := &corev1.ConfigMap{}
+	err = h.Kubeclient.Get(ctx, client.ObjectKey{Name: llmConfigName, Namespace: dd.Namespace}, llmConfigMap)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("LLM ConfigMap %q not found in namespace %q: the referenced LLM configuration does not exist. "+
+				"Please create the ConfigMap first, then retry", llmConfigName, dd.Namespace)
+		}
+		return fmt.Errorf("failed to check LLM ConfigMap %q in namespace %q: %w", llmConfigName, dd.Namespace, err)
+	}
+
+	h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name).
+		Info("LLM ConfigMap pre-check passed", "configMapName", llmConfigName)
+	return nil
+}
+
 // clearSyncRequestedAtAnnotation removes dac.dac.io/sync-requested-at using a fresh GET + merge patch.
 func (h *DataDescriptorHandler) clearSyncRequestedAtAnnotation(ctx context.Context, namespace, name string, logger logr.Logger) error {
 	fresh := &dacv1alpha1.DataDescriptor{}
@@ -125,6 +164,36 @@ type StatusAPIResponse struct {
 	TaskID    string `json:"task_id"`
 	Timestamp string `json:"timestamp"`
 	Error     string `json:"error"`
+}
+
+func parseStatusTimestamp(value string) (metav1.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return metav1.Time{}, fmt.Errorf("status timestamp is empty")
+	}
+
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05"} {
+		parsed, err := time.ParseInLocation(layout, value, time.UTC)
+		if err == nil {
+			return metav1.NewTime(parsed), nil
+		}
+	}
+
+	return metav1.Time{}, fmt.Errorf("unsupported status timestamp %q", value)
+}
+
+func readyConditionTime(dd *dacv1alpha1.DataDescriptor) metav1.Time {
+	for _, condition := range dd.Status.Conditions {
+		if condition.Type != dacv1alpha1.ConditionAvailable ||
+			condition.Status != corev1.ConditionTrue {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, condition.LastUpdateTime)
+		if err == nil {
+			return metav1.NewTime(parsed)
+		}
+	}
+	return metav1.Time{}
 }
 
 // errDataDescriptorGone is returned when the DD was deleted or is being deleted while waiting for deployment.
@@ -392,7 +461,7 @@ func (h *DataDescriptorHandler) DoAddOrUpdate(ctx context.Context, dd *dacv1alph
 			Logger:      h.Logger.WithName("DataDescriptorGenerator"),
 		}
 		logger.Info("Creating deployment for DataDescriptor")
-		if err := ddGenerator.Do(ctx, dd); err != nil {
+		if err := ddGenerator.Do(ctx, dd, "AddOrUpdate"); err != nil {
 			if hadSyncRequestedAt {
 				logger.Error(err,
 					"resync path: DataDescriptorGenerator.Do failed; sync-requested-at was NOT cleared — will retry on next reconcile",
@@ -816,7 +885,7 @@ func (h *DataDescriptorHandler) handleDDDelete(ctx context.Context, namespace st
 	// 2. 创建 deployment（和 Add/Update 一样的逻辑）
 	// 注意：如果 deployment 是 Delete 操作已存在，前面的代码会通过 goto 跳过这里
 	logger.Info("Creating deployment for DataDescriptor deletion")
-	if err := ddGenerator.Do(ctx, dd); err != nil {
+	if err := ddGenerator.Do(ctx, dd, "Delete"); err != nil {
 		return "", fmt.Errorf("failed to create deployment for data descriptor deletion: %w", err)
 	}
 
@@ -1265,7 +1334,7 @@ func (h *DataDescriptorHandler) isStatusEqualIgnoringTime(oldStatus, newStatus d
 		}
 	}
 
-	// Compare SourceStatuses (ignoring LastSyncTime)
+	// LastSyncTime is user-visible and must trigger a status update.
 	if len(oldStatus.SourceStatuses) != len(newStatus.SourceStatuses) {
 		return false
 	}
@@ -1274,6 +1343,7 @@ func (h *DataDescriptorHandler) isStatusEqualIgnoringTime(oldStatus, newStatus d
 		newSource := newStatus.SourceStatuses[i]
 		if oldSource.Name != newSource.Name ||
 			oldSource.Phase != newSource.Phase ||
+			!oldSource.LastSyncTime.Time.Equal(newSource.LastSyncTime.Time) ||
 			oldSource.Records != newSource.Records ||
 			oldSource.TaskID != newSource.TaskID {
 			return false
@@ -1320,10 +1390,18 @@ func (h *DataDescriptorHandler) checkSourceStatus(ctx context.Context, dd *dacv1
 	if existingStatus := h.getExistingSourceStatus(dd, source.Name); existingStatus != nil {
 		if existingStatus.Phase == "Ready" {
 			logger.Info("Data source already completed", "source", source.Name)
+			lastSyncTime := existingStatus.LastSyncTime
+			if lastSyncTime.IsZero() {
+				// Older Ready resources may not have persisted LastSyncTime. Their
+				// Available condition is the closest durable readiness timestamp.
+				lastSyncTime = readyConditionTime(dd)
+			}
 			return SourceStatusResult{
-				Name:   source.Name,
-				Phase:  "Ready",
-				TaskID: existingStatus.TaskID,
+				Name:         source.Name,
+				Phase:        "Ready",
+				LastSyncTime: lastSyncTime,
+				Records:      existingStatus.Records,
+				TaskID:       existingStatus.TaskID,
 			}
 		}
 	}
@@ -1358,10 +1436,17 @@ func (h *DataDescriptorHandler) checkSourceStatus(ctx context.Context, dd *dacv1
 
 	switch strings.ToLower(statusResp.Status) {
 	case "success":
+		lastSyncTime, parseErr := parseStatusTimestamp(statusResp.Timestamp)
+		if parseErr != nil {
+			logger.Error(parseErr, "Failed to parse successful job timestamp",
+				"source", source.Name,
+				"timestamp", statusResp.Timestamp)
+		}
 		return SourceStatusResult{
-			Name:   source.Name,
-			Phase:  "Ready",
-			TaskID: statusResp.TaskID,
+			Name:         source.Name,
+			Phase:        "Ready",
+			LastSyncTime: lastSyncTime,
+			TaskID:       statusResp.TaskID,
 		}
 	case "failure":
 		errMsg := statusResp.Error

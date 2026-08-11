@@ -37,9 +37,9 @@ type DDConfig struct {
 	LLMConfig             string
 }
 
-func (h *DataDescriptorGenerator) Do(ctx context.Context, dd *dacv1alpha1.DataDescriptor) error {
+func (h *DataDescriptorGenerator) Do(ctx context.Context, dd *dacv1alpha1.DataDescriptor, operation string) error {
 	logger := h.Logger.WithValues("namespace", dd.Namespace, "name", dd.Name)
-	logger.Info("Generate DataDescriptor K8S resources")
+	logger.Info("Generate DataDescriptor K8S resources", "operation", operation)
 
 	labels := map[string]string{
 		"data": dd.Name,
@@ -73,7 +73,7 @@ func (h *DataDescriptorGenerator) Do(ctx context.Context, dd *dacv1alpha1.DataDe
 		}
 	}
 
-	deployment, err := h.GenerateDataDescriptorDeployment(ctx, dd, labels, ownerRefs)
+	deployment, err := h.GenerateDataDescriptorDeployment(ctx, dd, labels, ownerRefs, operation)
 	if err != nil {
 		return err
 	}
@@ -244,6 +244,24 @@ func (h *DataDescriptorGenerator) generateDataSinkerJobEnvs(dd *dacv1alpha1.Data
 		Name:  "MINERU_DEVICE_MODE",
 		Value: mineruDeviceMode,
 	})
+	// PDF_LOADER_POLICY selects PDF processing by capability: auto | ocr | text.
+	// Derived from dd.Spec.PDFLoader. "ocr" forces OCR/layout parsing (even on CPU when
+	// gpuEnabled=no); "text" forces embedded-text extraction only; anything else → "auto".
+	pdfLoaderPolicy := strings.ToLower(strings.TrimSpace(dd.Spec.PDFLoader))
+	switch pdfLoaderPolicy {
+	case "ocr", "text":
+		// keep
+	case "mineru": // legacy alias
+		pdfLoaderPolicy = "ocr"
+	case "pymupdf": // legacy alias
+		pdfLoaderPolicy = "text"
+	default:
+		pdfLoaderPolicy = "auto"
+	}
+	envs = append(envs, corev1.EnvVar{
+		Name:  "PDF_LOADER_POLICY",
+		Value: pdfLoaderPolicy,
+	})
 	envs = append(envs, corev1.EnvVar{
 		Name:  "regroup_batch_size",
 		Value: "10",
@@ -315,7 +333,7 @@ func (h *DataDescriptorGenerator) GenerateDataDescriptorDeploymentName(dd *dacv1
 	return DataDescriptorResourceName(dd)
 }
 
-func (h *DataDescriptorGenerator) GenerateDataDescriptorDeployment(ctx context.Context, dd *dacv1alpha1.DataDescriptor, labels map[string]string, ownerRefs []metav1.OwnerReference) (*appsv1.Deployment, error) {
+func (h *DataDescriptorGenerator) GenerateDataDescriptorDeployment(ctx context.Context, dd *dacv1alpha1.DataDescriptor, labels map[string]string, ownerRefs []metav1.OwnerReference, operation string) (*appsv1.Deployment, error) {
 
 	name := h.GenerateDataDescriptorDeploymentName(dd)
 
@@ -431,8 +449,9 @@ func (h *DataDescriptorGenerator) GenerateDataDescriptorDeployment(ctx context.C
 				},
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("2000m"),
-						corev1.ResourceMemory: resource.MustParse("4000Mi"),
+						corev1.ResourceCPU: resource.MustParse("2000m"),
+						// MinerU PDF parsing (GPU/CPU mode) under multi-file batches can exceed 16Gi; 32Gi avoids cgroup OOM kills.
+						corev1.ResourceMemory: resource.MustParse("32Gi"),
 					},
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -481,14 +500,33 @@ func (h *DataDescriptorGenerator) GenerateDataDescriptorDeployment(ctx context.C
 		},
 	}
 
+	// Delete 操作是轻量的 API 调用（无 LLM/GPU/MinerU 解析），使用小资源避免占用大内存/GPU 节点。
+	// 覆盖 data-sinker-job 容器的 resources 为轻量配置；GPU 分支也会跳过 Delete。
+	if strings.EqualFold(operation, "Delete") {
+		for i := range podSpec.Containers {
+			if podSpec.Containers[i].Name == "data-sinker-job" {
+				podSpec.Containers[i].Resources = corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1000m"),
+						corev1.ResourceMemory: resource.MustParse("1Gi"),
+					},
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("100m"),
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
+					},
+				}
+			}
+		}
+	}
+
 	// Add GPU resources for data-sinker-job container if GPUEnabled is set to "yes"
-	if strings.EqualFold(dd.Spec.GPUEnabled, "yes") {
+	// (Delete 操作不需要 GPU，跳过)。
+	if strings.EqualFold(dd.Spec.GPUEnabled, "yes") && !strings.EqualFold(operation, "Delete") {
 		for i := range podSpec.Containers {
 			if podSpec.Containers[i].Name == "data-sinker-job" {
 				podSpec.Containers[i].Resources.Limits["nvidia.com/gpu"] = resource.MustParse("1")
 				podSpec.Containers[i].Resources.Requests["nvidia.com/gpu"] = resource.MustParse("1")
-				// Increase memory for CUDA: mineru with GPU needs more memory for model loading and processing
-				podSpec.Containers[i].Resources.Limits[corev1.ResourceMemory] = resource.MustParse("16Gi")
+				// GPU MinerU benefits from a higher memory request for scheduling/placement.
 				podSpec.Containers[i].Resources.Requests[corev1.ResourceMemory] = resource.MustParse("8Gi")
 			}
 		}

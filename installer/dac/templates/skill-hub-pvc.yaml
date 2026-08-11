@@ -1,21 +1,22 @@
-{{- if and .Values.skillHub.enabled .Values.skillHub.persistence.enabled (not .Values.skillHub.persistence.existingClaim) }}
+{{- if and .Values.skillHub.enabled .Values.skillHub.persistence.enabled (eq (.Values.skillHub.persistence.type | default "hostPath") "pvc") }}
+{{- $pvc := .Values.skillHub.persistence.pvc | default dict }}
+{{- /* Skip rendering when the caller supplies an existing claim. */ -}}
+{{- if not ($pvc.existingClaim | default "") }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "dac.skillHub.serviceName" . }}
+  name: {{ include "dac.skillHub.serviceName" . }}-skills
   labels:
     {{- include "dac.componentLabels" (dict "context" . "name" "skill-hub") | nindent 4 }}
-  {{- with .Values.skillHub.persistence.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
 spec:
   accessModes:
-    {{- toYaml .Values.skillHub.persistence.accessModes | nindent 4 }}
-  {{- with .Values.skillHub.persistence.storageClass }}
-  storageClassName: {{ . | quote }}
+    - {{ $pvc.accessMode | default "ReadWriteOnce" | quote }}
+  {{- $sc := $pvc.storageClass | default .Values.global.storageClass }}
+  {{- if $sc }}
+  storageClassName: {{ $sc | quote }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.skillHub.persistence.size | quote }}
+      storage: {{ $pvc.size | default "5Gi" | quote }}
+{{- end }}
 {{- end }}

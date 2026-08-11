@@ -22,6 +22,9 @@ type DataDescriptorUsecase interface {
 	List(ctx context.Context, namespace string, opts ListOptions) ([]*entity.DataDescriptor, error)
 	Update(ctx context.Context, namespace, name string, req *UpdateDataDescriptorRequest) (*entity.DataDescriptor, error)
 	Delete(ctx context.Context, namespace, name string) error
+	// RequestResync sets dac.dac.io/sync-requested-at so execution-engine re-runs
+	// data-sinker for Ready descriptors (needed after source appends).
+	RequestResync(ctx context.Context, namespace, name string) error
 
 	// Data Services integrations (domain types)
 	GetSignatureByDD(ctx context.Context, namespace, name string) (*Signature, error)

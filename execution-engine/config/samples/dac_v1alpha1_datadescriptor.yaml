@@ -58,6 +58,29 @@ spec:
 
 ---
 
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dianshang-postgres
+  namespace: default
+spec:
+  descriptorType: "structured-postgres"
+  sources:
+    - type: postgres
+      name: "postgres-production"
+      metadata:
+        host: "postgres-server.dac"
+        port: "5432"
+        user: "postgres"
+        password: "postgres"
+        database: "dactest"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""
+
+---
 
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
@@ -370,6 +393,26 @@ spec:
 apiVersion: dac.dac.io/v1alpha1
 kind: DataDescriptor
 metadata:
+  name: asynq
+  namespace: default
+spec:
+  descriptorType: "code"
+  sources:
+    - type: gitee
+      name: "gitee-asynq"
+      metadata:
+        codeRepoPath: "https://gitee.com/jamesxiong888/asynq.git"
+        codeRepoBranch: "main"
+        codeRepoToken: ""
+      prompts:
+        prompts:
+          name: ""
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
   name: dianshang-code
   namespace: default
 spec:
@@ -551,4 +594,201 @@ spec:
   syncPolicy:
     enabled: true
     schedule: "5m"
+
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: archaeology-file
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  gpuEnabled: "yes"
+  sources:
+    - type: minio
+      name: "archaeology-file"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "archaeology"
+      extract:
+        files: []
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: summarytest-file-gpu-auto
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  gpuEnabled: "yes"
+  pdfLoader: "auto"
+  sources:
+    - type: minio
+      name: "summarytest-file"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "summarytest"
+      extract:
+        files: []
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: summarytest-file-nogpu-auto
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  gpuEnabled: "no"
+  pdfLoader: "auto"
+  sources:
+    - type: minio
+      name: "summarytest-file"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "summarytest"
+      extract:
+        files: []
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: summarytest-file-gpu-ocr
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  gpuEnabled: "yes"
+  pdfLoader: "ocr"
+  sources:
+    - type: minio
+      name: "summarytest-file"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "summarytest"
+      extract:
+        files: []
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: summarytest-file-nogpu-ocr
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  gpuEnabled: "no"
+  pdfLoader: "ocr"
+  sources:
+    - type: minio
+      name: "summarytest-file"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "summarytest"
+      extract:
+        files: []
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: summarytest-file-gpu-text
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  gpuEnabled: "yes"
+  pdfLoader: "text"
+  sources:
+    - type: minio
+      name: "summarytest-file"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "summarytest"
+      extract:
+        files: []
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+
+---
+
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: summarytest-file-nogpu-text
+  namespace: default
+spec:
+  descriptorType: "unstructured"
+  gpuEnabled: "no"
+  pdfLoader: "text"
+  sources:
+    - type: minio
+      name: "summarytest-file"
+      metadata:
+        host: "minio-server.dac:9000"
+        access_key: "minioadmin"
+        secret_key: "minioadmin"
+        bucket: "summarytest"
+      extract:
+        files: []
+      prompts:
+        prompts:
+          name: ""
+  syncPolicy:
+    enabled: true
+    schedule: "5m"
+
 

@@ -24,6 +24,11 @@ p, user, /api/v1/discovery/scans, GET
 p, user, /api/v1/discovery/scans/*, GET
 p, user, /api/v1/datasources/probe, POST
 p, user, /api/v1/datasources/probe/types, GET
+p, user, /api/v1/skills/namespaces, GET
+p, user, /api/v1/skills/namespaces/*/exists, GET
+p, user, /api/v1/skills/namespaces/*/skills, GET
+p, user, /api/v1/skills/namespaces/*/skills/*, GET
+p, user, /api/v1/skills/namespaces/*/skills/*/download, GET
 p, user, /v1/chat/completions, POST
 
 g, admin, admin

@@ -11,59 +11,60 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 )
 
-// Scanner orchestrates a fixed-order list of Probes against a target port.
+// Scanner orchestrates service identification against a target port.
 //
-// The scanner itself owns no protocol knowledge: it dials once for liveness,
-// then dispatches to each registered Probe in order. The first probe that
-// returns a Match wins. Adding a new protocol means implementing Probe and
-// appending to the list in NewScanner; ScanPort never needs to change.
+// Order of operations:
+//  1. TCP liveness dial (closed ports are omitted)
+//  2. Cheap local DB probes (mysql / postgres / redis) — fast + deterministic
+//  3. Nerva (Praetorian) — 170+ protocol plugins for the long tail
+//  4. Local HTTP product enrichers (GitLab/Odoo/Saleor/Boutique/fileserver/…)
+//     when Nerva returns nothing or only generic http/nginx
 type Scanner struct {
-	dialer  *net.Dialer
-	timeout time.Duration
-	probes  []Probe
+	dialer    *net.Dialer
+	timeout   time.Duration
+	dbProbes  []Probe
+	nerva     *nervaProbe
+	httpProbe *httpProbe
 }
 
-// NewScanner returns a Scanner with the default probe stack:
-//
-//	mysql → postgres → redis → http (with HTTP fingerprinters)
-//
-// Probes are ordered cheapest-first within each protocol family, and
-// active-talk protocols (mysql sends a banner, postgres replies to
-// SSLRequest) are tried before HTTP so we don't waste a full round-trip
-// on text/html for a database port.
+// NewScanner returns a production Scanner with Nerva enabled.
 func NewScanner(timeout time.Duration) *Scanner {
+	return newScanner(timeout, true)
+}
+
+func newScanner(timeout time.Duration, withNerva bool) *Scanner {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
 	dialer := &net.Dialer{Timeout: timeout}
 	httpClient := newHTTPClient(timeout)
 
-	return &Scanner{
+	s := &Scanner{
 		dialer:  dialer,
 		timeout: timeout,
-		probes: []Probe{
+		dbProbes: []Probe{
 			&mysqlProbe{dialer: dialer, timeout: timeout},
 			&postgresProbe{dialer: dialer, timeout: timeout},
 			&redisProbe{dialer: dialer, timeout: timeout},
-			&httpProbe{
-				client:    httpClient,
-				timeout:   timeout,
-				detectors: defaultHTTPDetectors(),
-				fallbacks: defaultHTTPFallbacks(),
-			},
+		},
+		httpProbe: &httpProbe{
+			client:    httpClient,
+			timeout:   timeout,
+			detectors: defaultHTTPDetectors(),
+			fallbacks: defaultHTTPFallbacks(),
 		},
 	}
+	if withNerva {
+		s.nerva = &nervaProbe{timeout: timeout}
+	}
+	return s
 }
 
-// ScanPort runs the registered probes against host:port. A reachable port
-// always produces a DiscoveredService (with ServiceType="unknown" if no
-// probe matched) so the caller can distinguish "open but unidentified"
-// from "closed/filtered".
+// ScanPort runs identification against host:port. A reachable port always
+// produces a DiscoveredService (ServiceType="unknown" if nothing matched).
 func (s *Scanner) ScanPort(ctx context.Context, host string, port int) (*domain.DiscoveredService, bool) {
 	target := Target{Host: host, Port: port}
 
-	// Liveness check. Without this, every closed port would burn
-	// timeout × len(probes) waiting for handshakes that never come.
 	conn, err := s.dialer.DialContext(ctx, "tcp", target.Addr())
 	if err != nil {
 		return nil, false
@@ -78,24 +79,53 @@ func (s *Scanner) ScanPort(ctx context.Context, host string, port int) (*domain.
 		Metadata:    map[string]string{},
 	}
 
-	for _, p := range s.probes {
+	for _, p := range s.dbProbes {
 		if ctx.Err() != nil {
 			break
 		}
-		m := p.Probe(ctx, target)
-		if m == nil {
-			continue
+		if m := p.Probe(ctx, target); m != nil {
+			applyMatch(svc, m)
+			return svc, true
 		}
-		applyMatch(svc, m)
-		return svc, true
+	}
+
+	var nervaMatch *Match
+	if s.nerva != nil && ctx.Err() == nil {
+		nervaCtx, cancel := context.WithTimeout(ctx, s.timeout)
+		nervaMatch = s.nerva.Probe(nervaCtx, target)
+		cancel()
+		if nervaMatch != nil && !isGenericHTTP(nervaMatch) {
+			applyMatch(svc, nervaMatch)
+			return svc, true
+		}
+	}
+
+	if s.httpProbe != nil && ctx.Err() == nil {
+		if m := s.httpProbe.Probe(ctx, target); m != nil {
+			if nervaMatch != nil {
+				applyMatch(svc, nervaMatch)
+			}
+			applyMatch(svc, m)
+			return svc, true
+		}
+	}
+
+	if nervaMatch != nil {
+		applyMatch(svc, nervaMatch)
 	}
 	return svc, true
 }
 
-// applyMatch merges a Probe's result into the destination service.
-// Empty fields on the match leave the corresponding service field
-// untouched, so probes can return partial information without clobbering
-// defaults.
+func isGenericHTTP(m *Match) bool {
+	if m == nil {
+		return false
+	}
+	if m.ServiceType != "http" {
+		return false
+	}
+	return m.Product == "" || m.Product == "http" || m.Product == "https" || m.Product == "nginx"
+}
+
 func applyMatch(svc *domain.DiscoveredService, m *Match) {
 	if m.ServiceType != "" {
 		svc.ServiceType = m.ServiceType
@@ -114,15 +144,9 @@ func applyMatch(svc *domain.DiscoveredService, m *Match) {
 	}
 }
 
-// newHTTPClient builds the HTTP client shared by httpProbe and all
-// HTTPFingerprinters. Keep-alives are disabled because each port-scan
-// produces at most a handful of requests and we never reuse the same
-// host between targets.
 func newHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
-		// Don't follow redirects: a redirect from / to /login would
-		// hide the original Server header and confuse fingerprinters.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -137,18 +161,8 @@ func newHTTPClient(timeout time.Duration) *http.Client {
 }
 
 // Probe identifies a service speaking a particular protocol on a TCP port.
-//
-// Implementations must:
-//   - return promptly when ctx is cancelled
-//   - never panic
-//   - return nil to mean "this is not my protocol", a non-nil *Match
-//     to mean "I identified the service"
 type Probe interface {
-	// Name returns a stable identifier for logs and tests (e.g. "mysql").
 	Name() string
-
-	// Probe runs the protocol-specific identification dance against
-	// target. A non-nil return short-circuits the rest of the probe stack.
 	Probe(ctx context.Context, target Target) *Match
 }
 
@@ -164,13 +178,10 @@ func (t Target) Addr() string {
 }
 
 // Match is the positive identification a Probe returns.
-//
-// Fields are additive: empty values let the scanner keep whatever a
-// later probe (or the unknown default) provides.
 type Match struct {
-	ServiceType string            // "http", "mysql", "postgres", "redis"
-	Product     string            // "gitlab", "minio", "nginx", ...
-	Version     string            // free-form version string when known
-	TLS         bool              // true if the probe spoke (or detected) TLS
-	Metadata    map[string]string // small, opaque key/value pairs for the UI
+	ServiceType string
+	Product     string
+	Version     string
+	TLS         bool
+	Metadata    map[string]string
 }

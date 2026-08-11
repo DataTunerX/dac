@@ -1774,6 +1774,7 @@ async def unstructured_files_upsert_one(request: UnstructuredFileUpsertRequest):
             bucket=request.bucket,
             minio_path=request.minio_path,
             file_size=request.file_size,
+            content_hash=request.content_hash,
             file_summary=request.file_summary,
         )
         row_id = await unstructured_files_service.upsert(rec)
@@ -1808,6 +1809,7 @@ async def unstructured_files_batch_upsert(request: UnstructuredFileBatchUpsertRe
                 bucket=f.bucket,
                 minio_path=f.minio_path,
                 file_size=f.file_size,
+                content_hash=f.content_hash,
                 file_summary=f.file_summary,
             )
             for f in request.files
@@ -1908,17 +1910,25 @@ async def unstructured_files_delete_by_id(row_id: int):
 @app.post("/unstructured-files/delete-by-object", response_model=UnstructuredFileResponse)
 async def unstructured_files_delete_by_object(request: UnstructuredFileDeleteByObjectRequest):
     try:
-        ok = await unstructured_files_service.delete_by_dd_bucket_path(
+        n = await unstructured_files_service.delete_by_dd_bucket_path(
             request.dd_namespace,
             request.dd_name,
             request.bucket,
             request.minio_path,
         )
-        if not ok:
-            raise HTTPException(status_code=404, detail="unstructured-files record not found")
+        # Idempotent: a cleanup caller may ask to delete a row that was never inserted
+        # (e.g. an added file with no prior inventory row). Return 200 with count=0
+        # instead of 404, mirroring delete-by-dd semantics.
         return UnstructuredFileResponse(
             status="success",
-            message="unstructured-files deleted by bucket and path",
+            message=(
+                f"unstructured-files deleted {n} row(s) for dd_namespace={request.dd_namespace!r} "
+                f"dd_name={request.dd_name!r} bucket={request.bucket!r} minio_path={request.minio_path!r}"
+                if n
+                else "no unstructured-files row matched this object"
+            ),
+            count=n,
+            data={"deleted": n},
         )
     except HTTPException:
         raise

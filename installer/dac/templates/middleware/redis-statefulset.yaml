@@ -1,4 +1,4 @@
-{{- if .Values.redis.enabled }}
+{{- if and .Values.redis.enabled (not .Values.redis.external.host) }}
 {{- $registry := .Values.global.imageRegistry }}
 {{- if hasKey .Values.redis.image "registry" }}
 {{- $registry = .Values.redis.image.registry }}

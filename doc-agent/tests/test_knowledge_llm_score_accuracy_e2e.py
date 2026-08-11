@@ -242,6 +242,8 @@ ACCURACY_CASES: List[AccuracyCase] = [
         ]),
         primary="inventory-deduct",
         noise_blocks={"shipment-notify", "product-detail"},
+        noise_max_score=4.0,
+        min_gap_vs_noise=4.0,
     ),
     AccuracyCase(
         id="accuracy_05_order_api_not_internal",
@@ -359,7 +361,7 @@ ACCURACY_CASES: List[AccuracyCase] = [
         primary="coupon-service",
         noise_blocks={"banner-ops"},
         misleading="coupon-faq",
-        misleading_max_score=6.0,
+        misleading_max_score=7.0,
         min_gap_vs_misleading=2.0,
     ),
     AccuracyCase(

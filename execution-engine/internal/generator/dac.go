@@ -51,10 +51,12 @@ type DACConfig struct {
 	CodeAgentImage               string
 	DocAgentImage                string
 	DDSyncObserverImage          string
+	// SkillAgentImage is used by dacType=skill single-container Deployments.
+	SkillAgentImage string
 }
 
 func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) error {
-	logger := h.Logger.WithValues("namespace", dac.Namespace, "name", dac.Name)
+	logger := h.Logger.WithValues("namespace", dac.Namespace, "name", dac.Name, "dacType", dac.Spec.DACType)
 	logger.Info("Generate DataAgentContainer K8S resources")
 
 	labels := map[string]string{
@@ -70,6 +72,28 @@ func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.D
 			UID:        dac.UID,
 			Controller: &isController,
 		},
+	}
+
+	// Incremental branch: dacType=skill uses a single-port Service + skill-agent Deployment.
+	// ds/normal paths below are left unchanged.
+	if dac.Spec.DACType == "skill" {
+		logger.Info("Entering skill DAC branch: single skill-agent container, register to biz Redis db")
+		service := h.GenerateSkillDataAgentContainerService(dac, labels, ownerRefs)
+		if err := h.K8sServices.CreateOrUpdateService(dac.Namespace, service); err != nil {
+			logger.Error(err, "Failed to CreateOrUpdate skill DAC Service")
+			return err
+		}
+		deployment, err := h.GenerateSkillDataAgentContainerDeployment(ctx, dac, labels, ownerRefs)
+		if err != nil {
+			logger.Error(err, "Failed to generate skill DAC Deployment")
+			return err
+		}
+		if err := h.K8sServices.CreateOrUpdateDeployment(dac.Namespace, deployment); err != nil {
+			logger.Error(err, "Failed to CreateOrUpdate skill DAC Deployment")
+			return err
+		}
+		logger.Info("Skill DAC Service and Deployment reconciled successfully")
+		return nil
 	}
 
 	service := h.GenerateDataAgentContainerService(dac, labels, ownerRefs)
@@ -475,6 +499,7 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 		CodeAgentImage:               configMap.Data["code-agent-image"],
 		DocAgentImage:                configMap.Data["doc-agent-image"],
 		DDSyncObserverImage:          configMap.Data["dd-sync-observer-image"],
+		SkillAgentImage:              configMap.Data["skill-agent-image"],
 	}, nil
 }
 
@@ -1394,6 +1419,241 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: podTemplateObjectMeta(labels, dac),
+				Spec:       podSpec,
+			},
+		},
+	}
+	return deployment, nil
+}
+
+// GenerateSkillDataAgentContainerService exposes only port 10100 for skill-agent.
+// Kept separate from GenerateDataAgentContainerService so ds/normal dual-port logic is unchanged.
+func (h *DataAgentContainerGenerator) GenerateSkillDataAgentContainerService(dac *dacv1alpha1.DataAgentContainer, labels map[string]string, ownerRefs []metav1.OwnerReference) *corev1.Service {
+	serviceName := h.GenerateDataAgentContainerServiceName(dac)
+	targetPort := intstr.FromInt(10100)
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            serviceName,
+			Namespace:       dac.Namespace,
+			Labels:          labels,
+			OwnerReferences: ownerRefs,
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{
+				{
+					Port:       10100,
+					Protocol:   corev1.ProtocolTCP,
+					Name:       "skill",
+					TargetPort: targetPort,
+				},
+			},
+			Selector: labels,
+		},
+	}
+}
+
+// skillRefForEnv is the SKILLS env JSON element consumed by skill-agent skill_download.
+type skillRefForEnv struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+}
+
+// buildSkillsEnvJSON builds SKILLS from skillPolicy (source of truth for zip download).
+func buildSkillsEnvJSON(dac *dacv1alpha1.DataAgentContainer) (string, error) {
+	refs := make([]skillRefForEnv, 0, len(dac.Spec.SkillPolicy.Skills))
+	for _, s := range dac.Spec.SkillPolicy.Skills {
+		ns := strings.TrimSpace(s.Namespace)
+		name := strings.TrimSpace(s.Name)
+		if ns == "" || name == "" {
+			continue
+		}
+		refs = append(refs, skillRefForEnv{
+			Namespace: ns,
+			Name:      name,
+			Version:   strings.TrimSpace(s.Version),
+		})
+	}
+	b, err := json.Marshal(refs)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// generateSkillAgentArgs builds skill-agent CLI args.
+// Redis DB 2 matches biz-orchestrator-registry / biz-skill-agent so the agent registers to the biz center.
+func (h *DataAgentContainerGenerator) generateSkillAgentArgs(dac *dacv1alpha1.DataAgentContainer, llmConfig *LLMConfig, dacConfig *DACConfig) []string {
+	redisHost := "redis-server.dac.svc.cluster.local"
+	redisPort := "6379"
+	redisPassword := "123"
+	if dacConfig != nil {
+		if dacConfig.RedisHost != "" {
+			redisHost = dacConfig.RedisHost
+		}
+		if dacConfig.RedisPort != "" {
+			redisPort = dacConfig.RedisPort
+		}
+		if dacConfig.RedisPassword != "" {
+			redisPassword = dacConfig.RedisPassword
+		}
+	}
+
+	maxSteps := dac.Spec.ExpertAgentMaxSteps
+	if maxSteps == "" {
+		maxSteps = "20"
+	}
+
+	return []string{
+		"--port", "10100",
+		"--redis-host", redisHost,
+		"--redis-port", redisPort,
+		"--redis-db", "2",
+		"--password", redisPassword,
+		"--provider", llmConfig.Provider,
+		"--api-key", llmConfig.APIKey,
+		"--base-url", llmConfig.BaseURL,
+		"--model", llmConfig.Model,
+		"--max-steps", maxSteps,
+	}
+}
+
+// generateSkillAgentEnvs builds env for the skill-agent container.
+// REGISTER_AGENT=true + redis-db 2 → self-registers into the biz Redis registry.
+func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.DataAgentContainer, serviceName string, skillsJSON string, dacConfig *DACConfig) []corev1.EnvVar {
+	envs := []corev1.EnvVar{
+		{Name: "Agent_Host", Value: fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, dac.Namespace)},
+		{Name: "Agent_Port", Value: "10100"},
+		{Name: "Agent_Name", Value: dac.Spec.AgentCard.Name},
+		{Name: "Agent_Description", Value: dac.Spec.AgentCard.Description},
+		{Name: "REGISTER_AGENT", Value: "true"},
+		{Name: "SKILLS", Value: skillsJSON},
+		{Name: "SKILL_HUB_URL", Value: "http://skill-hub.dac.svc.cluster.local:8000"},
+		{Name: "SKILLS_DOWNLOAD_DIR", Value: "/app/skills/"},
+		{Name: "SKILL_DOWNLOAD_OVERWRITE", Value: "true"},
+		{Name: "SKILL_DOWNLOAD_CONCURRENCY", Value: "8"},
+	}
+	if dac.Spec.ExpertAgentMaxSteps != "" {
+		envs = append(envs, corev1.EnvVar{Name: "LOCAL_SKILL_MAX_STEPS", Value: dac.Spec.ExpertAgentMaxSteps})
+	}
+	if dacConfig != nil {
+		envs = append(envs,
+			corev1.EnvVar{Name: "LANGFUSE_BASE_URL", Value: dacConfig.ObservationBaseURL},
+			corev1.EnvVar{Name: "LANGFUSE_SECRET_KEY", Value: dacConfig.ObservationSecretKey},
+			corev1.EnvVar{Name: "LANGFUSE_PUBLIC_KEY", Value: dacConfig.ObservationPublicKey},
+		)
+	}
+	return envs
+}
+
+// GenerateSkillDataAgentContainerDeployment creates a single-container skill-agent Deployment.
+// Images come from dac-configuration skill-agent-image; SKILLS comes from skillPolicy (not agentCard).
+func (h *DataAgentContainerGenerator) GenerateSkillDataAgentContainerDeployment(ctx context.Context, dac *dacv1alpha1.DataAgentContainer, labels map[string]string, ownerRefs []metav1.OwnerReference) (*appsv1.Deployment, error) {
+	logger := h.Logger.WithValues("namespace", dac.Namespace, "name", dac.Name, "dacType", "skill")
+
+	name := h.GenerateDataAgentContainerDeploymentName(dac)
+	serviceName := h.GenerateDataAgentContainerServiceName(dac)
+	replicas := int32(1)
+
+	// Still project agentCard.skills into a ConfigMap for A2A card consistency.
+	if dac.Spec.AgentCard.Skills != nil {
+		if err := h.createConfigMapForSkills(ctx, dac); err != nil {
+			return nil, err
+		}
+	}
+
+	dacConfig, err := h.getDACConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Default matches design; override from dac-configuration when present.
+	skillAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:v0.11.0-amd64"
+	if dacConfig != nil && dacConfig.SkillAgentImage != "" {
+		skillAgentImage = dacConfig.SkillAgentImage
+	}
+	logger.Info("Skill DAC image resolved", "image", skillAgentImage)
+
+	expertLLMConfig, err := h.getExpertLLMConfig(ctx, dac)
+	if err != nil {
+		return nil, err
+	}
+
+	skillsJSON, err := buildSkillsEnvJSON(dac)
+	if err != nil {
+		return nil, fmt.Errorf("marshal skillPolicy for SKILLS env: %w", err)
+	}
+	logger.Info("Skill DAC SKILLS env from skillPolicy", "skills", skillsJSON, "count", len(dac.Spec.SkillPolicy.Skills))
+
+	if len(dac.Spec.SkillPolicy.Skills) == 0 {
+		logger.Info("WARNING: skillPolicy.skills is empty; skill-agent will skip zip download")
+	}
+
+	// skill DAC has no orchestrator: LLM comes from expertLLM (not plannerLLM).
+	args := h.generateSkillAgentArgs(dac, expertLLMConfig, dacConfig)
+	envs := h.generateSkillAgentEnvs(dac, serviceName, skillsJSON, dacConfig)
+
+	podSpec := corev1.PodSpec{
+		Containers: []corev1.Container{
+			{
+				Name:            "skill-agent",
+				Image:           skillAgentImage,
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				Args:            args,
+				Ports: []corev1.ContainerPort{
+					{Name: "skill", ContainerPort: 10100, Protocol: corev1.ProtocolTCP},
+				},
+				Env: envs,
+				Resources: corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1000m"),
+						corev1.ResourceMemory: resource.MustParse("2000Mi"),
+					},
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("100m"),
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
+					},
+				},
+			},
+		},
+	}
+
+	if dac.Spec.AgentCard.Skills != nil {
+		skillsConfigMapName := DataAgentContainerResourceName(dac)
+		podSpec.Volumes = []corev1.Volume{
+			{
+				Name: "skills-config",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: skillsConfigMapName},
+					},
+				},
+			},
+		}
+		// Mount as skills-card.json so it does not collide with LOCAL_SKILLS_DIR=/app/skills/ zip directory.
+		podSpec.Containers[0].VolumeMounts = []corev1.VolumeMount{
+			{
+				Name:      "skills-config",
+				MountPath: "/app/skills-card.json",
+				SubPath:   "skills.json",
+			},
+		}
+	}
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       dac.Namespace,
+			Labels:          labels,
+			OwnerReferences: ownerRefs,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Strategy: appsv1.DeploymentStrategy{Type: "RollingUpdate"},
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: podTemplateObjectMeta(labels, dac),
 				Spec:       podSpec,

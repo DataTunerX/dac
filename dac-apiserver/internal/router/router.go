@@ -27,6 +27,7 @@ func Setup(
 	configMapHandler *handler.ConfigMapHandler,
 	systemConfigHandler *handler.SystemConfigHandler,
 	agentRegistryHandler *handler.AgentRegistryHandler,
+	skillHubHandler *handler.SkillHubHandler,
 	namespaceHandler *handler.NamespaceHandler,
 	semanticGroupHandler *handler.SemanticGroupHandler,
 	ddGroupRelationHandler *handler.DDGroupRelationHandler,
@@ -89,6 +90,7 @@ func Setup(
 			auth.POST("/register", userHandler.Register)
 			auth.POST("/login", userHandler.Login)
 			auth.POST("/refresh", userHandler.RefreshToken)
+			auth.POST("/logout", userHandler.Logout)
 		}
 
 		// ============ Protected routes (JWT authentication required) ============
@@ -153,6 +155,7 @@ func Setup(
 				descriptors.GET("/:name/signature", descriptorHandler.GetSignature)
 				descriptors.GET("/:name/semantic-domain", descriptorHandler.GetSemanticDomain)
 				descriptors.PUT("/:name", descriptorHandler.Update)
+				descriptors.POST("/:name/resync", descriptorHandler.RequestResync)
 				descriptors.DELETE("/:name", descriptorHandler.Delete)
 
 				// Knowledge Fragments Management
@@ -189,6 +192,23 @@ func Setup(
 					agentRegistries.GET("", agentRegistryHandler.ListRegistries)
 					agentRegistries.GET("/:registry/agents", agentRegistryHandler.ListAgents)
 				}
+			}
+
+			// Skill Hub (skill zip registry BFF)
+			skills := authorized.Group("/skills")
+			{
+				skills.POST("/reload", skillHubHandler.Reload)
+				skills.GET("/namespaces", skillHubHandler.ListNamespaces)
+				skills.POST("/namespaces", skillHubHandler.CreateNamespace)
+				skills.GET("/namespaces/:ns/exists", skillHubHandler.NamespaceExists)
+				skills.DELETE("/namespaces/:ns", skillHubHandler.DeleteNamespace)
+				skills.GET("/namespaces/:ns/skills", skillHubHandler.ListSkills)
+				skills.POST("/namespaces/:ns/skills/create", skillHubHandler.CreateSkill)
+				skills.POST("/namespaces/:ns/skills", skillHubHandler.UploadSkill)
+				skills.GET("/namespaces/:ns/skills/:name", skillHubHandler.GetSkill)
+				skills.POST("/namespaces/:ns/skills/:name/update", skillHubHandler.UpdateSkill)
+				skills.GET("/namespaces/:ns/skills/:name/download", skillHubHandler.DownloadSkill)
+				skills.DELETE("/namespaces/:ns/skills/:name", skillHubHandler.DeleteSkill)
 			}
 
 			// Chat History routes

@@ -1,4 +1,4 @@
-{{- if .Values.pgvector.enabled }}
+{{- if and .Values.pgvector.enabled (not .Values.pgvector.external.host) }}
 {{- $registry := .Values.global.imageRegistry }}
 {{- if hasKey .Values.pgvector.image "registry" }}
 {{- $registry = .Values.pgvector.image.registry }}

@@ -27,14 +27,25 @@ Namespace: {{ .Release.Namespace }}
 ------------------------------------------------------------
   Middleware
 ------------------------------------------------------------
-{{- if .Values.mysql.enabled }}
+{{- if and .Values.mysql.enabled (not .Values.mysql.external.host) }}
   MySQL:    {{ include "dac.mysql.serviceName" . }}:{{ .Values.mysql.port }}
+{{- else if .Values.mysql.external.host }}
+  MySQL:    {{ include "dac.mysql.host" . }}:{{ include "dac.mysql.port" . }} (external)
 {{- end }}
-{{- if .Values.redis.enabled }}
+{{- if and .Values.redis.enabled (not .Values.redis.external.host) }}
   Redis:    {{ include "dac.redis.serviceName" . }}:{{ .Values.redis.port }}
+{{- else if .Values.redis.external.host }}
+  Redis:    {{ include "dac.redis.host" . }}:{{ include "dac.redis.port" . }} (external)
 {{- end }}
-{{- if .Values.pgvector.enabled }}
+{{- if and .Values.pgvector.enabled (not .Values.pgvector.external.host) }}
   PGVector: {{ include "dac.pgvector.serviceName" . }}:{{ .Values.pgvector.port }}
+{{- else if .Values.pgvector.external.host }}
+  PGVector: {{ include "dac.pgvector.host" . }}:{{ include "dac.pgvector.port" . }} (external)
+{{- end }}
+{{- if and .Values.neo4j.enabled (not .Values.neo4j.external.host) }}
+  Neo4j:    {{ include "dac.neo4j.boltUrl" . }}
+{{- else if .Values.neo4j.external.host }}
+  Neo4j:    {{ include "dac.neo4j.boltUrl" . }} (external)
 {{- end }}
 
 ------------------------------------------------------------

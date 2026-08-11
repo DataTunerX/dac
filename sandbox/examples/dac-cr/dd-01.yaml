@@ -12,7 +12,7 @@ spec:
     - type: mysql
       name: "test1"
       metadata:
-        host: "mysql-server"
+        host: "mysql.dac-sandbox.svc.cluster.local"
         port: "3306"
         user: "dac"
         password: "dacpass"

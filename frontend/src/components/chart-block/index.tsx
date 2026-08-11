@@ -36,8 +36,50 @@ type EChartsSeriesItem = Record<string, unknown>
 type EChartsTitleOption = Record<string, unknown>
 type EChartsLegendOption = Record<string, unknown>
 
+/** Drop stringified JS handlers from model JSON (ECharts can execute formatter strings). */
+function looksLikeJsHandler(value: string): boolean {
+  const t = value.trim()
+  // Keep ECharts template strings like "{b}: {c}" / "{a}<br/>{b}"
+  if (/^\{[\s\S]*\}$/.test(t) || /\{[a-zA-Z0-9@]+\}/.test(t)) {
+    if (!t.includes("=>") && !/\bfunction\b/.test(t) && !/\bnew\s+Function\b/i.test(t)) {
+      return false
+    }
+  }
+  return (
+    t.startsWith("function") ||
+    t.includes("=>") ||
+    /^\s*new\s+Function\b/i.test(t) ||
+    /^\s*\(\s*[a-zA-Z_$]/.test(t)
+  )
+}
+
+function stripUnsafeEChartsValues(value: unknown): unknown {
+  if (typeof value === "string") {
+    return looksLikeJsHandler(value) ? undefined : value
+  }
+  if (Array.isArray(value)) {
+    return value.map(stripUnsafeEChartsValues).filter((v) => v !== undefined)
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (/^on[A-Z]/.test(k) || k.toLowerCase() === "onclick") continue
+      // Only strip formatter strings that look like executable JS
+      if (k === "formatter" && typeof v === "string" && looksLikeJsHandler(v)) continue
+      const cleaned = stripUnsafeEChartsValues(v)
+      if (cleaned !== undefined) out[k] = cleaned
+    }
+    return out
+  }
+  return value
+}
+
 function normalizeEChartsOption(input: Record<string, unknown>) {
-  const o = input
+  const sanitized = stripUnsafeEChartsValues(input)
+  const o =
+    sanitized && typeof sanitized === "object" && !Array.isArray(sanitized)
+      ? (sanitized as Record<string, unknown>)
+      : {}
   const out: Record<string, unknown> = { ...o }
 
   const series: unknown[] = Array.isArray(o.series) ? o.series : o.series ? [o.series] : []
@@ -227,6 +269,8 @@ const ChartBlockWithECharts = memo(function ChartBlockWithECharts({
   const [ready, setReady] = useState(false)
   const [ReactECharts, setReactECharts] = useState<typeof import("echarts-for-react")["default"] | null>(null)
   const [echarts, setEcharts] = useState<typeof import("echarts") | null>(null)
+  const dialogChartContainerRef = useRef<HTMLDivElement | null>(null)
+  const [dialogChartHeight, setDialogChartHeight] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -283,21 +327,21 @@ const ChartBlockWithECharts = memo(function ChartBlockWithECharts({
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh]">
-          <DialogHeader className="flex flex-row items-center justify-between gap-3">
+        <DialogContent className="w-[min(96vw,72rem)] max-w-none max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50 flex-shrink-0 flex flex-row items-center justify-between gap-3">
             <DialogTitle>图表预览</DialogTitle>
-            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭">
+            <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="关闭" title="关闭">
               <X className="w-4 h-4" />
             </Button>
           </DialogHeader>
-          <div className="px-6 pb-6 pt-4">
-            <div className="rounded-lg border border-line bg-surface overflow-hidden">
+          <div ref={dialogChartContainerRef} className="p-6 overflow-auto flex-1 min-h-0">
+            <div className="rounded-lg border border-line bg-surface overflow-hidden" style={{ height: dialogChartHeight ? `${dialogChartHeight}px` : "400px" }}>
               <ReactECharts
                 echarts={echarts}
                 option={normalizedOption}
                 notMerge={true}
                 lazyUpdate={true}
-                style={{ width: "100%", height: "70vh" }}
+                style={{ width: "100%", height: "100%" }}
               />
             </div>
           </div>

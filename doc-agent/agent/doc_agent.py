@@ -17,7 +17,7 @@ from decimal import Decimal
 import uuid
 import numpy as np
 from typing import Any, AsyncIterable, Dict, Literal, List, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from abc import ABC
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -33,7 +33,7 @@ from a2a.utils import new_agent_text_message, new_task, new_text_artifact
 from .redis_registry import RedisRegistry, HeartbeatService
 from model_sdk import ModelManager
 from langchain_core.messages import SystemMessage, HumanMessage
-from .dataservices_client import DataServicesClient
+from .dataservices_client import DataServicesClient, MetadataValuesResult
 from .schema import ROLE_TYPE, Memory, Message
 from .prompts import (  
     NEXT_STEP_PROMPT_ZH,
@@ -41,6 +41,8 @@ from .prompts import (
     OBSERVE_PROMPT_UNSTRUCTURED_ZH,
     LOCATE_KNOWLEDGE_PROMPT_ZH
 )
+from langchain_core.tools import StructuredTool
+from .tool_call_utils import invoke_llm_with_tool, validate_pydantic, format_llm_output
 
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
@@ -68,6 +70,17 @@ _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
     "intent_analysis",
     "reasoning",
 )
+
+# 粗筛阶段安全兜底上限（环境变量可调，默认值足够宽松，只在 LLM 异常多选时触发截断）。
+_DOC_COARSE_MAX_IDS_PER_BATCH = int(os.getenv("DOC_COARSE_MAX_IDS_PER_BATCH", "60"))
+_DOC_COARSE_MAX_TOTAL_IDS = int(os.getenv("DOC_COARSE_MAX_TOTAL_IDS", "150"))
+
+# 向量/混合预检索配置（Step 0）。
+# 在 LLM 粗筛之前，先用 data-services 的 hybrid/vector search 召回每个 collection 中
+# 与 query 最相关的 top-N 块，大幅减少传入 LLM 的总块数。
+_DOC_KNOWLEDGE_VECTOR_ENABLED = os.getenv("DOC_KNOWLEDGE_VECTOR_ENABLED", "true").lower() not in ("false", "0", "no")
+_DOC_KNOWLEDGE_VECTOR_LIMIT = int(os.getenv("DOC_KNOWLEDGE_VECTOR_LIMIT", "10"))
+_DOC_KNOWLEDGE_VECTOR_SEARCH_TYPE = os.getenv("DOC_KNOWLEDGE_VECTOR_SEARCH_TYPE", "hybrid")
 
 def _escape_known_string_field_inner_quotes(text: str) -> str:
     """Best-effort escape of unescaped inner ``"`` inside known single-line
@@ -173,37 +186,81 @@ class TaskAnalyze(BaseModel):
     )
 
 class LLMResult(BaseModel):
+    """LLM 回答结果。包含三个字段：answer（回答内容）、conclusion（结论）、requery（重新生成的问题）。
+
+    输出示例：
+    terminate 示例（答案已满足问题）：
+    {
+      "answer": "Java是一种高级、面向对象、跨平台的编程语言，由Sun公司推出，具有可移植性、安全性等特点，广泛应用于企业级应用和Android开发。",
+      "conclusion": "terminate",
+      "requery": ""
+    }
+    continue 示例（需要重新查询）：
+    {
+      "answer": "当前背景知识主要涵盖Java和Go语言，无法提供Python相关的详细信息",
+      "conclusion": "continue",
+      "requery": "能否提供Python编程语言的具体介绍和特点？"
+    }
+    """
 
     answer: Optional[str] = Field(
-        description='The answer of llm for user question.'
+        description='answer字段：LLM 对用户问题的回答内容。当能提供完整回答时填入具体回答（如"Java是一种高级、面向对象、跨平台的编程语言..."），否则填空字符串。'
     )
 
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+    conclusion: Optional[Literal["terminate", "continue"]] = Field(
+        description='conclusion字段：结论。"terminate" 表示回答已满足问题可终止，"continue" 表示需要重新查询。'
     )
 
     requery: Optional[str] = Field(
-        description='The regenerated new user query.'
+        description='requery字段：重新生成的新问题。当conclusion为"continue"时填入新问题（如"能否提供Python编程语言的具体介绍和特点？"），否则填空字符串。'
     )
 
 class RequeryResult(BaseModel):
+    """重新生成问题结果。包含两个字段：requery（新问题）和 conclusion（结论）。
+
+    输出示例：
+    terminate 示例（已生成新问题）：
+    {
+      "requery": "新生成的问题...",
+      "conclusion": "terminate"
+    }
+    continue 示例（无法生成新问题）：
+    {
+      "requery": "",
+      "conclusion": "continue"
+    }
+    """
 
     requery: Optional[str] = Field(
-        description='The new query for user question.'
+        description='requery字段：重新生成的新问题。当能生成新问题时填入（如"新生成的问题..."），否则填空字符串。'
     )
 
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+    conclusion: Optional[Literal["terminate", "continue"]] = Field(
+        description='conclusion字段：结论。"terminate" 表示可以终止（已生成新问题），"continue" 表示需要继续（无法生成新问题）。'
     )
 
 class ObserveResult(BaseModel):
+    """观察答案是否满足问题结果。包含两个字段：reason（分析依据）和 conclusion（结论）。
+
+    输出示例：
+    terminate 示例（答案满足问题）：
+    {
+      "reason": "满足问题的原因",
+      "conclusion": "terminate"
+    }
+    continue 示例（答案不满足问题）：
+    {
+      "reason": "不满足问题的原因",
+      "conclusion": "continue"
+    }
+    """
 
     reason: Optional[str] = Field(
-        description='The reason for answer.'
+        description='reason字段：分析依据。说明答案是否满足问题的详细理由，必须包含具体分析内容（如"满足问题的原因"或"不满足问题的原因"）。'
     )
 
-    conclusion: Optional[str] = Field(
-        description='whether the answer meet your question.'
+    conclusion: Optional[Literal["terminate", "continue"]] = Field(
+        description='conclusion字段：结论。"terminate" 表示答案已满足问题，"continue" 表示答案不满足需要继续。'
     )
 
 class TaskStatus(BaseModel):
@@ -268,21 +325,29 @@ class Dimensions(BaseModel):
     )
 
 class KnowledgeSelectionResult(BaseModel):
-    """LLM 从摘要中筛选出的相关知识 ID 列表"""
+    """LLM 从摘要中筛选出的相关知识 ID 列表。输出包含 knowledge_ids（选中的知识ID列表）、intent_analysis（意图分析）、reasoning（选择原因）。
+
+    输出示例：
+    {
+      "knowledge_ids": ["Knowledge ID 1", "Knowledge ID 2", "Knowledge ID 3"],
+      "intent_analysis": "对用户真实意图的理解。",
+      "reasoning": "选择这些知识记录的原因。"
+    }
+    """
 
     knowledge_ids: List[str] = Field(
         default_factory=list,
-        description="与用户问题相关的知识记录 ID 列表"
+        description="与用户问题相关的知识记录 ID 列表，按与问题相关度从高到低排列，如 ['Knowledge ID 1', 'Knowledge ID 2', 'Knowledge ID 3']"
     )
 
     intent_analysis: Optional[str] = Field(
         default=None,
-        description="对用户真实意图的理解"
+        description="对用户真实意图的理解，说明用户问题的核心诉求是什么，如 '对用户真实意图的理解。'"
     )
 
     reasoning: Optional[str] = Field(
         default=None,
-        description="选择这些知识记录的原因"
+        description="选择这些知识记录的原因，2-5句话概括选择逻辑，禁止逐条解释每个ID，如 '选择这些知识记录的原因。'"
     )
 
 class AgentState(str, Enum):
@@ -322,6 +387,9 @@ class DocAgent(BaseAgent):
             content_types=['text', 'text/plain'],
         )
 
+        self._knowledge_selection_summary: str = ""  # 由 get_knowledge 填充，供 sd_doc_step_finished 使用
+        self._knowledge_selection_blocks: List[Dict[str, Any]] = []  # 结构化块清单，供 sd_doc_step_finished extra 消费
+
         self.manager = ModelManager()
         _extra_body = {"enable_thinking": False} if os.getenv("ENABLE_THINKING_PARAM", "true").strip().lower() not in ("false", "0", "no") else {}
         self.llm = self.manager.get_llm(
@@ -331,6 +399,18 @@ class DocAgent(BaseAgent):
             model=model,
             temperature=temperature,
             stream=stream,
+            extra_body=_extra_body,
+        )
+        # Tool calls require non-streaming LLM. When stream=True, the LLM returns
+        # AsyncStream instead of AIMessage, causing 'AsyncStream' object has no
+        # attribute 'model_dump'. Create a separate non-streaming instance for tool calls.
+        self.llm_non_stream = self.manager.get_llm(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=temperature,
+            stream=False,
             extra_body=_extra_body,
         )
         self.query=query
@@ -439,6 +519,124 @@ class DocAgent(BaseAgent):
             task_id=task_id,
             extra=extra,
         ))
+
+    def _build_knowledge_selection_message(self, blocks: List[Dict[str, Any]]) -> str:
+        """根据结构化块清单构建 message 文本（供 sd_doc_step_finished 拼接，UI 直接展示）。
+
+        每行包含：序号、id、来源路、所属文件、摘要（截断）。
+        blocks 来自 _log_selected_knowledge_blocks 整理的 structured 列表。
+        """
+        if not blocks:
+            return ""
+
+        lines = [
+            "",
+            f"选中的知识块（共 {len(blocks)} 个）：",
+        ]
+        for b in blocks:
+            idx = b.get("index", 0)
+            bid = b.get("id", "?")
+            origin = b.get("source", "-")
+            file_label = b.get("file", "-")
+            summary = (b.get("summary") or "").strip()
+            score = b.get("score")
+            score_str = f"[{float(score):.1f}] " if score is not None else ""
+            lines.append(
+                f"  {idx}. {score_str}id={bid} source={origin} file={file_label} | {summary}"
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _block_file_label(block: Dict[str, Any]) -> str:
+        """选取块所属文件的最具信息量字段，用于日志展示。"""
+        return (
+            block.get("source")
+            or block.get("file_name")
+            or block.get("document_id")
+            or "-"
+        )
+
+    def _log_selected_knowledge_blocks(
+        self,
+        score_meta: Dict[str, Any],
+        *,
+        semantic_ids: Optional[set] = None,
+        vector_ids: Optional[set] = None,
+    ) -> None:
+        """记录最终喂给 LLM 的知识块清单：id / 来源路 / summary / 所属文件。
+
+        score_select_applied=True 时从 report.blocks 取（含分数）；
+        否则从 selected_blocks 取（未打分，全量保留）。两者都为空时跳过。
+
+        Args:
+            semantic_ids: 语义粗筛（LLM）选出的块 ID 集合。
+            vector_ids: 向量补充检索新增的块 ID 集合。
+        """
+        blocks: List[Dict[str, Any]] = []
+        if score_meta.get("score_select_applied"):
+            report = score_meta.get("score_select_report") or {}
+            blocks = report.get("blocks") or []
+        if not blocks:
+            blocks = score_meta.get("selected_blocks") or []
+
+        if not blocks:
+            return
+
+        semantic_ids = semantic_ids or set()
+        vector_ids = vector_ids or set()
+
+        def _origin(bid: Any) -> str:
+            bid = str(bid) if bid is not None else ""
+            in_sem = bid in semantic_ids
+            in_vec = bid in vector_ids
+            if in_sem and in_vec:
+                return "semantic+vector"
+            if in_vec:
+                return "vector"
+            if in_sem:
+                return "semantic"
+            return "unknown"
+
+        logger.info(
+            "[DOC KNOWLEDGE RETRIEVED] ========== 最终检索到 %d 块 ==========",
+            len(blocks),
+        )
+        # 结构化块清单，供 sd_doc_step_finished 的 extra 消费
+        structured: List[Dict[str, Any]] = []
+        for i, b in enumerate(blocks):
+            bid = b.get("id", "?")
+            summary = (b.get("summary") or b.get("metadata_value") or "").strip()
+            file_label = self._block_file_label(b)
+            origin = _origin(bid)
+            score = b.get("score")
+            if score is None:
+                score = b.get("relevance_score")
+            score_str = f"score={float(score):.1f} " if score is not None else ""
+            logger.info(
+                "[DOC KNOWLEDGE RETRIEVED]   #%-2d id=%-36s %ssource=%s file=%s | %s",
+                i + 1,
+                bid,
+                score_str,
+                origin,
+                file_label,
+                summary[:120],
+            )
+            entry: Dict[str, Any] = {
+                "index": i + 1,
+                "id": str(bid) if bid is not None else "",
+                "source": origin,
+                "file": file_label,
+                "summary": summary[:200],
+            }
+            if score is not None:
+                entry["score"] = float(score)
+            structured.append(entry)
+        logger.info("[DOC KNOWLEDGE RETRIEVED] ========== 检索块清单结束 ==========")
+
+        # 供 sd_doc_step_finished extra 使用
+        self._knowledge_selection_blocks = structured
+        # 供 sd_doc_step_finished message 使用（UI 直接展示，覆盖打分与非打分两条路径）
+        self._knowledge_selection_summary = self._build_knowledge_selection_message(structured)
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
@@ -562,23 +760,10 @@ class DocAgent(BaseAgent):
         system_template = self.next_step_prompt
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "answer": "Java是一种高级、面向对象、跨平台的编程语言，由Sun公司推出，具有可移植性、安全性等特点，广泛应用于企业级应用和Android开发。",
-            "conclusion": "terminate",
-            "requery": ""
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "answer": "当前背景知识主要涵盖Java和Go语言，无法提供Python相关的详细信息",
-            "conclusion": "continue",
-            "requery": "能否提供Python编程语言的具体介绍和特点？"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["knowledge","original_query","history_querys","memory","current_time"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
@@ -587,51 +772,58 @@ class DocAgent(BaseAgent):
 
         history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call: answer_question — 根据背景知识回答用户问题
+        answer_question_tool = StructuredTool(
+            name="answer_question",
+            description="Answer the user's question based on background knowledge. Set conclusion to 'terminate' if satisfied, 'continue' if needs requery.",
+            args_schema=LLMResult,
+            func=None,
+            coroutine=None,
+        )
 
-        answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=answer_question_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                knowledge=knowledge,
+                original_query=self.original_query,
+                history_querys=history_querys,
+                memory=memory,
+                current_time=current_time,
+            ).to_messages(),
+            tool_choice="answer_question",
+            span_name="doc-agent-invoke",
+            span_input={"query": self.query},
+            retry=2,
+            validate=validate_pydantic(LLMResult),
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="doc-agent-invoke",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={
-                    "query": self.query,
-                    "agent_id": self.agent_id,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                },
-            )
+        logger.info(f" === ExpertAgent.invoke_unstructured, result = {result}")
 
-            answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": knowledge, "original_query":self.original_query, "history_querys":history_querys, "memory":memory, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.invoke_unstructured, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "answer": "System error: Unable to process model response",
                 "conclusion": "error",
                 "requery": ""
             }
+        else:
+            data_dict = result
 
-        llm_result = LLMResult(**data_dict)
+        try:
+            llm_result = LLMResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[invoke_unstructured] LLM returned invalid schema (%s) — returning fallback",
+                exc.error_count(),
+            )
+            llm_result = LLMResult(
+                answer="System error: Unable to process model response",
+                conclusion=None,
+                requery="",
+            )
 
         logger.info(f" === ExpertAgent.invoke_unstructured , llm_result = {llm_result}")
 
@@ -648,21 +840,10 @@ class DocAgent(BaseAgent):
 
         human_template = "{query}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "requery": "新生成的问题...",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "requery": "",
-            "conclusion": "continue"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["original_query","history_querys","current_time","step_history"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
@@ -671,50 +852,55 @@ class DocAgent(BaseAgent):
 
         history_querys = "\n".join([f"query {i+1}: {query}" for i, query in enumerate(self.old_querys)])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call: reformulate_query — 重新表述查询
+        reformulate_query_tool = StructuredTool(
+            name="reformulate_query",
+            description="Reformulate the query when the current answer is insufficient. Set conclusion to 'terminate' if no further reformulation is needed, 'continue' to try a different query.",
+            args_schema=RequeryResult,
+            func=None,
+            coroutine=None,
+        )
 
-        answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=reformulate_query_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                original_query=self.original_query,
+                history_querys=history_querys,
+                current_time=current_time,
+                step_history=step_history,
+            ).to_messages(),
+            tool_choice="reformulate_query",
+            span_name="doc-agent-requery",
+            span_input={"query": self.query},
+            retry=2,
+            validate=validate_pydantic(RequeryResult),
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="doc-agent-requery",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={
-                    "query": self.query,
-                    "agent_id": self.agent_id,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                },
-            )
+        logger.info(f" === ExpertAgent.invoke_requery, result = {result}")
 
-            answer = await chain.ainvoke(
-                {"query": self.query, "original_query": self.original_query,"history_querys": history_querys, "current_time":current_time, "step_history":step_history},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.invoke_requery, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
-                "query": "System error: Unable to process model response",
+                "requery": "System error: Unable to process model response",
                 "conclusion": "error"
             }
+        else:
+            data_dict = result
 
-        llm_result = RequeryResult(**data_dict)
+        try:
+            llm_result = RequeryResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[invoke_requery] LLM returned invalid schema (%s) — returning fallback",
+                exc.error_count(),
+            )
+            llm_result = RequeryResult(
+                requery="System error: Unable to process model response",
+                conclusion=None,
+            )
 
         logger.debug(f" === ExpertAgent.invoke_requery , llm_result = {llm_result}")
 
@@ -726,71 +912,64 @@ class DocAgent(BaseAgent):
 
         human_template = "question: {query};\n\nanswer:{answer}"
 
-        terminate_json_prompt_instructions_zh: dict = {
-            "reason": "满足问题的原因",
-            "conclusion": "terminate"
-        }
-
-        continue_json_prompt_instructions_zh: dict = {
-            "reason": "不满足问题的原因",
-            "conclusion": "continue"
-        }
-
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["knowledge","current_time"],
-            partial_variables={"terminate_fewshots": terminate_json_prompt_instructions_zh, "continue_fewshots": continue_json_prompt_instructions_zh},
         )
 
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
 
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call: observe_answer — 评估答案是否满足问题
+        observe_answer_tool = StructuredTool(
+            name="observe_answer",
+            description="Evaluate whether the answer satisfies the user's question. Set conclusion to 'terminate' if satisfied, 'continue' if needs further refinement.",
+            args_schema=ObserveResult,
+            func=None,
+            coroutine=None,
+        )
 
-        llm_answer = None
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=observe_answer_tool,
+            messages=chat_prompt.format_prompt(
+                query=query,
+                answer=answer,
+                knowledge=knowledge,
+                current_time=current_time,
+            ).to_messages(),
+            tool_choice="observe_answer",
+            span_name="doc-agent-observe",
+            span_input={"query": query},
+            retry=2,
+            validate=validate_pydantic(ObserveResult),
+        )
 
-        chain = chat_prompt | self.llm
-        
-        with langfuse.start_as_current_span(
-            name="doc-agent-observe",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={
-                    "query": query,
-                    "agent_id": self.agent_id,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                },
-            )
+        logger.info(f" === ExpertAgent.observe_unstructured, result = {result}")
 
-            llm_answer = await chain.ainvoke(
-                {"query": query, "answer":answer, "knowledge":knowledge, "current_time":current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-         
-            span.update_trace(output={"answer": llm_answer})
-
-        langfuse.flush()
-
-        logger.info(f" === ExpertAgent.observe_unstructured, answer = {llm_answer}")
-
-        data_dict = self.format_llm_output(llm_answer)
-
-        if data_dict is None:
+        if result is None:
             data_dict = {
                 "reason": "System error: Unable to process model response",
                 "conclusion": "error"
             }
+        else:
+            data_dict = result
 
-        llm_result = ObserveResult(**data_dict)
+        try:
+            llm_result = ObserveResult(**data_dict)
+        except ValidationError as exc:
+            logger.warning(
+                "[observe_unstructured] LLM returned invalid schema (%s) — returning fallback",
+                exc.error_count(),
+            )
+            llm_result = ObserveResult(
+                reason="System error: Unable to process model response",
+                conclusion="continue",
+            )
 
         logger.debug(f" === ExpertAgent.observe_unstructured , llm_result = {llm_result}")
 
@@ -839,6 +1018,81 @@ class DocAgent(BaseAgent):
         finally:
             await self.data_services_client.close()
 
+    async def _retrieve_vector(self) -> Optional[MetadataValuesResult]:
+        """
+        向量/混合补充检索：利用 data-services 的 hybrid/vector/fulltext search
+        召回与用户问题最相关的 top-N 块，转换为统一的 MetadataValuesResult 格式。
+        与语义粗筛独立运行，结果在 get_knowledge 中合并。
+        """
+        collection_names = [self.generate_collection_name(item) for item in self.data_descriptors]
+        logger.info(
+            "[VECTOR RETRIEVE] query=%r collections=%s search_type=%s limit=%d",
+            self.query[:120] if self.query else "",
+            collection_names,
+            _DOC_KNOWLEDGE_VECTOR_SEARCH_TYPE,
+            _DOC_KNOWLEDGE_VECTOR_LIMIT,
+        )
+
+        try:
+            await self.data_services_client._create_session()
+            result = await self.data_services_client.search_multiple_collections(
+                collection_names=collection_names,
+                query=self.query,
+                search_type=_DOC_KNOWLEDGE_VECTOR_SEARCH_TYPE,
+                limit=_DOC_KNOWLEDGE_VECTOR_LIMIT,
+            )
+        except Exception as e:
+            logger.error(f"[VECTOR RETRIEVE] search failed: {e}")
+            return None
+        finally:
+            await self.data_services_client.close()
+
+        if not result or not result.results:
+            logger.warning("[VECTOR RETRIEVE] returned empty results")
+            return None
+
+        # 将 VectorResult 列表转换为 MetadataValuesResult 的数据格式
+        data: Dict[str, List[Dict[str, Any]]] = {}
+        total_blocks = 0
+        for coll_name, search_result in result.results.items():
+            if search_result is None or not search_result.vector_result:
+                logger.info("[VECTOR RETRIEVE] collection=%s returned 0 items", coll_name)
+                continue
+
+            blocks = []
+            for vr in search_result.vector_result:
+                meta = vr.metadata or {}
+                # 使用 data-services 返回的 metadata.id（已有 id 字段）
+                block_id = meta.get("id", "")
+                blocks.append({
+                    "id": block_id,
+                    "text": vr.content,
+                    # metadata_value 优先取 summary，其次取 metadata_value，最后取 content 前 200 字
+                    "metadata_value": (
+                        meta.get("summary")
+                        or meta.get("metadata_value")
+                        or vr.content[:200]
+                    ),
+                    # 文件归属字段：与粗筛路保持一致，供下游日志识别块所属文件
+                    "source": meta.get("source") or "",
+                    "file_name": meta.get("file_name") or "",
+                    "document_id": meta.get("document_id") or "",
+                })
+            if blocks:
+                data[coll_name] = blocks
+                total_blocks += len(blocks)
+                logger.info(
+                    "[VECTOR RETRIEVE] collection=%s returned %d items",
+                    coll_name, len(blocks),
+                )
+
+        if not data:
+            logger.warning("[VECTOR RETRIEVE] all collections returned 0 items")
+            return None
+
+        logger.info("[VECTOR RETRIEVE] total %d blocks from %d collections", total_blocks, len(data))
+        return MetadataValuesResult(status="success", data=data, errors=None)
+
     async def select_relevant_knowledge(self, knowledge_summaries: str) -> KnowledgeSelectionResult:
         """
         使用 LLM 从知识摘要中筛选与用户问题相关的知识 ID。
@@ -861,46 +1115,57 @@ class DocAgent(BaseAgent):
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
 
-        user_id = self.metadata['user_id']
-        run_id = self.metadata['run_id']
-        trace_id = self.metadata['trace_id']
+        # Tool Call: select_knowledge — 从知识摘要中选择相关记录
+        select_knowledge_tool = StructuredTool(
+            name="select_knowledge",
+            description="Select relevant knowledge record IDs from the knowledge summaries based on the user's question.",
+            args_schema=KnowledgeSelectionResult,
+            func=None,
+            coroutine=None,
+        )
 
-        chain = chat_prompt | self.llm
+        result = await invoke_llm_with_tool(
+            llm=self.llm_non_stream,
+            metadata=self.metadata,
+            fallback_formatter=self.format_llm_output,
+            tool=select_knowledge_tool,
+            messages=chat_prompt.format_prompt(
+                query=self.query,
+                knowledge=knowledge_summaries,
+                current_time=current_time,
+            ).to_messages(),
+            tool_choice="select_knowledge",
+            span_name="doc-agent-select-knowledge",
+            span_input={"query": self.query},
+            retry=2,
+            validate=validate_pydantic(KnowledgeSelectionResult),
+        )
 
-        with langfuse.start_as_current_span(
-            name="doc-agent-select-knowledge",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={
-                    "query": self.query,
-                    "agent_id": self.agent_id,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                },
-            )
+        logger.info(f" === DocAgent.select_relevant_knowledge, result = {result}")
 
-            answer = await chain.ainvoke(
-                {"query": self.query, "knowledge": knowledge_summaries, "current_time": current_time},
-                config={"callbacks": [langfuse_handler]}
-            )
-
-            span.update_trace(output={"answer": answer})
-
-        langfuse.flush()
-
-        logger.info(f" === DocAgent.select_relevant_knowledge, answer = {answer}")
-
-        data_dict = self.format_llm_output(answer)
-
-        if data_dict is None:
+        if result is None:
             logger.error("select_relevant_knowledge: LLM output parsing failed, returning empty result")
             return KnowledgeSelectionResult(knowledge_ids=[], intent_analysis="", reasoning="parsing failed")
 
-        return KnowledgeSelectionResult(**data_dict)
+        try:
+            result_obj = KnowledgeSelectionResult(**result)
+        except ValidationError as exc:
+            logger.warning(
+                "[select_relevant_knowledge] LLM returned invalid schema (%s) — returning empty result",
+                exc.error_count(),
+            )
+            return KnowledgeSelectionResult(knowledge_ids=[], intent_analysis="", reasoning="parsing failed")
+
+        # 安全兜底：单批次返回 ID 数量异常时截断（防止 LLM 过度选择导致二阶拉取成本爆炸）
+        n_ids = len(result_obj.knowledge_ids)
+        if n_ids > _DOC_COARSE_MAX_IDS_PER_BATCH:
+            logger.warning(
+                "select_relevant_knowledge: LLM returned %d ids (cap=%d), truncating",
+                n_ids, _DOC_COARSE_MAX_IDS_PER_BATCH,
+            )
+            result_obj.knowledge_ids = result_obj.knowledge_ids[:_DOC_COARSE_MAX_IDS_PER_BATCH]
+
+        return result_obj
 
     async def get_knowledge(self) -> str:
         """
@@ -951,14 +1216,58 @@ class DocAgent(BaseAgent):
                 # 去重
                 seen = set()
                 unique_ids = [kid for kid in all_selected_ids if not (kid in seen or seen.add(kid))]
+                # 安全兜底：多批次合并后总量超过上限时截断（控制二阶拉取与打分成本）
+                if len(unique_ids) > _DOC_COARSE_MAX_TOTAL_IDS:
+                    logger.warning(
+                        "get_knowledge: total %d unique ids exceeds cap=%d, truncating",
+                        len(unique_ids), _DOC_COARSE_MAX_TOTAL_IDS,
+                    )
+                    unique_ids = unique_ids[:_DOC_COARSE_MAX_TOTAL_IDS]
                 logger.info(f"get_knowledge: Total unique selected knowledge IDs: {len(unique_ids)}")
+
+                # 记录语义粗筛选出的 ID 集合，用于后续日志区分块来源（语义 vs 向量）
+                semantic_ids: set = set(unique_ids)
+                vector_new_ids: List[str] = []
+
+                # Step 1b: 向量补充检索（独立一路，不参与 LLM 粗筛）。
+                # 在语义粗筛完成后，用 data-services 的 hybrid search 补充召回语义粗筛可能遗漏的知识块。
+                # 向量召回的块合并到 knowledge_blocks 中（确保 get_blocks_by_ids 能找到），ID 一并加入精取阶段。
+                if _DOC_KNOWLEDGE_VECTOR_ENABLED and unique_ids:
+                    vector_result = await self._retrieve_vector()
+                    if vector_result is not None and vector_result.get_all_items():
+                        n_before = len(unique_ids)
+                        seen = set(unique_ids)
+                        for coll_name, blocks in vector_result.data.items():
+                            if not isinstance(blocks, list):
+                                continue
+                            # 将向量召回的块也注册到 knowledge_blocks.data 中，确保第二阶段能拉到全文
+                            if coll_name not in knowledge_blocks.data:
+                                knowledge_blocks.data[coll_name] = []
+                            existing_ids = {b.get("id", "") for b in knowledge_blocks.data[coll_name]}
+                            for block in blocks:
+                                bid = block.get("id", "")
+                                if bid and bid not in existing_ids:
+                                    knowledge_blocks.data[coll_name].append(block)
+                                    existing_ids.add(bid)
+                                if bid and bid not in seen:
+                                    seen.add(bid)
+                                    vector_new_ids.append(bid)
+
+                        if vector_new_ids:
+                            unique_ids.extend(vector_new_ids)
+                            logger.info(
+                                "get_knowledge: vector supplement added %d new IDs (total %d → %d)",
+                                len(vector_new_ids), n_before, len(unique_ids),
+                            )
+                        else:
+                            logger.info("get_knowledge: vector supplement found 0 new IDs")
 
                 # 第二阶段：根据 ID 获取完整知识内容；超长时 LLM 打分并按预算选取
                 if unique_ids:
                     knowledge_str, score_meta = await knowledge_blocks.get_text_by_ids(
                         unique_ids,
                         query=self.query,
-                        llm=self.llm,
+                        llm=self.llm_non_stream,
                         parse_output=self.format_llm_output,
                         trace=self._langfuse_trace_context(),
                     )
@@ -973,6 +1282,14 @@ class DocAgent(BaseAgent):
                             "get_knowledge: score_select_report=%s",
                             score_meta.get("score_select_report"),
                         )
+
+                    # 记录最终喂给 LLM 的知识块清单（id / summary / 所属文件 / 来源路），
+                    # 同时构建 _knowledge_selection_summary 供 sd_doc_step_finished 的 message 使用（覆盖打分与非打分两条路径）
+                    self._log_selected_knowledge_blocks(
+                        score_meta,
+                        semantic_ids=semantic_ids,
+                        vector_ids=set(vector_new_ids),
+                    )
 
         except Exception as e:
             logger.error(f'An error occurred during two-stage knowledge retrieval: {e}')
@@ -1266,6 +1583,8 @@ class DocAgent(BaseAgent):
                 self.current_step < self.max_steps and self.state != AgentState.FINISHED
             ):
                 self.current_step += 1
+                self._knowledge_selection_summary = ""  # 每步开始前清空，避免残留
+                self._knowledge_selection_blocks = []   # 每步开始前清空，避免残留
 
                 current_task = self.metadata.get('current_task', '')
 
@@ -1303,20 +1622,26 @@ class DocAgent(BaseAgent):
                 logger.debug(f"******************** steps status: \n\n {steps_status}")
 
                 finished_query_preview = self._step_query_preview(step_query_snapshot)
+                finished_message = (
+                    f"completed step {self.current_step}/{self.max_steps}"
+                    f" | query: {finished_query_preview}"
+                )
+                if self._knowledge_selection_summary:
+                    finished_message += self._knowledge_selection_summary
+                finished_extra: Dict[str, Any] = {
+                    "step": self.current_step,
+                    "max_steps": self.max_steps,
+                    "step_query": finished_query_preview,
+                    "result_chars": len(str(step_result or "")),
+                }
+                if self._knowledge_selection_blocks:
+                    finished_extra["blocks"] = self._knowledge_selection_blocks
                 await self.emit_progress(
                     "sd_doc_step_finished",
-                    message=(
-                        f"completed step {self.current_step}/{self.max_steps}"
-                        f" | query: {finished_query_preview}"
-                    ),
+                    message=finished_message,
                     status="done",
                     task_id=self.current_task_id,
-                    extra={
-                        "step": self.current_step,
-                        "max_steps": self.max_steps,
-                        "step_query": finished_query_preview,
-                        "result_chars": len(str(step_result or "")),
-                    },
+                    extra=finished_extra,
                 )
 
                 yield step_result

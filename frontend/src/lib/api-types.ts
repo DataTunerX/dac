@@ -76,6 +76,19 @@ export type DataPolicyResponse = {
   sourceNameSelector?: string[]
 }
 
+/** Skill-hub package ref for dacType=skill (editable binding: ns/name/version only). */
+export type SkillRef = {
+  namespace: string
+  name: string
+  /** Empty / omitted = always pull latest. */
+  version?: string
+}
+
+/** Symmetric with dataPolicy: skill DACs bind via skillPolicy. */
+export type SkillPolicy = {
+  skills?: SkillRef[]
+}
+
 export type AgentSkillResponse = {
   id: string
   name: string
@@ -122,6 +135,8 @@ export type AgentContainerResponse = {
   labels?: Record<string, string>
   dacType?: string
   dataPolicy: DataPolicyResponse
+  /** Present when dacType=skill. */
+  skillPolicy?: SkillPolicy
   agentCard: AgentCardResponse
   model: ModelSpecResponse
   expertAgentMaxSteps?: string
@@ -131,6 +146,31 @@ export type AgentContainerResponse = {
   conditions?: ConditionResponse[]
   createdAt: string
   updatedAt: string
+}
+
+/** POST /namespaces/:ns/agents create body (aligned with CreateAgentContainerRequest). */
+export type CreateAgentContainerRequest = {
+  name: string
+  labels?: Record<string, string>
+  dacType?: string
+  dataPolicy: DataPolicyResponse
+  skillPolicy?: SkillPolicy
+  agentCard: AgentCardResponse
+  model: ModelSpecResponse
+  expertAgentMaxSteps?: string
+  orchestratorAgentMaxLoops?: string
+}
+
+/** PATCH/PUT agent update body (aligned with UpdateAgentContainerRequest). */
+export type UpdateAgentContainerRequest = {
+  labels?: Record<string, string>
+  dacType?: string
+  dataPolicy?: DataPolicyResponse
+  skillPolicy?: SkillPolicy
+  agentCard?: AgentCardResponse
+  model?: ModelSpecResponse
+  expertAgentMaxSteps?: string
+  orchestratorAgentMaxLoops?: string
 }
 
 /** GET /namespaces/:ns/agents or GET /agents list payload (after unwrap) */
@@ -234,6 +274,7 @@ export type DataDescriptorResponse = {
   labels?: Record<string, string>
   descriptor_type: string
   gpuEnabled: "yes" | "no"
+  pdfLoader?: "auto" | "ocr" | "text"
   sources: DataSourceResponse[]
   overall_phase?: string
   source_statuses?: SourceStatusResponse[]
@@ -250,6 +291,39 @@ export type DataDescriptorListResponse = {
   totalCount: number
   limit?: number
   offset?: number
+}
+
+/**
+ * After axios envelope unwrap, signature/semantic-domain handlers still return
+ * `{ data: T }` (see dac-apiserver dto.DataDescriptorSignatureResponse).
+ */
+export type NestedDataEnvelope<T> = {
+  data?: T | null
+}
+
+/** Signature record fields used by the data-source detail UI */
+export type DataDescriptorSignature = {
+  sig_id?: string
+  sig_type?: string
+  discovery_mode?: string
+  fingerprint?: string
+  location_info?: Record<string, unknown>
+  metadata_content?: Record<string, unknown>
+  dd_namespace?: string
+  dd_name?: string
+  created_at?: string
+  updated_at?: string
+}
+
+/** Semantic domain record for a data descriptor */
+export type DataDescriptorSemanticDomain = {
+  semantic_domain_id?: string
+  semantic_domain?: string
+  agent_card?: string
+  dd_namespace?: string
+  dd_name?: string
+  created_at?: string
+  updated_at?: string
 }
 
 // ----- Knowledge graph (internal/handler/dto/knowledge_graph.go + data-services) -----
@@ -324,6 +398,68 @@ export type ConversationResponse = {
 export type ListConversationsResponse = {
   items: ConversationResponse[]
   total: number
+}
+
+// ----- Skill Hub (internal/handler/dto/skill_hub.go) -----
+
+export type SkillInfoResponse = {
+  name: string
+  namespace: string
+  description: string
+  version: string
+  filename: string
+  availableVersions: string[]
+}
+
+export type SkillScriptInfoResponse = {
+  scriptName: string
+  interpreter: string
+}
+
+/** Full skill pack fields from GET /skills/namespaces/:ns/skills/:name. */
+export type SkillDetailResponse = {
+  name: string
+  namespace: string
+  description: string
+  /** SKILL.md body after frontmatter. */
+  detail: string
+  version: string
+  filename: string
+  availableVersions: string[]
+  /** Empty means unrestricted (skill_sdk / runner semantics). */
+  allowedTools: string[]
+  scripts: SkillScriptInfoResponse[]
+  resourceDirs: string[]
+}
+
+export type SkillListResponse = {
+  items: SkillInfoResponse[]
+  totalCount: number
+  namespace?: string
+}
+
+export type SkillNamespaceResponse = {
+  id: string
+  visibility: string
+}
+
+export type SkillNamespaceListResponse = {
+  items: SkillNamespaceResponse[]
+  totalCount: number
+}
+
+export type SkillNamespaceExistsResponse = {
+  namespace: string
+  exists: boolean
+}
+
+/** Create a skill from form fields (skill-hub packs SKILL.md + _meta.json). */
+export type CreateSkillRequest = {
+  name: string
+  description: string
+  detail?: string
+  version?: string
+  allowedTools?: string[]
 }
 
 // ----- Agent registry (internal/handler/dto/agent_registry.go) -----

@@ -1,4 +1,7 @@
-"""Batch LLM relevance scoring for complete knowledge blocks (post-selection)."""
+"""Batch LLM relevance scoring for complete knowledge blocks (post-selection).
+
+使用 tool call 机制替代原始 JSON-in-prompt 方式。
+"""
 
 from __future__ import annotations
 
@@ -10,10 +13,13 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from langchain_core.messages import HumanMessage
+from langchain_core.tools import StructuredTool
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 
 from agent.prompts import BATCH_KNOWLEDGE_SCORE_PROMPT
+from agent.schema import ScoresResult
+from agent.tool_call_utils import invoke_llm_with_tool, validate_pydantic
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,7 @@ class LangfuseTraceContext:
     run_id: str = ""
     trace_id: str = ""
     agent_id: str = ""
+
 
 _DEFAULT_BATCH_SIZE = 5
 _DEFAULT_SINGLE_BLOCK_PREVIEW_CHARS = 15000
@@ -111,6 +118,7 @@ def build_batch_score_prompt(query: str, batch: Sequence[Dict[str, Any]]) -> str
 
 
 def _default_parse_output(answer: Any) -> Dict[str, Any]:
+    """Fallback parse when tool call extraction fails."""
     import json
 
     raw = getattr(answer, "content", "") or str(answer or "")
@@ -165,53 +173,14 @@ def _fallback_batch_scores(batch: Sequence[Dict[str, Any]], *, reason: str) -> N
         block["score_description"] = reason
 
 
-async def _invoke_llm_with_langfuse(
-    llm: Any,
-    prompt: str,
-    *,
-    query: str,
-    trace: Optional[LangfuseTraceContext],
-    batch_index: int,
-    batch_total: int,
-    block_count: int,
-) -> Any:
-    message = HumanMessage(content=prompt)
-    span_name = f"doc-agent-knowledge-score-batch-{batch_index}"
-
-    if trace and trace.trace_id:
-        with langfuse.start_as_current_span(
-            name=span_name,
-            trace_context={"trace_id": trace.trace_id},
-        ) as span:
-            span.update_trace(
-                user_id=trace.user_id,
-                session_id=trace.run_id,
-                input={
-                    "query": query,
-                    "agent_id": trace.agent_id,
-                    "run_id": trace.run_id,
-                    "trace_id": trace.trace_id,
-                    "user_id": trace.user_id,
-                    "batch_index": batch_index,
-                    "batch_total": batch_total,
-                    "block_count": block_count,
-                },
-            )
-            answer = await llm.ainvoke(
-                [message],
-                config={"callbacks": [langfuse_handler]},
-            )
-            span.update_trace(
-                output={"answer": getattr(answer, "content", str(answer))},
-            )
-            return answer
-
-    logger.warning(
-        "[DOC KNOWLEDGE LLM SCORE] missing trace_id; Langfuse span skipped for batch %d/%d",
-        batch_index,
-        batch_total,
-    )
-    return await llm.ainvoke([message])
+def _trace_to_metadata(trace: Optional[LangfuseTraceContext]) -> Dict[str, str]:
+    if trace is None:
+        return {}
+    return {
+        "user_id": trace.user_id,
+        "run_id": trace.run_id,
+        "trace_id": trace.trace_id,
+    }
 
 
 async def score_knowledge_block_batch(
@@ -229,20 +198,36 @@ async def score_knowledge_block_batch(
 
     parser = parse_output or _default_parse_output
     prompt = build_batch_score_prompt(query, batch)
+    message = HumanMessage(content=prompt)
     started = time.monotonic()
 
+    # Tool Call: score_knowledge_blocks — 批量评分知识块
+    score_knowledge_blocks_tool = StructuredTool(
+        name="score_knowledge_blocks",
+        description="Score the relevance of knowledge blocks to the user's question.",
+        args_schema=ScoresResult,
+        func=None,
+        coroutine=None,
+    )
+
     try:
-        answer = await _invoke_llm_with_langfuse(
-            llm,
-            prompt,
-            query=query,
-            trace=trace,
-            batch_index=batch_index,
-            batch_total=batch_total,
-            block_count=len(batch),
+        result = await invoke_llm_with_tool(
+            llm=llm,
+            metadata=_trace_to_metadata(trace),
+            fallback_formatter=parser,
+            tool=score_knowledge_blocks_tool,
+            messages=[message],
+            tool_choice="score_knowledge_blocks",
+            span_name=f"doc-agent-knowledge-score-batch-{batch_index}",
+            span_input={"query": query, "batch_index": batch_index, "block_count": len(batch)},
+            retry=2,
+            validate=validate_pydantic(ScoresResult),
         )
-        data = parser(answer) or {}
-        scores = data.get("scores") or []
+
+        if result is None:
+            raise ValueError("LLM did not return scores")
+
+        scores = result.get("scores") or []
         if not isinstance(scores, list):
             raise ValueError("LLM response missing scores list")
         _apply_batch_scores(batch, scores)

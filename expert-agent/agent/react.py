@@ -12,6 +12,11 @@ from langchain_core.tools import StructuredTool
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel, Field
+from agent.compaction import (
+    CompactionConfig,
+    CompactionGuard,
+    default_compaction_config,
+)
 from .dataservices_client import SemanticDomainInfo, SemanticGroupInfo
 
 try:
@@ -264,8 +269,7 @@ Think step by step:
 
 IMPORTANT: SG orchestrator must NOT invent SQL, schema commands, or code-search micro-tasks in next_query. Pass the user's question; let the SD Expert decompose.
 
-Output ONLY valid JSON (no markdown):
-{{"sub_goals": ["..."], "satisfied": ["..."], "gaps": ["..."], "needs_code_or_doc_for_sql": true|false, "foundation_satisfied": true|false, "diagnosis": "...", "next_action": "finish|call:xxx|reformulate:xxx|stop_retry:xxx", "next_tool": "tool_name or empty", "next_query": "query or empty", "reasoning": "..."}}
+Call the analyze_step tool with your analysis.
 """
 
 _REACT_SUCCESS_STATUSES = frozenset({"completed", "forced_finish"})
@@ -290,6 +294,21 @@ class _FinishArgs(BaseModel):
     )
 
 
+class StepAnalysisResult(BaseModel):
+    """LLM output for step analysis in ReAct loop."""
+    model_config = {"extra": "ignore"}
+    sub_goals: List[str] = Field(default_factory=list, description="Distinct information needs")
+    satisfied: List[str] = Field(default_factory=list, description="Sub-goals already satisfied")
+    gaps: List[str] = Field(default_factory=list, description="Still missing information")
+    needs_code_or_doc_for_sql: bool = Field(default=False, description="Whether code/doc foundation is needed before SQL")
+    foundation_satisfied: bool = Field(default=False, description="Whether foundational context is already available")
+    diagnosis: str = Field(default="", description="Process diagnosis summary")
+    next_action: str = Field(default="unknown", description="Next action: finish, call:<tool>, reformulate:<tool>, stop_retry:<tool>")
+    next_tool: str = Field(default="", description="Target tool name for call/reformulate/stop_retry")
+    next_query: str = Field(default="", description="Query for the next tool call")
+    reasoning: str = Field(default="", description="Step-by-step reasoning")
+
+
 class _AgentQueryArgs(BaseModel):
     query: str = Field(
         description=(
@@ -297,6 +316,9 @@ class _AgentQueryArgs(BaseModel):
             "do NOT rewrite into SQL, DESCRIBE/SELECT, table/column names, or code-search instructions."
         )
     )
+
+
+_UNSET: Any = object()
 
 
 class ReActRunner:
@@ -315,6 +337,7 @@ class ReActRunner:
             str,
         ],
         agent_name: str = "SGExpert",
+        compaction: CompactionConfig | None = _UNSET,
     ):
         self.llm = llm
         self.invoke_agent = invoke_agent
@@ -322,6 +345,15 @@ class ReActRunner:
         self.agent_name = agent_name
         self.last_run_trace: Dict[str, Any] = {}
         self._llm_retry_events: List[Dict[str, Any]] = []
+
+        # Compaction: enabled by default (env-variable driven).
+        # Pass ``compaction=None`` to explicitly disable (legacy behavior).
+        if compaction is _UNSET:
+            compaction = default_compaction_config()
+        self._compaction_config = compaction
+        self._compaction_template: CompactionGuard | None = (
+            CompactionGuard(compaction, llm) if compaction is not None else None
+        )
 
     def _snapshot_run_trace(self, **fields: Any) -> Dict[str, Any]:
         trace = {"llm_retry_events": list(self._llm_retry_events)}
@@ -1165,12 +1197,37 @@ class ReActRunner:
         )
 
         try:
-            resp = await self._ainvoke_ai_message(
-                llm, [HumanMessage(content=prompt)], timeout=60.0, call_label=f"analysis_step_{step_no}",
+            analyze_step_tool = StructuredTool(
+                name="analyze_step",
+                description="Analyze the execution step and recommend next action.",
+                args_schema=StepAnalysisResult,
+                func=None,
+                coroutine=None,
             )
-            raw = str(getattr(resp, "content", "") or "").strip()
-            analysis = self._parse_step_analysis(raw)
-            analysis.setdefault("raw", raw)
+
+            llm_with_tool = llm.bind_tools([analyze_step_tool], tool_choice="analyze_step")
+            resp = await self._ainvoke_ai_message(
+                llm_with_tool, [HumanMessage(content=prompt)], timeout=60.0, call_label=f"analysis_step_{step_no}",
+            )
+
+            analysis: Dict[str, Any] = {}
+            for call in getattr(resp, "tool_calls", None) or []:
+                if call.get("name") == "analyze_step":
+                    args = call.get("args") or {}
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    if isinstance(args, dict):
+                        analysis = args
+                    break
+
+            if not analysis:
+                raw = str(getattr(resp, "content", "") or "").strip()
+                analysis = self._parse_step_analysis(raw)
+
+            analysis.setdefault("raw", str(getattr(resp, "content", "") or "").strip())
             analysis.setdefault("step", step_no)
             return analysis
         except Exception as e:
@@ -1238,6 +1295,13 @@ class ReActRunner:
         analysis_triggers: List[str] = []
         self._llm_retry_events = []
 
+        # Fresh per-run guard so overflow-recovery state does not leak across runs.
+        compaction_guard = (
+            self._compaction_template.new_run_guard()
+            if self._compaction_template is not None
+            else None
+        )
+
         tool_summaries = "\n".join(
             f"- {t.name}: {(t.description or '')[:300]}" for t in tools if t.name != "finish"
         )
@@ -1293,37 +1357,106 @@ class ReActRunner:
                     },
                 )
 
-                try:
-                    ai_msg = await self._ainvoke_ai_message(
-                        llm_with_tools, messages, timeout=120.0, call_label=f"react_step_{step_no}",
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning("[ReAct] 第%d步 · LLM 调用超时，停止推理", step_no)
-                    run_status = "llm_timeout"
-                    await self._emit_progress(
-                        progress_emitter,
-                        "sg_react_finished",
-                        message=f"ReAct stopped: LLM timeout at step {step_no}",
-                        status="fail",
-                        extra={"status": run_status, "steps": step_no, "result_chars": 0},
-                    )
-                    break
-                except Exception as e:
-                    logger.warning("[ReAct] 第%d步 · LLM 调用失败：%s", step_no, e)
-                    run_status = "llm_error"
-                    await self._emit_progress(
-                        progress_emitter,
-                        "sg_react_finished",
-                        message=self._truncate_progress_message(
-                            f"ReAct stopped: LLM error at step {step_no}: {e}",
-                            480,
-                        ),
-                        status="fail",
-                        extra={"status": run_status, "steps": step_no, "result_chars": 0},
-                    )
+                overflow_retry = False
+                ai_msg: Any = None
+                while True:
+                    if compaction_guard is not None:
+                        messages = await compaction_guard.before_invoke(messages)
+
+                    try:
+                        ai_msg = await self._ainvoke_ai_message(
+                            llm_with_tools, messages, timeout=120.0, call_label=f"react_step_{step_no}",
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("[ReAct] 第%d步 · LLM 调用超时，停止推理", step_no)
+                        run_status = "llm_timeout"
+                        await self._emit_progress(
+                            progress_emitter,
+                            "sg_react_finished",
+                            message=f"ReAct stopped: LLM timeout at step {step_no}",
+                            status="fail",
+                            extra={"status": run_status, "steps": step_no, "result_chars": 0},
+                        )
+                        break
+                    except Exception as e:
+                        if compaction_guard is None:
+                            logger.warning("[ReAct] 第%d步 · LLM 调用失败：%s", step_no, e)
+                            run_status = "llm_error"
+                            await self._emit_progress(
+                                progress_emitter,
+                                "sg_react_finished",
+                                message=self._truncate_progress_message(
+                                    f"ReAct stopped: LLM error at step {step_no}: {e}",
+                                    480,
+                                ),
+                                status="fail",
+                                extra={"status": run_status, "steps": step_no, "result_chars": 0},
+                            )
+                            break
+
+                        recovery = await compaction_guard.on_invoke_error(messages, e)
+                        if recovery is None:
+                            logger.warning("[ReAct] 第%d步 · LLM 调用失败：%s", step_no, e)
+                            run_status = "llm_error"
+                            await self._emit_progress(
+                                progress_emitter,
+                                "sg_react_finished",
+                                message=self._truncate_progress_message(
+                                    f"ReAct stopped: LLM error at step {step_no}: {e}",
+                                    480,
+                                ),
+                                status="fail",
+                                extra={"status": run_status, "steps": step_no, "result_chars": 0},
+                            )
+                            break
+                        if recovery.failed:
+                            logger.warning(
+                                "[ReAct] 第%d步 · 上下文溢出恢复失败，停止推理：%s",
+                                step_no, recovery.error_message,
+                            )
+                            run_status = "context_overflow"
+                            await self._emit_progress(
+                                progress_emitter,
+                                "sg_react_finished",
+                                message=self._truncate_progress_message(
+                                    f"ReAct stopped: context overflow recovery failed at step {step_no}",
+                                    480,
+                                ),
+                                status="fail",
+                                extra={"status": run_status, "steps": step_no, "result_chars": 0},
+                            )
+                            break
+                        if (
+                            recovery.will_retry
+                            and recovery.messages is not None
+                            and not overflow_retry
+                        ):
+                            messages = recovery.messages
+                            overflow_retry = True
+                            tool_history.append({
+                                "compaction": True,
+                                "reason": "overflow",
+                                "will_retry": True,
+                                "step": step_no,
+                            })
+                            continue
+                        raise
+
                     break
 
                 messages.append(ai_msg)
+
+                # After-invoke: detect silent overflow and record usage.
+                if compaction_guard is not None:
+                    action = await compaction_guard.after_invoke(messages[:-1], ai_msg)
+                    if action.compacted and action.messages is not None:
+                        messages = action.messages
+                        tool_history.append({
+                            "compaction": True,
+                            "reason": "overflow",
+                            "silent": True,
+                            "step": step_no,
+                        })
 
                 thought_text = str(getattr(ai_msg, "content", "") or "").strip()
                 structured_thought = self._parse_structured_thought(thought_text)
@@ -1365,7 +1498,10 @@ class ReActRunner:
                             "[ReAct] 第%d步 · LLM 未调工具，发送提醒（剩余 %d 次）",
                             step_no, nudge_retries_left,
                         )
-                        messages.append(HumanMessage(content=_REACT_NUDGE_MESSAGE))
+                        messages.append(HumanMessage(
+                            content=_REACT_NUDGE_MESSAGE,
+                            additional_kwargs={"sg_react_internal": True},
+                        ))
                         continue
 
                     final_answer = await self._invoke_forced_finish(
@@ -1411,6 +1547,10 @@ class ReActRunner:
                 finished_this_step = False
                 tool_calls = self._reorder_tool_calls_for_foundation(tool_calls, tool_to_agent)
                 tool_total = len(tool_calls)
+                all_tool_names = [
+                    c.get("name", "") for c in tool_calls
+                    if c.get("name") and c.get("name") != "finish"
+                ]
 
                 for idx, call in enumerate(tool_calls):
                     tool_name = call.get("name", "")
@@ -1455,7 +1595,7 @@ class ReActRunner:
                                 progress_emitter,
                                 "sg_react_tool_start",
                                 message=self._truncate_progress_message(
-                                    f"step {step_no} tool {idx + 1}/{tool_total}: {tool_name} → {agent_display_name}",
+                                    f"step {step_no}: {tool_name} → {agent_display_name}",
                                     320,
                                 ),
                                 status="running",
@@ -1464,6 +1604,7 @@ class ReActRunner:
                                     "tool_index": idx + 1,
                                     "tool_total": tool_total,
                                     "tool_name": tool_name,
+                                    "step_tool_names": all_tool_names,
                                     "agent_name": agent_display_name,
                                     "descriptor_type": dt,
                                     "query_preview": self._truncate_progress_message(agent_query, 320),
@@ -1534,7 +1675,7 @@ class ReActRunner:
                             progress_emitter,
                             "sg_react_tool_done",
                             message=self._truncate_progress_message(
-                                f"step {step_no} tool {idx + 1}/{tool_total}: {tool_name} done ({len(result_str)} chars)",
+                                f"step {step_no}: {tool_name} done ({len(result_str)} chars)",
                                 320,
                             ),
                             status="done" if not str(result_str).startswith("(error:") else "fail",
@@ -1543,6 +1684,7 @@ class ReActRunner:
                                 "tool_index": idx + 1,
                                 "tool_total": tool_total,
                                 "tool_name": tool_name,
+                                "step_tool_names": all_tool_names,
                                 "agent_name": agent_display_name if tool_name in tool_to_agent else "",
                                 "result_chars": len(result_str),
                                 "result_preview": self._truncate_progress_message(result_str, 480),
@@ -1632,7 +1774,10 @@ class ReActRunner:
                             },
                         )
                         analysis_msg = self._format_step_analysis_message(step_no, analysis)
-                        messages.append(HumanMessage(content=analysis_msg))
+                        messages.append(HumanMessage(
+                            content=analysis_msg,
+                            additional_kwargs={"sg_react_internal": True},
+                        ))
                         tool_history.append({
                             "step": step_no,
                             "analysis": analysis_msg,
@@ -1653,13 +1798,16 @@ class ReActRunner:
                         analysis_ran=analysis_ran,
                         analysis_trigger=analysis_trigger,
                     )
+                    step_tool_names_done = [
+                        o.get("tool", "") for o in step_observations
+                        if o.get("tool") and o.get("tool") != "finish"
+                    ]
+                    tool_names_label = " + ".join(step_tool_names_done) if step_tool_names_done else "(none)"
                     await self._emit_progress(
                         progress_emitter,
                         "sg_react_step_done",
                         message=self._truncate_progress_message(
-                            f"step {step_no}/{react_max_steps} done · "
-                            f"{len(step_observations)} tool(s)"
-                            + (" · analysis ran" if analysis_ran else ""),
+                            f"step {step_no}/{react_max_steps} done · {len(step_observations)} tool(s): {tool_names_label}",
                             320,
                         ),
                         status="done",
@@ -1667,6 +1815,7 @@ class ReActRunner:
                             "step": step_no,
                             "max_steps": react_max_steps,
                             "observation_count": len(step_observations),
+                            "step_tool_names": step_tool_names_done,
                             "analysis_ran": analysis_ran,
                         },
                     )

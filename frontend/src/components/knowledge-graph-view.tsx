@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { getGraphBySource } from "@/lib/knowledge-graph-api";
 import type { KnowledgeGraphBySourceResponse } from "@/lib/api-types";
@@ -145,7 +145,7 @@ function extractGraph(payload: unknown): {
   return { nodes, rels };
 }
 
-export function KnowledgeGraphView({
+export const KnowledgeGraphView = memo(function KnowledgeGraphView({
   source,
   className,
   nodeLimit = 1000,
@@ -602,7 +602,7 @@ export function KnowledgeGraphView({
       </div>
     </div>
   );
-}
+})
 
 function GraphLegend({ nodes }: { nodes: GraphNodeDto[] }) {
   const { stats, colorMap } = useMemo(() => {

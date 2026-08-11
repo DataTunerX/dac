@@ -1,0 +1,25 @@
+# DAC sandbox demo: Northwind 贸易公司样本库（采购/库存/订单/供应商）
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-sandbox-northwind
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-mysql"
+  sources:
+    - type: mysql
+      name: "northwind"
+      metadata:
+        host: "mysql.dac-sandbox.svc.cluster.local"
+        port: "3306"
+        user: "dac"
+        password: "dacpass"
+        database: "northwind"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""

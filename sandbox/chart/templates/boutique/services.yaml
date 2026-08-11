@@ -1,0 +1,35 @@
+{{/*
+  Named Services → STS Pod (optional DNS / ClusterIP access).
+  All Boutique processes run inside dac-sandbox-0.
+*/}}
+{{- $sel := include "dac-sandbox.selectorLabels" . -}}
+{{- range tuple
+  (dict "name" "frontend" "port" 80 "target" 8080 "pname" "http")
+  (dict "name" "currencyservice" "port" 7000 "target" 7000 "pname" "grpc")
+  (dict "name" "productcatalogservice" "port" 3550 "target" 3550 "pname" "grpc")
+  (dict "name" "cartservice" "port" 7070 "target" 7070 "pname" "grpc")
+  (dict "name" "shippingservice" "port" 50051 "target" 50051 "pname" "grpc")
+  (dict "name" "paymentservice" "port" 50052 "target" 50052 "pname" "grpc")
+  (dict "name" "emailservice" "port" 5000 "target" 5000 "pname" "grpc")
+  (dict "name" "checkoutservice" "port" 5050 "target" 5050 "pname" "grpc")
+  (dict "name" "recommendationservice" "port" 8081 "target" 8081 "pname" "grpc")
+  (dict "name" "adservice" "port" 9555 "target" 9555 "pname" "grpc")
+}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" $ | nindent 4 }}
+    app: {{ .name }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- $sel | nindent 4 }}
+  ports:
+    - name: {{ .pname }}
+      port: {{ .port }}
+      targetPort: {{ .target }}
+{{- end }}

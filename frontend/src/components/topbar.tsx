@@ -1,6 +1,5 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,32 +8,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
-import { clearAuthToken, getAuthToken, navigateAfterAuth } from "@/lib/auth-session"
-import { decodeJwtPayload, initialFromUsername } from "@/lib/utils"
+import { logout, navigateAfterAuth } from "@/lib/auth-session"
+import { useAuthHydrated, useAuthUsername } from "@/lib/use-user-role"
+import { initialFromUsername } from "@/lib/utils"
 
 export function Topbar() {
-  const [mounted, setMounted] = useState(false)
-  const [userInfo, setUserInfo] = useState({ username: "", initial: "U" })
-
-  useEffect(() => {
-    setMounted(true)
-    const token = getAuthToken()
-    const payload = token ? decodeJwtPayload(token) : null
-    const username = typeof payload?.username === "string" ? payload.username : ""
-    setUserInfo({ username, initial: initialFromUsername(username) })
-  }, [])
-
-  const { username, initial } = userInfo
+  const hydrated = useAuthHydrated()
+  const username = useAuthUsername()
+  const initial = initialFromUsername(username)
 
   const handleLogout = () => {
-    clearAuthToken()
-    navigateAfterAuth("/login")
+    void logout().finally(() => {
+      navigateAfterAuth("/login")
+    })
   }
 
   return (
-    <header className="h-14 shrink-0 bg-surface-inverse border-b border-white/5">
+    <header className="h-14 shrink-0 bg-[#0f172a] border-b border-white/5">
       <div className="h-full flex items-center w-full">
         <div className="hidden lg:flex w-64 h-full items-center px-6 gap-3">
           <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-sm font-bold bg-[#4f46e5] shadow-sm" aria-hidden="true">
@@ -44,7 +35,7 @@ export function Topbar() {
         </div>
 
         <div className="flex-1 flex items-center justify-end px-4 lg:px-6">
-          {mounted ? (
+          {hydrated ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -82,7 +73,7 @@ export function Topbar() {
             >
               <span className="relative flex shrink-0 overflow-hidden rounded-full h-8 w-8">
                 <span className="flex size-full items-center justify-center rounded-full bg-surface/10 text-content-inverse">
-                  {initial}
+                  {initial || "U"}
                 </span>
               </span>
             </Button>

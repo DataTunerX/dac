@@ -38,6 +38,7 @@ var (
 		"code-agent-image",
 		"doc-agent-image",
 		"dd-sync-observer-image",
+		"skill-agent-image",
 		"default-planner-llm",
 		"default-expert-llm",
 	}

@@ -1,0 +1,92 @@
+# =============================================================================
+# DAC Sandbox Helm Chart — full enterprise scan fixture (not the DAC platform)
+# =============================================================================
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  # -- Image registry for sandbox + mirrored third-party images
+  imageRegistry: "release.daocloud.io/dac"
+  # -- Tag for custom sandbox-* images
+  imageTag: "v0.11.0"
+  imagePullPolicy: Always
+  imagePullSecrets: []
+
+# Shared demo credentials (sandbox only — not production)
+credentials:
+  mysqlRootPassword: "dacpass"
+  postgresPassword: "dacpass"
+  minioRootUser: "dac"
+  minioRootPassword: "dacpassword"
+  gitlabRootPassword: "dacpassword"
+  odooUser: "odoo"
+  odooPassword: "odopass"
+  odooDatabase: "odoo_demo"
+  saleorUser: "saleor"
+  saleorPassword: "saleor"
+  saleorDatabase: "saleor"
+  saleorSecretKey: "sandbox-saleor-secret-key-change-me"
+
+# Saleor API listens on 8001 inside the STS (FileServer keeps 8000)
+saleor:
+  apiPort: 8001
+  imageTag: "3.23"
+  dashboardImageTag: "3.23"
+
+odoo:
+  imageTag: "17.0"
+  httpPort: 8069
+
+redis:
+  # -- Valkey/Redis image (mirrored)
+  repository: valkey
+  tag: "8.1-alpine"
+
+minio:
+  repository: minio
+  tag: "latest"
+
+gitlab:
+  repository: gitlab-ce
+  tag: "17.5.0-ce.0"
+
+alpine:
+  repository: alpine
+  tag: "3.20"
+
+boutique:
+  # -- Online Boutique runs inside the STS (localhost mesh; unique ports).
+  imageTag: "v0.10.5"
+
+resources:
+  mysql:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits: { cpu: "1000m", memory: "1Gi" }
+  postgres:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits: { cpu: "1000m", memory: "1Gi" }
+  redis:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits: { cpu: "200m", memory: "256Mi" }
+  minio:
+    requests: { cpu: "50m", memory: "128Mi" }
+    limits: { cpu: "500m", memory: "512Mi" }
+  fileserver:
+    requests: { cpu: "20m", memory: "32Mi" }
+    limits: { cpu: "200m", memory: "128Mi" }
+  gitlab:
+    requests: { cpu: "500m", memory: "4Gi" }
+    limits: { cpu: "2000m", memory: "8Gi" }
+  odoo:
+    requests: { cpu: "200m", memory: "512Mi" }
+    limits: { cpu: "1000m", memory: "1536Mi" }
+  saleorApi:
+    requests: { cpu: "200m", memory: "512Mi" }
+    limits: { cpu: "1000m", memory: "1536Mi" }
+  saleorDashboard:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits: { cpu: "200m", memory: "256Mi" }
+  boutique:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits: { cpu: "200m", memory: "128Mi" }

@@ -73,6 +73,16 @@ describe("buildExternalOrigin", () => {
 
     expect(buildExternalOrigin(headers, createRequestUrl("/"))).toBe("https://frontend.internal:3000")
   })
+
+  it("rejects spoofed forwarded host when Host is a public name", () => {
+    const headers = new Headers({
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "evil.example",
+      host: "dac.example.com",
+    })
+
+    expect(buildExternalOrigin(headers, createRequestUrl("/"))).toBe("https://dac.example.com")
+  })
 })
 
 describe("buildLoginRedirectUrl", () => {

@@ -128,6 +128,29 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         except Exception:  # noqa: BLE001
             logger.exception("[CodeAgent][Skill] preload_skill_runner raised — continuing")
 
+        # ---- Pre-warm LSP servers (gopls, basedpyright, etc.) -----------------
+        # LSP servers are lazily started on the first tool call. Pre-warming here
+        # avoids a 5-10s cold-start delay on the very first request that needs LSP.
+        try:
+            from skill_sdk.tool.lsp_plugin import _get_or_create_manager
+            _manager = _get_or_create_manager()
+            if _manager is not None:
+                server_names = list(_manager.get_all_servers().keys())
+                logger.info(
+                    "[CodeAgent][LSP] LSP servers pre-warmed successfully: %s",
+                    server_names,
+                )
+            else:
+                logger.info(
+                    "[CodeAgent][LSP] SKILL_SDK_LSP_SERVERS not set or empty; "
+                    "LSP will be unavailable until configured."
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[CodeAgent][LSP] LSP pre-warm failed — continuing, "
+                "will fall back to lazy start on first tool call."
+            )
+
         atexit.register(code_executor.shutdown_skill_runner)
 
         # Default: register agent to Redis. Set REGISTER_AGENT=false/0/no to skip registration.

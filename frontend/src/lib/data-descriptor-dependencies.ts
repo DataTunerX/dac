@@ -1,12 +1,13 @@
 import { api } from "@/lib/api"
 import { getDescriptor } from "@/lib/descriptors-api"
-import { listAgentsAll } from "@/lib/agents-api"
+import { listAllAgentContainers } from "@/lib/agents-api"
 import type {
-  AgentContainerResponse,
   DDGroupRelationResponse,
   SemanticDomainResponse,
   SemanticGroupResponse,
 } from "@/lib/api-types"
+
+export { listAllAgentContainers } from "@/lib/agents-api"
 
 export type DataDescriptorDependency = {
   kind: "agent" | "group" | "dac"
@@ -108,24 +109,6 @@ export async function detachDataDescriptorFromSemanticGroups(
     await api.delete(`/dd-group-relations/${encodeURIComponent(String(relation.relationId))}`)
   }
   return relations.length
-}
-
-export async function listAllAgentContainers(): Promise<AgentContainerResponse[]> {
-  const limit = 200
-  let offset = 0
-  const out: AgentContainerResponse[] = []
-
-  for (;;) {
-    const page = await listAgentsAll({ limit, offset })
-    const items = page.items ?? []
-    out.push(...items)
-
-    const total = Number(page.totalCount ?? 0)
-    if (items.length === 0 || out.length >= total || items.length < limit) {
-      return out
-    }
-    offset += limit
-  }
 }
 
 async function listGroupsForDescriptor(namespace: string, name: string): Promise<DataDescriptorDependency[]> {

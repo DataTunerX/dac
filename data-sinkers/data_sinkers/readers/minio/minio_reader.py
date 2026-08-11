@@ -7,6 +7,7 @@ from langchain_core.documents import Document
 from .minio_conn import GeneralMinio
 from ..base.base_reader import BaseDataReader
 from ...file_processors.general import Processor
+from ..per_file_summary import build_per_file_summary_document
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -22,14 +23,22 @@ def _normalize_etag(raw: Any) -> str:
     return s.strip().strip('"')
 
 
-def _file_descriptor_dict(bucket: str, object_name: str, file_size: int) -> Dict[str, Any]:
+def _file_descriptor_dict(
+    bucket: str,
+    object_name: str,
+    file_size: int,
+    content_hash: Optional[str] = None,
+) -> Dict[str, Any]:
     """Stable fields for unstructured-files / inventory APIs."""
-    return {
+    d: Dict[str, Any] = {
         "file_name": os.path.basename(object_name),
         "bucket": bucket,
         "minio_path": f"minio://{bucket}/{object_name}",
         "file_size": int(file_size),
     }
+    if content_hash:
+        d["content_hash"] = str(content_hash)
+    return d
 
 
 class MinIOReader(BaseDataReader):
@@ -83,7 +92,7 @@ class MinIOReader(BaseDataReader):
             if not size:
                 size = len(file_data)
 
-            descriptor = _file_descriptor_dict(bucket, object_name, size)
+            descriptor = _file_descriptor_dict(bucket, object_name, size, content_hash=etag or None)
 
             suffix = os.path.splitext(filename)[1]
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
@@ -170,6 +179,7 @@ class MinIOReader(BaseDataReader):
         all_documents: List[Document] = []
         file_descriptors: List[Dict[str, Any]] = []
         per_file_summaries: List[Document] = []
+        file_results: List[Dict[str, Any]] = []
 
         if objects is not None:
             file_objects = [obj for obj in objects if not obj.endswith('/')]
@@ -187,6 +197,7 @@ class MinIOReader(BaseDataReader):
             try:
                 documents = self.query_one(obj_name, bucket=bucket, **kwargs)
                 all_documents.extend(documents)
+                summary_doc: Optional[Document] = None
                 if documents:
                     rec = documents[0].metadata.get(UNSTRUCTURED_FILE_RECORD_KEY)
                     if isinstance(rec, dict) and rec:
@@ -202,11 +213,52 @@ class MinIOReader(BaseDataReader):
                         if summary_doc is not None:
                             per_file_summaries.append(summary_doc)
 
-                logger.info(f"File {obj_name} processing completed, generated {len(documents)} document segments")
+                l2_status = "yes" if summary_doc is not None else ("no" if file_analyzer else "skipped")
+                file_results.append(
+                    {
+                        "index": i + 1,
+                        "object": obj_name,
+                        "segments": len(documents),
+                        "l2_summary": l2_status,
+                    }
+                )
+                logger.info(
+                    "File [%d/%d] %s: segments=%d l2_summary=%s",
+                    i + 1,
+                    len(file_objects),
+                    obj_name,
+                    len(documents),
+                    l2_status,
+                )
 
             except Exception as e:
                 logger.error(f"Error processing file {obj_name}: {e}")
+                file_results.append(
+                    {
+                        "index": i + 1,
+                        "object": obj_name,
+                        "segments": 0,
+                        "l2_summary": "error",
+                    }
+                )
                 continue
+
+        logger.info(
+            "[minio_reader] bucket processing complete: files=%d total_segments=%d l2_summaries=%d/%d",
+            len(file_objects),
+            len(all_documents),
+            len(per_file_summaries),
+            len(file_objects),
+        )
+        for row in file_results:
+            logger.info(
+                "[minio_reader]   [%d/%d] segments=%d l2=%s object=%s",
+                row["index"],
+                len(file_objects),
+                row["segments"],
+                row["l2_summary"],
+                row["object"],
+            )
 
         return all_documents, file_descriptors, per_file_summaries
 
@@ -236,66 +288,17 @@ class MinIOReader(BaseDataReader):
 
         Returns ``None`` if the LLM call fails or produces no usable content at all.
         """
-        try:
-            fs_result = file_analyzer.file_summary(documents) or {}
-        except Exception as sum_err:
-            logger.warning("per-file file_summary failed for %s: %s", obj_name, sum_err)
-            return None
-
-        summary_text = str(fs_result.get("summary") or "").strip()
-        outline_text = str(fs_result.get("outline") or "").strip()
-
-        doc_struct = fs_result.get("document_structure") or {}
-        if not isinstance(doc_struct, dict):
-            doc_struct = {}
-        doc_type = str(doc_struct.get("document_type") or "").strip()
-        raw_themes = doc_struct.get("main_themes") or []
-        if isinstance(raw_themes, (list, tuple, set)):
-            themes: List[str] = [str(t).strip() for t in raw_themes if str(t).strip()]
-        else:
-            themes = [str(raw_themes).strip()] if str(raw_themes).strip() else []
-
-        if not (summary_text or outline_text or themes or doc_type):
-            return None
-
-        file_name = os.path.basename(obj_name)
         minio_path = f"minio://{bucket}/{obj_name}"
-
-        sections: List[str] = [f"【文件】{file_name}（{minio_path}）"]
-        if doc_type:
-            sections.append(f"【类型】{doc_type}")
-        if themes:
-            sections.append("【主题】" + "、".join(themes))
-        if summary_text:
-            sections.append(f"【摘要】{summary_text}")
-        if outline_text:
-            sections.append("【大纲】\n" + outline_text)
-
-        page_content = "\n".join(sections)
-
-        meta: Dict[str, Any] = {
-            "file_name": file_name,
-            "bucket": bucket,
-            "minio_path": minio_path,
-            "source": minio_path,
-            "minio_object_key": obj_name,
-            # Keep the raw structured pieces accessible too, so callers that want a specific
-            # field (e.g. just the summary) don't have to re-parse page_content.
-            "summary": summary_text,
-            "outline": outline_text,
-            "document_type": doc_type,
-            "main_themes": themes,
-        }
-        logger.info(
-            "Generated per-file summary for %s (summary_len=%d outline_len=%d themes=%d type=%s page_content_len=%d)",
-            obj_name,
-            len(summary_text),
-            len(outline_text),
-            len(themes),
-            doc_type or "-",
-            len(page_content),
+        return build_per_file_summary_document(
+            file_analyzer,
+            documents,
+            file_uri=minio_path,
+            file_name=os.path.basename(obj_name),
+            extra_metadata={
+                "bucket": bucket,
+                "minio_object_key": obj_name,
+            },
         )
-        return Document(page_content=page_content, metadata=meta)
 
     def minio_path_to_object_key(self, minio_path: str) -> Optional[str]:
         """Strip ``minio://{bucket}/`` prefix; return object key or None if not matched."""
@@ -338,7 +341,8 @@ class MinIOReader(BaseDataReader):
             if not name or name.endswith("/"):
                 continue
             size = int(info.get("size") or 0)
-            d = dict(_file_descriptor_dict(bucket, name, size))
+            etag = _normalize_etag(info.get("etag"))
+            d = dict(_file_descriptor_dict(bucket, name, size, content_hash=etag or None))
             d["dd_namespace"] = str(dd_namespace or "").strip()
             d["dd_name"] = str(dd_name or "").strip()
             out.append(d)
@@ -353,11 +357,18 @@ class MinIOReader(BaseDataReader):
         rows = resp.get("data") or []
         return bool(rows)
 
-    def fetch_saved_inventory_object_sizes(self, dd_namespace: str, dd_name: str, uf_client: Any) -> Dict[str, int]:
-        """Paginate GET /unstructured-files; map object key -> stored file_size."""
+    def fetch_saved_inventory_object_meta(
+        self, dd_namespace: str, dd_name: str, uf_client: Any
+    ) -> Dict[str, Tuple[Optional[str], int]]:
+        """Paginate GET /unstructured-files; map object key -> (stored content_hash, file_size).
+
+        ``content_hash`` is the MinIO etag persisted at last sync. Legacy rows (or rows
+        upserted by an older data-sinker that never sent etag) have ``content_hash=None``;
+        callers must fall back to ``file_size`` for those rows.
+        """
         limit = 500
         offset = 0
-        out: Dict[str, int] = {}
+        out: Dict[str, Tuple[Optional[str], int]] = {}
         while True:
             resp = uf_client.list_unstructured_files(
                 dd_namespace=dd_namespace, dd_name=dd_name, limit=limit, offset=offset
@@ -382,7 +393,9 @@ class MinIOReader(BaseDataReader):
                             self.config.get("bucket"),
                         )
                     continue
-                out[key] = int(row.get("file_size") or 0)
+                ch = row.get("content_hash")
+                ch_str = str(ch).strip() if isinstance(ch, str) and ch.strip() else None
+                out[key] = (ch_str, int(row.get("file_size") or 0))
             if len(rows) < limit:
                 break
             offset += limit
@@ -439,12 +452,15 @@ class MinIOReader(BaseDataReader):
         Returns:
             (added, removed, modified) as sets of object names (keys).
 
-        Modification is detected by **file_size** change only (inventory has no etag).
+        Modification is detected by **content_hash** (MinIO etag) first, falling back to
+        **file_size** when either side lacks a content_hash (legacy inventory rows, or a
+        live listing that returned no etag). This catches same-size content edits that a
+        size-only diff would miss.
         """
         current = self.current_bucket_objects_meta()
-        saved_sizes = self.fetch_saved_inventory_object_sizes(dd_namespace, dd_name, uf_client)
+        saved_meta = self.fetch_saved_inventory_object_meta(dd_namespace, dd_name, uf_client)
         current_keys = set(current.keys())
-        saved_keys = set(saved_sizes.keys())
+        saved_keys = set(saved_meta.keys())
 
         # If you delete an object but deleted=[] here, usually either (1) listing still sees the object,
         # or (2) that object was never counted in saved_keys (minio_path did not parse — see fetch warnings).
@@ -462,7 +478,14 @@ class MinIOReader(BaseDataReader):
         removed = saved_keys - current_keys
         modified: Set[str] = set()
         for k in current_keys & saved_keys:
-            if current[k][1] != saved_sizes[k]:
+            live_etag, live_size = current[k]
+            saved_etag, saved_size = saved_meta[k]
+            # Prefer etag/content_hash when both sides have it; otherwise fall back to size
+            # so legacy rows (no stored content_hash) still get size-change detection.
+            if live_etag and saved_etag:
+                if live_etag != saved_etag:
+                    modified.add(k)
+            elif live_size != saved_size:
                 modified.add(k)
         logger.info(
             "%s feature=minio_inventory_diff dd_namespace=%r dd_name=%r bucket=%r "

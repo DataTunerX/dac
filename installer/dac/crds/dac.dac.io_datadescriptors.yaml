@@ -154,6 +154,17 @@ spec:
                   - type
                   type: object
                 type: array
+              pdfLoader:
+                description: |-
+                  PDFLoader selects how unstructured PDFs are processed, by capability rather than
+                  a specific library name.
+                  Valid values: "auto" (default), "ocr", "text".
+                  "auto": use OCR/layout parsing when GPU is allocated (gpuEnabled=yes) and the file is under ~1GB,
+                          otherwise extract the embedded text layer only.
+                  "ocr": force OCR + layout parsing regardless of gpuEnabled (runs on CPU when gpuEnabled=no);
+                         still falls back to text-only extraction for files >= ~1GB.
+                  "text": always extract the embedded text layer only (no OCR).
+                type: string
               syncPolicy:
                 description: SyncPolicy enables periodic observation of data source
                   changes for re-sync

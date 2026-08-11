@@ -37,6 +37,7 @@ from a2a.utils import new_agent_text_message, new_task, new_text_artifact
 from .redis_registry import RedisRegistry, HeartbeatService
 from model_sdk import ModelManager
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.tools import StructuredTool
 from .react import ReActRunner
 from .dataservices_client import DataServicesClient, SemanticDomainInfo, SemanticGroupInfo
 from .agentregistry_client import AgentRegistryClient
@@ -44,6 +45,7 @@ from .schema import ROLE_TYPE, AgentState, Memory, Message
 from .prompts import NEXT_STEP_PROMPT_ZH
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
+from .tool_call_utils import invoke_llm_with_tool
 
 try:
     # json_repair is a tolerant JSON parser designed specifically for LLM output.
@@ -115,6 +117,38 @@ def _escape_known_string_field_inner_quotes(text: str) -> str:
 
     return pattern.sub(_repl, text)
 
+
+_EMBEDDED_JSON_FENCE_RE = re.compile(
+    r"```(?:json)?\s*\n(.*?)\n```",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _extract_embedded_json_fence(text: str) -> Optional[str]:
+    """Extract JSON content from a markdown code fence embedded in the middle of text."""
+    match = _EMBEDDED_JSON_FENCE_RE.search(text)
+    if not match:
+        return None
+    inner = match.group(1).strip()
+    if not inner:
+        return None
+    return inner
+
+
+_JSON_OBJECT_RE = re.compile(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", re.DOTALL)
+
+
+def _extract_json_object_from_text(text: str) -> Optional[str]:
+    """Try to extract a balanced JSON object from free-form text (no fence)."""
+    for match in _JSON_OBJECT_RE.finditer(text):
+        candidate = match.group(0)
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            continue
+    return None
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -185,6 +219,7 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "tool_index",
         "tool_total",
         "tool_name",
+        "step_tool_names",
         "agent_name",
         "descriptor_type",
         "query_preview",
@@ -197,6 +232,7 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "tool_index",
         "tool_total",
         "tool_name",
+        "step_tool_names",
         "agent_name",
         "result_chars",
         "result_preview",
@@ -214,6 +250,7 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "step",
         "max_steps",
         "observation_count",
+        "step_tool_names",
         "analysis_ran",
     },
     "sg_react_finished": {"status", "steps", "result_chars"},
@@ -291,6 +328,31 @@ class AgentState(str, Enum):
     FINISHED = "FINISHED"
     ERROR = "ERROR"
 
+
+class ExecutionPlanPhase(BaseModel):
+    """Execution plan phase for LLM output."""
+    phase: int = Field(description="Phase number")
+    agents: List[str] = Field(default_factory=list, description="Agent names in this phase")
+    context_from: List[str] = Field(default_factory=list, description="Agent names whose context is used")
+
+
+class ExcludedAgent(BaseModel):
+    """Agent intentionally omitted from an execution plan."""
+    name: str = Field(description="Exact name of the excluded agent")
+    reason: str = Field(description="Brief reason why the agent is not needed")
+
+
+class ExecutionPlanResult(BaseModel):
+    """LLM output for execution plan."""
+    model_config = {"extra": "ignore"}
+    reasoning: str = Field(default="", description="Step-by-step reasoning")
+    execution_plan: List[ExecutionPlanPhase] = Field(default_factory=list, description="Ordered execution phases")
+    excluded_agents: List[ExcludedAgent] = Field(
+        default_factory=list,
+        description="Excluded agents with their exact names and reasons",
+    )
+
+
 class ExpertAgent(BaseAgent):
     """Expert Agent"""
 
@@ -328,6 +390,17 @@ class ExpertAgent(BaseAgent):
             model=model,
             temperature=temperature,
             stream=stream,
+            extra_body=_extra_body,
+        )
+        # Tool calls require non-streaming LLM. When stream=True, the LLM returns
+        # AsyncStream instead of AIMessage. Create a separate non-streaming instance.
+        self.llm_non_stream = self.manager.get_llm(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=temperature,
+            stream=False,
             extra_body=_extra_body,
         )
         self.query=query
@@ -633,6 +706,28 @@ class ExpertAgent(BaseAgent):
             return json.loads(cleaned_content)
         except json.JSONDecodeError as e2:
             logger.error(f" === format_llm_output, Parsing failed after cleanup.: {e2}")
+
+        # ── Extract embedded JSON fence from mixed text (e.g. "解释 + ```json\n{...}\n```") ──
+        embedded_json = _extract_embedded_json_fence(cleaned_content)
+        if embedded_json is not None:
+            try:
+                parsed = json.loads(embedded_json)
+                if isinstance(parsed, dict):
+                    logger.info(" === format_llm_output, recovered via embedded JSON fence extraction")
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        # ── Extract bare JSON object from free-form text (no fence) ──
+        bare_json = _extract_json_object_from_text(cleaned_content)
+        if bare_json is not None:
+            try:
+                parsed = json.loads(bare_json)
+                if isinstance(parsed, dict):
+                    logger.info(" === format_llm_output, recovered via embedded bare JSON extraction")
+                    return parsed
+            except json.JSONDecodeError:
+                pass
 
         escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
         if escaped_content != cleaned_content:
@@ -1322,21 +1417,11 @@ class ExpertAgent(BaseAgent):
             "  - Independent agents within the same phase run in parallel\n"
             "  - context_from must only reference agents from earlier phases\n\n"
             "## Output Format\n"
-            "Output ONLY a valid JSON object (no markdown, no explanation, no extra text):\n"
-            "{\n"
-            '  "reasoning": "Step 1: [intent analysis]. Step 2: [per-agent judgment]. '
-            'Step 3: [co-existence check]. Step 4: [exclusion decisions]. Step 5: [phase planning].",\n'
-            '  "execution_plan": [\n'
-            '    {"phase": 1, "agents": ["AgentNameA", "AgentNameB"], "context_from": []},\n'
-            '    {"phase": 2, "agents": ["AgentNameC"], "context_from": ["AgentNameA"]}\n'
-            "  ],\n"
-            '  "excluded_agents": [\n'
-            '    {"name": "AgentNameD", "reason": "User query is about API parameters; database querying is not needed"}\n'
-            "  ]\n"
-            "}\n\n"
+            "Call the plan_execution tool with your execution plan.\n\n"
             "Important:\n"
             "- The \"reasoning\" field MUST contain your step-by-step thinking following all 5 steps. Do NOT skip it.\n"
             "- Every agent MUST appear either in execution_plan or in excluded_agents, not both.\n"
+            "- Every excluded_agents item MUST contain the exact agent name in \"name\" and a brief explanation in \"reason\".\n"
             "- excluded_agents can be an empty list if all agents are relevant.\n"
             "- Only keep excluded_agents empty when the query genuinely needs ALL agent types.\n"
             "- Including unnecessary agents wastes resources and slows down response time. Be precise."
@@ -1358,14 +1443,33 @@ class ExpertAgent(BaseAgent):
                 HumanMessage(content=human_content),
             ]
             logger.info("[ExecutionPlanner] LLM 规划开始 | agent 数: %d", len(self.group_agent_cards))
-            response = await asyncio.wait_for(self.llm.ainvoke(messages), timeout=30.0)
-            raw_text = response.content if hasattr(response, 'content') else str(response)
-            logger.debug("[ExecutionPlanner] LLM raw response: %s", raw_text[:1000])
 
-            # 复用 format_llm_output 进行 JSON 提取和清洗（处理 markdown 代码块、引号等问题）
-            plan_data = self.format_llm_output(response)
-            if not plan_data or not isinstance(plan_data, dict):
-                logger.warning("[ExecutionPlanner] format_llm_output 返回无效，使用 fallback")
+            plan_execution_tool = StructuredTool(
+                name="plan_execution",
+                description="Plan the execution order of agents with phase-level parallelism and context routing.",
+                args_schema=ExecutionPlanResult,
+                func=None,
+                coroutine=None,
+            )
+
+            result = await invoke_llm_with_tool(
+                llm=self.llm_non_stream,
+                metadata=self.metadata,
+                fallback_formatter=self.format_llm_output,
+                tool=plan_execution_tool,
+                messages=messages,
+                tool_choice="plan_execution",
+                span_name="expert-plan-execution",
+                span_input={"query": self.query},
+            )
+
+            if result is None:
+                logger.warning("[ExecutionPlanner] tool call 返回 None，使用 fallback")
+                return fallback_plan
+
+            plan_data = result
+            if not isinstance(plan_data, dict):
+                logger.warning("[ExecutionPlanner] plan_data 不是 dict，使用 fallback")
                 return fallback_plan
 
             reasoning = plan_data.get("reasoning", "")

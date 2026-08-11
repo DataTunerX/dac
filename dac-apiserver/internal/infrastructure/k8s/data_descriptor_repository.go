@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/bytedance/sonic"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,7 +33,7 @@ func NewDataDescriptorRepository(k8sClient *k8s.Client) domain.DataDescriptorRep
 
 // Create creates a new data descriptor
 func (r *dataDescriptorRepository) Create(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error) {
-	unst, err := r.toUnstructured(descriptor)
+	unst, err := r.toUnstructured(descriptor, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert to unstructured: %w", err)
 	}
@@ -99,7 +100,8 @@ func (r *dataDescriptorRepository) List(ctx context.Context, namespace string, o
 
 // Update updates a data descriptor
 func (r *dataDescriptorRepository) Update(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error) {
-	unst, err := r.toUnstructured(descriptor)
+	// Spec-only update: never send status on the main resource endpoint.
+	unst, err := r.toUnstructured(descriptor, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert to unstructured: %w", err)
 	}
@@ -116,7 +118,7 @@ func (r *dataDescriptorRepository) Update(ctx context.Context, descriptor *entit
 
 // UpdateStatus updates the status of a data descriptor
 func (r *dataDescriptorRepository) UpdateStatus(ctx context.Context, descriptor *entity.DataDescriptor) (*entity.DataDescriptor, error) {
-	unst, err := r.toUnstructured(descriptor)
+	unst, err := r.toUnstructured(descriptor, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert to unstructured: %w", err)
 	}
@@ -166,15 +168,24 @@ func (r *dataDescriptorRepository) Delete(ctx context.Context, namespace, name s
 }
 
 // toUnstructured converts domain entity to unstructured.Unstructured
-func (r *dataDescriptorRepository) toUnstructured(descriptor *entity.DataDescriptor) (*unstructured.Unstructured, error) {
+func (r *dataDescriptorRepository) toUnstructured(descriptor *entity.DataDescriptor, includeStatus bool) (*unstructured.Unstructured, error) {
+	metadata := map[string]interface{}{
+		"name":      descriptor.Name,
+		"namespace": descriptor.Namespace,
+		"labels":    descriptor.Labels,
+	}
+	// K8s rejects Update/UpdateStatus without resourceVersion (optimistic concurrency).
+	if rv := strings.TrimSpace(descriptor.ResourceVersion); rv != "" {
+		metadata["resourceVersion"] = rv
+	}
+	if len(descriptor.Annotations) > 0 {
+		metadata["annotations"] = descriptor.Annotations
+	}
+
 	obj := map[string]interface{}{
 		"apiVersion": "dac.dac.io/v1alpha1",
 		"kind":       "DataDescriptor",
-		"metadata": map[string]interface{}{
-			"name":      descriptor.Name,
-			"namespace": descriptor.Namespace,
-			"labels":    descriptor.Labels,
-		},
+		"metadata":   metadata,
 		"spec": map[string]interface{}{
 			"descriptorType": descriptor.DescriptorType,
 			"gpuEnabled":     entity.NormalizeGPUEnabled(descriptor.GPUEnabled),
@@ -182,7 +193,11 @@ func (r *dataDescriptorRepository) toUnstructured(descriptor *entity.DataDescrip
 		},
 	}
 
-	if len(descriptor.SourceStatuses) > 0 || len(descriptor.ConsumedBy) > 0 || descriptor.OverallPhase != "" {
+	if pdfLoader := entity.NormalizePDFLoader(descriptor.PDFLoader); pdfLoader != "" {
+		obj["spec"].(map[string]interface{})["pdfLoader"] = pdfLoader
+	}
+
+	if includeStatus && (len(descriptor.SourceStatuses) > 0 || len(descriptor.ConsumedBy) > 0 || descriptor.OverallPhase != "" || len(descriptor.Conditions) > 0) {
 		status := make(map[string]interface{})
 		if len(descriptor.SourceStatuses) > 0 {
 			status["sourceStatuses"] = r.sourceStatusesToMap(descriptor.SourceStatuses)
@@ -233,18 +248,20 @@ func k8sDataDescriptorToEntity(k8sDesc *K8sDataDescriptor) *entity.DataDescripto
 		return &entity.DataDescriptor{}
 	}
 	descriptor := &entity.DataDescriptor{
-		Name:           k8sDesc.Metadata.Name,
-		Namespace:      k8sDesc.Metadata.Namespace,
-		Labels:         k8sDesc.Metadata.Labels,
-		Annotations:    k8sDesc.Metadata.Annotations,
-		DescriptorType: k8sDesc.Spec.DescriptorType,
-		GPUEnabled:     entity.NormalizeGPUEnabled(k8sDesc.Spec.GPUEnabled),
-		Sources:        mapK8sSourcesToEntity(k8sDesc.Spec.Sources),
-		SourceStatuses: k8sDesc.Status.SourceStatuses,
-		ConsumedBy:     k8sDesc.Status.ConsumedBy,
-		OverallPhase:   k8sDesc.Status.OverallPhase,
-		Conditions:     k8sDesc.Status.Conditions,
-		CreatedAt:      k8sDesc.Metadata.CreationTimestamp.Time,
+		Name:            k8sDesc.Metadata.Name,
+		Namespace:       k8sDesc.Metadata.Namespace,
+		Labels:          k8sDesc.Metadata.Labels,
+		Annotations:     k8sDesc.Metadata.Annotations,
+		ResourceVersion: k8sDesc.Metadata.ResourceVersion,
+		DescriptorType:  k8sDesc.Spec.DescriptorType,
+		GPUEnabled:      entity.NormalizeGPUEnabled(k8sDesc.Spec.GPUEnabled),
+		PDFLoader:       entity.NormalizePDFLoader(k8sDesc.Spec.PDFLoader),
+		Sources:         mapK8sSourcesToEntity(k8sDesc.Spec.Sources),
+		SourceStatuses:  k8sDesc.Status.SourceStatuses,
+		ConsumedBy:      k8sDesc.Status.ConsumedBy,
+		OverallPhase:    k8sDesc.Status.OverallPhase,
+		Conditions:      k8sDesc.Status.Conditions,
+		CreatedAt:       k8sDesc.Metadata.CreationTimestamp.Time,
 	}
 	return descriptor
 }

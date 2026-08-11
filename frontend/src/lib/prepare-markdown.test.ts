@@ -34,4 +34,35 @@ describe("prepareMarkdown — GFM tables", () => {
     const out = prepareMarkdown(input)
     expect(out.split("\n").length).toBeGreaterThanOrEqual(3)
   })
+
+  it("keeps literal \\n escapes inside ```chart code fence (valid JSON preserved)", () => {
+    const input = '```chart\n{"series":[{"type":"funnel","label":{"formatter":"{b}\\n{c}人"}}]}\n```'
+    const out = prepareMarkdown(input)
+    // The literal \n inside the JSON string must survive as `\` + `n`
+    // (not become a real newline that breaks JSON.parse).
+    expect(out).toContain('"{b}\\n{c}')
+    expect(out).not.toContain('formatter":"{b}\n{c}人"')
+    // And it must still be parseable JSON once the fence is stripped.
+    const body = out
+      .split("\n")
+      .filter((l) => !/^\s*```/.test(l))
+      .join("\n")
+    expect(() => JSON.parse(body)).not.toThrow()
+  })
+})
+
+describe("prepareMarkdown — empty table cells", () => {
+  it("does not split valid rows that contain empty cells", () => {
+    const input = [
+      "| Column | Type | Nullable | Key | Comment |",
+      "|--------|------|----------|-----|---------|",
+      "| `id` | `int4(32,0)` | NO | PRI | None |",
+      "| `first_name` | `varchar(256)` | NO |  |  |",
+      "| `last_name` | `varchar(256)` | NO |  | some note |",
+    ].join("\n")
+    const out = prepareMarkdown(input)
+    expect(out).toBe(input)
+    expect(out).toContain("| `first_name` | `varchar(256)` | NO |  |  |")
+    expect(out).toContain("| `last_name` | `varchar(256)` | NO |  | some note |")
+  })
 })

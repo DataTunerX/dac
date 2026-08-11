@@ -16,7 +16,7 @@ type User struct {
 
 // LoginData represents the data returned after successful login
 type LoginData struct {
-	Token  string `json:"token"`
+	Token  string `json:"-"`
 	Expire string `json:"expire"`
 	User   *User  `json:"user"`
 }

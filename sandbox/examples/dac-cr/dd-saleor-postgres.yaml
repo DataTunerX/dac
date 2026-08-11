@@ -1,0 +1,25 @@
+# DAC sandbox demo: Saleor 电商平台演示数据（populatedb Job 灌入后的 PostgreSQL）
+apiVersion: dac.dac.io/v1alpha1
+kind: DataDescriptor
+metadata:
+  name: dd-sandbox-saleor-postgres
+  namespace: dac
+  labels:
+    app.kubernetes.io/name: execution-engine
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  descriptorType: "structured-postgres"
+  sources:
+    - type: postgres
+      name: "sandbox-saleor-db"
+      metadata:
+        host: "postgres.dac-sandbox.svc.cluster.local"
+        port: "5432"
+        user: "saleor"
+        password: "saleor"
+        database: "saleor"
+      extract:
+        tables: []
+      prompts:
+        prompts:
+          name: ""

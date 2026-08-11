@@ -6,6 +6,7 @@ package handler
 import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"errors"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 )
@@ -51,12 +52,15 @@ func AcceptedResponse(c *app.RequestContext, data interface{}) {
 
 // ErrorResponse returns an error response based on error type
 func ErrorResponse(c *app.RequestContext, err error) {
-	// getuser友好of错误消息（不暴露内部细节）
+	// Prefer DomainError user message even when wrapped (e.g. "invalid request: %w").
 	getUserMessage := func(err error) string {
-		if domainErr, ok := err.(*domain.DomainError); ok {
+		var domainErr *domain.DomainError
+		if errors.As(err, &domainErr) {
 			return domainErr.UserMessage()
 		}
-		// 对于非 DomainError，返回通用消息
+		if domain.IsInvalidInput(err) {
+			return err.Error()
+		}
 		return "an error occurred"
 	}
 
@@ -80,6 +84,11 @@ func ErrorResponse(c *app.RequestContext, err error) {
 	case domain.IsConflict(err):
 		c.JSON(consts.StatusConflict, Response{
 			Code:    "CONFLICT",
+			Message: getUserMessage(err),
+		})
+	case errors.Is(err, domain.ErrUnauthorized):
+		c.JSON(consts.StatusUnauthorized, Response{
+			Code:    "UNAUTHORIZED",
 			Message: getUserMessage(err),
 		})
 	default:

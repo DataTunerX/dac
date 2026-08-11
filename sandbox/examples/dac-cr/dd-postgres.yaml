@@ -13,7 +13,7 @@ spec:
     - type: postgres
       name: "sandbox-postgres-finance"
       metadata:
-        host: "postgres-server.dac-sandbox.svc.cluster.local"
+        host: "postgres.dac-sandbox.svc.cluster.local"
         port: "5432"
         user: "dac"
         password: "dacpass"

@@ -1,17 +1,13 @@
-# DAC sandbox — 一键构建/推送/部署
+# DAC sandbox — 镜像准备 + Helm 安装
 #
-# 典型用法:
-#   make mirror-public   # (首次/私有 registry 必跑) 同步 mysql/postgres/nginx/alpine/mc/minio/gitlab-ce 公共镜像
-#   make vendor          # 下载 Sakila/Pagila/Chinook/MovieLens 到 seed/
-#   make build           # 本地 build 五个 sandbox-* 镜像
-#                        # (gitlab-seed 镜像构建期会自动 git clone gitee.com/jamesxiong888/test-code.git)
-#   make push            # push sandbox-* 镜像到 $(REGISTRY)
-#   make apply           # 部署到当前 kubectl 上下文
-#   make all             # vendor + build + push
-#   make verify          # 部署后做端口和数据自检
+#   make offline-prep   # 有网机：vendor + mirror + build/push
+#   make apply          # 集群：helm install 全量
+#   make scan-targets   # 前端 /infra 扫描用 IP/端口
+#   make verify
+#   make uninstall
 
 REGISTRY ?= release.daocloud.io/dac
-TAG      ?= v0.10.0
+TAG      ?= v0.11.0
 PLATFORM ?= linux/amd64
 BUILD    := docker build --platform $(PLATFORM)
 
@@ -22,66 +18,51 @@ FILESERVER_IMAGE   := $(REGISTRY)/sandbox-fileserver:$(TAG)
 GITLAB_SEED_IMAGE  := $(REGISTRY)/sandbox-gitlab-seed:$(TAG)
 
 NAMESPACE := dac-sandbox
+CHART     := ./chart
+RELEASE   := dac-sandbox
 
-# gitlab-seed 镜像内置的示例代码仓库（构建期 git clone 进镜像）
-GITLAB_SEED_REPO_URL ?= https://gitee.com/jamesxiong888/test-code.git
-GITLAB_SEED_REPO_REF ?= master
+GITLAB_TEST_CODE_REPO_URL ?= https://gitee.com/jamesxiong888/test-code.git
+GITLAB_TEST_CODE_REPO_REF ?= master
+GITLAB_SALEOR_REPO_URL ?= https://github.com/saleor/saleor.git
+GITLAB_SALEOR_REPO_REF ?= main
 
-.PHONY: help vendor mirror-public \
+.PHONY: help vendor mirror-images offline-prep \
         build build-mysql build-postgres build-minio-seed build-fileserver build-gitlab-seed \
         push push-mysql push-postgres push-minio-seed push-fileserver push-gitlab-seed \
-        apply delete restart logs verify clean all
+        apply install uninstall template lint restart logs verify scan-targets clean all
 
 help:
 	@awk 'BEGIN{FS=":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*?##/{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-# ------------- Vendor (开源数据集) -------------
-vendor: ## 下载 Sakila / Pagila / Chinook / MovieLens 1M 到 seed/
+# ------------- Prepare images (online machine) -------------
+vendor: ## 下载 Sakila/Pagila/Chinook/MovieLens 等 SQL/datasets 到 seed/
 	@bash scripts/download-vendor.sh
 
-# ------------- Mirror Public Images -------------
-# 把 sandbox 用到的所有外部公共镜像（base + runtime）从 docker.io 同步到 $(REGISTRY)
-# 只在私有 registry 不是 docker hub 透明代理时需要跑一次。已存在则覆盖。
-PUBLIC_IMAGES := \
-  library/mysql:8.0 \
-  library/postgres:16 \
-  library/nginx:1.27-alpine \
-  library/alpine:3.20 \
-  minio/mc:latest \
-  minio/minio:latest \
-  gitlab/gitlab-ce:17.5.0-ce.0
+mirror-images: ## 外部镜像 pull/tag/push 到 $(REGISTRY)
+	REGISTRY=$(REGISTRY) PLATFORM=$(PLATFORM) BOUTIQUE_TAG=v0.10.5 SALEOR_TAG=3.23 bash scripts/mirror-images.sh
 
-mirror-public: ## 拉公共镜像 → retag → push 到 $(REGISTRY) （私有 registry 首次必跑）
-	@set -e; \
-	for src in $(PUBLIC_IMAGES); do \
-	  short=$$(basename "$$src"); \
-	  dst="$(REGISTRY)/$$short"; \
-	  echo "\033[36m[mirror]\033[0m docker.io/$$src  ->  $$dst"; \
-	  docker pull --platform $(PLATFORM) "docker.io/$$src"; \
-	  docker tag  "docker.io/$$src" "$$dst"; \
-	  docker push "$$dst"; \
-	done
-	@echo "\n\033[32m[mirror] DONE — $(words $(PUBLIC_IMAGES)) images synced to $(REGISTRY)\033[0m"
+offline-prep: ## 有网机一站式：vendor + mirror + build/push
+	REGISTRY=$(REGISTRY) TAG=$(TAG) PLATFORM=$(PLATFORM) bash scripts/offline-prep.sh
 
-# ------------- Build -------------
-build: build-mysql build-postgres build-minio-seed build-fileserver build-gitlab-seed ## build 全部 5 个镜像
+build: build-mysql build-postgres build-minio-seed build-fileserver build-gitlab-seed ## build 5 个 sandbox-* 镜像
 
-build-mysql:        ## build MySQL 镜像
-	$(BUILD) -t $(MYSQL_IMAGE)      -f images/mysql/Dockerfile      .
-build-postgres:     ## build PostgreSQL 镜像
-	$(BUILD) -t $(POSTGRES_IMAGE)   -f images/postgres/Dockerfile   .
-build-minio-seed:   ## build MinIO seed Job 镜像
+build-mysql: vendor
+	$(BUILD) -t $(MYSQL_IMAGE) -f images/mysql/Dockerfile .
+build-postgres: vendor
+	$(BUILD) -t $(POSTGRES_IMAGE) -f images/postgres/Dockerfile .
+build-minio-seed:
 	$(BUILD) -t $(MINIO_SEED_IMAGE) -f images/minio-seed/Dockerfile .
-build-fileserver:   ## build FileServer (nginx) 镜像
+build-fileserver:
 	$(BUILD) -t $(FILESERVER_IMAGE) -f images/fileserver/Dockerfile .
-build-gitlab-seed:  ## build GitLab seed Job 镜像（构建期会克隆 $(GITLAB_SEED_REPO_URL)）
+build-gitlab-seed:
 	$(BUILD) \
-	  --build-arg SEED_REPO_URL=$(GITLAB_SEED_REPO_URL) \
-	  --build-arg SEED_REPO_REF=$(GITLAB_SEED_REPO_REF) \
+	  --build-arg TEST_CODE_REPO_URL=$(GITLAB_TEST_CODE_REPO_URL) \
+	  --build-arg TEST_CODE_REPO_REF=$(GITLAB_TEST_CODE_REPO_REF) \
+	  --build-arg SALEOR_REPO_URL=$(GITLAB_SALEOR_REPO_URL) \
+	  --build-arg SALEOR_REPO_REF=$(GITLAB_SALEOR_REPO_REF) \
 	  -t $(GITLAB_SEED_IMAGE) -f images/gitlab-seed/Dockerfile .
 
-# ------------- Push -------------
-push: push-mysql push-postgres push-minio-seed push-fileserver push-gitlab-seed ## push 5 个镜像到 registry
+push: push-mysql push-postgres push-minio-seed push-fileserver push-gitlab-seed ## push 5 个镜像
 
 push-mysql:
 	docker push $(MYSQL_IMAGE)
@@ -94,67 +75,82 @@ push-fileserver:
 push-gitlab-seed:
 	docker push $(GITLAB_SEED_IMAGE)
 
-all: vendor build push ## 一把梭：下载数据 + build + push
+all: vendor build push ## vendor + build + push（不含 mirror）
 
-# ------------- K8s -------------
-apply: ## kubectl apply 整个 sandbox
-	kubectl apply -f k8s/00-namespace.yaml
-	kubectl apply -f k8s/01-statefulset.yaml
-	kubectl apply -f k8s/02-services.yaml
-	kubectl apply -f k8s/03-seed-job.yaml
-	kubectl apply -f k8s/04-gitlab-seed-job.yaml
+# ------------- Helm install (cluster) -------------
+apply install: ## helm upgrade --install 全量沙盒
+	helm upgrade --install $(RELEASE) $(CHART) \
+	  -n $(NAMESPACE) --create-namespace \
+	  --set global.imageRegistry=$(REGISTRY) \
+	  --set global.imageTag=$(TAG)
 	@echo
-	@echo "等 Pod ready (GitLab 首次 reconfigure 约 3-5 分钟):  kubectl -n $(NAMESPACE) get pods -w"
+	@echo "Installed. Wait for GitLab (~3-5m) and Odoo/Saleor init on STS."
+	@echo "Next: make scan-targets"
 
-delete: ## 拆掉 sandbox
-	-kubectl delete -f k8s/04-gitlab-seed-job.yaml
-	-kubectl delete -f k8s/03-seed-job.yaml
-	-kubectl delete -f k8s/02-services.yaml
-	-kubectl delete -f k8s/01-statefulset.yaml
-	-kubectl delete -f k8s/00-namespace.yaml
+uninstall: ## helm uninstall + 删除命名空间
+	-helm uninstall $(RELEASE) -n $(NAMESPACE)
+	-kubectl delete ns $(NAMESPACE) --wait=false
 
-restart: ## 重启 Pod (快速重置数据)
+template: ## helm template
+	helm template $(RELEASE) $(CHART) -n $(NAMESPACE) \
+	  --set global.imageRegistry=$(REGISTRY) \
+	  --set global.imageTag=$(TAG)
+
+lint: ## helm lint
+	helm lint $(CHART)
+
+restart: ## 重启 STS（emptyDir 数据会丢）
 	kubectl -n $(NAMESPACE) rollout restart statefulset/dac-sandbox
 
-logs: ## 查 Pod 日志 (容器=mysql/postgres/minio/fileserver/gitlab)
+logs: ## STS mysql 日志
 	kubectl -n $(NAMESPACE) logs -f dac-sandbox-0 -c mysql --tail=50
 
-# ------------- Verify -------------
-verify: ## 部署后自检：端口可达 + 关键 db/bucket/repo 存在
+verify: ## 部署后自检
 	@echo "== Pods =="
 	@kubectl -n $(NAMESPACE) get pods
 	@echo
 	@echo "== Services =="
 	@kubectl -n $(NAMESPACE) get svc
 	@echo
-	@echo "== Pod IP =="
+	@echo "== STS Pod IP =="
 	@kubectl -n $(NAMESPACE) get pod dac-sandbox-0 -o jsonpath='{.status.podIP}{"\n"}'
 	@echo
-	@echo "== MySQL databases =="
-	@kubectl -n $(NAMESPACE) exec dac-sandbox-0 -c mysql -- \
-	  mysql -uroot -pdacpass -e "SHOW DATABASES;" 2>/dev/null | grep -vE '^(Database|mysql|information_schema|performance_schema|sys)$$' || true
+	@echo "== STS containers =="
+	@kubectl -n $(NAMESPACE) get pod dac-sandbox-0 -o jsonpath='{range .status.containerStatuses[*]}{.name}{": ready="}{.ready}{"\n"}{end}' 2>/dev/null || true
 	@echo
-	@echo "== Postgres databases =="
+	@echo "== MySQL DBs =="
+	@kubectl -n $(NAMESPACE) exec dac-sandbox-0 -c mysql -- \
+	  mysql -uroot -pdacpass -N -e "SHOW DATABASES;" 2>/dev/null \
+	  | grep -vE '^(mysql|information_schema|performance_schema|sys)$$' || true
+	@echo
+	@echo "== Postgres DBs =="
 	@kubectl -n $(NAMESPACE) exec dac-sandbox-0 -c postgres -- \
 	  psql -U postgres -tAc "SELECT datname FROM pg_database WHERE datistemplate=false;" 2>/dev/null || true
 	@echo
-	@echo "== MinIO buckets =="
-	@kubectl -n $(NAMESPACE) exec dac-sandbox-0 -c minio -- \
-	  mc --json --insecure alias set localck http://127.0.0.1:9000 dac dacpassword >/dev/null 2>&1 || true
-	@kubectl -n $(NAMESPACE) exec dac-sandbox-0 -c minio -- \
-	  mc ls localck 2>/dev/null || true
-	@echo
-	@echo "== FileServer index =="
-	@kubectl -n $(NAMESPACE) exec dac-sandbox-0 -c fileserver -- \
-	  wget -qO- http://127.0.0.1:8000/ 2>/dev/null | grep -oE 'href="[^"]+"' | head -10 || true
-	@echo
-	@echo "== GitLab projects (root/) =="
-	@kubectl -n $(NAMESPACE) exec dac-sandbox-0 -c gitlab -- \
-	  curl -fsS -H "PRIVATE-TOKEN: $$GITLAB_ROOT_TOKEN" http://127.0.0.1:8929/api/v4/users/root/projects 2>/dev/null \
-	  | (command -v jq >/dev/null && jq -r '.[] | "  - " + .path_with_namespace' || cat) \
-	  || echo "(skipped — set GITLAB_ROOT_TOKEN to inspect via API; or browse http://<pod-ip>:8929/root)"
+	@echo "== HTTP on STS (dashboard / boutique) =="
+	@kubectl -n $(NAMESPACE) exec dac-sandbox-0 -c saleor-dashboard -- \
+	  wget -qO- http://127.0.0.1:9002/dashboard/ >/dev/null 2>&1 && echo "saleor-dashboard:9002 ok" || echo "saleor-dashboard: not ready"
+	@kubectl -n $(NAMESPACE) exec dac-sandbox-0 -c boutique-frontend -- \
+	  wget -qO- http://127.0.0.1:8080/_healthz >/dev/null 2>&1 && echo "boutique:8080 ok" || echo "boutique: not ready"
 
-clean: ## 清掉本地 vendor 缓存和派生文件
+scan-targets: ## 前端 /infra 扫描（单个 STS IP）
+	@echo "== 目标（只需 dac-sandbox-0 这一个 IP）=="
+	@kubectl -n $(NAMESPACE) get pod dac-sandbox-0 -o jsonpath='{.status.podIP}{"\n"}' 2>/dev/null \
+	  || echo "(no pod — run: make apply)"
+	@echo
+	@echo "== 端口 =="
+	@echo "3306,5432,6379,8000,8001,8069,8080,8929,9000,9001,9002"
+	@echo
+	@echo "  3306 mysql | 5432 postgres | 6379 redis"
+	@echo "  8000 fileserver | 8001 saleor-api | 8069 odoo"
+	@echo "  8080 boutique | 8929 gitlab | 9000/9001 minio | 9002 saleor-dashboard"
+
+clean: ## 清本地 vendor 缓存
 	rm -rf scripts/.vendor-cache \
 	       seed/datasets/ml-1m \
-	       seed/mysql/99-sakila.sql seed/postgres/98-pagila.sql seed/postgres/99-chinook.sql
+	       seed/mysql/50-northwind.sql seed/mysql/51-classicmodels.sql \
+	       seed/mysql/52-chinook.sql seed/mysql/53-employees.sh \
+	       seed/mysql/53-employees-schema.sql seed/mysql/54-world.sql \
+	       seed/mysql/employees-dumps/*.dump \
+	       seed/mysql/99-sakila.sql seed/postgres/50-northwind.sql \
+	       seed/postgres/98-pagila.sql seed/postgres/99-chinook.sql

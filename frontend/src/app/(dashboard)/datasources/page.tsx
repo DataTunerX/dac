@@ -33,11 +33,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import { Plus, Eye, Loader2, RefreshCw, Trash2, Box } from "lucide-react"
 import { CreateDataSourceDialog } from "@/components/data-source-forms"
 import { toast } from "sonner"
 import { BrandIcon } from "@/components/brand-icon"
 import { getDataSourceKindLabel, normalizeDataSourceKind, type DataSourceKind } from "@/lib/data-source-kind"
+import { validateSystemLlmConfigMaps } from "@/lib/system-config-meta"
+import { buildCreateDescriptorPayload } from "@/lib/descriptor-payload"
+import { getApiErrorMessage } from "@/lib/api-error"
 
 // --- Types ---
 interface DataSource {
@@ -48,9 +52,26 @@ interface DataSource {
   sourceType?: DataSourceKind;
   status: string;
   isDeleting?: boolean;
-  lastUpdated: string;
+  createdAt: string;
+  readyAt: string;
   raw: unknown;
 }
+
+const DATASOURCES_LIST_COLUMNS = [
+  { id: "name", size: 220 },
+  { id: "namespace", size: 140 },
+  { id: "type", size: 120 },
+  { id: "status", size: 110 },
+  { id: "created", size: 160 },
+  { id: "ready", size: 160 },
+  { id: "actions", size: 120 },
+] as const
+
+const DATASOURCES_DEPENDENT_COLUMNS = [
+  { id: "resource", size: 240 },
+  { id: "namespace", size: 112 },
+  { id: "actions", size: 176 },
+] as const
 
 interface CreateDataSourcePayload {
     namespace: string;
@@ -73,6 +94,7 @@ interface CreateDataSourcePayload {
     extractFiles?: string;
     promptsConfigMapName?: string;
     gpuEnabled?: "yes" | "no";
+    pdfLoader?: "auto" | "ocr" | "text";
     enableCodeRepo?: boolean;
     codeRepoType?: string;
     codeRepoPath?: string;
@@ -85,18 +107,28 @@ interface CreateDataSourcePayload {
  * (lowercase, alphanumeric + '-', no leading/trailing dashes, capped length).
  * Empty input maps to "db" so callers don't have to guard against it.
  */
-function sanitizeDBSegment(raw: string): string {
-  const cleaned = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40)
-  return cleaned || "db"
-}
-
 function isRecord(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === "object" && !Array.isArray(v)
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) return "-"
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime()) || date.getUTCFullYear() <= 1) return "-"
+  return date.toLocaleString("zh-CN", { hour12: false })
+}
+
+function getReadyAt(
+  statuses: DataDescriptorListResponse["items"][number]["source_statuses"],
+): string {
+  const timestamps = (statuses ?? [])
+    .filter((status) => status.phase.toLowerCase() === "ready")
+    .map((status) => new Date(status.last_sync_time).getTime())
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0)
+
+  return timestamps.length > 0
+    ? formatDateTime(new Date(Math.max(...timestamps)).toISOString())
+    : "-"
 }
 
 function SourceIcon({ kind }: { kind: DataSourceKind }) {
@@ -151,7 +183,6 @@ export default function DataSourcesPage() {
       const sourceType = first?.type ?? ""
       const iconKind = normalizeDataSourceKind(descriptorType, sourceType)
       const overallPhase = item.overall_phase ?? "NotReady"
-      const updatedAt = item.updated_at ?? ""
       return {
         id: item.name,
         name: item.name,
@@ -160,7 +191,8 @@ export default function DataSourcesPage() {
         sourceType: iconKind,
         status: (item.deleting || item.deletion_timestamp) ? "Deleting" : overallPhase,
         isDeleting: Boolean(item.deleting || item.deletion_timestamp),
-        lastUpdated: updatedAt ? new Date(updatedAt).toLocaleString() : "-",
+        createdAt: formatDateTime(item.created_at),
+        readyAt: getReadyAt(item.source_statuses),
         raw: item,
       } as DataSource
     })
@@ -270,137 +302,26 @@ export default function DataSourcesPage() {
       setIsDeleting(false)
     }
   }
-
   const handleCreate = async (data: CreateDataSourcePayload) => {
+    const targetNs = String(data.namespace || "default").trim() || "default"
+    const llmErr = await validateSystemLlmConfigMaps(targetNs)
+    if (llmErr) {
+      toast.error(llmErr, { duration: 8000 })
+      throw new Error(llmErr)
+    }
+
     try {
-      const namespace = data.namespace?.trim() || "default"
-      const promptsName = data.promptsConfigMapName?.trim() || ""
-      const hasPrompts = Boolean(promptsName)
-
-      const repoType = data.codeRepoType?.trim() || ""
-      const repoPath = data.codeRepoPath?.trim() || ""
-      const repoBranch = data.codeRepoBranch?.trim() || ""
-      const repoToken = data.codeRepoToken?.trim() || ""
-      const t = String(data.type || "").trim()
-      const gpuEnabled = data.gpuEnabled === "yes" ? "yes" : "no"
-      const isCodeRepo = t === "coderepo"
-      const hasCodeRepo =
-        isCodeRepo || (Boolean(data.enableCodeRepo) && Boolean(repoType || repoPath || repoBranch || repoToken))
-
-      const isStructuredDB = t === "mysql" || t === "postgres"
-      // execution-engine 认 descriptorType === "code" 时走 code-agent 与 code 配置；代码类型统一用 code
-      const descriptorType = isCodeRepo ? "code" : isStructuredDB ? `structured-${t}` : "unstructured"
-
-      const name = String(data.name || "").trim()
-
-      if (isCodeRepo) {
-        const sourceType = repoType || "github"
-        const metadata: Record<string, string> = {
-          codeRepoPath: repoPath,
-          codeRepoBranch: repoBranch || "main",
-          codeRepoToken: repoToken,
-        }
-        const payload = {
-          name: data.name,
-          namespace,
-          descriptorType,
-          gpuEnabled,
-          sources: [
-            {
-              name: data.name + "-source",
-              type: sourceType,
-              metadata,
-              ...(hasPrompts ? { prompts: { configMapName: promptsName } } : {}),
-              extract: { tables: [] },
-              processing: { cleaning: [] },
-            },
-          ],
-        }
-        await api.post(`/namespaces/${namespace}/descriptors`, payload)
-        toast.success("数据源创建成功")
-        fetchData()
-        return
-      }
-
-      const baseMetadata: Record<string, string> = {
-        host: String(data.host ?? ""),
-        port: String(data.port ?? ""),
-      }
-      if (t === "minio") {
-        baseMetadata.access_key = String(data.accessKey ?? "")
-        baseMetadata.secret_key = String(data.secretKey ?? "")
-        baseMetadata.bucket = String(data.bucket ?? "")
-      } else if (t === "fileserver") {
-        if (data.path) baseMetadata.path = String(data.path)
-      }
-
-      const extractFiles = String(data.extractFiles ?? "")
-        .split(/\r?\n|,/g)
-        .map((s) => s.trim())
-        .filter(Boolean)
-
-      const buildSource = (sourceName: string, metadata: Record<string, string>) => ({
-        name: sourceName,
-        type: t,
-        metadata,
-        ...(hasPrompts ? { prompts: { configMapName: promptsName } } : {}),
-        ...(hasCodeRepo
-          ? {
-              codeRepo: {
-                codeRepoType: repoType,
-                codeRepoPath: repoPath,
-                codeRepoBranch: repoBranch,
-                codeRepoToken: repoToken,
-              },
-            }
-          : {}),
-        extract:
-          t === "minio" || t === "fileserver"
-            ? { files: extractFiles }
-            : { tables: [] },
-        processing: { cleaning: [] },
-      })
-
-      // Fan-out: a structured-DB DataDescriptor expands into one logical
-      // DataSource per selected database, all sharing the same connection.
-      // For non-DB types we keep the historical 1:1 mapping.
-      let sources: ReturnType<typeof buildSource>[]
-      if (isStructuredDB) {
-        const dbs = (data.databases ?? [])
-          .map((s) => s.trim())
-          .filter(Boolean)
-        if (dbs.length === 0) {
-          throw new Error("请至少选择一个数据库")
-        }
-        sources = dbs.map((db) => {
-          const sourceName = `${name}-${sanitizeDBSegment(db)}`
-          return buildSource(sourceName, {
-            ...baseMetadata,
-            user: String(data.user ?? ""),
-            password: String(data.password ?? ""),
-            database: db,
-          })
-        })
-      } else {
-        sources = [buildSource(`${name}-source`, baseMetadata)]
-      }
-
-      const payload = {
-        name,
-        namespace,
-        descriptorType,
-        gpuEnabled,
-        sources,
-      }
-
-      await api.post(`/namespaces/${namespace}/descriptors`, payload)
+      const payload = buildCreateDescriptorPayload(data)
+      await api.post(
+        `/namespaces/${encodeURIComponent(payload.namespace)}/descriptors`,
+        payload,
+      )
       toast.success("数据源创建成功")
-      fetchData() 
+      fetchData()
     } catch (err) {
-        console.error("Failed to create", err)
-        const e = err as { response?: { data?: { message?: string } } }
-        toast.error(e.response?.data?.message || "创建失败，请检查输入或日志")
-        throw err
+      console.error("Failed to create", err)
+      toast.error(getApiErrorMessage(err, "创建失败，请检查输入或日志"))
+      throw err
     }
   }
 
@@ -432,23 +353,23 @@ export default function DataSourcesPage() {
       </div>
 
       {/* Table */}
-      <div className="rounded-lg border border-line bg-surface overflow-hidden">
-        <div className="overflow-x-auto">
-          <Table>
+      <TableWrapper>
+          <Table storageKey="datasources-list" columns={[...DATASOURCES_LIST_COLUMNS]}>
             <TableHeader>
               <TableRow className="bg-surface-muted">
-                <TableHead className="whitespace-nowrap">名称</TableHead>
-                <TableHead className="whitespace-nowrap">命名空间</TableHead>
-                <TableHead className="whitespace-nowrap">类型</TableHead>
-                <TableHead className="whitespace-nowrap">状态</TableHead>
-                <TableHead className="whitespace-nowrap">最后更新</TableHead>
-                <TableHead className="text-right whitespace-nowrap">操作</TableHead>
+                <TableHead columnId="name" className="whitespace-nowrap">名称</TableHead>
+                <TableHead columnId="namespace" className="whitespace-nowrap">命名空间</TableHead>
+                <TableHead columnId="type" className="whitespace-nowrap">类型</TableHead>
+                <TableHead columnId="status" className="whitespace-nowrap">状态</TableHead>
+                <TableHead columnId="created" className="whitespace-nowrap">创建时间</TableHead>
+                <TableHead columnId="ready" className="whitespace-nowrap">就绪时间</TableHead>
+                <TableHead columnId="actions" className="text-right whitespace-nowrap">操作</TableHead>
               </TableRow>
             </TableHeader>
           <TableBody>
             {isLoading && dataSources.length === 0 ? (
              <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center">
+                <TableCell colSpan={7} className="h-24 text-center">
                     <div className="flex items-center justify-center gap-2 text-muted-foreground">
                         <Loader2 className="w-4 h-4 animate-spin" /> 加载中…
                     </div>
@@ -456,7 +377,7 @@ export default function DataSourcesPage() {
             </TableRow>
           ) : dataSources.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={6} className="text-center text-content-muted py-10">
+              <TableCell colSpan={7} className="text-center text-content-muted py-10">
                 暂无数据源
                 <RbacWrapper requiredRole="admin">
                   <Button
@@ -483,15 +404,15 @@ export default function DataSourcesPage() {
                   navigateToDetail(ds)
                 }}
               >
-                <TableCell className="font-medium flex items-center gap-3">
+                <TableCell columnId="name" className="font-medium flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-cta/10 flex items-center justify-center text-cta">
                     <SourceIcon kind={ds.sourceType ?? "generic"} />
                   </div>
                   {ds.name}
                 </TableCell>
-                <TableCell className="text-content-muted">{ds.namespace}</TableCell>
-                <TableCell>{ds.type}</TableCell>
-                <TableCell>
+                <TableCell columnId="namespace" className="text-content-muted">{ds.namespace}</TableCell>
+                <TableCell columnId="type">{ds.type}</TableCell>
+                <TableCell columnId="status">
                   {(() => {
                     const raw = String(ds.status ?? "").trim()
                     // Normalize empty / "-" / "Unknown" into NotReady for display.
@@ -522,8 +443,13 @@ export default function DataSourcesPage() {
                     )
                   })()}
                 </TableCell>
-                <TableCell>{ds.lastUpdated}</TableCell>
-                <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                <TableCell columnId="created" className="whitespace-nowrap tabular-nums">
+                  {ds.createdAt}
+                </TableCell>
+                <TableCell columnId="ready" className="whitespace-nowrap tabular-nums">
+                  {ds.readyAt}
+                </TableCell>
+                <TableCell columnId="actions" className="text-right" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-2">
                     <Button
                       variant="ghost"
@@ -555,8 +481,7 @@ export default function DataSourcesPage() {
           )}
         </TableBody>
         </Table>
-        </div>
-      </div>
+      </TableWrapper>
 
       <PaginationBar
         total={totalCount}
@@ -588,23 +513,23 @@ export default function DataSourcesPage() {
           </AlertDialogHeader>
 
           <div className="mt-4 space-y-3 px-6">
-            <div className="max-h-[320px] w-full overflow-auto rounded-md border border-line">
-              <Table className="w-full table-fixed">
+            <TableWrapper className="max-h-[320px] overflow-auto rounded-md">
+              <Table storageKey="datasources-dependent-resources" columns={[...DATASOURCES_DEPENDENT_COLUMNS]}>
                 <TableHeader>
                   <TableRow className="bg-surface-muted">
-                    <TableHead className="w-auto">资源</TableHead>
-                    <TableHead className="w-28">命名空间</TableHead>
-                    <TableHead className="w-44 text-right">操作</TableHead>
+                    <TableHead columnId="resource">资源</TableHead>
+                    <TableHead columnId="namespace">命名空间</TableHead>
+                    <TableHead columnId="actions" className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {dependentResources.map((r, idx) => (
                     <TableRow key={`${r.kind}/${r.id ?? r.namespace}/${r.name}/${idx}`}>
-                      <TableCell className="font-medium whitespace-normal break-all">
+                      <TableCell columnId="resource" className="font-medium whitespace-normal break-all">
                         {getDataDescriptorDependencyKindLabel(r.kind)} / {r.name}
                       </TableCell>
-                      <TableCell className="text-content-muted">{r.namespace}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell columnId="namespace" className="text-content-muted">{r.namespace}</TableCell>
+                      <TableCell columnId="actions" className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           {r.kind === "group" && r.id ? (
                             <Button
@@ -640,7 +565,7 @@ export default function DataSourcesPage() {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </TableWrapper>
             <div className="text-sm text-content">
               若仅被语义组引用，可先「从语义组移除」再删除；若还被智能体引用，请先处理智能体依赖。
             </div>

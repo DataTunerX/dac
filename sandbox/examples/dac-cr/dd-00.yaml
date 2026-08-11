@@ -12,7 +12,7 @@ spec:
     - type: mysql
       name: "mysql-production"
       metadata:
-        host: "mysql-server.dac"
+        host: "mysql.dac-sandbox.svc.cluster.local"
         port: "3306"
         user: "dac"
         password: "dacpass"

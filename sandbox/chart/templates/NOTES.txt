@@ -1,0 +1,23 @@
+============================================================
+  DAC Sandbox — single Pod IP for asset scan
+============================================================
+
+Release:   {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+Get the scan target:
+
+  kubectl -n {{ .Release.Namespace }} get pod dac-sandbox-0 -o jsonpath='{.status.podIP}{"\n"}'
+
+Or:  make -C sandbox scan-targets
+
+Ports (one IP):
+  3306 mysql | 5432 postgres | 6379 redis
+  8000 fileserver | 8001 saleor-api | 8069 odoo
+  8080 boutique | 8929 gitlab
+  9000/9001 minio | 9002 saleor-dashboard
+
+Saleor UI:  http://<pod-ip>:9002/dashboard/
+Boutique:   http://<pod-ip>:8080/
+
+Platform chart is separate: installer/dac

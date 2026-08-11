@@ -26,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { TableWrapper } from "@/components/ui/table-wrapper"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,6 +48,17 @@ const MEMBER_BADGE_VARIANTS = [
   "bg-slate-100 text-slate-700 border-slate-200",
 ] as const
 const MEMBER_BADGE_BASE = "border text-xs font-medium rounded-full px-2 py-0.5"
+const MEMBER_LABEL_MAX = 24
+
+/** Show a readable badge label; full value stays in title/tooltip. */
+function displayMemberLabel(label: string): string {
+  const trimmed = label.trim()
+  const segment = trimmed.includes("/")
+    ? (trimmed.split("/").pop() ?? trimmed)
+    : trimmed
+  if (segment.length <= MEMBER_LABEL_MAX) return segment
+  return `${segment.slice(0, MEMBER_LABEL_MAX - 1)}…`
+}
 
 function fmtCreatedAt(input?: string) {
   if (!input) return "-"
@@ -140,7 +152,7 @@ function MemberBadges({ labels }: { labels?: string[] }) {
   return (
     <>
       <span
-        className="inline-flex items-center gap-1.5 flex-nowrap align-middle"
+        className="inline-flex max-w-full flex-wrap items-center gap-1.5 align-middle"
         onMouseEnter={hasOverflow ? (e) => { updatePosition(e); cancelClose() } : undefined}
         onMouseMove={hasOverflow && open ? updatePosition : undefined}
         onMouseLeave={hasOverflow ? scheduleClose : undefined}
@@ -149,9 +161,10 @@ function MemberBadges({ labels }: { labels?: string[] }) {
           <Badge
             key={`${i}-${label}`}
             variant="outline"
+            title={label}
             className={`${MEMBER_BADGE_VARIANTS[i % MEMBER_BADGE_VARIANTS.length]} ${MEMBER_BADGE_BASE}`}
           >
-            {label}
+            {displayMemberLabel(label)}
           </Badge>
         ))}
         {hasOverflow && (
@@ -198,6 +211,19 @@ function MemberBadgesFromApi({ groupId }: { groupId: string }) {
 async function rootsFetcher(): Promise<{ items: SemanticGroupResponse[]; totalCount: number }> {
   return listSemanticGroupRoots()
 }
+
+const SEMANTIC_GROUPS_COLUMNS = [
+  { id: "name", size: 260, minSize: 180, maxSize: 420 },
+  { id: "members", size: 280, minSize: 200, maxSize: 480 },
+  { id: "created", size: 168, minSize: 152, maxSize: 220 },
+  { id: "actions", size: 112, minSize: 96, maxSize: 160 },
+] as const
+
+const SEMANTIC_GROUPS_DEPENDENT_COLUMNS = [
+  { id: "agent", size: 240 },
+  { id: "namespace", size: 112 },
+  { id: "actions", size: 112 },
+] as const
 
 export default function SemanticGroupsPage() {
   const router = useRouter()
@@ -285,14 +311,14 @@ export default function SemanticGroupsPage() {
         </Button>
       </div>
 
-      <div className="rounded-lg border border-line bg-surface overflow-hidden">
-        <Table>
+      <TableWrapper>
+        <Table storageKey="semantic-groups-list" columns={[...SEMANTIC_GROUPS_COLUMNS]}>
           <TableHeader>
             <TableRow className="bg-surface-muted">
-              <TableHead>名称</TableHead>
-              <TableHead className="whitespace-nowrap w-[120px]">成员</TableHead>
-              <TableHead className="whitespace-nowrap w-[180px]">创建时间</TableHead>
-              <TableHead className="text-right">操作</TableHead>
+              <TableHead columnId="name">名称</TableHead>
+              <TableHead columnId="members">成员</TableHead>
+              <TableHead columnId="created">创建时间</TableHead>
+              <TableHead columnId="actions" className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -312,20 +338,33 @@ export default function SemanticGroupsPage() {
               items.map((g) => (
                 <TableRow
                   key={g.id}
-                  className="hover:bg-surface-muted/60 cursor-pointer"
+                  className="align-top hover:bg-surface-muted/60 cursor-pointer"
                   onClick={() => router.push(`/semantic-groups/${encodeURIComponent(g.id)}`)}
                 >
-                  <TableCell className="font-medium flex items-center gap-3 max-w-[22rem]">
-                    <div className="w-8 h-8 rounded-full bg-cta/10 flex items-center justify-center text-cta shrink-0">
-                      <Layers className="w-4 h-4" />
+                  <TableCell columnId="name" className="align-top font-medium">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-cta/10 text-cta">
+                        <Layers className="h-4 w-4" />
+                      </div>
+                      <span className="min-w-0 truncate" title={g.group_name}>
+                        {g.group_name}
+                      </span>
                     </div>
-                    <span className="truncate block w-full">{g.group_name}</span>
                   </TableCell>
-                  <TableCell className="text-content overflow-visible" onClick={(e) => e.stopPropagation()}>
+                  <TableCell
+                    columnId="members"
+                    className="min-w-0 align-top text-content"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <MemberBadgesFromApi groupId={g.id} />
                   </TableCell>
-                  <TableCell className="text-content whitespace-nowrap">{fmtCreatedAt(g.created_at)}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell
+                    columnId="created"
+                    className="whitespace-nowrap align-top tabular-nums text-sm text-content-muted"
+                  >
+                    {fmtCreatedAt(g.created_at)}
+                  </TableCell>
+                  <TableCell columnId="actions" className="align-top text-right">
                     <div className="inline-flex items-center gap-1">
                       <Button
                         variant="ghost"
@@ -364,7 +403,7 @@ export default function SemanticGroupsPage() {
             )}
           </TableBody>
         </Table>
-      </div>
+      </TableWrapper>
 
       <PaginationBar
         total={totalCount}
@@ -401,21 +440,21 @@ export default function SemanticGroupsPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="mt-4 space-y-3 px-6">
-            <div className="max-h-[320px] w-full overflow-auto rounded-md border border-line">
-              <Table className="w-full table-fixed">
+            <TableWrapper className="max-h-[320px] overflow-auto rounded-md">
+              <Table storageKey="semantic-groups-dependent-agents" columns={[...SEMANTIC_GROUPS_DEPENDENT_COLUMNS]}>
                 <TableHeader>
                   <TableRow className="bg-surface-muted">
-                    <TableHead className="w-auto">智能体名称</TableHead>
-                    <TableHead className="w-28">命名空间</TableHead>
-                    <TableHead className="w-28 text-right">操作</TableHead>
+                    <TableHead columnId="agent">智能体名称</TableHead>
+                    <TableHead columnId="namespace">命名空间</TableHead>
+                    <TableHead columnId="actions" className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {dependentAgents.map((a, idx) => (
                     <TableRow key={`${a.namespace}/${a.name}/${idx}`}>
-                      <TableCell className="font-medium whitespace-normal break-all">{a.name}</TableCell>
-                      <TableCell className="text-content-muted">{a.namespace}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell columnId="agent" className="font-medium whitespace-normal break-all">{a.name}</TableCell>
+                      <TableCell columnId="namespace" className="text-content-muted">{a.namespace}</TableCell>
+                      <TableCell columnId="actions" className="text-right">
                         <Button
                           variant="ghost"
                           size="sm"
@@ -432,7 +471,7 @@ export default function SemanticGroupsPage() {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </TableWrapper>
             <div className="text-sm text-content">请先删除这些智能体或修改其关联的语义组，然后再删除。</div>
           </div>
           <AlertDialogFooter>

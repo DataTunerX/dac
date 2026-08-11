@@ -18,6 +18,7 @@ type Config struct {
 	DataServices    DataServicesConfig    `mapstructure:"data_services"`
 	SemanticGrouper SemanticGrouperConfig `mapstructure:"semantic_grouper"`
 	AgentRegistry   AgentRegistryConfig   `mapstructure:"agent_registry"`
+	SkillHub        SkillHubConfig        `mapstructure:"skill_hub"`
 	Database      DatabaseConfig      `mapstructure:"database"`
 }
 
@@ -50,7 +51,11 @@ type ObservabilityConfig struct {
 
 // JWTConfig holds JWT configuration
 type JWTConfig struct {
-	Secret string `mapstructure:"secret"`
+	Secret       string        `mapstructure:"secret"`
+	Timeout      time.Duration `mapstructure:"timeout"`
+	MaxRefresh   time.Duration `mapstructure:"max_refresh"`
+	CookieSecure bool          `mapstructure:"cookie_secure"`
+	CookieDomain string        `mapstructure:"cookie_domain"`
 }
 
 // RoutingAgentConfig holds Routing Agent configuration
@@ -77,6 +82,12 @@ type AgentRegistryConfig struct {
 	OrchestratorBaseURL    string        `mapstructure:"orchestrator_base_url"`
 	BizOrchestratorBaseURL string        `mapstructure:"biz_orchestrator_base_url"`
 	Timeout                time.Duration `mapstructure:"timeout"`
+}
+
+// SkillHubConfig holds skill-hub registry endpoint.
+type SkillHubConfig struct {
+	BaseURL string        `mapstructure:"base_url"`
+	Timeout time.Duration `mapstructure:"timeout"`
 }
 
 // DatabaseConfig holds database configuration
@@ -108,6 +119,8 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
+	v.SetDefault("skill_hub.timeout", "120s")
+
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -115,6 +128,16 @@ func Load(cfgFile string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	if cfg.JWT.Timeout == 0 {
+		cfg.JWT.Timeout = 15 * time.Minute
+	}
+	if cfg.JWT.MaxRefresh == 0 {
+		cfg.JWT.MaxRefresh = 168 * time.Hour
+	}
+	if cfg.SkillHub.Timeout == 0 {
+		cfg.SkillHub.Timeout = 120 * time.Second
 	}
 
 	return &cfg, nil

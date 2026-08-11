@@ -487,20 +487,71 @@ class TestDocumentSymbol:
             assert sym in formatted, f"Missing '{sym}' in core.py documentSymbol"
 
     @pytest.mark.skipif(not HAS_LSP_CONFIG, reason="No LSP config")
-    def test_document_symbol_ignores_line_param(self, lsp_setup):
-        """documentSymbol should work correctly even when line is provided (ignored)."""
+    def test_document_symbol_filters_by_name(self, lsp_setup):
+        """Small files stay full; name is only a focus hint when over budget."""
+        full = _unmarshal_result(
+            lsp_setup.execute(operation="documentSymbol", file_path=str(GO_HANDLER))
+        )
+        _assert_result_has_lines(full, "documentSymbol full handler.go")
+        full_text = full["result"]
+
+        filtered = _unmarshal_result(
+            lsp_setup.execute(
+                operation="documentSymbol",
+                file_path=str(GO_HANDLER),
+                symbol_name="ProcessRequest",
+            )
+        )
+        _assert_result_has_lines(filtered, "documentSymbol filtered ProcessRequest")
+        text = filtered["result"]
+        assert "ProcessRequest" in text
+        # handler.go outline is small → expect full outline under budget
+        assert "full outline" in text or "filtered" in text
+        assert len(text) <= 10000
+
+    @pytest.mark.skipif(not HAS_LSP_CONFIG, reason="No LSP config")
+    def test_document_symbol_filters_by_line(self, lsp_setup):
+        """documentSymbol(line=...) focuses when over budget; small files stay full."""
+        line, _ = _find_symbol(
+            GO_HANDLER, "ProcessRequest", line_hint="func (h *Handler) ProcessRequest"
+        )
         output = lsp_setup.execute(
             operation="documentSymbol",
-            file_path=str(GO_MAIN),
-            line=999,
-            character=999,
+            file_path=str(GO_HANDLER),
+            line=line,
         )
         result = _unmarshal_result(output)
-        _assert_result_has_lines(result, "documentSymbol with ignored line")
+        _assert_result_has_lines(result, "documentSymbol filtered by line")
+        text = result["result"]
+        assert "ProcessRequest" in text
+        assert len(text) <= 10000
 
-        formatted = result["result"]
-        assert "Document symbols" in formatted
-        assert "DataProcessor" in formatted
+    @pytest.mark.skipif(not HAS_LSP_CONFIG, reason="No LSP config")
+    def test_document_symbol_line_miss_on_small_file_returns_full(self, lsp_setup):
+        """Under-budget files return the full outline even if line misses."""
+        output = lsp_setup.execute(
+            operation="documentSymbol",
+            file_path=str(GO_HANDLER),
+            line=99999,
+        )
+        result = _unmarshal_result(output)
+        _assert_no_error(result, "documentSymbol line miss small file")
+        text = result["result"]
+        assert "full outline" in text or "Handler" in text
+        assert "HealthCheck" in text or "ProcessRequest" in text
+
+    @pytest.mark.skipif(not HAS_LSP_CONFIG, reason="No LSP config")
+    def test_document_symbol_name_without_line_does_not_require_line_hit(self, lsp_setup):
+        """symbol_name focus must work even when line is omitted."""
+        output = lsp_setup.execute(
+            operation="documentSymbol",
+            file_path=str(GO_HANDLER),
+            symbol_name="HealthCheck",
+        )
+        result = _unmarshal_result(output)
+        _assert_result_has_lines(result, "documentSymbol name-only HealthCheck")
+        assert "HealthCheck" in result["result"]
+        assert "error" not in result
 
 
 # ===========================================================================
@@ -769,6 +820,15 @@ class TestSkillMdRoutingRules:
         )
         assert "跨文件定位" in self.content, "Missing explanation: cross-file location"
         assert "完整边界" in self.content, "Missing explanation: complete boundary"
+        assert "symbol_name" in self.content, (
+            "Missing guidance to pass symbol_name when filtering documentSymbol"
+        )
+
+    def test_large_file_document_symbol_filter_guidance(self):
+        assert "大文件" in self.content or "预算" in self.content or "documentSymbol" in self.content
+        assert "SKILL_SDK_DOC_SYMBOL_FILTER_MAX_CHARS" in self.content or "10000" in self.content
+        assert "symbol_name" in self.content
+        assert "Variable" in self.content or "噪音" in self.content or "KEEP_NOISE" in self.content
 
     def test_distinguishes_go_to_def_vs_find_refs(self):
         assert "goToDefinition vs findReferences" in self.content, (
@@ -786,46 +846,72 @@ class TestSkillMdRoutingRules:
         )
 
     def test_has_error_examples(self):
-        assert "错误示例" in self.content, "Missing error examples"
-        assert "应该用 `goToDefinition`" in self.content, "Missing correct usage: goToDefinition"
-        assert "应该用 `documentSymbol`" in self.content, "Missing correct usage: documentSymbol"
-        assert "应该用 `findReferences`" in self.content, "Missing correct usage: findReferences"
+        assert "常见错误" in self.content or "错误示例" in self.content, (
+            "Missing error examples section"
+        )
+        assert "goToDefinition" in self.content and "documentSymbol" in self.content
+        assert "findReferences" in self.content
+        # ProcessData / 文件大纲类纠错仍在文档中
+        assert "ProcessData" in self.content or "怎么实现" in self.content
+        assert "这个文件有哪些函数" in self.content or "文件大纲" in self.content
 
     def test_has_detailed_flow_examples(self):
-        assert "流程 A：定向路径" in self.content, "Missing Flow A"
-        assert "流程 B：概览路径" in self.content, "Missing Flow B"
-        assert "流程 C：引用查找" in self.content, "Missing Flow C"
-        assert "流程 D：调用链分析" in self.content, "Missing Flow D"
+        # Titles follow current SKILL.md 「示例 N」naming (not legacy 流程 A–D).
+        assert "示例 2：定向路径" in self.content, "Missing directed-path example"
+        assert "示例 3：概览路径" in self.content, "Missing overview example"
+        assert "示例 4：引用查找" in self.content, "Missing references example"
+        assert "示例 5：调用链分析" in self.content, "Missing call-hierarchy example"
 
     def test_flow_examples_use_correct_operations(self):
         """Flow examples must reference the correct LSP operations."""
-        assert 'operation="goToDefinition"' in self.content, "Flow A missing goToDefinition"
-        assert 'operation="documentSymbol"' in self.content, "Flow B missing documentSymbol"
-        assert 'operation="findReferences"' in self.content, "Flow C missing findReferences"
-        # Flow D uses call hierarchy operations
-        assert 'operation="prepareCallHierarchy"' in self.content, "Flow D missing prepareCallHierarchy"
-        assert 'operation="outgoingCalls"' in self.content, "Flow D missing outgoingCalls"
-        assert 'operation="incomingCalls"' in self.content, "Flow D missing incomingCalls"
+        assert 'operation="goToDefinition"' in self.content, "Directed path missing goToDefinition"
+        assert 'operation="documentSymbol"' in self.content, "Overview missing documentSymbol"
+        assert 'operation="findReferences"' in self.content, "References example missing findReferences"
+        assert 'operation="prepareCallHierarchy"' in self.content, "Call hierarchy missing prepareCallHierarchy"
+        assert 'operation="outgoingCalls"' in self.content, "Call hierarchy missing outgoingCalls"
+        assert 'operation="incomingCalls"' in self.content, "Call hierarchy missing incomingCalls"
+
+    def test_forbids_grep_guessing_when_lsp_refs_available(self):
+        """Reference questions must not use grep as the reference list when LSP can answer."""
+        assert "引用约束" in self.content
+        assert "决定不能" in self.content
+        assert "findReferences" in self.content and "incomingCalls" in self.content
+        assert "禁止用 grep" in self.content or "绝对禁止用 `grep`" in self.content
+
+    def test_broad_questions_prefer_grep_when_needed(self):
+        """Overview questions soft-prefer grep for large/unclear repos; small repos may skip."""
+        assert "宽问题探索指引" in self.content
+        assert "宜用 grep" in self.content or "优先 `grep`" in self.content or "优先 grep" in self.content
+        assert "可跳过 grep" in self.content
+        assert "禁止批量扫读" in self.content or "禁止" in self.content and "扫读" in self.content
+
+    def test_grep_regex_guidance(self):
+        """Skill should teach that grep is ripgrep regex with plain examples."""
+        assert "grep 与正则" in self.content
+        assert "ripgrep" in self.content or "正则" in self.content
+        assert r"\b" in self.content or "单词边界" in self.content
+        assert "def\\s+" in self.content or r"def\s+" in self.content or "def\\\\s+" in self.content
+        assert "case_insensitive" in self.content
 
     def test_has_call_hierarchy_error_examples(self):
         """Error examples should cover call hierarchy misuse."""
-        assert "应该用 `prepareCallHierarchy` → `outgoingCalls`" in self.content, (
-            "Missing error example: outgoingCalls misuse"
-        )
-        assert "应该用 `prepareCallHierarchy` → `incomingCalls`" in self.content, (
-            "Missing error example: incomingCalls misuse"
-        )
+        assert "outgoingCalls" in self.content, "Missing outgoingCalls in error guidance"
+        assert "incomingCalls" in self.content, "Missing incomingCalls in error guidance"
+        assert "prepareCallHierarchy" in self.content
+        # Table or prose should steer call-chain questions away from findReferences-only
+        assert "Process 被哪些函数调用了" in self.content or "谁调用了" in self.content
 
     def test_scenarios_match_operations(self):
-        """Each scenario example uses the operation appropriate for its intent."""
-        # Scenario 1: "这个功能怎么实现的" -> goToDefinition
-        assert "场景 1：用户问" in self.content
-        scene1 = self.content.split("场景 1：")[1].split("场景 2：")[0]
-        assert "goToDefinition" in scene1, "Scene 1 should use goToDefinition"
+        """Flow examples encode the operation appropriate for each intent."""
+        # 示例 2：定向路径 → goToDefinition when crossing files
+        assert "示例 2：定向路径" in self.content
+        flow_directed = self.content.split("示例 2：")[1].split("示例 3：")[0]
+        assert "goToDefinition" in flow_directed, "Directed path should use goToDefinition"
 
-        # Scenario 2: "看看这个文件的整体结构" -> documentSymbol
-        scene2 = self.content.split("场景 2：")[1].split("场景 3：")[0]
-        assert "documentSymbol" in scene2, "Scene 2 should use documentSymbol"
+        # 示例 3：概览路径 → documentSymbol
+        assert "示例 3：概览路径" in self.content
+        flow_overview = self.content.split("示例 3：")[1].split("示例 4：")[0]
+        assert "documentSymbol" in flow_overview, "Overview should use documentSymbol"
 
 
 # ===========================================================================

@@ -1,0 +1,155 @@
+{{/*
+  Services for the STS Pod + named endpoints used by Jobs / DataDescriptors.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: dac-sandbox
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: mysql,       port: 3306, targetPort: 3306 }
+    - { name: postgres,    port: 5432, targetPort: 5432 }
+    - { name: redis,       port: 6379, targetPort: 6379 }
+    - { name: s3,          port: 9000, targetPort: 9000 }
+    - { name: console,     port: 9001, targetPort: 9001 }
+    - { name: files,       port: 8000, targetPort: 8000 }
+    - { name: gitlab-http, port: 8929, targetPort: 8929 }
+    - name: odoo
+      port: {{ .Values.odoo.httpPort }}
+      targetPort: {{ .Values.odoo.httpPort }}
+    - name: saleor-api
+      port: {{ .Values.saleor.apiPort }}
+      targetPort: {{ .Values.saleor.apiPort }}
+    - name: saleor-ui
+      port: 9002
+      targetPort: 9002
+    - name: boutique
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: mysql, port: 3306, targetPort: 3306 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: postgres, port: 5432, targetPort: 5432 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: redis, port: 6379, targetPort: 6379 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fileserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: files, port: 8000, targetPort: 8000 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: gitlab-http, port: 8929, targetPort: 8929 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: odoo
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: odoo
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.odoo.httpPort }}
+      targetPort: {{ .Values.odoo.httpPort }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saleor-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: saleor-api
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.saleor.apiPort }}
+      targetPort: {{ .Values.saleor.apiPort }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dac-sandbox.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dac-sandbox.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: s3, port: 9000, targetPort: 9000 }
+    - { name: console, port: 9001, targetPort: 9001 }

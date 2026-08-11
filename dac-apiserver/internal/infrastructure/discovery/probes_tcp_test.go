@@ -402,7 +402,8 @@ func TestScanner_PicksFirstMatch(t *testing.T) {
 		_, _ = c.Write([]byte{'N'})
 	})
 
-	s := NewScanner(500 * time.Millisecond)
+	// Local DB probes only — this test pins probe ordering, not Nerva.
+	s := newScanner(500*time.Millisecond, false)
 	ctx, cancel := newProbeContext(t)
 	defer cancel()
 

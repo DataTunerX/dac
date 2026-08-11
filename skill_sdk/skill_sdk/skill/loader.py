@@ -292,6 +292,39 @@ class SkillLoader:
             scripts=list(scripts) if scripts is not None else [],
             base_dir=str(Path(base_dir).resolve()) if base_dir else "",
             resource_dirs=list(resource_dirs) if resource_dirs is not None else [],
+            allowed_tools=SkillLoader._parse_allowed_tools(meta),
+        )
+
+    @staticmethod
+    def _parse_allowed_tools(meta: dict[str, Any]) -> list[str]:
+        """Parse ``allowed_tools`` from ``_meta.json``.
+
+        Missing / null / empty → ``[]`` (unrestricted).
+        Accepts a JSON list of strings, or a single whitespace/comma-separated string.
+        """
+        raw = meta.get("allowed_tools")
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            parts = [
+                p.strip()
+                for p in raw.replace(",", " ").split()
+                if p.strip()
+            ]
+            return parts
+        if isinstance(raw, list):
+            out: list[str] = []
+            seen: set[str] = set()
+            for item in raw:
+                name = str(item or "").strip()
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                out.append(name)
+            return out
+        raise ValueError(
+            "allowed_tools must be a list of strings or a string, "
+            f"got {type(raw).__name__}"
         )
 
     def load(

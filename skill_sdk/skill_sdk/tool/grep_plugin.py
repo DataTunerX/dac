@@ -24,13 +24,169 @@ DESCRIPTION = """Powerful content search using ripgrep (regex), same role as Cla
 
 - Use this tool for searching file contents; prefer it over shell `grep` or raw `rg` in bash when the agent exposes this tool.
 - Full regex (ripgrep syntax, not GNU grep). Literal `{}` in patterns often need escaping (e.g. Go `interface\\{\\}`).
+- **Prefer omitting `glob` / `file_type` on the first search** unless you already know the repo language.
+  Wrong filters (e.g. `**/*.go` on a Python tree) return 0 matches even when the pattern is correct.
+  After you know the language from glob/listing, you may narrow with `glob="*.py"` or `file_type="py"`.
 - Filter paths with `glob` (e.g. "*.py", "**/*.ts") or `file_type` (maps to rg `--type`, e.g. py, js, rust).
-- output_mode: "content" shows matching lines (with optional context / line numbers); "files_with_matches" lists paths only (default); "count" shows match counts per file.
+- output_mode: "content" shows matching lines (line numbers; no surrounding context); "files_with_matches" lists paths only (default); "count" shows match counts per file.
+- For broad keyword exploration **always** start with output_mode=files_with_matches (or a single source file). Do **not** dump directory-wide content with kitchen-sink patterns like `http|serve|run|port|host`.
+  Such directory content searches are auto-downgraded to files_with_matches.
+- Prefer specific tokens: compound ids / unique symbol names / protocol strings — not bare short words, short `/paths`, or short `--flags`.
+- **Pattern must stay narrow**: ≤6 `|` alternates. Over-broad content alts are auto-dropped by **shape heuristics** (short bare words, short path/CLI stubs, common ops vocab) — not by listing per-language keywords. Outline → `documentSymbol`; surrounding lines → `readline_in_range`.
+- content mode: **always leave `context_c` at 0** (match lines only). Do **not** pass `context_c` / `context` / `context_before` / `context_after`. Need surrounding lines → use `readline_in_range` / LSP on the hit, not grep context.
 - Default multiline is false; set multiline=true for patterns spanning lines (rg -U --multiline-dotall).
 - For open-ended multi-round exploration, narrow path/glob or paginate with head_limit and offset.
 """
 
 DEFAULT_HEAD_LIMIT = 250
+# Match lines only; surrounding lines belong to readline/LSP, not grep context.
+DEFAULT_CONTEXT_C = 0
+MAX_CONTEXT_C = 0
+# Soft cap on `|` alternates for content searches (auto-trim beyond this).
+MAX_CONTENT_PATTERN_ALTS = 6
+# Bare single-word alts at or below this length are treated as too broad
+# (language-agnostic: catches def/class/func/var/let/type/… without listing them).
+MAX_BARE_WORD_ALT_LEN = 5
+# Path segment `/foo` at or below this length is treated as a stub (/api, /v1).
+MAX_SHORT_PATH_SEG_LEN = 4
+# CLI flag `--foo` / `--a-b`: banned when every hyphen segment is this short.
+MAX_SHORT_CLI_SEG_LEN = 4
+
+# Cross-domain ops vocabulary (not language keywords). Alone → usually noise.
+_GENERIC_GREP_TOKENS = frozenset(
+    {
+        "http",
+        "https",
+        "serve",
+        "server",
+        "run",
+        "port",
+        "host",
+        "start",
+        "stop",
+        "get",
+        "set",
+        "post",
+        "put",
+        "patch",
+        "path",
+        "file",
+        "name",
+        "type",
+        "data",
+        "id",
+        "key",
+        "value",
+        "url",
+        "api",
+        "app",
+        "main",
+        "test",
+        "config",
+        "log",
+        "user",
+        "code",
+        "time",
+        "date",
+        "json",
+        "text",
+        "true",
+        "false",
+        "null",
+        "health",
+        "status",
+        "error",
+        "info",
+        "debug",
+        "warn",
+        "request",
+        "response",
+        "client",
+        "service",
+    }
+)
+
+# Source-code extensions we may auto-prefer for directory ``content`` searches.
+_SOURCE_EXTS = frozenset(
+    {
+        ".py",
+        ".pyi",
+        ".go",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".rs",
+        ".java",
+        ".kt",
+        ".kts",
+        ".c",
+        ".h",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".hpp",
+        ".cs",
+        ".rb",
+        ".php",
+        ".swift",
+        ".scala",
+        ".vue",
+        ".svelte",
+        ".zig",
+        ".lua",
+        ".dart",
+    }
+)
+
+_FILE_TYPE_TO_EXT = {
+    "py": "py",
+    "python": "py",
+    "go": "go",
+    "rs": "rs",
+    "rust": "rs",
+    "js": "js",
+    "javascript": "js",
+    "ts": "ts",
+    "typescript": "ts",
+    "tsx": "tsx",
+    "jsx": "jsx",
+    "java": "java",
+    "c": "c",
+    "cpp": "cpp",
+    "ruby": "rb",
+    "rb": "rb",
+    "php": "php",
+    "swift": "swift",
+    "kotlin": "kt",
+    "kt": "kt",
+    "csharp": "cs",
+    "cs": "cs",
+}
+
+_SKIP_WALK_DIRS = frozenset(
+    {
+        ".git",
+        ".svn",
+        ".hg",
+        ".bzr",
+        ".jj",
+        ".sl",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        "dist",
+        "build",
+        ".idea",
+        ".vscode",
+    }
+)
 
 VCS_DIRECTORIES_TO_EXCLUDE = (
     ".git",
@@ -54,6 +210,345 @@ def _working_directory() -> str:
 
 
 _T = TypeVar("_T")
+
+
+def _clamp_context_lines(value: int | None) -> int:
+    """Clamp rg -C/-A/-B to ``[0, MAX_CONTEXT_C]``."""
+    if value is None:
+        return DEFAULT_CONTEXT_C
+    return max(0, min(int(value), MAX_CONTEXT_C))
+
+
+def _pattern_alt_parts(pattern: str) -> list[str]:
+    """Split ``a|b|c`` into raw alternate pieces (best-effort; no nested-group parse)."""
+    return [p.strip() for p in (pattern or "").split("|") if p.strip()]
+
+
+def _pattern_alt_tokens(pattern: str) -> list[str]:
+    """Rough identifier tokens from a ``a|b|c`` regex (best-effort)."""
+    tokens: list[str] = []
+    for raw in _pattern_alt_parts(pattern):
+        cleaned = re.sub(r"\\[bBsSwWdD]", "", raw.strip())
+        cleaned = re.sub(r"[^A-Za-z0-9_]+", "", cleaned).lower()
+        if cleaned:
+            tokens.append(cleaned)
+    return tokens
+
+
+def _alt_substance_words(alt: str) -> list[str]:
+    """Identifier-like words left after stripping common regex noise."""
+    s = re.sub(r"\\[bBsSwWdDAazZ]", "", alt or "")
+    s = re.sub(r"\\s\+?", " ", s)
+    s = re.sub(r"\\[.\-+*?\[\](){}|]", "", s)
+    return re.findall(r"[A-Za-z_][A-Za-z0-9_]*", s)
+
+
+def _alt_is_banned(alt: str, *, multi_alt: bool = True) -> str | None:
+    """Language-agnostic: drop alts that are too short / shapeless to be useful.
+
+    ``multi_alt``: when False (single-token pattern), bare short words are kept so
+    intentional searches like ``MCP`` still work; path/CLI stubs still banned.
+    """
+    a = (alt or "").strip()
+    if not a:
+        return "empty"
+
+    # Short / generic path stub: /api, /v1, /health — not /search (unless in generic set).
+    m_path = re.fullmatch(r"/([A-Za-z0-9_-]+)/?", a)
+    if m_path:
+        seg = m_path.group(1).lower()
+        if len(seg) <= MAX_SHORT_PATH_SEG_LEN or seg in _GENERIC_GREP_TOKENS:
+            return "short/generic path stub"
+
+    # Short CLI flag(s): --host, --port, --api-host (every segment short).
+    if a.startswith("--"):
+        segs = [s for s in a[2:].split("-") if s]
+        if segs and max(len(s) for s in segs) <= MAX_SHORT_CLI_SEG_LEN:
+            return "short CLI flag"
+
+    words = _alt_substance_words(a)
+    token = "".join(w.lower() for w in words)
+
+    # Distinctive shape → keep (even if a word looks common).
+    distinctive = bool(
+        "://" in a
+        or a.startswith("@")
+        or "(" in a
+        or re.search(r"[A-Za-z0-9]-[A-Za-z0-9]", a)  # compound like mcp-server
+        or (a.startswith("/") and words and len(words[0]) > MAX_SHORT_PATH_SEG_LEN
+            and words[0].lower() not in _GENERIC_GREP_TOKENS)
+        or (any(c.isupper() for c in a) and any(c.islower() for c in a)
+            and len(token) > MAX_BARE_WORD_ALT_LEN)
+    )
+    if distinctive:
+        return None
+
+    # Bare short word — only strip inside multi-alt kitchen sinks.
+    if multi_alt and len(words) <= 1 and token and len(token) <= MAX_BARE_WORD_ALT_LEN:
+        return "bare short word (add a specific name, or use documentSymbol)"
+
+    if multi_alt and token in _GENERIC_GREP_TOKENS and len(words) <= 1:
+        return f"generic ops token {token!r}"
+
+    return None
+
+
+def _alt_specificity_score(alt: str) -> tuple[int, int, int, int]:
+    """Higher is better when picking which alts to keep under the cap."""
+    words = _alt_substance_words(alt)
+    token_alnum = "".join(w.lower() for w in words)
+    is_generic = token_alnum in _GENERIC_GREP_TOKENS or len(token_alnum) <= 3
+    # Structural preference — not language-specific keywords.
+    protocolish = 0
+    if any(c.isupper() for c in alt) and re.search(r"[a-z]", alt) and len(token_alnum) > 4:
+        protocolish = 4
+    elif "://" in alt or re.search(r"[A-Za-z0-9]-[A-Za-z0-9]", alt) or alt.startswith("@"):
+        protocolish = 3
+    elif alt.startswith("/") and len(token_alnum) > MAX_SHORT_PATH_SEG_LEN:
+        protocolish = 2
+    elif alt.startswith("--") and len(token_alnum) > MAX_SHORT_CLI_SEG_LEN:
+        protocolish = 1
+    return (
+        0 if is_generic else 3,
+        protocolish,
+        len(token_alnum),
+        len(alt),
+    )
+
+
+def _narrow_content_pattern(pattern: str) -> tuple[str, list[str]]:
+    """Drop over-broad alts and cap `|` count for content searches.
+
+    Heuristics are language-agnostic (length / shape / common ops words),
+    not a list of per-language keywords.
+
+    Returns ``(pattern, notes)``. Notes empty when unchanged.
+    """
+    notes: list[str] = []
+    parts = _pattern_alt_parts(pattern)
+    if not parts:
+        return pattern, notes
+
+    multi = len(parts) >= 2
+    kept: list[str] = []
+    dropped: list[str] = []
+    for alt in parts:
+        reason = _alt_is_banned(alt, multi_alt=multi)
+        if reason:
+            dropped.append(f"{alt!r} ({reason})")
+            continue
+        kept.append(alt)
+
+    if dropped:
+        notes.append(
+            "dropped over-broad pattern alts: "
+            + "; ".join(dropped[:8])
+            + (f" (+{len(dropped) - 8} more)" if len(dropped) > 8 else "")
+            + ". Prefer specific symbol/protocol tokens; "
+            "use documentSymbol for language outlines."
+        )
+
+    trimmed: list[str] = []
+    while len(kept) > MAX_CONTENT_PATTERN_ALTS:
+        # Equal score → drop later alts first (preserve model’s earlier tokens).
+        worst_i = min(
+            range(len(kept)),
+            key=lambda i: (_alt_specificity_score(kept[i]), -i),
+        )
+        trimmed.append(kept.pop(worst_i))
+    if trimmed:
+        notes.append(
+            f"capped pattern to {MAX_CONTENT_PATTERN_ALTS} alternates "
+            f"(dropped {trimmed!r}); prefer ≤{MAX_CONTENT_PATTERN_ALTS} specific tokens"
+        )
+
+    if not kept:
+        notes.append(
+            "pattern had no usable alts after narrowing; "
+            "retry with ≤6 longer/specific tokens "
+            "(unique symbol names, compound ids, protocol strings) — "
+            "not bare short words, short /paths, or short --flags"
+        )
+        return "", notes
+
+    new_pat = "|".join(kept)
+    if new_pat != pattern.strip():
+        notes.append(f"narrowed pattern → {new_pat!r}")
+    return new_pat, notes
+
+
+def _is_broad_content_pattern(pattern: str) -> tuple[bool, str]:
+    """True when pattern is too kitchen-sink for a directory ``content`` dump."""
+    parts = _pattern_alt_parts(pattern)
+    multi = len(parts) >= 2
+    if multi:
+        banned = [p for p in parts if _alt_is_banned(p, multi_alt=True)]
+        if banned:
+            return True, f"contains over-broad alts {banned[:6]!r}"
+    tokens = _pattern_alt_tokens(pattern)
+    if len(tokens) < 2:
+        return False, ""
+    generic = [t for t in tokens if t in _GENERIC_GREP_TOKENS or len(t) <= 3]
+    # e.g. FastAPI|...|http|serve|run|port|host  → many generic alts
+    if len(generic) >= 3:
+        return (
+            True,
+            f"pattern has {len(generic)} generic alternates {generic[:8]} "
+            f"(of {len(tokens)} parts)",
+        )
+    if len(tokens) >= 8:
+        return True, f"pattern has {len(tokens)} alternates (too wide for content dump)"
+    return False, ""
+
+
+def _should_downgrade_dir_content(
+    *,
+    pattern: str,
+    search_root: str,
+    output_mode: str,
+) -> tuple[bool, str]:
+    """Directory-wide content with a kitchen-sink pattern → files_with_matches."""
+    if output_mode != "content":
+        return False, ""
+    root = Path(search_root)
+    if not root.is_dir():
+        return False, ""
+    broad, why = _is_broad_content_pattern(pattern)
+    if not broad:
+        return False, ""
+    return True, why
+
+
+def _normalize_one_glob(raw: str) -> str:
+    """Turn bare ``py`` / ``.py`` into ``*.py``; leave real globs alone."""
+    g = (raw or "").strip()
+    if not g:
+        return g
+    if re.fullmatch(r"\.?[A-Za-z0-9]+", g):
+        return f"*.{g.lstrip('.').lower()}"
+    return g
+
+
+def _normalize_glob_value(glob: str | None) -> str | None:
+    if glob is None:
+        return None
+    parts = [_normalize_one_glob(p) for p in _expand_glob_patterns(str(glob))]
+    parts = [p for p in parts if p]
+    if not parts:
+        return None
+    return " ".join(parts)
+
+
+def _exts_from_glob(glob: str | None) -> set[str]:
+    """Best-effort extensions referenced by a glob (``.py``, ``.go``, …)."""
+    if not glob:
+        return set()
+    exts: set[str] = set()
+    for piece in _expand_glob_patterns(glob):
+        brace = re.search(r"\.\{([^}]+)\}", piece)
+        if brace:
+            for e in brace.group(1).split(","):
+                e = e.strip().lstrip(".").lower()
+                if e:
+                    exts.add(f".{e}")
+            continue
+        # last .ext in the pattern (*.py / **/*.ts)
+        m = re.search(r"\.([A-Za-z0-9]+)(?:$|\})", piece)
+        if m:
+            exts.add(f".{m.group(1).lower()}")
+    return exts
+
+
+def _detect_repo_source_exts(
+    root: Path, *, max_files: int = 800
+) -> list[tuple[str, int]]:
+    """Count source-file extensions under ``root`` (capped walk)."""
+    counts: dict[str, int] = {}
+    seen = 0
+    if not root.is_dir():
+        return []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_WALK_DIRS and not d.startswith(".")]
+        for name in filenames:
+            seen += 1
+            if seen > max_files:
+                break
+            ext = Path(name).suffix.lower()
+            if ext in _SOURCE_EXTS:
+                counts[ext] = counts.get(ext, 0) + 1
+        if seen > max_files:
+            break
+    return sorted(counts.items(), key=lambda t: (-t[1], t[0]))
+
+
+def _suggest_source_glob(ext_counts: list[tuple[str, int]]) -> str | None:
+    if not ext_counts:
+        return None
+    tops = [e.lstrip(".") for e, _n in ext_counts[:4]]
+    if len(tops) == 1:
+        return f"*.{tops[0]}"
+    return "*." + "{" + ",".join(tops) + "}"
+
+
+def _resolve_grep_filters(
+    *,
+    glob: str | None,
+    file_type: str | None,
+    search_root: str,
+    output_mode: str,
+) -> tuple[str | None, str | None, list[str]]:
+    """Normalize glob/file_type and fix filters that miss the repo language.
+
+    Returns ``(glob, file_type, notes)``.
+    """
+    notes: list[str] = []
+    root = Path(search_root)
+    glob_n = _normalize_glob_value(glob)
+    if glob and glob_n and glob_n != glob.strip():
+        notes.append(f"normalized glob {glob!r} → {glob_n!r}")
+
+    ft = (file_type or "").strip().lower() or None
+    if ft and ft in _FILE_TYPE_TO_EXT and ft != _FILE_TYPE_TO_EXT[ft]:
+        mapped = _FILE_TYPE_TO_EXT[ft]
+        notes.append(f"normalized file_type {ft!r} → {mapped!r}")
+        ft = mapped
+    elif ft and ft not in _FILE_TYPE_TO_EXT and ft.isalpha():
+        # keep unknown types for rg --type; no rewrite
+        pass
+
+    if not root.is_dir():
+        return glob_n, ft, notes
+
+    ext_counts = _detect_repo_source_exts(root)
+    present = {e for e, _n in ext_counts}
+    suggested = _suggest_source_glob(ext_counts)
+
+    # Wrong language filter: **/*.go on a Python tree, etc.
+    requested: set[str] = set(_exts_from_glob(glob_n))
+    if ft and ft in _FILE_TYPE_TO_EXT:
+        requested.add(f".{_FILE_TYPE_TO_EXT[ft]}")
+
+    if requested and present and requested.isdisjoint(present) and suggested:
+        notes.append(
+            f"filter {sorted(requested)} matches no source files here "
+            f"(repo has {sorted(present)[:6]}); using {suggested!r} instead"
+        )
+        return suggested, None, notes
+
+    # Directory content with no filter → prefer source extensions (skip md/yaml/lock noise).
+    if (
+        output_mode == "content"
+        and not glob_n
+        and not ft
+        and suggested
+    ):
+        notes.append(
+            f"auto glob {suggested!r} for directory content "
+            "(excludes md/yaml/lock noise; omit only if you need docs)"
+        )
+        return suggested, None, notes
+
+    return glob_n, ft, notes
 
 
 def apply_head_limit(
@@ -142,16 +637,21 @@ def _build_rg_args(params: dict[str, Any]) -> list[str]:
         raise ValueError(f"Invalid output_mode: {output_mode!r}")
 
     if output_mode == "content":
+        # Always print path: when searching a single file rg omits the path
+        # unless -H, and our parser / numMatches stats require path:line:text.
+        args.append("--with-filename")
         if line_numbers:
             args.append("-n")
         ctx_val = context if context is not None else context_union
+        if ctx_val is None and context_before is None and context_after is None:
+            ctx_val = DEFAULT_CONTEXT_C
         if ctx_val is not None:
-            args.extend(["-C", str(int(ctx_val))])
+            args.extend(["-C", str(_clamp_context_lines(ctx_val))])
         else:
             if context_before is not None:
-                args.extend(["-B", str(int(context_before))])
+                args.extend(["-B", str(_clamp_context_lines(context_before))])
             if context_after is not None:
-                args.extend(["-A", str(int(context_after))])
+                args.extend(["-A", str(_clamp_context_lines(context_after))])
 
     if isinstance(pattern, str) and pattern.startswith("-"):
         args.extend(["-e", pattern])
@@ -206,19 +706,71 @@ def _run_rg_stdout_lines(argv: list[str], target: str, timeout: float) -> tuple[
     return [ln.rstrip("\r") for ln in lines], None
 
 
-_CONTENT_LINE_RE = re.compile(r"^(.+?):(\d+):(.*)$")
+_CONTENT_LINE_RE = re.compile(r"^(.+?):(\d+):(.*)$")  # legacy; prefer _parse_rg_content_line
+
+# ripgrep -n / -C lines use the SAME separator on both sides of the line number:
+#   match:   path:line:text
+#   context: path-line-text
+# Body text often contains ":digits:" (timestamps, host:port). A naive
+# path:digits:text match on the whole line invents fake paths like
+#   file.md-63-        "timestamp": "2025-11-11T12"
+_RG_CONTENT_LINE_RE = re.compile(r"^(.*?)([:\-])(\d+)\2(.*)$")
+# Single-file rg without -H: ``9:text`` / ``7-text`` (no path prefix).
+_RG_CONTENT_LINE_NO_PATH_RE = re.compile(r"^(\d+)([:\-])(.*)$")
+
+
+def _parse_rg_content_line(line: str) -> tuple[str, str, str, str] | None:
+    """Parse one rg content line.
+
+    Returns ``(kind, path, line_no, text)`` where ``kind`` is ``"match"`` or
+    ``"context"``. Returns ``None`` for separators / unparseable lines.
+    ``path`` may be ``""`` for pathless single-file output.
+    """
+    if not line or line == "--":
+        return None
+    m = _RG_CONTENT_LINE_RE.match(line)
+    if m and m.group(1) != "":
+        path, sep, ln_no, text = m.group(1), m.group(2), m.group(3), m.group(4)
+        kind = "match" if sep == ":" else "context"
+        return kind, path, ln_no, text
+    m2 = _RG_CONTENT_LINE_NO_PATH_RE.match(line)
+    if not m2:
+        return None
+    ln_no, sep, text = m2.group(1), m2.group(2), m2.group(3)
+    kind = "match" if sep == ":" else "context"
+    return kind, "", ln_no, text
+
+
+def _content_match_stats(lines: list[str]) -> tuple[int, list[str]]:
+    """Count ripgrep **match** lines only; exclude context and ``--`` separators."""
+    files: list[str] = []
+    seen: set[str] = set()
+    matches = 0
+    for ln in lines:
+        parsed = _parse_rg_content_line(ln)
+        if parsed is None or parsed[0] != "match":
+            continue
+        matches += 1
+        fp = parsed[1]
+        if fp and fp not in seen:
+            seen.add(fp)
+            files.append(fp)
+    return matches, files
 
 
 def _relativize_content_line(line: str, cwd: Path) -> str:
-    m = _CONTENT_LINE_RE.match(line)
-    if not m:
+    parsed = _parse_rg_content_line(line)
+    if parsed is None:
         return line
-    fp, ln_no, rest = m.group(1), m.group(2), m.group(3)
+    kind, fp, ln_no, rest = parsed
+    sep = ":" if kind == "match" else "-"
+    if not fp:
+        return f"{ln_no}{sep}{rest}"
     try:
         rp = os.path.relpath(Path(fp).resolve(), cwd.resolve())
     except ValueError:
         rp = fp
-    return f"{rp}:{ln_no}:{rest}"
+    return f"{rp}{sep}{ln_no}{sep}{rest}"
 
 
 def _relativize_files_line(line: str, cwd: Path) -> str:
@@ -284,17 +836,22 @@ def run_ripgrep_search(
     if output_mode == "content":
         limited, applied_limit = apply_head_limit(lines, head_limit, offset)
         final = [_relativize_content_line(ln, cwd) for ln in limited]
+        num_matches, match_files = _content_match_stats(final)
+        content = "\n".join(final)
+        # Put summary fields before content so logs/truncation still show counts.
         out: dict[str, Any] = {
             "mode": "content",
-            "numFiles": 0,
-            "filenames": [],
-            "content": "\n".join(final),
+            "numMatches": num_matches,
             "numLines": len(final),
+            "numFiles": len(match_files),
+            "filenames": match_files,
+            "resultLen": len(content),
         }
         if applied_limit is not None:
             out["appliedLimit"] = applied_limit
         if offset:
             out["appliedOffset"] = offset
+        out["content"] = content
         return out
 
     if output_mode == "count":
@@ -313,12 +870,14 @@ def run_ripgrep_search(
                 continue
             total_matches += n
             file_count += 1
+        content = "\n".join(final_lines)
         out = {
             "mode": "count",
             "numFiles": file_count,
             "filenames": [],
-            "content": "\n".join(final_lines),
             "numMatches": total_matches,
+            "resultLen": len(content),
+            "content": content,
         }
         if applied_limit is not None:
             out["appliedLimit"] = applied_limit
@@ -340,10 +899,12 @@ def run_ripgrep_search(
     ordered = [p for p, _ in scored]
     limited_paths, applied_limit = apply_head_limit(ordered, head_limit, offset)
     rels = [_relativize_files_line(p, cwd) for p in limited_paths]
+    payload = "\n".join(rels)
     out = {
         "mode": "files_with_matches",
         "filenames": rels,
         "numFiles": len(rels),
+        "resultLen": len(payload),
     }
     if applied_limit is not None:
         out["appliedLimit"] = applied_limit
@@ -360,7 +921,15 @@ class GrepInput(BaseModel):
     )
     glob: str | None = Field(
         default=None,
-        description='Glob filter for paths (e.g. "*.py"); maps to multiple rg --glob when comma/space separated.',
+        description=(
+            'Optional path filter (e.g. "*.py"); maps to rg --glob. '
+            "Bare values like py/.py are normalized to *.py. "
+            "Prefer omitting on files_with_matches explore. "
+            "Wrong-language filters (e.g. **/*.go on a Python tree) are rewritten "
+            "to the repo's detected source glob when possible. "
+            "Directory content searches without a filter auto-use detected source "
+            "extensions (*.py / *.{py,ts,…}) to skip md/yaml noise."
+        ),
     )
     output_mode: Literal["content", "files_with_matches", "count"] | None = Field(
         default="files_with_matches",
@@ -369,22 +938,34 @@ class GrepInput(BaseModel):
     context_before: int | None = Field(
         default=None,
         ge=0,
-        description='Lines before each match (rg -B); only when output_mode is content.',
+        description=(
+            "Unused: grep context is fixed at 0. "
+            "Do not set; use readline_in_range for surrounding lines."
+        ),
     )
     context_after: int | None = Field(
         default=None,
         ge=0,
-        description='Lines after each match (rg -A); only when output_mode is content.',
+        description=(
+            "Unused: grep context is fixed at 0. "
+            "Do not set; use readline_in_range for surrounding lines."
+        ),
     )
     context_c: int | None = Field(
-        default=None,
+        default=DEFAULT_CONTEXT_C,
         ge=0,
-        description='Context lines before and after (rg -C); content mode. Overrides context_before/after when set.',
+        description=(
+            "Must stay 0 (match lines only). Do not raise this; "
+            "surrounding lines → readline_in_range / LSP. "
+            "Non-zero values are ignored."
+        ),
     )
     context: int | None = Field(
         default=None,
         ge=0,
-        description='Same as context_c when set (content mode); if both set, prefer this field.',
+        description=(
+            "Unused alias of context_c. Leave unset; grep context is fixed at 0."
+        ),
     )
     line_numbers: bool | None = Field(
         default=True,
@@ -394,7 +975,10 @@ class GrepInput(BaseModel):
     file_type: str | None = Field(
         default=None,
         validation_alias=AliasChoices("file_type", "type"),
-        description='Restrict by rg --type (e.g. py, js, rust); TS tool field name was `type`.',
+        description=(
+            "Optional rg --type filter (e.g. py, js, rust). "
+            "Omit on first search unless language is known; TS field name may be `type`."
+        ),
     )
     head_limit: int | None = Field(
         default=None,
@@ -453,6 +1037,48 @@ class GrepPlugin(ToolPlugin):
             if env_cap.isdigit():
                 head_limit = int(env_cap)
 
+        pattern_notes: list[str] = []
+        downgrade_hint = ""
+        # Decide directory kitchen-sink downgrade on the *original* pattern,
+        # before shape-based narrowing (which may leave a tight leftover).
+        downgrade, why = _should_downgrade_dir_content(
+            pattern=pattern, search_root=search_root, output_mode=om
+        )
+        if downgrade:
+            om = "files_with_matches"
+            downgrade_hint = (
+                "Directory-wide content search refused for a kitchen-sink pattern "
+                f"({why}). Auto-downgraded to files_with_matches. "
+                "Next: pick 1–3 source files (e.g. **/server.py) and grep content "
+                "there with ≤6 specific tokens "
+                "(unique symbols / compound ids / protocol strings; "
+                "not bare short words, short /paths, or short --flags)."
+            )
+        elif om == "content":
+            pattern, pattern_notes = _narrow_content_pattern(pattern)
+            if not pattern:
+                return json.dumps(
+                    {
+                        "error": (
+                            "grep content pattern too broad after narrowing "
+                            "(bare short words / short path stubs / short CLI flags). "
+                            "Retry with ≤6 specific tokens: unique symbol names, "
+                            "compound ids, protocol strings — "
+                            "use documentSymbol for language outlines."
+                        ),
+                        "error_code": 1,
+                        "hint": "; ".join(pattern_notes),
+                    },
+                    ensure_ascii=False,
+                )
+
+        glob_eff, file_type_eff, filter_notes = _resolve_grep_filters(
+            glob=inp.glob,
+            file_type=inp.file_type,
+            search_root=search_root,
+            output_mode=om,
+        )
+
         t0 = time.perf_counter()
         try:
             out = run_ripgrep_search(
@@ -460,14 +1086,15 @@ class GrepPlugin(ToolPlugin):
                 search_path=search_root,
                 cwd_for_relative=cwd,
                 output_mode=om,
-                glob=inp.glob,
-                file_type=inp.file_type,
+                glob=glob_eff,
+                file_type=file_type_eff,
                 case_insensitive=bool(inp.case_insensitive),
                 multiline=bool(inp.multiline),
-                context_before=inp.context_before,
-                context_after=inp.context_after,
-                context=inp.context,
-                context_c=inp.context_c,
+                # Policy: match lines only; ignore model-supplied context*.
+                context_before=None,
+                context_after=None,
+                context=None,
+                context_c=DEFAULT_CONTEXT_C,
                 line_numbers=inp.line_numbers,
                 head_limit=head_limit,
                 offset=offset,
@@ -480,4 +1107,48 @@ class GrepPlugin(ToolPlugin):
             return json.dumps({"error": out["error"], "error_code": 2}, ensure_ascii=False)
 
         out["durationMs"] = int((time.perf_counter() - t0) * 1000)
+        if pattern_notes:
+            out["pattern"] = pattern
+            filter_notes = list(filter_notes) + pattern_notes
+        if glob_eff != (inp.glob or None) or file_type_eff != (inp.file_type or None):
+            out["glob"] = glob_eff
+            out["file_type"] = file_type_eff
+        if filter_notes:
+            out["filter_notes"] = filter_notes
+        if downgrade_hint:
+            out["downgraded_from"] = "content"
+            out["hint"] = downgrade_hint
+        elif filter_notes and "hint" not in out:
+            # Surface filter rewrites so the model knows why results look different.
+            out["hint"] = "; ".join(filter_notes)
+
+        # Empty result with a language/path filter is usually a bad glob, not a bad pattern.
+        empty = False
+        if om == "content":
+            empty = int(out.get("numMatches") or 0) == 0
+        elif om == "count":
+            empty = int(out.get("numMatches") or 0) == 0
+        else:
+            empty = int(out.get("numFiles") or 0) == 0
+        if empty and (glob_eff or file_type_eff) and "hint" not in out:
+            out["hint"] = (
+                "0 matches with "
+                f"glob={glob_eff!r} file_type={file_type_eff!r}. "
+                "The pattern may be fine but the filter excluded this repo "
+                "(e.g. **/*.go / file_type=go on a Python tree). "
+                "Retry the same pattern without glob/file_type, or use a filter "
+                "that matches the repo language (e.g. glob=*.py / file_type=py)."
+            )
+        elif (
+            om == "content"
+            and out.get("appliedLimit") is not None
+            and Path(search_root).is_dir()
+            and "hint" not in out
+        ):
+            out["hint"] = (
+                "content results were truncated (appliedLimit). "
+                "For directory search prefer files_with_matches first, then content "
+                "on 1–3 source files, or tighten the pattern / add glob=*.py."
+            )
+
         return json.dumps(out, ensure_ascii=False)

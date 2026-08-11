@@ -3,7 +3,7 @@
 #   data-sinkers fileserver_reader 走 GET http://host:port/{filename}
 #
 # 构建上下文必须是 sandbox/ 根目录:
-#   docker build -t release.daocloud.io/dac/sandbox-fileserver:v0.10.0 -f images/fileserver/Dockerfile .
+#   docker build -t release.daocloud.io/dac/sandbox-fileserver:v0.11.0 -f images/fileserver/Dockerfile .
 
 FROM nginx:1.27-alpine
 
