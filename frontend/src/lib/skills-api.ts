@@ -72,6 +72,24 @@ export async function createSkill(
   return res.data
 }
 
+/**
+ * Update skill metadata while preserving scripts / resource dirs in the zip.
+ * `sourceVersion` selects which pack to edit (omit = latest).
+ */
+export async function updateSkill(
+  namespace: string,
+  name: string,
+  body: CreateSkillRequest,
+  sourceVersion?: string
+): Promise<SkillInfoResponse> {
+  const res = await api.post<SkillInfoResponse>(
+    `/skills/namespaces/${encodeURIComponent(namespace)}/skills/${encodeURIComponent(name)}/update`,
+    body,
+    { params: sourceVersion ? { version: sourceVersion } : undefined }
+  )
+  return res.data
+}
+
 export async function uploadSkill(
   namespace: string,
   file: File

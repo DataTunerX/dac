@@ -335,6 +335,57 @@ def test_create_skill_rejects_invalid_name(client):
     assert r.status_code == 400
 
 
+def test_update_skill_preserves_scripts(client, skills_dir):
+    # Create base pack, then inject a script into the stored zip.
+    assert (
+        client.post(
+            "/namespaces/team-a/skills/create",
+            json={
+                "name": "editable",
+                "description": "v1",
+                "detail": "old\n",
+                "version": "1.0.0",
+                "allowed_tools": ["glob"],
+            },
+        ).status_code
+        == 201
+    )
+    zip_path = skills_dir / "team-a" / "editable-1.0.0.zip"
+    import io
+    import zipfile
+
+    raw = zip_path.read_bytes()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(raw), "r") as zin, zipfile.ZipFile(
+        buf, "w", zipfile.ZIP_DEFLATED
+    ) as zout:
+        for info in zin.infolist():
+            zout.writestr(info, zin.read(info.filename))
+        zout.writestr("scripts/run.py", "print(1)\n")
+    zip_path.write_bytes(buf.getvalue())
+    client.post("/skills/reload")
+
+    r = client.post(
+        "/namespaces/team-a/skills/editable/update?version=1.0.0",
+        json={
+            "name": "editable",
+            "description": "v2",
+            "detail": "new\n",
+            "version": "1.0.0",
+            "allowed_tools": ["grep"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["description"] == "v2"
+    with zipfile.ZipFile(zip_path) as zf:
+        assert zf.read("scripts/run.py") == b"print(1)\n"
+        meta = __import__("json").loads(zf.read("_meta.json"))
+        assert meta["allowed_tools"] == ["grep"]
+    detail = client.get("/namespaces/team-a/skills/editable/detail").json()
+    assert detail["description"] == "v2"
+    assert "new" in detail["detail"]
+
+
 def test_delete_specific_version_falls_back(client):
     assert (
         client.get("/namespaces/team-a/skills/report.zip?version=1.0.0").status_code

@@ -5,10 +5,21 @@ import Link from "next/link"
 import { useParams } from "next/navigation"
 import useSWR, { mutate as globalMutate } from "swr"
 import { toast } from "sonner"
-import { ArrowLeft, Download, Loader2, Package, Plus, RefreshCw, Trash2, Upload } from "lucide-react"
+import {
+  ArrowLeft,
+  Download,
+  Eye,
+  Loader2,
+  Package,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from "lucide-react"
 
 import { RbacButton, RbacWrapper } from "@/components/rbac"
 import { ListPageSearch } from "@/components/list-page-search"
+import { SkillEditDialog } from "@/components/skill-edit-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -88,6 +99,8 @@ export default function SkillNamespaceDetailPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState(EMPTY_FORM)
+  // Opens SkillEditDialog (view + edit pack metadata).
+  const [detailSkill, setDetailSkill] = useState<SkillInfoResponse | null>(null)
 
   const skillsKey = namespace ? `skills:${namespace}` : null
   const {
@@ -207,6 +220,7 @@ export default function SkillNamespaceDetailPage() {
       await deleteSkill(deleteTarget.namespace, deleteTarget.name, deleteTarget.version)
       toast.success(`已删除 ${deleteTarget.name}@${deleteTarget.version}`)
       setDeleteTarget(null)
+      setDetailSkill(null)
       await mutateSkills()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "删除失败")
@@ -314,14 +328,18 @@ export default function SkillNamespaceDetailPage() {
                 <TableHead>描述</TableHead>
                 <TableHead className="w-[8rem]">最新版本</TableHead>
                 <TableHead className="w-[8rem]">版本数</TableHead>
-                <TableHead className="w-[10rem] text-right">操作</TableHead>
+                <TableHead className="w-[12rem] text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.map((skill) => {
                 const dlKey = `${skill.namespace}/${skill.name}`
                 return (
-                  <TableRow key={dlKey}>
+                  <TableRow
+                    key={dlKey}
+                    className="cursor-pointer"
+                    onClick={() => setDetailSkill(skill)}
+                  >
                     <TableCell className="font-medium">{skill.name}</TableCell>
                     <TableCell
                       className="max-w-[28rem] truncate text-content-muted"
@@ -333,8 +351,16 @@ export default function SkillNamespaceDetailPage() {
                       <Badge variant="secondary">{skill.version || "—"}</Badge>
                     </TableCell>
                     <TableCell>{skill.availableVersions?.length ?? 0}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="查看 / 编辑"
+                          onClick={() => setDetailSkill(skill)}
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -367,6 +393,19 @@ export default function SkillNamespaceDetailPage() {
           </Table>
         </TableWrapper>
       )}
+
+      <SkillEditDialog
+        skill={detailSkill}
+        downloading={
+          !!detailSkill &&
+          downloadingKey === `${detailSkill.namespace}/${detailSkill.name}`
+        }
+        onClose={() => setDetailSkill(null)}
+        onDownload={onDownload}
+        onSaved={async () => {
+          await Promise.all([mutateSkills(), globalMutate(SKILL_NAMESPACES_KEY)])
+        }}
+      />
 
       <Dialog
         open={createOpen}

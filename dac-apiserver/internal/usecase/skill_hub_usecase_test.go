@@ -51,6 +51,12 @@ func (s *stubSkillHubClient) GetSkill(ctx context.Context, namespace, name, vers
 	}, nil
 }
 
+func (s *stubSkillHubClient) UpdateSkill(ctx context.Context, namespace, name, sourceVersion string, req domain.CreateSkillRequest) (*domain.SkillInfo, error) {
+	return &domain.SkillInfo{
+		Name: name, Namespace: namespace, Description: req.Description, Version: req.Version,
+		Filename: name + "-" + req.Version + ".zip",
+	}, nil
+}
 func (s *stubSkillHubClient) CreateSkill(ctx context.Context, namespace string, req domain.CreateSkillRequest) (*domain.SkillInfo, error) {
 	s.uploaded = &domain.SkillInfo{
 		Name:        req.Name,

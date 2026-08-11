@@ -241,6 +241,54 @@ func (c *Client) CreateSkill(ctx context.Context, namespace string, req domain.C
 	return &info, nil
 }
 
+// UpdateSkill updates SKILL.md / _meta.json while preserving other pack files.
+// sourceVersion selects the zip to edit (empty = latest on skill-hub).
+func (c *Client) UpdateSkill(ctx context.Context, namespace, name, sourceVersion string, req domain.CreateSkillRequest) (*domain.SkillInfo, error) {
+	if err := validateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		req.Name = name
+	}
+	if strings.TrimSpace(req.Name) != strings.TrimSpace(name) {
+		return nil, domain.NewInvalidInputError("name in body must match path name")
+	}
+	if strings.TrimSpace(req.Description) == "" {
+		return nil, domain.NewInvalidInputError("description is required")
+	}
+	tools := req.AllowedTools
+	if tools == nil {
+		tools = []string{}
+	}
+	payload := createSkillBody{
+		Name:         strings.TrimSpace(req.Name),
+		Description:  strings.TrimSpace(req.Description),
+		Detail:       req.Detail,
+		Version:      strings.TrimSpace(req.Version),
+		AllowedTools: tools,
+	}
+	if payload.Version == "" {
+		payload.Version = "1.0.0"
+	}
+	body, err := sonic.Marshal(payload)
+	if err != nil {
+		return nil, domain.NewInternalError(err)
+	}
+	path := "/namespaces/" + url.PathEscape(namespace) + "/skills/" + url.PathEscape(name) + "/update"
+	if sourceVersion != "" {
+		path += "?version=" + url.QueryEscape(sourceVersion)
+	}
+	var raw skillInfoRaw
+	if err := c.doJSON(ctx, http.MethodPost, path, body, "application/json", &raw); err != nil {
+		return nil, err
+	}
+	info := mapSkill(raw)
+	return &info, nil
+}
+
 func (c *Client) UploadSkill(ctx context.Context, namespace, filename string, r io.Reader) (*domain.SkillInfo, error) {
 	if err := validateNamespace(namespace); err != nil {
 		return nil, err

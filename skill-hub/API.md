@@ -57,6 +57,7 @@
 | GET | `/namespaces/{ns}/skills/{name}/detail` | 获取 skill 详情（含 detail / allowed_tools） |
 | GET | `/namespaces/{ns}/skills/{name}.zip` | 从某命名空间下载 skill |
 | POST | `/namespaces/{ns}/skills/create` | 用表单字段创建 skill（服务端打包 zip） |
+| POST | `/namespaces/{ns}/skills/{name}/update` | 更新 skill 元数据（保留 scripts / 资源目录） |
 | POST | `/namespaces/{ns}/skills` | 上传 skill 到某命名空间 |
 | DELETE | `/namespaces/{ns}/skills/{name}.zip` | 删除某命名空间的 skill |
 | GET | `/skills/{name}.zip` | 从 `default` 下载 skill（旧别名） |
@@ -450,6 +451,38 @@ curl -sS -X POST "http://<host>:8000/namespaces/team-a/skills/create" \
 | --- | --- |
 | 400 | 字段非法 / 空 description / 打包结果无法通过 SkillLoader 校验 |
 | 413 | 生成包超过 256 MiB（极少见） |
+
+---
+
+## POST /namespaces/{namespace}/skills/{name}/update
+
+更新已有 skill 的元数据与说明，同时**保留**包内 `scripts/`、资源目录等其它文件。
+
+流程：按 `name`（及可选 query `version`）加载现有 zip → 重写 `SKILL.md` / `_meta.json` → 写回 `{name}-{body.version}.zip`（同版本覆盖；改版本则新增版本文件）。
+
+**路径参数**
+
+| 参数 | 说明 |
+| --- | --- |
+| `namespace` | 命名空间 |
+| `name` | skill 名（身份；不可改名） |
+
+**Query**
+
+| 参数 | 说明 |
+| --- | --- |
+| `version` | 要编辑的**源**版本；省略则为最新版本 |
+
+**请求体** — 与 create 相同（`name` 必须与路径一致；`version` 为写入目标版本）。
+
+**响应** `200 OK` — `SkillInfo`
+
+**错误**
+
+| 状态码 | 场景 |
+| --- | --- |
+| 400 | 字段非法 / body.name 与路径不一致 |
+| 404 | 源 skill / 版本不存在 |
 
 ---
 

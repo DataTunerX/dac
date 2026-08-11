@@ -95,6 +95,37 @@ func (u *skillHubUsecase) CreateSkill(ctx context.Context, namespace string, req
 	return u.client.CreateSkill(ctx, namespace, req)
 }
 
+func (u *skillHubUsecase) UpdateSkill(ctx context.Context, namespace, name, sourceVersion string, req domain.CreateSkillRequest) (*domain.SkillInfo, error) {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	sourceVersion = strings.TrimSpace(sourceVersion)
+	req.Name = strings.TrimSpace(req.Name)
+	req.Description = strings.TrimSpace(req.Description)
+	req.Version = strings.TrimSpace(req.Version)
+	if namespace == "" {
+		return nil, domain.NewInvalidInputError("namespace is required")
+	}
+	if name == "" {
+		return nil, domain.NewInvalidInputError("skill name is required")
+	}
+	if req.Name == "" {
+		req.Name = name
+	}
+	if req.Name != name {
+		return nil, domain.NewInvalidInputError("name in body must match path name")
+	}
+	if req.Description == "" {
+		return nil, domain.NewInvalidInputError("description is required")
+	}
+	if req.Version == "" {
+		req.Version = "1.0.0"
+	}
+	if req.AllowedTools == nil {
+		req.AllowedTools = []string{}
+	}
+	return u.client.UpdateSkill(ctx, namespace, name, sourceVersion, req)
+}
+
 func (u *skillHubUsecase) UploadSkill(ctx context.Context, namespace, filename string, r io.Reader) (*domain.SkillInfo, error) {
 	namespace = strings.TrimSpace(namespace)
 	filename = strings.TrimSpace(filename)

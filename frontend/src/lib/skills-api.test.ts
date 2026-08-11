@@ -16,6 +16,7 @@ import {
   deleteSkillNamespace,
   downloadSkill,
   getSkill,
+  updateSkill,
   listSkillNamespaces,
   listSkills,
   reloadSkills,
@@ -121,6 +122,43 @@ describe("skills-api", () => {
       allowedTools: ["glob"],
     })
     expect(out.name).toBe("form-skill")
+  })
+
+  it("updateSkill posts JSON to /skills/:name/update", async () => {
+    vi.mocked(api.post).mockResolvedValue({
+      data: {
+        name: "form-skill",
+        namespace: "team-a",
+        description: "updated",
+        version: "1.1.0",
+        filename: "form-skill-1.1.0.zip",
+        availableVersions: ["1.0.0", "1.1.0"],
+      },
+    })
+    const out = await updateSkill(
+      "team-a",
+      "form-skill",
+      {
+        name: "form-skill",
+        description: "updated",
+        detail: "## Hi\n",
+        version: "1.1.0",
+        allowedTools: ["grep"],
+      },
+      "1.0.0"
+    )
+    expect(api.post).toHaveBeenCalledWith(
+      "/skills/namespaces/team-a/skills/form-skill/update",
+      {
+        name: "form-skill",
+        description: "updated",
+        detail: "## Hi\n",
+        version: "1.1.0",
+        allowedTools: ["grep"],
+      },
+      { params: { version: "1.0.0" } }
+    )
+    expect(out.version).toBe("1.1.0")
   })
 
   it("uploadSkill sends multipart FormData", async () => {

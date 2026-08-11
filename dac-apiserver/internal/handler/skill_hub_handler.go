@@ -204,6 +204,58 @@ func (h *SkillHubHandler) CreateSkill(ctx context.Context, c *app.RequestContext
 	CreatedResponse(c, dto.ToSkillInfoResponse(*item))
 }
 
+// UpdateSkill updates skill pack metadata while preserving scripts / resources.
+//
+//	@Summary		Update skill
+//	@Tags			Skills
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			ns		path		string					true	"namespace"
+//	@Param			name	path		string					true	"skill name"
+//	@Param			version	query		string					false	"source version to edit"
+//	@Param			body	body		dto.CreateSkillRequest	true	"skill fields"
+//	@Success		200		{object}	map[string]any
+//	@Router			/skills/namespaces/{ns}/skills/{name}/update [post]
+func (h *SkillHubHandler) UpdateSkill(ctx context.Context, c *app.RequestContext) {
+	ns := c.Param("ns")
+	name := c.Param("name")
+	sourceVersion := string(c.Query("version"))
+	var req dto.CreateSkillRequest
+	if err := c.BindAndValidate(&req); err != nil {
+		ErrorResponse(c, domain.NewInvalidInputError(err.Error()))
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		req.Name = name
+	}
+	if strings.TrimSpace(req.Name) != strings.TrimSpace(name) {
+		ErrorResponse(c, domain.NewInvalidInputError("name in body must match path name"))
+		return
+	}
+	if strings.TrimSpace(req.Description) == "" {
+		ErrorResponse(c, domain.NewInvalidInputError("description is required"))
+		return
+	}
+	tools := req.AllowedTools
+	if tools == nil {
+		tools = []string{}
+	}
+	item, err := h.usecase.UpdateSkill(ctx, ns, name, sourceVersion, domain.CreateSkillRequest{
+		Name:         req.Name,
+		Description:  req.Description,
+		Detail:       req.Detail,
+		Version:      req.Version,
+		AllowedTools: tools,
+	})
+	if err != nil {
+		h.logger.Error("failed to update skill", "error", err, "namespace", ns, "name", name)
+		ErrorResponse(c, err)
+		return
+	}
+	SuccessResponse(c, dto.ToSkillInfoResponse(*item))
+}
+
 // UploadSkill uploads a skill zip to a namespace.
 //
 //	@Summary		Upload skill

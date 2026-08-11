@@ -144,6 +144,42 @@ func TestClient_CreateSkill(t *testing.T) {
 	}
 }
 
+func TestClient_UpdateSkill(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/namespaces/team-a/skills/form-skill/update" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("version") != "1.0.0" {
+			t.Fatalf("want source version query, got %q", r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"name":"form-skill",
+			"namespace":"team-a",
+			"description":"updated",
+			"version":"1.1.0",
+			"filename":"form-skill-1.1.0.zip",
+			"available_versions":["1.0.0","1.1.0"]
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, 0, nil)
+	info, err := c.UpdateSkill(context.Background(), "team-a", "form-skill", "1.0.0", domain.CreateSkillRequest{
+		Name:         "form-skill",
+		Description:  "updated",
+		Detail:       "## Hi\n",
+		Version:      "1.1.0",
+		AllowedTools: []string{"grep"},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSkill: %v", err)
+	}
+	if info.Version != "1.1.0" || info.Description != "updated" {
+		t.Fatalf("unexpected info: %#v", info)
+	}
+}
+
 func TestClient_UploadSkill(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/namespaces/default/skills" {

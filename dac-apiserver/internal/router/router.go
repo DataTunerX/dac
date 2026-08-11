@@ -206,6 +206,7 @@ func Setup(
 				skills.POST("/namespaces/:ns/skills/create", skillHubHandler.CreateSkill)
 				skills.POST("/namespaces/:ns/skills", skillHubHandler.UploadSkill)
 				skills.GET("/namespaces/:ns/skills/:name", skillHubHandler.GetSkill)
+				skills.POST("/namespaces/:ns/skills/:name/update", skillHubHandler.UpdateSkill)
 				skills.GET("/namespaces/:ns/skills/:name/download", skillHubHandler.DownloadSkill)
 				skills.DELETE("/namespaces/:ns/skills/:name", skillHubHandler.DeleteSkill)
 			}

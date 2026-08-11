@@ -26,7 +26,7 @@ from .models import (
     SkillListResponse,
     SkillScriptInfo,
 )
-from .packager import build_skill_zip_bytes
+from .packager import build_skill_zip_bytes, rebuild_skill_zip_bytes
 from .validation import validate_namespace, validate_skill_name, validate_version
 
 logger = logging.getLogger(__name__)
@@ -362,6 +362,71 @@ async def download_skill_at_root(
     ),
 ) -> FileResponse:
     return await _download_by_namespace(DEFAULT_NAMESPACE, name, version)
+
+
+@router.post(
+    "/namespaces/{namespace}/skills/{name}/update",
+    response_model=SkillInfo,
+    status_code=200,
+)
+async def update_skill(
+    namespace: str,
+    name: str,
+    body: CreateSkillRequest,
+    version: str | None = Query(
+        default=None,
+        description=(
+            "Source version to edit (defaults to latest). "
+            "Body.version is the version written into the new pack."
+        ),
+    ),
+) -> SkillInfo:
+    """Update skill metadata while preserving scripts / resource dirs.
+
+    Loads the existing zip for ``name`` (+ optional source ``version``), rewrites
+    ``SKILL.md`` / ``_meta.json`` from the JSON body, keeps other pack files, then
+    stores as ``{name}-{body.version}.zip`` (overwrite if that version exists).
+    Path ``name`` is the skill identity and must match ``body.name``.
+    """
+    ns = validate_namespace(namespace)
+    clean_name = validate_skill_name(name)
+    body_name = validate_skill_name(body.name)
+    if body_name != clean_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"body.name '{body_name}' must match path name '{clean_name}'",
+        )
+    source_version = validate_version(version)
+    new_version = validate_version(body.version)
+    if not new_version:
+        raise HTTPException(status_code=400, detail="version must not be empty")
+    description = (body.description or "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="description must not be empty")
+
+    idx = _require_index()
+    zip_path = idx.resolve_zip(ns, clean_name, source_version)
+    if zip_path is None or not zip_path.is_file():
+        if source_version:
+            detail = f"skill '{ns}/{clean_name}' version '{source_version}' not found"
+        else:
+            detail = f"skill '{ns}/{clean_name}' not found"
+        raise HTTPException(status_code=404, detail=detail)
+
+    existing = zip_path.read_bytes()
+    req = CreateSkillRequest(
+        name=clean_name,
+        description=description,
+        detail=body.detail if body.detail is not None else "",
+        version=new_version,
+        allowed_tools=body.allowed_tools or [],
+    )
+    try:
+        data = rebuild_skill_zip_bytes(existing, req)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"failed to rebuild skill zip: {exc}")
+
+    return _store_skill_zip(ns, data, source="update")
 
 
 @router.post(

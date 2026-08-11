@@ -72,6 +72,9 @@ type SkillHubClient interface {
 	ListSkills(ctx context.Context, namespace string) ([]SkillInfo, error)
 	GetSkill(ctx context.Context, namespace, name, version string) (*SkillDetail, error)
 	CreateSkill(ctx context.Context, namespace string, req CreateSkillRequest) (*SkillInfo, error)
+	// UpdateSkill rewrites metadata in an existing pack (preserves scripts/resources).
+	// sourceVersion selects which zip to edit (empty = latest); req.Version is written.
+	UpdateSkill(ctx context.Context, namespace, name, sourceVersion string, req CreateSkillRequest) (*SkillInfo, error)
 	UploadSkill(ctx context.Context, namespace, filename string, r io.Reader) (*SkillInfo, error)
 	DownloadSkill(ctx context.Context, namespace, name, version string) (*SkillDownload, error)
 	DeleteSkill(ctx context.Context, namespace, name, version string) error
@@ -89,6 +92,7 @@ type SkillHubUsecase interface {
 	ListSkills(ctx context.Context, namespace string) ([]SkillInfo, error)
 	GetSkill(ctx context.Context, namespace, name, version string) (*SkillDetail, error)
 	CreateSkill(ctx context.Context, namespace string, req CreateSkillRequest) (*SkillInfo, error)
+	UpdateSkill(ctx context.Context, namespace, name, sourceVersion string, req CreateSkillRequest) (*SkillInfo, error)
 	UploadSkill(ctx context.Context, namespace, filename string, r io.Reader) (*SkillInfo, error)
 	DownloadSkill(ctx context.Context, namespace, name, version string) (*SkillDownload, error)
 	DeleteSkill(ctx context.Context, namespace, name, version string) error

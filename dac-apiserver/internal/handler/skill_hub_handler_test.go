@@ -59,6 +59,19 @@ func (s *stubSkillHubUC) CreateSkill(ctx context.Context, namespace string, req 
 		Filename:    req.Name + "-" + req.Version + ".zip",
 	}, nil
 }
+func (s *stubSkillHubUC) UpdateSkill(ctx context.Context, namespace, name, sourceVersion string, req domain.CreateSkillRequest) (*domain.SkillInfo, error) {
+	if s.uploadErr != nil {
+		return nil, s.uploadErr
+	}
+	s.uploaded = true
+	return &domain.SkillInfo{
+		Name:        name,
+		Namespace:   namespace,
+		Description: req.Description,
+		Version:     req.Version,
+		Filename:    name + "-" + req.Version + ".zip",
+	}, nil
+}
 func (s *stubSkillHubUC) UploadSkill(ctx context.Context, namespace, filename string, r io.Reader) (*domain.SkillInfo, error) {
 	if s.uploadErr != nil {
 		return nil, s.uploadErr
