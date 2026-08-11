@@ -17,12 +17,16 @@ from fastapi.responses import FileResponse, JSONResponse
 from .index import SkillIndex
 from .models import (
     DEFAULT_NAMESPACE,
+    CreateSkillRequest,
     NamespaceExistsResponse,
     NamespaceInfo,
     NamespaceListResponse,
+    SkillDetail,
     SkillInfo,
     SkillListResponse,
+    SkillScriptInfo,
 )
+from .packager import build_skill_zip_bytes
 from .validation import validate_namespace, validate_skill_name, validate_version
 
 logger = logging.getLogger(__name__)
@@ -210,6 +214,77 @@ async def list_namespace_skills(namespace: str) -> SkillListResponse:
     )
 
 
+@router.get(
+    "/namespaces/{namespace}/skills/{name}/detail",
+    response_model=SkillDetail,
+)
+async def get_skill_detail(
+    namespace: str,
+    name: str,
+    version: str | None = Query(
+        default=None,
+        description="Optional skill version. Defaults to the latest indexed version.",
+    ),
+) -> SkillDetail:
+    """Return full skill pack metadata (including ``detail`` / ``allowed_tools``).
+
+    Loads the zip with ``SkillLoader`` so the response mirrors what the runner sees.
+    Path uses ``/detail`` to avoid colliding with ``/{name}.zip`` downloads.
+    """
+    ns = validate_namespace(namespace)
+    clean_name = validate_skill_name(name)
+    clean_version = validate_version(version)
+    idx = _require_index()
+
+    zip_path = idx.resolve_zip(ns, clean_name, clean_version)
+    if zip_path is None or not zip_path.is_file():
+        if clean_version:
+            detail = f"skill '{ns}/{clean_name}' version '{clean_version}' not found"
+        else:
+            detail = f"skill '{ns}/{clean_name}' not found"
+        raise HTTPException(status_code=404, detail=detail)
+
+    resolved = idx.resolved_version(ns, clean_name, clean_version) or ""
+    from skill_sdk.skill.loader import SkillLoader
+
+    loader = SkillLoader()
+    try:
+        skill = loader.load(zip_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400, detail=f"invalid skill zip: {exc}"
+        ) from exc
+    finally:
+        loader.close()
+
+    # Prefer list summary for available_versions / download_url when present.
+    summary = _find_latest(idx, ns, clean_name) or {}
+    if ns == DEFAULT_NAMESPACE:
+        download_url = f"/{clean_name}.zip"
+    else:
+        download_url = f"/namespaces/{ns}/skills/{clean_name}.zip"
+
+    return SkillDetail(
+        name=skill.name,
+        namespace=ns,
+        description=skill.description,
+        detail=skill.detail or "",
+        version=resolved or skill.version,
+        filename=zip_path.name,
+        download_url=summary.get("download_url") or download_url,
+        available_versions=list(summary.get("available_versions") or ([resolved] if resolved else [])),
+        allowed_tools=list(skill.allowed_tools or []),
+        scripts=[
+            SkillScriptInfo(
+                script_name=s.script_name,
+                interpreter=s.interpreter or "",
+            )
+            for s in (skill.scripts or [])
+        ],
+        resource_dirs=list(skill.resource_dirs or []),
+    )
+
+
 async def _download_by_namespace(
     namespace: str, name: str, version: str | None
 ) -> FileResponse:
@@ -235,12 +310,17 @@ async def _download_by_namespace(
         resolved,
         zip_path.name,
     )
-    # Serve the original zip filename (which may be e.g. hashgen-1.0.0.zip),
-    # but report it as the canonical "<name>.zip" for a stable client filename.
+    # Match on-disk naming: {name}-{version}.zip (e.g. discrawl-1.0.0.zip).
+    # Prefer the resolved version so Content-Disposition stays consistent even if
+    # the stored file used a different historical layout.
+    if resolved:
+        download_name = f"{clean_name}-{resolved}.zip"
+    else:
+        download_name = zip_path.name
     response = FileResponse(
         path=str(zip_path),
         media_type="application/zip",
-        filename=f"{clean_name}.zip",
+        filename=download_name,
     )
     if resolved:
         response.headers["X-Skill-Version"] = resolved
@@ -285,6 +365,39 @@ async def download_skill_at_root(
 
 
 @router.post(
+    "/namespaces/{namespace}/skills/create",
+    response_model=SkillInfo,
+    status_code=201,
+)
+async def create_skill(namespace: str, body: CreateSkillRequest) -> SkillInfo:
+    """Create a skill from structured fields (no pre-built zip required).
+
+    skill-hub packages ``SKILL.md`` + ``_meta.json`` into a zip, then stores it
+    the same way as multipart upload. Same ``name`` + ``version`` overwrites.
+    Missing namespaces are created lazily.
+    """
+    ns = validate_namespace(namespace)
+    # Validate identity fields before packaging so bad input fails fast with 400.
+    name = validate_skill_name(body.name)
+    version = validate_version(body.version)
+    if not version:
+        raise HTTPException(status_code=400, detail="version must not be empty")
+    description = (body.description or "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="description must not be empty")
+
+    req = CreateSkillRequest(
+        name=name,
+        description=description,
+        detail=body.detail if body.detail is not None else "",
+        version=version,
+        allowed_tools=body.allowed_tools or [],
+    )
+    data = build_skill_zip_bytes(req)
+    return _store_skill_zip(ns, data, source="create")
+
+
+@router.post(
     "/namespaces/{namespace}/skills",
     response_model=SkillInfo,
     status_code=201,
@@ -303,20 +416,6 @@ async def upload_skill(
     uploaded skill is available right away.
     """
     ns = validate_namespace(namespace)
-    idx = _require_index()
-
-    # Lazily create the namespace directory on first upload. This mirrors the
-    # Docker-Hub model: pushing to a not-yet-existing repo initialises it rather
-    # than failing. The directory becomes a namespace as soon as it exists, and
-    # the immediate reload below makes it visible right away.
-    ns_dir = idx.namespace_dir(ns)
-    if not ns_dir.is_dir():
-        ns_dir.mkdir(parents=True, exist_ok=True)
-        logger.warning(
-            "[SkillHub] upload auto-created namespace %s (dir=%s)",
-            ns,
-            ns_dir,
-        )
 
     # Read and size-limit the upload.
     data = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -326,31 +425,57 @@ async def upload_skill(
             detail=f"upload too large (limit {MAX_UPLOAD_BYTES} bytes)",
         )
 
-    # Parse the zip to validate it and extract name/version.
-    name, version = _parse_upload_zip(data, file.filename or "upload.zip")
+    return _store_skill_zip(ns, data, source="upload", original_filename=file.filename)
 
-    # Deterministic target filename so re-upload of the same name+version overwrites.
+
+def _store_skill_zip(
+    namespace: str,
+    data: bytes,
+    *,
+    source: str,
+    original_filename: str | None = None,
+) -> SkillInfo:
+    """Validate ``data`` as a skill zip, write it under the namespace, reload index."""
+    idx = _require_index()
+
+    # Lazily create the namespace directory on first write (Docker-Hub style).
+    ns_dir = idx.namespace_dir(namespace)
+    if not ns_dir.is_dir():
+        ns_dir.mkdir(parents=True, exist_ok=True)
+        logger.warning(
+            "[SkillHub] %s auto-created namespace %s (dir=%s)",
+            source,
+            namespace,
+            ns_dir,
+        )
+
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"upload too large (limit {MAX_UPLOAD_BYTES} bytes)",
+        )
+
+    name, version = _parse_upload_zip(data, original_filename or f"{source}.zip")
+
     target = ns_dir / f"{name}-{version}.zip"
     target.write_bytes(data)
     logger.info(
-        "[SkillHub] uploaded skill ns=%s name=%s version=%s file=%s size=%d",
-        ns,
+        "[SkillHub] %s skill ns=%s name=%s version=%s file=%s size=%d",
+        source,
+        namespace,
         name,
         version,
         target.name,
         len(data),
     )
 
-    # Reload immediately so the uploaded skill is addressable right away
-    # (do not wait for the watchfiles debounce).
     idx.reload()
 
-    info = _find_latest(idx, ns, name)
+    info = _find_latest(idx, namespace, name)
     if info is None:
-        # Shouldn't happen after a successful reload, but guard defensively.
         raise HTTPException(
             status_code=500,
-            detail=f"upload succeeded but skill '{ns}/{name}' not indexed",
+            detail=f"{source} succeeded but skill '{namespace}/{name}' not indexed",
         )
     return SkillInfo(**info)
 

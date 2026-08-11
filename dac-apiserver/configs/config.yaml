@@ -5,7 +5,7 @@ server:
   mode: "debug"
   read_timeout: 10s
   write_timeout: 10s
-  max_request_body_size: 10
+  max_request_body_size: 64
 
 log:
   level: "debug"
@@ -49,6 +49,10 @@ agent_registry:
   orchestrator_base_url: "http://orchestrator-registry.dac.svc.cluster.local:8000"
   biz_orchestrator_base_url: "http://biz-orchestrator-registry.dac.svc.cluster.local:8000"
   timeout: 10s
+
+# Skill Hub：地址硬编码为 dac/skill-hub Service，此处仅配置超时
+skill_hub:
+  timeout: 120s
 
 # 数据库配置
 database:

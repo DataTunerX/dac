@@ -134,11 +134,17 @@ def test_list_namespace_skills(client):
     assert rep["download_url"] == "/namespaces/team-a/skills/report.zip"
 
 
+def _assert_download_filename(resp, expected: str) -> None:
+    cd = resp.headers.get("content-disposition", "")
+    assert expected in cd, f"expected {expected!r} in Content-Disposition={cd!r}"
+
+
 def test_download_default_root_path(client):
     r = client.get("/github.zip")
     assert r.status_code == 200
     assert r.headers["content-type"] == "application/zip"
     assert r.headers["x-skill-version"] == "1.0.0"
+    _assert_download_filename(r, "github-1.0.0.zip")
 
 
 def test_download_default_under_skills_path(client):
@@ -148,9 +154,11 @@ def test_download_default_under_skills_path(client):
     assert r.status_code == 200
     assert r.headers["content-type"] == "application/zip"
     assert r.headers["x-skill-version"] == "1.0.0"
+    _assert_download_filename(r, "github-1.0.0.zip")
     r2 = client.get("/skills/hashgen.zip?version=1.10.0")
     assert r2.status_code == 200
     assert r2.headers["x-skill-version"] == "1.10.0"
+    _assert_download_filename(r2, "hashgen-1.10.0.zip")
     assert client.get("/skills/nonexistent.zip").status_code == 404
 
 
@@ -158,15 +166,39 @@ def test_download_default_specific_version(client):
     r = client.get("/hashgen.zip?version=1.10.0")
     assert r.status_code == 200
     assert r.headers["x-skill-version"] == "1.10.0"
+    _assert_download_filename(r, "hashgen-1.10.0.zip")
 
 
 def test_download_namespace_skill(client):
     r = client.get("/namespaces/team-a/skills/report.zip")
     assert r.status_code == 200
     assert r.headers["x-skill-version"] == "1.1.0"
+    _assert_download_filename(r, "report-1.1.0.zip")
     r = client.get("/namespaces/team-a/skills/report.zip?version=1.0.0")
     assert r.status_code == 200
     assert r.headers["x-skill-version"] == "1.0.0"
+    _assert_download_filename(r, "report-1.0.0.zip")
+
+
+def test_get_skill_detail(client):
+    r = client.get("/namespaces/team-a/skills/report/detail")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == "report"
+    assert body["namespace"] == "team-a"
+    assert body["version"] == "1.1.0"
+    assert "detail" in body
+    assert "allowed_tools" in body
+    assert isinstance(body["allowed_tools"], list)
+    assert "Test skill for report" in body["detail"]
+    # specific version
+    r2 = client.get("/namespaces/team-a/skills/report/detail?version=1.0.0")
+    assert r2.status_code == 200
+    assert r2.json()["version"] == "1.0.0"
+
+
+def test_get_skill_detail_missing_404(client):
+    assert client.get("/namespaces/team-a/skills/nope/detail").status_code == 404
 
 
 def test_download_missing_returns_404(client):
@@ -263,6 +295,43 @@ def test_upload_invalid_zip_400(client):
             "/namespaces/team-a/skills",
             files={"file": ("bad.zip", f, "application/zip")},
         )
+    assert r.status_code == 400
+
+
+def test_create_skill_from_json(client, skills_dir):
+    r = client.post(
+        "/namespaces/team-a/skills/create",
+        json={
+            "name": "form-skill",
+            "description": "Created from form",
+            "detail": "## Goal\n\nHelp the user.\n",
+            "version": "1.0.0",
+            "allowed_tools": ["glob", "grep"],
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == "form-skill"
+    assert body["version"] == "1.0.0"
+    assert body["namespace"] == "team-a"
+    assert body["description"] == "Created from form"
+    assert (skills_dir / "team-a" / "form-skill-1.0.0.zip").is_file()
+    assert client.get("/namespaces/team-a/skills/form-skill.zip").status_code == 200
+
+
+def test_create_skill_rejects_empty_description(client):
+    r = client.post(
+        "/namespaces/team-a/skills/create",
+        json={"name": "x", "description": "  ", "version": "1.0.0"},
+    )
+    assert r.status_code == 400
+
+
+def test_create_skill_rejects_invalid_name(client):
+    r = client.post(
+        "/namespaces/team-a/skills/create",
+        json={"name": "bad name", "description": "x", "version": "1.0.0"},
+    )
     assert r.status_code == 400
 
 

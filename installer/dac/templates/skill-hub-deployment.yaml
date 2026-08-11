@@ -1,4 +1,19 @@
 {{- if .Values.skillHub.enabled }}
+{{- /*
+  Persist uploaded/created skill zips. Without a volume, SKILLS_DIR lives in the
+  container FS and is wiped on restart. hostPath is the default (single-node);
+  set persistence.type=pvc for StorageClass-backed volumes.
+*/ -}}
+{{- $persist := .Values.skillHub.persistence | default dict }}
+{{- $persistEnabled := false }}
+{{- if $persist.enabled }}{{ $persistEnabled = true }}{{ end }}
+{{- $persistType := $persist.type | default "hostPath" }}
+{{- $mountPath := $persist.mountPath | default "/app/skills" }}
+{{- $hostPath := $persist.hostPath | default dict }}
+{{- $pvc := $persist.pvc | default dict }}
+{{- if and $persistEnabled (eq $persistType "hostPath") (gt (int .Values.skillHub.replicas) 1) }}
+{{- fail "skillHub.persistence.type=hostPath requires skillHub.replicas=1 (hostPath is node-local)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,6 +25,11 @@ spec:
   selector:
     matchLabels:
       {{- include "dac.selectorLabels" (dict "context" . "name" "skill-hub") | nindent 6 }}
+  {{- if $persistEnabled }}
+  # Avoid rolling updates swapping nodes while hostPath data stays on the old node.
+  strategy:
+    type: Recreate
+  {{- end }}
   template:
     metadata:
       labels:
@@ -18,6 +38,32 @@ spec:
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $persistEnabled }}
+      # Mount volume at /skills-data here so /app/skills from the image remains
+      # the seed source. Main container mounts the same volume at mountPath.
+      initContainers:
+        - name: seed-default-skills
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.skillHub.image.repository "tag" .Values.skillHub.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              DEST="/skills-data"
+              SRC="/app/skills"
+              mkdir -p "${DEST}/default"
+              # First boot only: copy image-baked defaults when volume default/ is empty.
+              # Never overwrite existing zips (user uploads / previous seeds).
+              if [ -d "${SRC}/default" ] && [ -z "$(ls -A "${DEST}/default" 2>/dev/null || true)" ]; then
+                echo "[skill-hub] seeding default skills from image into persistent volume"
+                cp -a "${SRC}/default/." "${DEST}/default/"
+              else
+                echo "[skill-hub] skip seed (default/ already populated or image has no defaults)"
+              fi
+          volumeMounts:
+            - name: skills-data
+              mountPath: /skills-data
       {{- end }}
       containers:
         - name: skill-hub
@@ -32,10 +78,20 @@ spec:
             # real langfuse instance is wired up.
             - name: LANGFUSE_ENABLED
               value: {{ .Values.skillHub.config.langfuseEnabled | quote }}
+            {{- if $persistEnabled }}
+            - name: SKILLS_DIR
+              value: {{ $mountPath | quote }}
+            {{- else }}
             {{- with .Values.skillHub.config.skillsDir }}
             - name: SKILLS_DIR
               value: {{ . | quote }}
             {{- end }}
+            {{- end }}
+          {{- if $persistEnabled }}
+          volumeMounts:
+            - name: skills-data
+              mountPath: {{ $mountPath | quote }}
+          {{- end }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -50,4 +106,17 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.skillHub.resources | nindent 12 }}
+      {{- if $persistEnabled }}
+      volumes:
+        - name: skills-data
+          {{- if eq $persistType "pvc" }}
+          persistentVolumeClaim:
+            claimName: {{ $pvc.existingClaim | default (printf "%s-skills" (include "dac.skillHub.serviceName" .)) }}
+          {{- else }}
+          # hostPath keeps uploads across pod restarts on the same node.
+          hostPath:
+            path: {{ $hostPath.path | default "/var/lib/dac/skill-hub/skills" | quote }}
+            type: {{ $hostPath.type | default "DirectoryOrCreate" | quote }}
+          {{- end }}
+      {{- end }}
 {{- end }}

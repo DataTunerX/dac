@@ -12,6 +12,7 @@ import {
   Network,
   Layers,
   Globe,
+  Package,
   ChevronRight,
   X,
   Menu,
@@ -44,6 +45,16 @@ type SidebarGroupItem = {
 
 const sidebarNav: Array<SidebarLinkItem | SidebarGroupItem> = [
   { type: "link", icon: Bot, label: "智能体", href: "/agents" },
+  {
+    type: "group",
+    icon: Package,
+    label: "技能中心",
+    sectionPaths: ["/skills"],
+    children: [
+      { label: "技能市场", href: "/skills/marketplace" },
+      { label: "命名空间", href: "/skills/namespaces" },
+    ],
+  },
   {
     type: "group",
     icon: Database,

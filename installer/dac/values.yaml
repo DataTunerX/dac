@@ -717,21 +717,42 @@ bizSkillAgent:
 # skill-hub - HTTP index/download service for skill zip packages.
 # skill-agent (and orchestrator-agent's skill_download.py) fetches
 # `{SKILL_HUB_URL}/skills/{name}.zip` from this service at startup.
-# Images bake the zip packs into /app/skills/, so no PVC is required.
+# Uploaded / created skills are written under SKILLS_DIR; without persistence
+# they live only in the container FS and are lost on pod restart.
 # ---------------------------------------------------------------------------
 skillHub:
   enabled: true
   image:
     repository: skill-hub
     tag: "v0.11.0-amd64"
+  # hostPath persistence is node-local — keep replicas at 1.
   replicas: 1
   config:
     # -- Silence the transitive langfuse "client disabled" log from skill_sdk.
     #    Set to "true" only if a real langfuse instance is configured.
     langfuseEnabled: "false"
-    # -- Override SKILLS_DIR inside the container. Empty string keeps the
-    #    image default (/app/skills/). Useful if you mount a volume.
+    # -- Override SKILLS_DIR when persistence.enabled=false. Empty = image
+    #    default (/app/skills/). Ignored when persistence is enabled (mountPath
+    #    is always used as SKILLS_DIR then).
     skillsDir: ""
+  # Persist skill zips across pod restarts. Default hostPath is enough for
+  # single-node / lab clusters; switch type to "pvc" for multi-node / prod.
+  persistence:
+    enabled: true
+    # -- "hostPath" | "pvc"
+    type: hostPath
+    # -- Container mount path (= SKILLS_DIR when persistence is on)
+    mountPath: /app/skills
+    hostPath:
+      # -- Node-local directory (kubelet creates it when type=DirectoryOrCreate)
+      path: /var/lib/dac/skill-hub/skills
+      type: DirectoryOrCreate
+    pvc:
+      # -- Reuse an existing PVC name; empty creates "{{ release }}-skill-hub-skills"
+      existingClaim: ""
+      storageClass: ""
+      size: 5Gi
+      accessMode: ReadWriteOnce
   service:
     type: ClusterIP
     port: 8000

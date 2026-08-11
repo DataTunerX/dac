@@ -360,6 +360,68 @@ export type ListConversationsResponse = {
   total: number
 }
 
+// ----- Skill Hub (internal/handler/dto/skill_hub.go) -----
+
+export type SkillInfoResponse = {
+  name: string
+  namespace: string
+  description: string
+  version: string
+  filename: string
+  availableVersions: string[]
+}
+
+export type SkillScriptInfoResponse = {
+  scriptName: string
+  interpreter: string
+}
+
+/** Full skill pack fields from GET /skills/namespaces/:ns/skills/:name. */
+export type SkillDetailResponse = {
+  name: string
+  namespace: string
+  description: string
+  /** SKILL.md body after frontmatter. */
+  detail: string
+  version: string
+  filename: string
+  availableVersions: string[]
+  /** Empty means unrestricted (skill_sdk / runner semantics). */
+  allowedTools: string[]
+  scripts: SkillScriptInfoResponse[]
+  resourceDirs: string[]
+}
+
+export type SkillListResponse = {
+  items: SkillInfoResponse[]
+  totalCount: number
+  namespace?: string
+}
+
+export type SkillNamespaceResponse = {
+  id: string
+  visibility: string
+}
+
+export type SkillNamespaceListResponse = {
+  items: SkillNamespaceResponse[]
+  totalCount: number
+}
+
+export type SkillNamespaceExistsResponse = {
+  namespace: string
+  exists: boolean
+}
+
+/** Create a skill from form fields (skill-hub packs SKILL.md + _meta.json). */
+export type CreateSkillRequest = {
+  name: string
+  description: string
+  detail?: string
+  version?: string
+  allowedTools?: string[]
+}
+
 // ----- Agent registry (internal/handler/dto/agent_registry.go) -----
 
 export type AgentRegistrySummaryResponse = {

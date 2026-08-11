@@ -16,6 +16,7 @@ import (
 
 	_ "github.com/lvyanru/dac-apiserver/docs" // swagger docs
 	"github.com/lvyanru/dac-apiserver/internal/config"
+	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/handler"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/a2a"
 	agentregistryinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/agentregistry"
@@ -25,6 +26,7 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/k8s"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/probe"
 	semanticgrouperinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/semanticgrouper"
+	skillhubinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/skillhub"
 	"github.com/lvyanru/dac-apiserver/internal/router"
 	"github.com/lvyanru/dac-apiserver/internal/usecase"
 	dbpkg "github.com/lvyanru/dac-apiserver/pkg/database"
@@ -182,6 +184,16 @@ func runServer(cmd *cobra.Command, args []string) {
 	agentRegistryUsecase := usecase.NewAgentRegistryUsecase(agentRegistryRepo, appLogger)
 	agentRegistryHandler := handler.NewAgentRegistryHandler(agentRegistryUsecase, appLogger)
 
+	// skill-hub address is fixed to the dac/skill-hub Service (not config-driven).
+	skillHubTimeout := cfg.SkillHub.Timeout
+	if skillHubTimeout <= 0 {
+		skillHubTimeout = 120 * time.Second
+	}
+	slog.Info("skill-hub client configured", "base_url", domain.SkillHubBaseURL, "timeout", skillHubTimeout)
+	skillHubClient := skillhubinfra.NewClient(domain.SkillHubBaseURL, skillHubTimeout, appLogger)
+	skillHubUsecase := usecase.NewSkillHubUsecase(skillHubClient, appLogger)
+	skillHubHandler := handler.NewSkillHubHandler(skillHubUsecase, appLogger)
+
 	// Namespace module (for UI namespace dropdown)
 	namespaceRepo := k8s.NewNamespaceRepository(k8sClient)
 	namespaceUsecase := usecase.NewNamespaceUsecase(namespaceRepo, appLogger)
@@ -270,6 +282,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		configMapHandler,
 		systemConfigHandler,
 		agentRegistryHandler,
+		skillHubHandler,
 		namespaceHandler,
 		semanticGroupHandler,
 		ddGroupRelationHandler,

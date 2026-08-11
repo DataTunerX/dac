@@ -18,6 +18,7 @@ type Config struct {
 	DataServices    DataServicesConfig    `mapstructure:"data_services"`
 	SemanticGrouper SemanticGrouperConfig `mapstructure:"semantic_grouper"`
 	AgentRegistry   AgentRegistryConfig   `mapstructure:"agent_registry"`
+	SkillHub        SkillHubConfig        `mapstructure:"skill_hub"`
 	Database      DatabaseConfig      `mapstructure:"database"`
 }
 
@@ -83,6 +84,12 @@ type AgentRegistryConfig struct {
 	Timeout                time.Duration `mapstructure:"timeout"`
 }
 
+// SkillHubConfig holds skill-hub registry endpoint.
+type SkillHubConfig struct {
+	BaseURL string        `mapstructure:"base_url"`
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
 // DatabaseConfig holds database configuration
 type DatabaseConfig struct {
 	Driver          string        `mapstructure:"driver"`
@@ -112,6 +119,8 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
+	v.SetDefault("skill_hub.timeout", "120s")
+
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -126,6 +135,9 @@ func Load(cfgFile string) (*Config, error) {
 	}
 	if cfg.JWT.MaxRefresh == 0 {
 		cfg.JWT.MaxRefresh = 168 * time.Hour
+	}
+	if cfg.SkillHub.Timeout == 0 {
+		cfg.SkillHub.Timeout = 120 * time.Second
 	}
 
 	return &cfg, nil

@@ -54,7 +54,9 @@
 | POST | `/namespaces/{ns}` | 显式创建命名空间（已存在返回 409） |
 | DELETE | `/namespaces/{ns}` | 删除**空**命名空间（非空返回 409，`default` 禁止删除） |
 | GET | `/namespaces/{ns}/skills` | 列出某命名空间的 skill |
+| GET | `/namespaces/{ns}/skills/{name}/detail` | 获取 skill 详情（含 detail / allowed_tools） |
 | GET | `/namespaces/{ns}/skills/{name}.zip` | 从某命名空间下载 skill |
+| POST | `/namespaces/{ns}/skills/create` | 用表单字段创建 skill（服务端打包 zip） |
 | POST | `/namespaces/{ns}/skills` | 上传 skill 到某命名空间 |
 | DELETE | `/namespaces/{ns}/skills/{name}.zip` | 删除某命名空间的 skill |
 | GET | `/skills/{name}.zip` | 从 `default` 下载 skill（旧别名） |
@@ -317,6 +319,45 @@ curl -sS -X DELETE "http://<host>:8000/namespaces/empty-ns"
 
 ---
 
+## GET /namespaces/{namespace}/skills/{name}/detail
+
+返回 skill 的完整元数据（从 zip 经 `SkillLoader` 解析），供 UI 详情弹窗使用。
+
+**路径参数**
+
+| 参数 | 说明 |
+| --- | --- |
+| `namespace` | 命名空间名 |
+| `name` | skill 名 |
+
+**查询参数**
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `version` | str? | 可选；省略时为最新版本 |
+
+**响应** `200 OK`
+
+```json
+{
+  "name": "report",
+  "namespace": "team-a",
+  "description": "Generate report",
+  "detail": "## Goal\n\n...",
+  "version": "1.1.0",
+  "filename": "report-1.1.0.zip",
+  "download_url": "/namespaces/team-a/skills/report.zip",
+  "available_versions": ["1.1.0", "1.0.0"],
+  "allowed_tools": ["glob", "grep"],
+  "scripts": [{"script_name": "run.py", "interpreter": "python3"}],
+  "resource_dirs": ["assets"]
+}
+```
+
+`allowed_tools` 为空数组表示不限制工具。
+
+---
+
 ## GET /namespaces/{namespace}/skills/{name}.zip
 
 从指定命名空间下载 skill 的 zip。
@@ -337,7 +378,7 @@ curl -sS -X DELETE "http://<host>:8000/namespaces/empty-ns"
 **响应** `200 OK`
 
 - `Content-Type: application/zip`
-- `Content-Disposition: attachment; filename="{name}.zip"`
+- `Content-Disposition: attachment; filename="{name}-{version}.zip"`（与磁盘命名一致，如 `discrawl-1.0.0.zip`）
 - 响应头 `X-Skill-Version`：本次实际返回的版本号（便于客户端在请求 `latest` 时获知具体版本）
 
 **示例**
@@ -353,6 +394,62 @@ curl -sS -OJ "http://<host>:8000/namespaces/team-a/skills/report.zip?version=1.0
 | --- | --- |
 | 400 | namespace / name / version 非法 |
 | 404 | skill 或指定版本不存在 |
+
+---
+
+## POST /namespaces/{namespace}/skills/create
+
+用结构化字段创建一个 skill（无需预先打 zip）。skill-hub 会生成符合 `skill_sdk` 约定的包：
+
+- `SKILL.md`：`name` / `description` frontmatter + `detail` 正文
+- `_meta.json`：`version`、可选 `allowed_tools`；`slug` **固定等于** `name`（请求体不收该字段）
+
+然后按与上传相同的规则写入命名空间并刷新索引。
+
+**路径参数**
+
+| 参数 | 说明 |
+| --- | --- |
+| `namespace` | 目标命名空间名 |
+
+**请求体** — `application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `name` | string | 是 | skill 名（写入 `SKILL.md`；字符集同上传校验） |
+| `description` | string | 是 | 短描述 |
+| `detail` | string | 否 | Markdown 正文（技能完整说明/指令） |
+| `version` | string | 否 | 默认 `1.0.0` |
+| `allowed_tools` | string[] | 否 | 工具白名单；空数组表示不限制 |
+
+**行为**
+
+- 同命名空间 `name` + `version` 相同 → **覆盖**。
+- 命名空间不存在时自动创建。
+- 成功后立即刷新索引。
+
+**响应** `201 Created` — `SkillInfo`（与上传接口相同）
+
+**示例**
+
+```bash
+curl -sS -X POST "http://<host>:8000/namespaces/team-a/skills/create" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "my-skill",
+    "description": "Does something useful",
+    "detail": "## Steps\n\n1. Inspect the repo\n2. Answer the question\n",
+    "version": "1.0.0",
+    "allowed_tools": ["glob", "grep", "readline_in_range"]
+  }'
+```
+
+**错误**
+
+| 状态码 | 场景 |
+| --- | --- |
+| 400 | 字段非法 / 空 description / 打包结果无法通过 SkillLoader 校验 |
+| 413 | 生成包超过 256 MiB（极少见） |
 
 ---
 

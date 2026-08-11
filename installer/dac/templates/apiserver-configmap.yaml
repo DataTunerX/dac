@@ -47,6 +47,11 @@ data:
     data_services:
       base_url: {{ include "dac.dataServices.url" . | quote }}
 
+    # skill-hub base URL is hardcoded in apiserver to
+    # http://skill-hub.dac.svc.cluster.local:8000; only timeout is configurable here.
+    skill_hub:
+      timeout: 120s
+
     database:
       driver: "mysql"
       host: {{ include "dac.mysql.host" . | quote }}
@@ -93,6 +98,10 @@ data:
     p, user, /api/v1/discovery/scans, GET
     p, user, /api/v1/discovery/scans/*, GET
     p, user, /api/v1/knowledge-graph/*, POST
+    p, user, /api/v1/skills/namespaces, GET
+    p, user, /api/v1/skills/namespaces/*/exists, GET
+    p, user, /api/v1/skills/namespaces/*/skills, GET
+    p, user, /api/v1/skills/namespaces/*/skills/*/download, GET
     p, user, /v1/chat/completions, POST
 
     g, admin, admin

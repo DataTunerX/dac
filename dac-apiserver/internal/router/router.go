@@ -27,6 +27,7 @@ func Setup(
 	configMapHandler *handler.ConfigMapHandler,
 	systemConfigHandler *handler.SystemConfigHandler,
 	agentRegistryHandler *handler.AgentRegistryHandler,
+	skillHubHandler *handler.SkillHubHandler,
 	namespaceHandler *handler.NamespaceHandler,
 	semanticGroupHandler *handler.SemanticGroupHandler,
 	ddGroupRelationHandler *handler.DDGroupRelationHandler,
@@ -191,6 +192,22 @@ func Setup(
 					agentRegistries.GET("", agentRegistryHandler.ListRegistries)
 					agentRegistries.GET("/:registry/agents", agentRegistryHandler.ListAgents)
 				}
+			}
+
+			// Skill Hub (skill zip registry BFF)
+			skills := authorized.Group("/skills")
+			{
+				skills.POST("/reload", skillHubHandler.Reload)
+				skills.GET("/namespaces", skillHubHandler.ListNamespaces)
+				skills.POST("/namespaces", skillHubHandler.CreateNamespace)
+				skills.GET("/namespaces/:ns/exists", skillHubHandler.NamespaceExists)
+				skills.DELETE("/namespaces/:ns", skillHubHandler.DeleteNamespace)
+				skills.GET("/namespaces/:ns/skills", skillHubHandler.ListSkills)
+				skills.POST("/namespaces/:ns/skills/create", skillHubHandler.CreateSkill)
+				skills.POST("/namespaces/:ns/skills", skillHubHandler.UploadSkill)
+				skills.GET("/namespaces/:ns/skills/:name", skillHubHandler.GetSkill)
+				skills.GET("/namespaces/:ns/skills/:name/download", skillHubHandler.DownloadSkill)
+				skills.DELETE("/namespaces/:ns/skills/:name", skillHubHandler.DeleteSkill)
 			}
 
 			// Chat History routes

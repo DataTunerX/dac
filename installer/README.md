@@ -798,8 +798,14 @@ helm status dac -n dac
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `global.storageClass` | 所有中间件 PVC 的 StorageClass | `nfs-csi` |
+| `skillHub.persistence.enabled` | 持久化 skill zip（上传/创建），避免 Pod 重启丢失 | `true` |
+| `skillHub.persistence.type` | `hostPath`（单节点）或 `pvc` | `hostPath` |
+| `skillHub.persistence.hostPath.path` | 节点本地目录 | `/var/lib/dac/skill-hub/skills` |
+| `skillHub.persistence.pvc.size` | type=pvc 时的声明大小 | `5Gi` |
 
 各中间件可通过 `mysql.persistence.storageClass` / `redis.persistence.storageClass` / `pgvector.persistence.storageClass` 单独覆盖；留空则使用 `global.storageClass`。将 `global.storageClass` 设为 `""` 可使用集群默认 StorageClass。
+
+`skillHub.persistence.type=hostPath` 时数据在**节点本地**，要求 `replicas: 1`；多节点生产环境建议改为 `type: pvc`。首次启动会用 initContainer 把镜像内置的 `default/` skill 拷进空卷（已有内容不覆盖）。
 
 ### 前端访问
 
@@ -932,6 +938,6 @@ kubectl get sc
 | **语义分组** | semantic-grouper（API + Worker） | Celery 异步语义分组 |
 | **Agent 注册中心** | orchestrator-registry、biz-orchestrator-registry | A2A Agent Card 发现 |
 | **Agent** | biz-routing-agent、biz-chart-agent、biz-skill-agent | 路由 / 图表生成 / 技能执行等业务 Agent |
-| **Skill Hub** | skill-hub | 技能 zip 包索引 / 下载 HTTP 服务，供 biz-skill-agent 启动时按 `SKILLS` 拉取 |
+| **Skill Hub** | skill-hub | 技能 zip 包索引 / 下载 HTTP 服务，供 biz-skill-agent 启动时按 `SKILLS` 拉取；上传/创建的 zip 默认落在节点 hostPath（`skillHub.persistence`），避免 Pod 重启丢失 |
 
 > `orchestrator-agent`、`expert-agent`、`code-agent`、`doc-agent`、`data-sinkers-job` 、`data-sinkers-observer` 等组件**不在 Helm 中静态部署**，由 execution-engine Operator 根据 CR 动态管理。
