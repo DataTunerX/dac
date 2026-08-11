@@ -805,7 +805,7 @@ helm status dac -n dac
 
 各中间件可通过 `mysql.persistence.storageClass` / `redis.persistence.storageClass` / `pgvector.persistence.storageClass` 单独覆盖；留空则使用 `global.storageClass`。将 `global.storageClass` 设为 `""` 可使用集群默认 StorageClass。
 
-`skillHub.persistence.type=hostPath` 时数据在**节点本地**，要求 `replicas: 1`；多节点生产环境建议改为 `type: pvc`。首次启动会用 initContainer 把镜像内置的 `default/` skill 拷进空卷（已有内容不覆盖）。
+`skillHub.persistence.type=hostPath` 时数据在**节点本地**，要求 `replicas: 1`；多节点生产环境建议改为 `type: pvc`。每次 Pod 启动时 initContainer 会把镜像内置的 `default/` skill **同步覆盖**到持久卷（同名 zip 随镜像升级刷新；用户在 `default/` 下额外上传的其它 zip、以及其它命名空间不会被删）。
 
 ### 前端访问
 
