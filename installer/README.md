@@ -369,9 +369,9 @@ frontend:
   # -- Enable frontend deployment
   enabled: true
   image:
-    registry: release.daocloud.io/dac
+    registry: ""
     repository: frontend
-    tag: "v0.11.0"
+    tag: "v0.11.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -789,7 +789,7 @@ helm status dac -n dac
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `global.imageRegistry` | 镜像仓库前缀 | `registry.cn-shanghai.aliyuncs.com/jamesxiong` |
-| `frontend.image.registry` | 前端仓库（覆盖 global） | `release.daocloud.io/dac` |
+| `frontend.image.registry` | 前端仓库（空则用 global） | `""` → `global.imageRegistry` |
 | `global.imagePullPolicy` | 拉取策略 | `IfNotPresent` |
 | `global.imagePullSecrets` | 私有仓库认证 Secret | `[]` |
 

@@ -316,9 +316,11 @@ frontend:
   # -- Enable frontend deployment
   enabled: true
   image:
-    registry: release.daocloud.io/dac
+    # -- Optional override; empty uses global.imageRegistry
+    #    (registry.cn-shanghai.aliyuncs.com/jamesxiong)
+    registry: ""
     repository: frontend
-    tag: "v0.11.0"
+    tag: "v0.11.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
