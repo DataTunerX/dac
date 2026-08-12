@@ -548,6 +548,9 @@ export default function AgentsPage() {
           semanticGroupID: isSemanticGroup ? data.dataSourceId : undefined,
           sourceNameSelector: !isSemanticGroup ? [data.dataSourceId] : undefined,
         },
+        ...(isSemanticGroup
+          ? { skillPolicy: data.skillPolicy ?? { skills: [] } }
+          : {}),
         model: {
           plannerLLM: data.plannerModel,
           expertLLM: data.expertModel,

@@ -97,3 +97,75 @@ func TestGenerateSkillAgentEnvs_RegisterAndSkills(t *testing.T) {
 		t.Fatalf("expected --redis-db 2 in %v", args)
 	}
 }
+
+func TestGenerateOrchestratorAgentEnvs_NormalWithSkillPolicy(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Name = "sg-demo"
+	dac.Namespace = "ns1"
+	dac.Spec.DACType = "normal"
+	dac.Spec.AgentCard.Name = "SGAgent"
+	dac.Spec.AgentCard.Description = "desc"
+	dac.Spec.DataPolicy.DataSourceType = "SemanticGroup"
+	dac.Spec.DataPolicy.SemanticGroupID = "sg-123"
+	dac.Spec.SkillPolicy = dacv1alpha1.SkillPolicy{
+		Skills: []dacv1alpha1.SkillRef{
+			{Namespace: "default", Name: "weather", Version: "1.0.0"},
+			{Namespace: "team-a", Name: "web_fetch", Version: ""},
+		},
+	}
+	envs := h.generateOrchestratorAgentEnvs(dac, "dac-sg-demo", "", nil)
+	m := map[string]string{}
+	for _, e := range envs {
+		m[e.Name] = e.Value
+	}
+	if m["SKILLS"] == "" {
+		t.Fatalf("expected SKILLS env for normal+skillPolicy, got %+v", m)
+	}
+	if m["SKILL_HUB_URL"] != "http://skill-hub.dac.svc.cluster.local:8000" {
+		t.Fatalf("SKILL_HUB_URL=%q", m["SKILL_HUB_URL"])
+	}
+	if m["SKILLS_DOWNLOAD_DIR"] != "/app/skills/" {
+		t.Fatalf("SKILLS_DOWNLOAD_DIR=%q", m["SKILLS_DOWNLOAD_DIR"])
+	}
+	if m["SKILL_DOWNLOAD_OVERWRITE"] != "true" {
+		t.Fatalf("SKILL_DOWNLOAD_OVERWRITE=%q", m["SKILL_DOWNLOAD_OVERWRITE"])
+	}
+	var refs []skillRefForEnv
+	if err := json.Unmarshal([]byte(m["SKILLS"]), &refs); err != nil {
+		t.Fatalf("SKILLS not JSON: %v raw=%s", err, m["SKILLS"])
+	}
+	if len(refs) != 2 || refs[0].Name != "weather" || refs[1].Name != "web_fetch" {
+		t.Fatalf("unexpected SKILLS refs: %+v", refs)
+	}
+}
+
+func TestGenerateOrchestratorAgentEnvs_NormalWithoutSkillPolicy(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Name = "sg-demo"
+	dac.Namespace = "ns1"
+	dac.Spec.DACType = "normal"
+	dac.Spec.AgentCard.Name = "SGAgent"
+	dac.Spec.DataPolicy.DataSourceType = "SemanticGroup"
+	dac.Spec.DataPolicy.SemanticGroupID = "sg-123"
+	envs := h.generateOrchestratorAgentEnvs(dac, "dac-sg-demo", "", nil)
+	for _, e := range envs {
+		if e.Name == "SKILLS" || e.Name == "SKILL_HUB_URL" {
+			t.Fatalf("did not expect %s when skillPolicy empty, value=%q", e.Name, e.Value)
+		}
+	}
+}
+
+func TestPodTemplateObjectMeta_SkillPolicyAnnotation(t *testing.T) {
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Spec.SkillPolicy = dacv1alpha1.SkillPolicy{
+		Skills: []dacv1alpha1.SkillRef{
+			{Namespace: "default", Name: "weather"},
+		},
+	}
+	om := podTemplateObjectMeta(map[string]string{"app": "x"}, dac)
+	if om.Annotations["dac.dac.io/skill-policy-sha256"] == "" {
+		t.Fatalf("expected skill-policy-sha256 annotation, got %+v", om.Annotations)
+	}
+}

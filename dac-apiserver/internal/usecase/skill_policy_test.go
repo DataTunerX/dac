@@ -107,3 +107,47 @@ func TestValidateSkillPolicy_MissingNamespace(t *testing.T) {
 		t.Fatalf("want InvalidInput, got %v", err)
 	}
 }
+
+func TestValidateOptionalSkillPolicyRefs_EmptyOK(t *testing.T) {
+	if err := validateOptionalSkillPolicyRefs(entity.SkillPolicy{}); err != nil {
+		t.Fatalf("empty policy should be ok for normal: %v", err)
+	}
+}
+
+func TestValidateOptionalSkillPolicyRefs_OK(t *testing.T) {
+	err := validateOptionalSkillPolicyRefs(entity.SkillPolicy{Skills: []entity.SkillRef{
+		{Namespace: "default", Name: "weather"},
+		{Namespace: "team-a", Name: "web_fetch"},
+	}})
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+}
+
+func TestValidateOptionalSkillPolicyRefs_Duplicate(t *testing.T) {
+	err := validateOptionalSkillPolicyRefs(entity.SkillPolicy{Skills: []entity.SkillRef{
+		{Namespace: "default", Name: "weather"},
+		{Namespace: "team-a", Name: "weather"},
+	}})
+	if err == nil {
+		t.Fatal("expected duplicate name error")
+	}
+	if !domain.IsInvalidInput(err) {
+		t.Fatalf("want InvalidInput, got %v", err)
+	}
+}
+
+func TestRejectSkillPolicyForDS(t *testing.T) {
+	if err := rejectSkillPolicyForDS(entity.SkillPolicy{}); err != nil {
+		t.Fatalf("empty should be ok: %v", err)
+	}
+	err := rejectSkillPolicyForDS(entity.SkillPolicy{Skills: []entity.SkillRef{
+		{Namespace: "default", Name: "weather"},
+	}})
+	if err == nil {
+		t.Fatal("expected reject non-empty skillPolicy for ds")
+	}
+	if !domain.IsInvalidInput(err) {
+		t.Fatalf("want InvalidInput, got %v", err)
+	}
+}

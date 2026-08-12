@@ -125,7 +125,7 @@ func (u *agentContainerUsecase) Update(ctx context.Context, namespace, name stri
 		existing.OrchestratorAgentMaxLoops = *req.OrchestratorAgentMaxLoops
 	}
 
-	// skill 类型更新时，若带了 skillPolicy / agentCard，做与创建相同的约束校验
+	// skillPolicy / agentCard constraints by dacType
 	if existing.DACType == "skill" {
 		if err := validateSkillPolicy(existing.SkillPolicy, existing.AgentCard); err != nil {
 			u.logger.Error("skill DAC update validation failed",
@@ -133,6 +133,19 @@ func (u *agentContainerUsecase) Update(ctx context.Context, namespace, name stri
 				"name", name,
 				"error", err,
 			)
+			return nil, fmt.Errorf("invalid request: %w", err)
+		}
+	} else if existing.DACType == "normal" {
+		if err := validateOptionalSkillPolicyRefs(existing.SkillPolicy); err != nil {
+			u.logger.Error("normal DAC skillPolicy update validation failed",
+				"namespace", namespace,
+				"name", name,
+				"error", err,
+			)
+			return nil, fmt.Errorf("invalid request: %w", err)
+		}
+	} else if existing.DACType == "ds" {
+		if err := rejectSkillPolicyForDS(existing.SkillPolicy); err != nil {
 			return nil, fmt.Errorf("invalid request: %w", err)
 		}
 	}
@@ -171,14 +184,27 @@ func (u *agentContainerUsecase) validateCreateRequest(req *domain.CreateAgentCon
 		return domain.ErrInvalidInput
 	}
 
-	// Incremental validation for dacType=skill (ds/normal unchanged).
-	if req.DACType == "skill" {
+	switch req.DACType {
+	case "skill":
 		if err := validateSkillPolicy(req.SkillPolicy, req.AgentCard); err != nil {
 			u.logger.Error("skill DAC create validation failed",
 				"name", req.Name,
 				"namespace", req.Namespace,
 				"error", err,
 			)
+			return err
+		}
+	case "normal":
+		if err := validateOptionalSkillPolicyRefs(req.SkillPolicy); err != nil {
+			u.logger.Error("normal DAC skillPolicy create validation failed",
+				"name", req.Name,
+				"namespace", req.Namespace,
+				"error", err,
+			)
+			return err
+		}
+	case "ds", "":
+		if err := rejectSkillPolicyForDS(req.SkillPolicy); err != nil {
 			return err
 		}
 	}
@@ -193,16 +219,11 @@ func validateSkillPolicy(policy entity.SkillPolicy, card entity.AgentCard) error
 	if len(policy.Skills) == 0 {
 		return domain.NewInvalidInputError("skillPolicy.skills must not be empty for dacType=skill")
 	}
-	seen := make(map[string]struct{}, len(policy.Skills))
+	if err := validateSkillPolicyRefs(policy); err != nil {
+		return err
+	}
 	policyNames := make(map[string]struct{}, len(policy.Skills))
 	for _, s := range policy.Skills {
-		if s.Namespace == "" || s.Name == "" {
-			return domain.NewInvalidInputError("skillPolicy skill requires namespace and name")
-		}
-		if _, ok := seen[s.Name]; ok {
-			return domain.NewInvalidInputError(fmt.Sprintf("duplicate skillPolicy skill name %q (must be unique within a DAC)", s.Name))
-		}
-		seen[s.Name] = struct{}{}
 		policyNames[s.Name] = struct{}{}
 	}
 	if len(card.Skills) == 0 {
@@ -222,6 +243,39 @@ func validateSkillPolicy(policy entity.SkillPolicy, card entity.AgentCard) error
 		if _, ok := cardNames[n]; !ok {
 			return domain.NewInvalidInputError(fmt.Sprintf("agentCard.skills missing skill %q from skillPolicy", n))
 		}
+	}
+	return nil
+}
+
+// validateOptionalSkillPolicyRefs validates skillPolicy for dacType=normal (Semantic Group).
+// Empty policy is allowed (image-baked LocalSkill only). Non-empty requires namespace+name and unique names.
+// Does not require agentCard.skills alignment (Expert card stays fingerprint-derived).
+func validateOptionalSkillPolicyRefs(policy entity.SkillPolicy) error {
+	if len(policy.Skills) == 0 {
+		return nil
+	}
+	return validateSkillPolicyRefs(policy)
+}
+
+// rejectSkillPolicyForDS rejects non-empty skillPolicy on dacType=ds.
+func rejectSkillPolicyForDS(policy entity.SkillPolicy) error {
+	if len(policy.Skills) == 0 {
+		return nil
+	}
+	return domain.NewInvalidInputError("skillPolicy must be empty for dacType=ds")
+}
+
+// validateSkillPolicyRefs checks namespace+name presence and unique skill names within a DAC.
+func validateSkillPolicyRefs(policy entity.SkillPolicy) error {
+	seen := make(map[string]struct{}, len(policy.Skills))
+	for _, s := range policy.Skills {
+		if s.Namespace == "" || s.Name == "" {
+			return domain.NewInvalidInputError("skillPolicy skill requires namespace and name")
+		}
+		if _, ok := seen[s.Name]; ok {
+			return domain.NewInvalidInputError(fmt.Sprintf("duplicate skillPolicy skill name %q (must be unique within a DAC)", s.Name))
+		}
+		seen[s.Name] = struct{}{}
 	}
 	return nil
 }

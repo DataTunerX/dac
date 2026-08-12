@@ -84,7 +84,8 @@ export type SkillRef = {
   version?: string
 }
 
-/** Symmetric with dataPolicy: skill DACs bind via skillPolicy. */
+/** Symmetric with dataPolicy: skill DACs bind via skillPolicy;
+ *  Semantic Group (normal) may optionally bind LocalSkill packs via skillPolicy. */
 export type SkillPolicy = {
   skills?: SkillRef[]
 }

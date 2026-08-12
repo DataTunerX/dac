@@ -393,6 +393,26 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 			Name:  "Enable_History",
 			Value: "enable",
 		})
+
+		// Optional LocalSkill packs from skill-hub (skillPolicy on Semantic Group DACs).
+		if len(dac.Spec.SkillPolicy.Skills) > 0 {
+			skillsJSON, err := buildSkillsEnvJSON(dac)
+			if err != nil {
+				h.Logger.Error(err, "Failed to marshal skillPolicy for orchestrator SKILLS env; skipping download envs",
+					"namespace", dac.Namespace, "name", dac.Name)
+			} else {
+				envs = append(envs,
+					corev1.EnvVar{Name: "SKILLS", Value: skillsJSON},
+					corev1.EnvVar{Name: "SKILL_HUB_URL", Value: "http://skill-hub.dac.svc.cluster.local:8000"},
+					corev1.EnvVar{Name: "SKILLS_DOWNLOAD_DIR", Value: "/app/skills/"},
+					corev1.EnvVar{Name: "SKILL_DOWNLOAD_OVERWRITE", Value: "true"},
+					corev1.EnvVar{Name: "SKILL_DOWNLOAD_CONCURRENCY", Value: "8"},
+				)
+				h.Logger.Info("Orchestrator LocalSkill SKILLS env from skillPolicy",
+					"namespace", dac.Namespace, "name", dac.Name,
+					"skills", skillsJSON, "count", len(dac.Spec.SkillPolicy.Skills))
+			}
+		}
 	}
 
 	if dacConfig != nil {
@@ -428,6 +448,19 @@ func agentCardSkillsSHA256(dac *dacv1alpha1.DataAgentContainer) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// skillPolicySHA256 is a stable checksum of SkillPolicy for rolling Pods when LocalSkill bindings change.
+func skillPolicySHA256(dac *dacv1alpha1.DataAgentContainer) string {
+	if len(dac.Spec.SkillPolicy.Skills) == 0 {
+		return ""
+	}
+	skillsJSON, err := json.Marshal(dac.Spec.SkillPolicy.Skills)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(skillsJSON)
+	return hex.EncodeToString(sum[:])
+}
+
 func podTemplateObjectMeta(labels map[string]string, dac *dacv1alpha1.DataAgentContainer) metav1.ObjectMeta {
 	om := metav1.ObjectMeta{Labels: labels}
 	if dac.Spec.AgentCard.Skills != nil {
@@ -437,6 +470,12 @@ func podTemplateObjectMeta(labels map[string]string, dac *dacv1alpha1.DataAgentC
 			}
 			om.Annotations["dac.dac.io/skills-json-sha256"] = h
 		}
+	}
+	if h := skillPolicySHA256(dac); h != "" {
+		if om.Annotations == nil {
+			om.Annotations = map[string]string{}
+		}
+		om.Annotations["dac.dac.io/skill-policy-sha256"] = h
 	}
 	return om
 }
