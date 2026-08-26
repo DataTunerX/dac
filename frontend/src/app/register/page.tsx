@@ -16,6 +16,7 @@ export default function RegisterPage() {
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [email, setEmail] = useState("")
   const [loading, setLoading] = useState(false)
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -32,7 +33,7 @@ export default function RegisterPage() {
     setLoading(true)
     try {
       // Register returns user info (no token). Login sets HttpOnly dac_token via Set-Cookie.
-      await api.post("/auth/register", { username, password })
+      await api.post("/auth/register", { username, password, email: email.trim() || undefined })
       const loginRes = await api.post("/auth/login", { username, password })
       const user = loginRes.data?.user
       if (!user) {
@@ -86,6 +87,19 @@ export default function RegisterPage() {
                     onChange={(e) => setUsername(e.target.value)}
                     disabled={loading}
                     required
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="email">邮箱（可选）</Label>
+                  <Input
+                    id="email"
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder="请输入邮箱…"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    disabled={loading}
                   />
                 </div>
                 <div className="grid gap-2">

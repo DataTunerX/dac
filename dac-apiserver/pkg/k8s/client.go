@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Client Kubernetes client封装
@@ -54,21 +55,23 @@ type GPUAvailability struct {
 	ResourceKey string
 }
 
-// NewClient createnewof Kubernetes client，使用 in-cluster 配置
+// NewClient createof Kubernetes client
+// It prefers the in-cluster configuration (when running inside a Kubernetes
+// pod with a ServiceAccount). When that is unavailable — e.g. running the
+// binary as a container outside the cluster — it falls back to the standard
+// kubeconfig lookup chain (KUBECONFIG env, then ~/.kube/config), so the same
+// image can be used for local development/testing and in-cluster deployment.
 func NewClient() (*Client, error) {
-	// 使用 in-cluster 配置
-	slog.Info("using in-cluster kubernetes configuration")
-
-	restConfig, err := rest.InClusterConfig()
+	restConfig, err := newRESTConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build kubernetes config: %w", err)
 	}
 
-	// 设置默认of QPS and Burst
+	// Set default QPS and Burst
 	restConfig.QPS = 50
 	restConfig.Burst = 100
 
-	// create标准 clientset
+	// create standard clientset
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes clientset: %w", err)
@@ -83,6 +86,7 @@ func NewClient() (*Client, error) {
 	slog.Info("kubernetes client created successfully",
 		"qps", restConfig.QPS,
 		"burst", restConfig.Burst,
+		"host", restConfig.Host,
 	)
 
 	return &Client{
@@ -90,6 +94,22 @@ func NewClient() (*Client, error) {
 		dynamicClient: dynamicClient,
 		config:        restConfig,
 	}, nil
+}
+
+// newRESTConfig builds a *rest.Config, preferring the in-cluster ServiceAccount
+// configuration and falling back to the kubeconfig loading rules otherwise.
+func newRESTConfig() (*rest.Config, error) {
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return cfg, nil
+	}
+
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	overrides := &clientcmd.ConfigOverrides{}
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("in-cluster config unavailable and no kubeconfig found: %w", err)
+	}
+	return cfg, nil
 }
 
 // GetClientset get Kubernetes 标准 clientset

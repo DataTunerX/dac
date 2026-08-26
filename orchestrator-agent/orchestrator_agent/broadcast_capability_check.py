@@ -29,6 +29,7 @@ PROPAGATED_HISTORY_KEY = "propagated_history"
 ROUTING_AGENT_POOL_KEY = "routing_agent_pool"
 ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY = "routing_skip_broadcast_eligible"
 ROUTING_SELECTED_ROOT_KEY = "routing_selected_root"
+SG_EXECUTION_HINT_KEY = "sg_execution_hint"
 
 _CONTRIBUTION_TRUNC = 300
 _REASON_TRUNC = 200
@@ -45,6 +46,15 @@ class CapabilityCheckResponse(BaseModel):
     can_contribute: bool = False
     contribution: str = ""
     execution_strategy: str = "single"
+    collaboration_agents: list[str] = Field(default_factory=list)
+    collaboration_roles: dict[str, str] = Field(default_factory=dict)
+    collaboration_paths: list[dict] = Field(default_factory=list)
+    member_results: list[dict] = Field(default_factory=list)
+    degraded: bool = False
+    unavailable_count: int = 0
+    missing_requirements: list[str] = Field(default_factory=list)
+    # Opaque SG-issued handoff; Routing/mid-delegate may transport it as-is.
+    execution_hint: dict = Field(default_factory=dict)
 
 
 def _is_non_actionable_contribution_text(text: str) -> bool:
@@ -68,17 +78,53 @@ def _is_non_actionable_contribution_text(text: str) -> bool:
         r"related information",
         r"auxiliary information",
     )
-    return any(re.search(pattern, normalized) for pattern in generic_patterns)
+    if any(re.search(pattern, normalized) for pattern in generic_patterns):
+        return True
+    inability_patterns = (
+        r"无法访问",
+        r"无法查询",
+        r"无法访问任何业务",
+        r"无任何业务数据库",
+        r"不具备",
+        r"仅具备 weather",
+        r"only (has|have) weather",
+        r"cannot access",
+        r"no business database",
+        r"本 agent 仅具备",
+    )
+    return any(re.search(pattern, normalized) for pattern in inability_patterns)
+
+
+def _is_skill_mismatch_contributor(response: "CapabilityCheckResponse") -> bool:
+    name = str(getattr(response, "agent_name", "") or "").lower()
+    blob = " ".join(
+        [
+            str(getattr(response, "contribution", "") or ""),
+            str(getattr(response, "reason", "") or ""),
+        ]
+    ).lower()
+    if "weather" in name and not re.search(r"天气|weather|forecast|气温", blob):
+        return True
+    return False
 
 
 def normalize_capability_check_response(response: CapabilityCheckResponse) -> CapabilityCheckResponse:
     if response.can_handle or not response.can_contribute:
         return response
-    if _is_non_actionable_contribution_text(response.contribution):
+    blob = f"{response.contribution or ''} {response.reason or ''}"
+    if _is_non_actionable_contribution_text(response.contribution) or _is_non_actionable_contribution_text(blob):
         logger.info(
             "SG broadcast: normalize non-actionable contributor '%s' contribution='%s'",
             response.agent_name,
             (response.contribution or "")[:120],
+        )
+        response.can_contribute = False
+        response.contribution = ""
+        return response
+    if _is_skill_mismatch_contributor(response):
+        logger.info(
+            "SG broadcast: normalize skill-mismatch contributor '%s'",
+            response.agent_name,
         )
         response.can_contribute = False
         response.contribution = ""
@@ -121,6 +167,64 @@ async def list_all_orchestrator_agent_cards(
     except Exception as e:
         logger.error("SG broadcast: list_all_orchestrator_agent_cards failed: %s", e)
         return []
+
+
+def _is_unreachable_registry_error(exc: BaseException) -> bool:
+    """True for DNS / connect failures that mean the card URL is a ghost."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    markers = (
+        "name does not resolve",
+        "nodename nor servname",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "getaddrinfo failed",
+        "connecterror",
+        "connection refused",
+        "network is unreachable",
+        "no route to host",
+        "errno -2",
+        "errno -3",
+        "gaierror",
+    )
+    return any(m in text for m in markers)
+
+
+async def purge_unreachable_agent_card(
+    agent_card: AgentCard,
+    *,
+    error: BaseException,
+) -> None:
+    """Best-effort DELETE from registry when capability probe hits DNS/connect fail."""
+    enabled = os.getenv("REGISTRY_PURGE_ON_PROBE_UNREACHABLE", "true").strip().lower() not in (
+        "false",
+        "0",
+        "no",
+    )
+    if not enabled:
+        return
+    if not _is_unreachable_registry_error(error):
+        return
+    url = str(getattr(agent_card, "url", "") or "").strip()
+    if not url:
+        return
+    try:
+        client = AgentRegistryClient(timeout=10)
+        result = await client.adelete_agent(url)
+        logger.warning(
+            "SG broadcast: purged unreachable agent from registry | name=%s url=%s "
+            "error=%s result=%s",
+            getattr(agent_card, "name", ""),
+            url,
+            error,
+            result,
+        )
+    except Exception as purge_exc:  # noqa: BLE001
+        logger.error(
+            "SG broadcast: failed to purge unreachable agent | name=%s url=%s err=%s",
+            getattr(agent_card, "name", ""),
+            url,
+            purge_exc,
+        )
 
 
 async def send_capability_check(
@@ -175,6 +279,9 @@ async def send_capability_check(
             rps = response_data.get("route_paths") or []
             if not rps and rp:
                 rps = [{"path": rp, "confidence": response_data.get("confidence", 0.0)}]
+            hint = response_data.get("execution_hint") or {}
+            if not isinstance(hint, dict):
+                hint = {}
             return CapabilityCheckResponse(
                 can_handle=response_data.get("can_handle", False),
                 confidence=response_data.get("confidence", 0.0),
@@ -186,6 +293,14 @@ async def send_capability_check(
                 can_contribute=response_data.get("can_contribute", False),
                 contribution=response_data.get("contribution", ""),
                 execution_strategy=response_data.get("execution_strategy", "single"),
+                collaboration_agents=response_data.get("collaboration_agents") or [],
+                collaboration_roles=response_data.get("collaboration_roles") or {},
+                collaboration_paths=response_data.get("collaboration_paths") or [],
+                member_results=response_data.get("member_results") or [],
+                degraded=bool(response_data.get("degraded", False)),
+                unavailable_count=int(response_data.get("unavailable_count", 0) or 0),
+                missing_requirements=response_data.get("missing_requirements") or [],
+                execution_hint=hint,
             )
     except json.JSONDecodeError as e:
         logger.error(
@@ -202,6 +317,7 @@ async def send_capability_check(
             agent_card.url,
             e,
         )
+        await purge_unreachable_agent_card(agent_card, error=e)
         return None
 
 
@@ -387,3 +503,144 @@ def pool_to_peer_agent_cards(
             except Exception as e:
                 logger.warning("SG broadcast: invalid agent snapshot for %s: %s", name, e)
     return out
+
+
+def _capability_probe_concurrency() -> int:
+    try:
+        return max(1, int(os.getenv("SG_MID_DELEGATE_CAPABILITY_CONCURRENCY", "8") or 8))
+    except ValueError:
+        return 8
+
+
+async def probe_agents_capability_concurrent(
+    query: str,
+    agent_cards: list[AgentCard],
+    user_id: str,
+    run_id: str,
+    trace_id: str,
+    *,
+    propagated_history: Optional[dict] = None,
+    get_response_text: Optional[Callable[[Any], str]] = None,
+    max_concurrency: Optional[int] = None,
+) -> list[tuple[AgentCard, CapabilityCheckResponse]]:
+    """Concurrently probe a concrete candidate set with standard capability_check.
+
+    Unlike ``broadcast_capability_check`` (full registry), this only probes the
+    provided cards — used by mid-delegate remote SG selection.
+    """
+    cards = [c for c in (agent_cards or []) if getattr(c, "name", None) and getattr(c, "url", None)]
+    if not cards:
+        logger.info(
+            "[CapabilityProbe] skip | reason=empty_candidate_set query_preview=%s",
+            (query or "")[:80],
+        )
+        return []
+
+    concurrency = max_concurrency or _capability_probe_concurrency()
+    semaphore = asyncio.Semaphore(concurrency)
+    logger.info(
+        "[CapabilityProbe] start concurrent probes | candidates=%d concurrency=%d "
+        "names=%s query_preview=%s",
+        len(cards),
+        concurrency,
+        [getattr(c, "name", "") for c in cards[:12]],
+        (query or "")[:120],
+    )
+
+    async def _one(card: AgentCard) -> Optional[tuple[AgentCard, CapabilityCheckResponse]]:
+        async with semaphore:
+            resp = await send_capability_check(
+                query,
+                card,
+                user_id,
+                run_id,
+                trace_id,
+                propagated_history=propagated_history,
+                get_response_text=get_response_text,
+            )
+            if resp is None:
+                logger.info(
+                    "[CapabilityProbe] no_response | agent=%s url=%s",
+                    getattr(card, "name", ""),
+                    getattr(card, "url", ""),
+                )
+                return None
+            resp = normalize_capability_check_response(resp)
+            logger.info(
+                "[CapabilityProbe] result | agent=%s can_handle=%s can_contribute=%s "
+                "confidence=%.2f degraded=%s reason=%s",
+                getattr(card, "name", "") or resp.agent_name,
+                resp.can_handle,
+                resp.can_contribute,
+                float(resp.confidence or 0.0),
+                resp.degraded,
+                (resp.reason or "")[:160],
+            )
+            return card, resp
+
+    gathered = await asyncio.gather(
+        *[_one(card) for card in cards],
+        return_exceptions=True,
+    )
+
+    capable: list[tuple[AgentCard, CapabilityCheckResponse]] = []
+    errors = 0
+    for index, item in enumerate(gathered):
+        if isinstance(item, Exception):
+            errors += 1
+            logger.error(
+                "[CapabilityProbe] exception | agent=%s err=%s",
+                getattr(cards[index], "name", ""),
+                item,
+            )
+            continue
+        if item is None:
+            continue
+        card, resp = item
+        if resp.can_handle or resp.can_contribute:
+            capable.append((card, resp))
+
+    capable.sort(
+        key=lambda pair: (1 if pair[1].can_handle else 0, float(pair[1].confidence or 0.0)),
+        reverse=True,
+    )
+    logger.info(
+        "[CapabilityProbe] done | probed=%d capable=%d errors=%d "
+        "handlers=%s contributors=%s",
+        len(cards),
+        len(capable),
+        errors,
+        [c.name for c, r in capable if r.can_handle][:10],
+        [c.name for c, r in capable if (not r.can_handle) and r.can_contribute][:10],
+    )
+    return capable
+
+
+def format_capability_evidence_for_planner(
+    capable_agents: list[tuple[AgentCard, CapabilityCheckResponse]],
+    *,
+    limit: int = 12,
+) -> str:
+    """Render capability-check evidence for planner memory (not card descriptions)."""
+    if not capable_agents:
+        return "(no capability-check capable peers)"
+    lines = [
+        "Remote SG candidates selected by standard capability_check "
+        "(member-evidence based; do NOT rely on generic card descriptions):"
+    ]
+    for index, (card, resp) in enumerate(capable_agents[:limit], start=1):
+        name = getattr(card, "name", "") or resp.agent_name or "?"
+        role = "handle" if resp.can_handle else "contribute"
+        reason = (resp.reason or "")[:_REASON_TRUNC]
+        contribution = (resp.contribution or "")[:_CONTRIBUTION_TRUNC]
+        lines.append(
+            f"  #{index} agent={name} role={role} confidence={float(resp.confidence or 0.0):.2f}"
+        )
+        if reason:
+            lines.append(f"       reason={reason}")
+        if contribution:
+            lines.append(f"       contribution={contribution}")
+        missing = list(resp.missing_requirements or [])[:6]
+        if missing:
+            lines.append(f"       missing_requirements={missing}")
+    return "\n".join(lines)

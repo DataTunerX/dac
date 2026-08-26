@@ -1,21 +1,16 @@
 "use client"
 
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
 import { logout, navigateAfterAuth } from "@/lib/auth-session"
 import { useAuthHydrated, useAuthUsername } from "@/lib/use-user-role"
 import { initialFromUsername } from "@/lib/utils"
+import { TenantSwitcher } from "@/components/tenant-switcher"
 
 export function Topbar() {
   const hydrated = useAuthHydrated()
   const username = useAuthUsername()
+  const displayName = username === "admin" ? "管理员" : username
   const initial = initialFromUsername(username)
 
   const handleLogout = () => {
@@ -36,7 +31,9 @@ export function Topbar() {
 
         <div className="flex-1 flex items-center justify-end px-4 lg:px-6">
           {hydrated ? (
-            <DropdownMenu>
+            <>
+              <TenantSwitcher className="mr-2 text-content-inverse" />
+              <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   type="button"
@@ -53,7 +50,7 @@ export function Topbar() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel>账户: {username}</DropdownMenuLabel>
+                <DropdownMenuLabel>账户: {displayName}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="text-red-600 focus:text-red-700"
@@ -63,6 +60,7 @@ export function Topbar() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            </>
           ) : (
             <Button
               type="button"

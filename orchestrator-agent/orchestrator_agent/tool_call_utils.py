@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time as _time
 from typing import Any, Optional
 
@@ -115,9 +116,13 @@ async def invoke_llm_with_tool(
         llm_with_tool = llm.bind_tools([tool])
 
     _md: dict[str, Any] = metadata or {}
-    trace_id = _md.get("trace_id", "")
+    trace_id = str(_md.get("trace_id", "") or "").strip()
     user_id = _md.get("user_id", "")
     run_id = _md.get("run_id", "")
+    # Langfuse requires a 32-char lowercase hex trace id; ignore invalid values
+    # so capability/dependency judges still run when callers pass opaque ids.
+    if not re.fullmatch(r"[0-9a-f]{32}", trace_id):
+        trace_id = ""
 
     _t0 = _time.monotonic()
     with _langfuse_client.start_as_current_span(

@@ -216,7 +216,7 @@ export default function AgentDetailPage() {
           <Button variant="outline" size="icon" onClick={() => void refreshData()} disabled={isLoading} aria-label="刷新">
             <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
-          <RbacWrapper requiredRole="admin">
+          <RbacWrapper requiredPermission="agent:delete">
             <Button
               variant="outline"
               onClick={() => setIsDeleteOpen(true)}

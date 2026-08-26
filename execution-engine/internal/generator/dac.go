@@ -36,23 +36,61 @@ type LLMConfig struct {
 
 // DACConfig
 type DACConfig struct {
-	ObservationBaseURL           string
-	ObservationSecretKey         string
-	ObservationPublicKey         string
-	RedisHost                    string
-	RedisPort                    string
-	RedisPassword                string
-	DataServicesURL              string
-	DSOrchestratorAgentRegistry  string
-	BIZOrchestratorAgentRegistry string
-	OrchestratorAgentImage       string
-	ExpertAgentImage             string
-	DSDataServicesImage          string
-	CodeAgentImage               string
-	DocAgentImage                string
-	DDSyncObserverImage          string
+	ObservationBaseURL              string
+	ObservationSecretKey            string
+	ObservationPublicKey            string
+	RedisHost                       string
+	RedisPort                       string
+	RedisPassword                   string
+	DataServicesURL                 string
+	DSOrchestratorAgentRegistry     string
+	BIZOrchestratorAgentRegistry    string
+	OrchestratorAgentImage          string
+	ExpertAgentImage                string
+	DSDataServicesImage             string
+	CodeAgentImage                  string
+	DocAgentImage                   string
+	DDSyncObserverImage             string
+	SGMemberCapabilityEnabled       string
+	SGMemberCapabilityShadow        string
+	SGMemberCapabilityConcurrency   string
+	SGMemberCapabilityMemberTimeout string
+	SGMemberCapabilityTotalTimeout  string
 	// SkillAgentImage is used by dacType=skill single-container Deployments.
 	SkillAgentImage string
+}
+
+// appendNonEmptyEnv appends env vars whose values are non-empty after trim.
+// Missing ConfigMap keys become "" and must not be injected, so agent-side
+// defaults (e.g. SG_MEMBER_CAPABILITY_CHECK_ENABLED=true) can take effect.
+func appendNonEmptyEnv(envs []corev1.EnvVar, items ...corev1.EnvVar) []corev1.EnvVar {
+	for _, item := range items {
+		if strings.TrimSpace(item.Value) == "" {
+			continue
+		}
+		envs = append(envs, item)
+	}
+	return envs
+}
+
+func memberCapabilityEnvs(dacConfig *DACConfig, includeCheckTimeout bool) []corev1.EnvVar {
+	if dacConfig == nil {
+		return nil
+	}
+	items := []corev1.EnvVar{
+		{Name: "SG_MEMBER_CAPABILITY_CHECK_ENABLED", Value: dacConfig.SGMemberCapabilityEnabled},
+		{Name: "SG_MEMBER_CAPABILITY_CHECK_SHADOW", Value: dacConfig.SGMemberCapabilityShadow},
+		{Name: "SG_MEMBER_CAPABILITY_MAX_CONCURRENCY", Value: dacConfig.SGMemberCapabilityConcurrency},
+		{Name: "SG_MEMBER_CAPABILITY_PER_MEMBER_TIMEOUT", Value: dacConfig.SGMemberCapabilityMemberTimeout},
+		{Name: "SG_MEMBER_CAPABILITY_TOTAL_TIMEOUT", Value: dacConfig.SGMemberCapabilityTotalTimeout},
+	}
+	if includeCheckTimeout {
+		items = append(items, corev1.EnvVar{
+			Name:  "SG_MEMBER_CAPABILITY_CHECK_TIMEOUT",
+			Value: dacConfig.SGMemberCapabilityTotalTimeout,
+		})
+	}
+	return appendNonEmptyEnv(nil, items...)
 }
 
 func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) error {
@@ -272,6 +310,8 @@ func (h *DataAgentContainerGenerator) generateExpertAgentEnvs(dac *dacv1alpha1.D
 			Name:  "Enable_History",
 			Value: "enable",
 		})
+
+		envs = append(envs, memberCapabilityEnvs(dacConfig, false)...)
 	}
 
 	if dacConfig != nil {
@@ -393,6 +433,8 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 			Name:  "Enable_History",
 			Value: "enable",
 		})
+
+		envs = append(envs, memberCapabilityEnvs(dacConfig, true)...)
 
 		// Optional LocalSkill packs from skill-hub (skillPolicy on Semantic Group DACs).
 		if len(dac.Spec.SkillPolicy.Skills) > 0 {
@@ -523,22 +565,27 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 	}
 
 	return &DACConfig{
-		ObservationBaseURL:           configMap.Data["observation-base-url"],
-		ObservationSecretKey:         configMap.Data["observation-secret-key"],
-		ObservationPublicKey:         configMap.Data["observation-public-key"],
-		RedisHost:                    configMap.Data["redis-host"],
-		RedisPort:                    configMap.Data["redis-port"],
-		RedisPassword:                configMap.Data["redis-password"],
-		DataServicesURL:              configMap.Data["data-services-url"],
-		BIZOrchestratorAgentRegistry: configMap.Data["biz-orchestrator-agent-registry"],
-		DSOrchestratorAgentRegistry:  configMap.Data["orchestrator-agent-registry"],
-		OrchestratorAgentImage:       configMap.Data["orchestrator-agent-image"],
-		ExpertAgentImage:             configMap.Data["expert-agent-image"],
-		DSDataServicesImage:          configMap.Data["ds-data-services-image"],
-		CodeAgentImage:               configMap.Data["code-agent-image"],
-		DocAgentImage:                configMap.Data["doc-agent-image"],
-		DDSyncObserverImage:          configMap.Data["dd-sync-observer-image"],
-		SkillAgentImage:              configMap.Data["skill-agent-image"],
+		ObservationBaseURL:              configMap.Data["observation-base-url"],
+		ObservationSecretKey:            configMap.Data["observation-secret-key"],
+		ObservationPublicKey:            configMap.Data["observation-public-key"],
+		RedisHost:                       configMap.Data["redis-host"],
+		RedisPort:                       configMap.Data["redis-port"],
+		RedisPassword:                   configMap.Data["redis-password"],
+		DataServicesURL:                 configMap.Data["data-services-url"],
+		BIZOrchestratorAgentRegistry:    configMap.Data["biz-orchestrator-agent-registry"],
+		DSOrchestratorAgentRegistry:     configMap.Data["orchestrator-agent-registry"],
+		OrchestratorAgentImage:          configMap.Data["orchestrator-agent-image"],
+		ExpertAgentImage:                configMap.Data["expert-agent-image"],
+		DSDataServicesImage:             configMap.Data["ds-data-services-image"],
+		CodeAgentImage:                  configMap.Data["code-agent-image"],
+		DocAgentImage:                   configMap.Data["doc-agent-image"],
+		DDSyncObserverImage:             configMap.Data["dd-sync-observer-image"],
+		SGMemberCapabilityEnabled:       configMap.Data["sg-member-capability-check-enabled"],
+		SGMemberCapabilityShadow:        configMap.Data["sg-member-capability-check-shadow"],
+		SGMemberCapabilityConcurrency:   configMap.Data["sg-member-capability-max-concurrency"],
+		SGMemberCapabilityMemberTimeout: configMap.Data["sg-member-capability-member-timeout-sec"],
+		SGMemberCapabilityTotalTimeout:  configMap.Data["sg-member-capability-total-timeout-sec"],
+		SkillAgentImage:                 configMap.Data["skill-agent-image"],
 	}, nil
 }
 

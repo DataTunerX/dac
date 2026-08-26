@@ -178,16 +178,108 @@ class MetadataValuesResult:
             batches.append(separator.join(current_batch))
         return batches
 
+    def list_ids(self, id_key: str = "id") -> List[str]:
+        """Return inventory knowledge ids in first-seen order."""
+        ids: List[str] = []
+        seen = set()
+        for item in self.get_all_items():
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get(id_key, "") or "").strip()
+            if not item_id or item_id in seen:
+                continue
+            ids.append(item_id)
+            seen.add(item_id)
+        return ids
+
+    @staticmethod
+    def _normalize_knowledge_id(value: Any) -> str:
+        return str(value or "").strip().casefold()
+
+    @staticmethod
+    def _hamming_distance(left: str, right: str) -> int:
+        if len(left) != len(right):
+            return max(len(left), len(right))
+        return sum(1 for a, b in zip(left, right) if a != b)
+
+    def resolve_knowledge_ids(
+        self,
+        selected_ids: List[str],
+        *,
+        id_key: str = "id",
+        max_edit_distance: int = 2,
+    ) -> List[str]:
+        """Map LLM-selected ids onto real inventory ids.
+
+        - Keep exact / case-insensitive matches.
+        - Correct near-miss typos when a unique closest inventory id exists
+          within max_edit_distance (same string length).
+        - Drop ids that cannot be resolved. Never invent ids outside inventory.
+        """
+        available = self.list_ids(id_key=id_key)
+        if not selected_ids:
+            return []
+        if not available:
+            return []
+
+        by_norm = {self._normalize_knowledge_id(item_id): item_id for item_id in available}
+        resolved: List[str] = []
+        seen = set()
+
+        for raw in selected_ids:
+            selected = str(raw or "").strip()
+            if not selected:
+                continue
+            norm = self._normalize_knowledge_id(selected)
+            canonical = by_norm.get(norm)
+            if canonical is None and max_edit_distance > 0:
+                best_dist = None
+                best_ids: List[str] = []
+                for avail_norm, avail_id in by_norm.items():
+                    if len(avail_norm) != len(norm):
+                        continue
+                    dist = self._hamming_distance(norm, avail_norm)
+                    if dist <= 0 or dist > max_edit_distance:
+                        continue
+                    if best_dist is None or dist < best_dist:
+                        best_dist = dist
+                        best_ids = [avail_id]
+                    elif dist == best_dist and avail_id not in best_ids:
+                        best_ids.append(avail_id)
+                if best_dist is not None and len(best_ids) == 1:
+                    canonical = best_ids[0]
+                    logger.warning(
+                        "resolve_knowledge_ids: corrected near-miss id %s -> %s (hamming=%d)",
+                        selected,
+                        canonical,
+                        best_dist,
+                    )
+            if canonical is None:
+                logger.warning(
+                    "resolve_knowledge_ids: dropping unknown knowledge id %s "
+                    "(not in inventory of %d ids)",
+                    selected,
+                    len(available),
+                )
+                continue
+            if canonical in seen:
+                continue
+            resolved.append(canonical)
+            seen.add(canonical)
+        return resolved
+
     def get_text_by_ids(self, knowledge_ids: List[str], text_key: str = "text", id_key: str = "id") -> str:
         """Stage 2: 根据 Stage 1 选中的 knowledge_id 列表，提取对应的完整知识内容（text 字段）。"""
+        # Resolve against inventory so near-miss LLM ids still retrieve text.
+        resolved_ids = self.resolve_knowledge_ids(knowledge_ids, id_key=id_key)
         texts = []
-        knowledge_ids_set = set(knowledge_ids)
+        knowledge_ids_set = set(resolved_ids)
         for collection_name, values in self.data.items():
             if not isinstance(values, list):
                 continue
             for item in values:
                 if isinstance(item, dict):
-                    item_id = item.get(id_key, "")
+                    item_id = str(item.get(id_key, "") or "").strip()
                     if item_id in knowledge_ids_set:
                         text = item.get(text_key, "")
                         if text:

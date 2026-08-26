@@ -34,22 +34,47 @@ describe("client session snapshot", () => {
     clearClientSession()
   })
 
-  it("stores role/username in module memory", () => {
-    establishSession({ role: "admin", username: "alice" })
-    expect(getClientSession()).toEqual({ role: "admin", username: "alice" })
+  it("stores username in module memory", () => {
+    establishSession({ username: "alice" })
+    expect(getClientSession()).toEqual({
+      username: "alice",
+      isSuper: false,
+      platformRoles: [],
+      permissionCodes: [],
+    })
     clearClientSession()
     expect(getClientSession()).toBeNull()
   })
 
-  it("defaults role to user when missing", () => {
-    establishSession({ username: "bob" })
-    expect(getClientSession()).toEqual({ role: "user", username: "bob" })
+  it("defaults username to empty string when missing", () => {
+    establishSession({})
+    expect(getClientSession()).toEqual({
+      username: "",
+      isSuper: false,
+      platformRoles: [],
+      permissionCodes: [],
+    })
+  })
+
+  it("normalizes isSuper and permission codes from the payload", () => {
+    establishSession({
+      username: "carol",
+      isSuper: true,
+      platformRoles: ["super_admin", "ops"],
+      permissionCodes: ["tenant:manage", "user:manage", 42 as never, null as never],
+    })
+    expect(getClientSession()).toEqual({
+      username: "carol",
+      isSuper: true,
+      platformRoles: ["super_admin", "ops"],
+      permissionCodes: ["tenant:manage", "user:manage"],
+    })
   })
 
   it("emits AUTH_CHANGE_EVENT on establish/clear", () => {
     const spy = vi.fn()
     window.addEventListener(AUTH_CHANGE_EVENT, spy)
-    establishSession({ role: "user", username: "carol" })
+    establishSession({ username: "carol" })
     clearClientSession()
     window.removeEventListener(AUTH_CHANGE_EVENT, spy)
     expect(spy).toHaveBeenCalledTimes(2)

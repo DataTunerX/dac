@@ -420,7 +420,10 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 2. **领域内隐含能力**：领域专家拥有**该领域内**的全量知识（如订单 / 交易 Agent 天然能"按各种维度（商品、用户、时段）切分销售统计"，因为这都是其业务的自然产出）。
 3. **⚠ 不可跨域扩张（重点）**：不要假设"X Agent 是 X 全能专家就能处理 X 的 Y"，当 Y 是**动态行为数据**且行为本身归属于另一领域时（如"商品的销量"中"销量"是消费购买行为的产物，归属于交易领域，**不在**商品领域）。"全能"只在该 Agent 业务能力本身的范围内有效。
 4. **任务分解节制**：仅当查询确实涉及**多个不同领域**或存在**明确先后依赖**时才拆分；不要把一个简单问题过度拆分。
-5. **"无对应"协议**：仅当议题完全超出所有 Agent 的领域范围时才使用 "NONE"。
+5. **"无对应"协议（NONE）**：
+   - **仅当**用户问题的**全部**可执行议题都超出当前可用 Agent 的领域范围时，才使用 `agent="NONE"`。
+   - **禁止**因为还夹带了本 Agent 无法覆盖的关联属性 / 外域切片，就把**整题**标成 NONE。
+   - 若可用 Agent 已覆盖问题中的**主锚定议题 / 本域可答部分**，必须派给对应 Agent；外域缺口留给执行结果或上层编排，不得因“答不完整题”拒绝派活。
 6. **名称准确性**：`agent` 字段必须与智能体列表中的"名称"完全一致。
 
 ## ⚠ 反模式（已知路由失败案例 — 必须避免）
@@ -593,7 +596,10 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 2. **领域内隐含能力**：领域专家拥有**该领域内**的全量知识（如订单 / 交易 Agent 天然能"按各种维度（商品、用户、时段）切分销售统计"，因为这都是其业务的自然产出）。
 3. **⚠ 不可跨域扩张（重点）**：不要假设"X Agent 是 X 全能专家就能处理 X 的 Y"，当 Y 是**动态行为数据**且行为本身归属于另一领域时（如"商品的销量"中"销量"是消费购买行为的产物，归属于交易领域，**不在**商品领域）。"全能"只在该 Agent 业务能力本身的范围内有效。
 4. **任务分解节制**：仅当查询确实涉及**多个不同领域**或存在**明确先后依赖**时才拆分；不要把一个简单问题过度拆分。
-5. **"无对应"协议**：仅当议题完全超出所有 Agent 的领域范围时才使用 "NONE"。
+5. **"无对应"协议（NONE）**：
+   - **仅当**用户问题的**全部**可执行议题都超出当前可用 Agent 的领域范围时，才使用 `agent="NONE"`。
+   - **禁止**因为还夹带了本 Agent 无法覆盖的关联属性 / 外域切片，就把**整题**标成 NONE。
+   - 若可用 Agent 已覆盖问题中的**主锚定议题 / 本域可答部分**，必须派给对应 Agent；外域缺口留给执行结果或上层编排，不得因“答不完整题”拒绝派活。
 6. **名称准确性**：`agent` 字段必须与智能体列表中的"名称"完全一致。
 
 ## ⚠ 反模式（已知路由失败案例 — 必须避免）
@@ -935,6 +941,7 @@ class TaskStatus(BaseModel):
 # ==================== Capability Check Protocol ====================
 # Message type flag used in A2A metadata to indicate a capability check request
 CAPABILITY_CHECK_MESSAGE_TYPE = "capability_check"
+SG_EXECUTION_HINT_KEY = "sg_execution_hint"
 TOP_K_PATHS_PER_TREE = int(os.getenv("TOP_K_PATHS_PER_TREE", "5"))
 MAX_PATH_FAILURES_BEFORE_STOP = int(os.getenv("MAX_PATH_FAILURES_BEFORE_STOP", "3"))
 MIN_CONTRIBUTION_CONFIDENCE = float(os.getenv("MIN_CONTRIBUTION_CONFIDENCE", "0.6"))
@@ -1032,6 +1039,26 @@ class CapabilityCheckResponse(BaseModel):
         default_factory=list,
         description="Optional per-agent route hints for collaboration (usually empty); shape e.g. [{\"agent\":\"A\",\"path\":[...],\"confidence\":0.9}]."
     )
+    member_results: List[dict] = Field(
+        default_factory=list,
+        description="Compact member capability evidence for execution-plan reuse."
+    )
+    degraded: bool = Field(
+        default=False,
+        description="Whether member capability evaluation was degraded."
+    )
+    unavailable_count: int = Field(
+        default=0,
+        description="Number of member capability probes that were unavailable."
+    )
+    missing_requirements: List[str] = Field(
+        default_factory=list,
+        description="Requirements not covered by the selected group members."
+    )
+    execution_hint: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Opaque SG-issued execution evidence for request-scoped handoff."
+    )
     latency_ms: int = Field(
         default=0,
         description="Capability check end-to-end latency in milliseconds, measured by the responding agent."
@@ -1056,13 +1083,15 @@ CAPABILITY_CHECK_PROMPT = """# Role：业务领域匹配判定器
 
 **步骤 4 - 反思（关键）**：① 若步骤 1 提取不到任何业务数据实体（纯工具类请求：编程、脚本、翻译、计算器等无行业数据），则不属于任何业务领域，应判定为不能处理。② **领域归属由数据所属行业决定，不由操作类型（分析/统计/可视化/导出）决定**——操作类型不是领域。③ **不按行业内的子领域细分**：智能体覆盖整个行业，不因描述侧重某环节而排斥同行业其他环节的数据。④ 同一名词可能对应不同行业。需从**用户问题的核心诉求**推断：用户真正关心的是哪个行业的数据？
 
-**步骤 5 - 结论**：综合以上做出判定。不确定时倾向于 can_handle=true。
+**步骤 5 - 结论**：综合以上做出判定。不确定时，结构化业务查询不要仅凭 AgentCard 文案就 can_handle=true。can_handle 表示本智能体覆盖问题的**主实体/主职责**（如订单号 → 订单域），即使关联字段（如下单用户姓名）需其他域补全也可为 true，并在 missing_requirements 中列出缺口。若问题有多个对等主实体且本智能体缺其一，则 can_handle=false。
 
 **步骤 6 - 可贡献性（仅当 can_handle=false 时）**：只有当本智能体能提供**当前问题直接需要、且可明确说清楚的具体补充内容**时，才能设 can_contribute=true，并在 contribution 中写明具体补充什么；否则必须为 false。
 补充约束：
 - 若已有单一专家可端到端回答当前问题，则其它专家应倾向于 can_contribute=false。
 - contribution 必须是可执行、可验证的具体内容，禁止输出“补充相关信息/互补信息/完善信息/辅助信息”这类空泛表述。
 - 不要因为“也许以后有用”或“同属一个行业”就判定 can_contribute=true。
+- 若本智能体只有本地技能（如 weather）而问题是订单/用户/商品等业务库查询，必须 can_contribute=false。
+- 若 reason/contribution 表明自己没有所需数据源或无法访问业务库，必须 can_contribute=false。
 
 ---
 **本智能体信息：**
@@ -1152,12 +1181,27 @@ class DependentQueryRefineResult(BaseModel):
 
 
 class DelegationDetectionResult(BaseModel):
-    """Mid-execution delegation detection result for _detect_delegation_needs."""
+    """Mid-execution gap detection result for _detect_delegation_needs.
+
+    Target SG selection is performed separately via concurrent standard
+    ``capability_check`` against peer SGs. ``target_sgs`` here is optional and
+    treated only as a soft inventory hint when present.
+    """
     model_config = {"extra": "ignore"}
     needs_help: bool = Field(default=False, description="Whether another SG's help is needed")
-    synthesized_query: str = Field(default="", description="Complete sub-query for downstream SG")
-    target_sgs: List[str] = Field(default_factory=list, description="List of SG names to delegate to")
-    reason: str = Field(default="", description="Why these SGs are needed")
+    synthesized_query: str = Field(
+        default="",
+        description=(
+            "Scoped sub-query for the downstream SG only: join keys + fields that "
+            "SG must return. Do NOT restate the full original question or ask the "
+            "peer to also compute other domains' metrics."
+        ),
+    )
+    target_sgs: List[str] = Field(
+        default_factory=list,
+        description="Optional soft hint of SG names; final selection uses capability_check",
+    )
+    reason: str = Field(default="", description="Why additional data is needed")
 
 
 ALLOWED_FAILURE_REASON_CODES = {
@@ -2682,6 +2726,13 @@ class OrchestratorAgent(BaseAgent):
         md = self.metadata if isinstance(self.metadata, dict) else {}
         if md.get("collaboration_delegation") is True:
             return False
+        hint = md.get(sg_broadcast.SG_EXECUTION_HINT_KEY)
+        if isinstance(hint, dict) and hint.get("missing_requirements"):
+            logger.info(
+                "[RoutingPool] skip broadcast blocked | missing_requirements=%s",
+                list(hint.get("missing_requirements") or [])[:8],
+            )
+            return False
         if not md.get(sg_broadcast.ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY):
             return False
         if self._routing_skip_broadcast_used:
@@ -2924,14 +2975,38 @@ class OrchestratorAgent(BaseAgent):
         upstream_context: Optional[dict] = None,
         progress_updater: Optional[Any] = None,
         progress_artifact_name: str = "collaboration-progress",
+        execution_hint: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Send a structured delegation request to another SG Orchestrator.
 
         Uses A2A SendStreamingMessage with metadata so the downstream SG
         can recognise the request as a collaboration delegation.
+        When ``execution_hint`` is present (from that peer's capability_check),
+        it is transported opaquely so the peer can reuse member evidence.
         """
         chain = list(delegation_chain or [])
         ctx = dict(upstream_context or {})
+
+        metadata: Dict[str, Any] = {
+            "collaboration_delegation": True,
+            "hop_remaining": hop_remaining,
+            "delegation_chain": chain,
+            "upstream_context": ctx,
+            "user_id": user_id,
+            "run_id": run_id,
+            "trace_id": trace_id,
+            "delegator_name": self.agent_name,
+            "skip_history_write": True,
+        }
+        if isinstance(execution_hint, dict) and execution_hint:
+            metadata[SG_EXECUTION_HINT_KEY] = execution_hint
+            logger.info(
+                "[Cross-SG][Delegate] transporting peer execution_hint | target=%s "
+                "selected_members=%s can_handle=%s",
+                getattr(target_card, "name", ""),
+                (execution_hint.get("selected_members") or [])[:10],
+                execution_hint.get("can_handle"),
+            )
 
         send_payload = {
             "message": {
@@ -2939,17 +3014,7 @@ class OrchestratorAgent(BaseAgent):
                 "parts": [{"type": "text", "text": task_description}],
                 "messageId": uuid4().hex,
             },
-            "metadata": {
-                "collaboration_delegation": True,
-                "hop_remaining": hop_remaining,
-                "delegation_chain": chain,
-                "upstream_context": ctx,
-                "user_id": user_id,
-                "run_id": run_id,
-                "trace_id": trace_id,
-                "delegator_name": self.agent_name,
-                "skip_history_write": True,
-            },
+            "metadata": metadata,
         }
 
         timeout = float(os.getenv("A2A_REQUEST_TIMEOUT", "3600"))
@@ -5220,6 +5285,251 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         self._skill_runner_lock = asyncio.Lock()
         self._log_local_skill_executor_config()
 
+    @staticmethod
+    def _execution_hint_ttl_sec() -> float:
+        try:
+            return max(
+                1.0,
+                float(os.getenv("SG_EXECUTION_HINT_TTL_SECONDS", "300")),
+            )
+        except ValueError:
+            return 300.0
+
+    @staticmethod
+    def _execution_query_fingerprint(query: str) -> str:
+        normalized = re.sub(r"\s+", " ", str(query or "").strip()).casefold()
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def _build_execution_hint(
+        self,
+        *,
+        run_id: str,
+        query: str,
+        check_response: "CapabilityCheckResponse",
+    ) -> Dict[str, Any]:
+        """Build SG-owned evidence that Routing can transparently round-trip."""
+        member_roles = dict(
+            getattr(check_response, "collaboration_roles", None) or {}
+        )
+        selected_members = [
+            str(name).strip()
+            for name in (getattr(check_response, "collaboration_agents", None) or [])
+            if str(name).strip()
+        ]
+        member_evidence: List[Dict[str, Any]] = []
+        for result in list(getattr(check_response, "member_results", None) or [])[:30]:
+            if not isinstance(result, dict):
+                continue
+            agent_name = str(result.get("agent_name") or "").strip()
+            if not agent_name:
+                continue
+            role = str(
+                member_roles.get(agent_name)
+                or (
+                    "handle"
+                    if result.get("can_handle")
+                    else "contribute"
+                    if result.get("can_contribute")
+                    else "unsupported"
+                )
+            ).strip()
+            matched = []
+            for key in (
+                "matched_evidence",
+                "matched_entities",
+                "matched_tables",
+                "matched_metrics",
+            ):
+                for item in result.get(key) or []:
+                    text = str(item).strip()
+                    if text and text not in matched:
+                        matched.append(text)
+                    if len(matched) >= 8:
+                        break
+                if len(matched) >= 8:
+                    break
+            member_evidence.append(
+                {
+                    "agent_name": agent_name,
+                    "role": role,
+                    "confidence": float(result.get("confidence", 0.0) or 0.0),
+                    "reason": str(result.get("reason") or "")[:240],
+                    "matched_evidence": matched,
+                }
+            )
+        return {
+            "version": "v1",
+            "semantic_group_id": str(self.semantic_group_id or ""),
+            "agent_name": self.current_agent_label(),
+            "run_id": str(run_id or ""),
+            "query_fingerprint": self._execution_query_fingerprint(query),
+            "created_at_epoch": int(_time.time()),
+            "ttl_seconds": int(self._execution_hint_ttl_sec()),
+            "can_handle": bool(getattr(check_response, "can_handle", False)),
+            "can_contribute": bool(getattr(check_response, "can_contribute", False)),
+            "confidence": float(getattr(check_response, "confidence", 0.0) or 0.0),
+            "degraded": bool(getattr(check_response, "degraded", False)),
+            "missing_requirements": list(
+                getattr(check_response, "missing_requirements", None) or []
+            )[:20],
+            "execution_strategy": str(
+                getattr(check_response, "execution_strategy", None) or "single"
+            ),
+            "selected_members": selected_members,
+            "member_roles": member_roles,
+            "member_evidence": member_evidence,
+            "reason": str(getattr(check_response, "reason", "") or "")[:500],
+        }
+
+    def _validated_execution_hint(
+        self,
+        metadata: Dict[str, Any],
+        query: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Validate the SG-issued hint delivered with the execution request."""
+        hint = metadata.get(SG_EXECUTION_HINT_KEY)
+        if not isinstance(hint, dict):
+            return None
+        if hint.get("version") != "v1":
+            logger.warning("[Capability][ExecutionHint] rejected: unsupported version")
+            return None
+        if str(hint.get("semantic_group_id") or "") != str(self.semantic_group_id or ""):
+            logger.warning("[Capability][ExecutionHint] rejected: semantic_group_id mismatch")
+            return None
+        request_run_id = str(metadata.get("run_id") or "")
+        if str(hint.get("run_id") or "") != request_run_id:
+            logger.warning("[Capability][ExecutionHint] rejected: run_id mismatch")
+            return None
+        expected_fingerprint = self._execution_query_fingerprint(query)
+        if str(hint.get("query_fingerprint") or "") != expected_fingerprint:
+            logger.warning("[Capability][ExecutionHint] rejected: query fingerprint mismatch")
+            return None
+        try:
+            created_at = float(hint.get("created_at_epoch", 0) or 0)
+            ttl = min(
+                max(1.0, float(hint.get("ttl_seconds", 300) or 300)),
+                self._execution_hint_ttl_sec(),
+            )
+        except (TypeError, ValueError):
+            logger.warning("[Capability][ExecutionHint] rejected: invalid timestamp/ttl")
+            return None
+        age = _time.time() - created_at
+        if age > ttl:
+            logger.info(
+                "[Capability][ExecutionHint] rejected: expired | age_sec=%.1f ttl_sec=%.0f",
+                age,
+                ttl,
+            )
+            return None
+        if not hint.get("can_handle") or hint.get("degraded"):
+            logger.info(
+                "[Capability][ExecutionHint] ignored: can_handle=%s degraded=%s",
+                hint.get("can_handle"),
+                hint.get("degraded"),
+            )
+            return None
+        missing = [
+            str(item).strip()
+            for item in (hint.get("missing_requirements") or [])
+            if str(item).strip()
+        ]
+        if missing:
+            logger.info(
+                "[Capability][ExecutionHint] ignored: missing_requirements=%s",
+                missing[:8],
+            )
+            return None
+        selected = [
+            str(name).strip()
+            for name in (hint.get("selected_members") or [])
+            if str(name).strip()
+        ]
+        if not selected:
+            logger.warning("[Capability][ExecutionHint] rejected: selected_members empty")
+            return None
+        logger.info(
+            "[Capability][ExecutionHint] accepted | run_id=%s strategy=%s "
+            "selected=%s confidence=%.2f age_sec=%.1f",
+            request_run_id,
+            hint.get("execution_strategy") or "single",
+            selected[:10],
+            float(hint.get("confidence") or 0.0),
+            age,
+        )
+        return hint
+
+    @staticmethod
+    def _pick_own_expert_name(own_names: set[str], preferred: str = "") -> str:
+        preferred = str(preferred or "").strip()
+        if preferred and preferred in own_names and preferred != "LocalSkill":
+            return preferred
+        candidates = sorted(
+            name for name in own_names if name and name != "LocalSkill"
+        )
+        return candidates[0] if candidates else ""
+
+    def _build_authoritative_execution_plan(
+        self,
+        *,
+        query: str,
+        own_names: set[str],
+        preferred_own_agent: str,
+        execution_hint: Optional[Dict[str, Any]],
+    ) -> Optional["TaskList"]:
+        """Create the primary own-Expert task from validated member evidence.
+
+        ``missing_requirements`` must NOT block authoritative dispatch: capability
+        already established can_handle for the primary ask; out-of-domain slices
+        are expected to surface as partial results / mid-exec delegation.
+        """
+        if not execution_hint or not execution_hint.get("can_handle"):
+            return None
+        if execution_hint.get("degraded"):
+            return None
+        own_expert = self._pick_own_expert_name(own_names, preferred_own_agent)
+        if not own_expert:
+            return None
+        return TaskList(
+            thought_process=(
+                "Reusing validated SG member capability evidence; dispatching "
+                "the original query to this SG's Expert."
+            ),
+            original_query=query,
+            tasks=[
+                PlannerTask(
+                    id=1,
+                    description=query,
+                    agent=own_expert,
+                    depends_on=[],
+                )
+            ],
+        )
+
+    def _execution_hint_memory_note(self, plan: Dict[str, Any]) -> str:
+        selected = [
+            str(name).strip()
+            for name in (plan.get("selected_members") or [])
+            if str(name).strip()
+        ]
+        reason = str(plan.get("reason") or "").strip()
+        lines = [
+            "[MemberCapabilityEvidence]",
+            "A prior member capability check for this run already confirmed that "
+            "this Semantic Group can handle the user query via its member data agents.",
+            f"can_handle={bool(plan.get('can_handle'))} "
+            f"confidence={float(plan.get('confidence') or 0.0):.2f} "
+            f"strategy={plan.get('execution_strategy') or 'single'}",
+        ]
+        if selected:
+            lines.append("selected_members=" + ", ".join(selected[:10]))
+        if reason:
+            lines.append("reason=" + reason[:300])
+        lines.append(
+            "Therefore prefer this SG's own Expert Agent for execution; "
+            "do not return agent=NONE solely because the SG summary card is generic."
+        )
+        return "\n".join(lines)
+
     # ─────────────────────── Data-Flow Logging Helper ───────────────────────
 
     @staticmethod
@@ -5561,40 +5871,29 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             name=task_name,
         )
 
-    async def handle_capability_check(
-        self,
-        context: RequestContext,
-        event_queue: EventQueue,
-        query: str,
-    ) -> None:
-        """Handle a capability check request from the routing agent.
-
-        In single-layer SG mode every SG is both root and leaf, so capability
-        check only evaluates the current SG itself and returns a single-node path.
-        """
-        task = context.current_task
-        if not task:
-            task = new_task(context.message)
-            await event_queue.enqueue_event(task)
-
-        updater = TaskUpdater(event_queue, context.task_id, context.context_id)
-        request_metadata = context.metadata if isinstance(context.metadata, dict) else {}
-        if request_metadata:
-            # Keep executor metadata fresh for this request lifecycle.
-            self.metadata = request_metadata
-        md = request_metadata or (self.metadata if isinstance(self.metadata, dict) else {})
-
-        agent_name = self.agent_card.name if self.agent_card else self.agent_id or "Unknown"
-        logger.info(
-            "[RoutePlan] ----- %s | capability_check start | query: %s -----",
-            agent_name, (query[:80] + "..." if len(query) > 80 else query),
+    @staticmethod
+    def _member_capability_flag(name: str, *, default: bool = False) -> bool:
+        default_value = "true" if default else "false"
+        return os.getenv(name, default_value).strip().lower() in (
+            "true",
+            "1",
+            "yes",
         )
-        agent_description = self.agent_card.description if self.agent_card else ""
+
+    def _capability_identity(self) -> tuple[str, str]:
+        agent_name = self.agent_card.name if self.agent_card else self.agent_id or "Unknown"
         agent_url = self.agent_card.url if self.agent_card else ""
+        return agent_name, agent_url
 
-        # 必须放在 try 之前计时，保证异常分支也能取得有效的 latency_ms。
+    async def _legacy_capability_check(
+        self,
+        query: str,
+        md: dict[str, Any],
+    ) -> CapabilityCheckResponse:
+        """Run the original SG self-description LLM capability check."""
         _cc_start = _time.monotonic()
-
+        agent_name, agent_url = self._capability_identity()
+        agent_description = self.agent_card.description if self.agent_card else ""
         agent_skills_text = "（无）"
         if self.agent_card and self.agent_card.skills:
             skills_lines = []
@@ -5684,6 +5983,257 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 route_paths=[{"path": leaf_path, "confidence": 0.0, "alias": _path_to_alias(leaf_path)}],
                 latency_ms=int((_time.monotonic() - _cc_start) * 1000),
             )
+        return check_response
+
+    def _member_capability_sidecar_card(self) -> AgentCard:
+        sidecar_url = (
+            os.getenv("SG_MEMBER_CAPABILITY_CHECK_URL", "").strip()
+            or "http://localhost:10101"
+        )
+        if self.agent_card is not None:
+            dump = getattr(self.agent_card, "model_dump", None) or getattr(
+                self.agent_card, "dict", None
+            )
+            card_data = dict(dump()) if dump else {}
+        else:
+            agent_name, _ = self._capability_identity()
+            card_data = {
+                "name": agent_name,
+                "description": "",
+                "version": "1.0.0",
+                "capabilities": {},
+                "defaultInputModes": ["text"],
+                "defaultOutputModes": ["text"],
+                "skills": [],
+            }
+        card_data["url"] = sidecar_url
+        return AgentCard(**card_data)
+
+    @staticmethod
+    def _parse_capability_json(text: str) -> dict[str, Any]:
+        payload = str(text or "").strip()
+        if payload.startswith("```json"):
+            payload = payload[7:]
+        elif payload.startswith("```"):
+            payload = payload[3:]
+        if payload.endswith("```"):
+            payload = payload[:-3]
+        result = json.loads(payload.strip())
+        if not isinstance(result, dict):
+            raise ValueError("member capability response must be a JSON object")
+        return result
+
+    @staticmethod
+    def _capability_response_text(chunk: Any) -> str:
+        """Extract text from an A2A artifact update returned by the SG Expert."""
+        dump = getattr(chunk, "model_dump", None)
+        if not callable(dump):
+            return ""
+        data = dump(mode="json", exclude_none=True)
+        result = data.get("result") if isinstance(data, dict) else None
+        if not isinstance(result, dict) or result.get("kind") != "artifact-update":
+            return ""
+        artifact = result.get("artifact")
+        parts = artifact.get("parts") if isinstance(artifact, dict) else None
+        if not isinstance(parts, list):
+            return ""
+        return "".join(
+            str(part.get("text") or "")
+            for part in parts
+            if isinstance(part, dict) and part.get("text") is not None
+        )
+
+    async def _delegated_member_capability_check(
+        self,
+        query: str,
+        md: dict[str, Any],
+    ) -> CapabilityCheckResponse:
+        """Ask the local SG Expert sidecar to evaluate its member agents."""
+        started = _time.monotonic()
+        agent_name, agent_url = self._capability_identity()
+        sidecar_card = self._member_capability_sidecar_card()
+        timeout_raw = (
+            os.getenv("SG_MEMBER_CAPABILITY_CHECK_TIMEOUT", "").strip()
+            or os.getenv("SG_MEMBER_CAPABILITY_CHECK_TIMEOUT_SECONDS", "").strip()
+            or "180"
+        )
+        timeout = float(timeout_raw)
+        send_payload: dict[str, Any] = {
+            "message": {
+                "role": "user",
+                "parts": [{"type": "text", "text": query}],
+                "messageId": uuid4().hex,
+            },
+            "metadata": {
+                "message_type": "group_member_capability_check",
+                "user_id": str(md.get("user_id") or ""),
+                "run_id": str(md.get("run_id") or ""),
+                "trace_id": str(md.get("trace_id") or ""),
+                PROPAGATED_HISTORY_KEY: parse_propagated_history(
+                    md.get(PROPAGATED_HISTORY_KEY)
+                ),
+            },
+        }
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout, connect=min(timeout, 10.0))
+        ) as httpx_client:
+            client = A2AClient(httpx_client=httpx_client, agent_card=sidecar_card)
+            request = SendStreamingMessageRequest(
+                id=uuid4().hex,
+                params=MessageSendParams(**send_payload),
+            )
+            chunks: list[str] = []
+            async for chunk in client.send_message_streaming(request):
+                text = self._capability_response_text(chunk)
+                if text:
+                    chunks.append(text)
+
+        data = self._parse_capability_json("".join(chunks))
+        route_path = data.get("route_path") or [agent_name]
+        route_paths = data.get("route_paths") or []
+        if not route_paths:
+            route_paths = [{
+                "path": route_path,
+                "confidence": data.get("confidence", 0.0),
+                "alias": _path_to_alias(route_path),
+            }]
+        response = CapabilityCheckResponse(
+            can_handle=bool(data.get("can_handle", False)),
+            confidence=float(data.get("confidence", 0.0) or 0.0),
+            reason=str(data.get("reason") or ""),
+            agent_name=str(data.get("agent_name") or agent_name),
+            agent_url=str(data.get("agent_url") or agent_url),
+            route_path=route_path,
+            route_paths=route_paths,
+            can_contribute=bool(data.get("can_contribute", False)),
+            contribution=str(data.get("contribution") or ""),
+            execution_strategy=str(data.get("execution_strategy") or "single"),
+            collaboration_agents=data.get("collaboration_agents") or [],
+            collaboration_roles=data.get("collaboration_roles") or {},
+            collaboration_paths=data.get("collaboration_paths") or [],
+            member_results=data.get("member_results") or [],
+            degraded=bool(data.get("degraded", False)),
+            unavailable_count=int(data.get("unavailable_count", 0) or 0),
+            missing_requirements=data.get("missing_requirements") or [],
+            latency_ms=int((_time.monotonic() - started) * 1000),
+        )
+        logger.info(
+            "[Capability][MemberDelegation] member_response_count=%d "
+            "unavailable_count=%d strategy=%s degraded=%s delegated_latency_ms=%d",
+            len(response.member_results),
+            response.unavailable_count,
+            response.execution_strategy,
+            response.degraded,
+            response.latency_ms,
+        )
+        return response
+
+    @staticmethod
+    def _log_capability_shadow_difference(
+        legacy: CapabilityCheckResponse,
+        delegated: CapabilityCheckResponse,
+    ) -> None:
+        fields = (
+            "can_handle",
+            "can_contribute",
+            "confidence",
+            "execution_strategy",
+            "collaboration_agents",
+            "missing_requirements",
+        )
+        differences = {
+            field: {
+                "old": getattr(legacy, field),
+                "new": getattr(delegated, field),
+            }
+            for field in fields
+            if getattr(legacy, field) != getattr(delegated, field)
+        }
+        logger.info(
+            "[Capability][MemberDelegation] shadow_difference=%s "
+            "old_new_disagreement=%s",
+            json.dumps(differences, ensure_ascii=False, default=str),
+            bool(differences),
+        )
+
+    async def handle_capability_check(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        query: str,
+    ) -> None:
+        """Handle routing probes without entering normal task execution."""
+        task = context.current_task
+        if not task:
+            task = new_task(context.message)
+            await event_queue.enqueue_event(task)
+
+        updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+        request_metadata = context.metadata if isinstance(context.metadata, dict) else {}
+        if request_metadata:
+            self.metadata = request_metadata
+        md = request_metadata or (self.metadata if isinstance(self.metadata, dict) else {})
+        agent_name, _ = self._capability_identity()
+        enabled = self._member_capability_flag(
+            "SG_MEMBER_CAPABILITY_CHECK_ENABLED",
+            default=True,
+        )
+        shadow = self._member_capability_flag("SG_MEMBER_CAPABILITY_CHECK_SHADOW")
+        mode = "shadow" if shadow else ("delegated" if enabled else "legacy")
+        logger.info(
+            "[RoutePlan] ----- %s | capability_check start | mode=%s | query: %s -----",
+            agent_name,
+            mode,
+            query[:80] + ("..." if len(query) > 80 else ""),
+        )
+
+        if shadow:
+            delegated_started = _time.monotonic()
+            legacy_result, delegated_result = await asyncio.gather(
+                self._legacy_capability_check(query, md),
+                self._delegated_member_capability_check(query, md),
+                return_exceptions=True,
+            )
+            if isinstance(legacy_result, BaseException):
+                raise legacy_result
+            check_response = legacy_result
+            if isinstance(delegated_result, BaseException):
+                logger.warning(
+                    "[Capability][MemberDelegation] mode=shadow sidecar_unavailable=true "
+                    "delegated_latency_ms=%d error_type=%s error=%s",
+                    int((_time.monotonic() - delegated_started) * 1000),
+                    type(delegated_result).__name__,
+                    delegated_result,
+                )
+            else:
+                self._log_capability_shadow_difference(check_response, delegated_result)
+        elif enabled:
+            delegated_started = _time.monotonic()
+            try:
+                delegated_result = await self._delegated_member_capability_check(query, md)
+                if delegated_result.degraded:
+                    logger.warning(
+                        "[Capability][MemberDelegation] mode=delegated degraded=true "
+                        "fallback=legacy member_response_count=%d unavailable_count=%d "
+                        "delegated_latency_ms=%d",
+                        len(delegated_result.member_results),
+                        delegated_result.unavailable_count,
+                        delegated_result.latency_ms,
+                    )
+                    check_response = await self._legacy_capability_check(query, md)
+                else:
+                    check_response = delegated_result
+            except Exception as exc:
+                logger.warning(
+                    "[Capability][MemberDelegation] mode=delegated sidecar_unavailable=true "
+                    "fallback=legacy delegated_latency_ms=%d error_type=%s error=%s",
+                    int((_time.monotonic() - delegated_started) * 1000),
+                    type(exc).__name__,
+                    exc,
+                )
+                check_response = await self._legacy_capability_check(query, md)
+        else:
+            check_response = await self._legacy_capability_check(query, md)
 
         # Single-layer SG: do not probe child groups or build subtree collaboration plans.
         path_display = " -> ".join(check_response.route_path) if check_response.route_path else check_response.agent_name
@@ -5710,6 +6260,20 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             path_display,
             (" | collaboration=" + str(collab)) if collab else "",
             (f"  collaboration_paths: {collab_paths_display}\n" if collab_paths_display else ""),
+        )
+        check_response.execution_hint = self._build_execution_hint(
+            run_id=str(md.get("run_id") or ""),
+            query=query,
+            check_response=check_response,
+        )
+        logger.info(
+            "[Capability][ExecutionHint] issued | run_id=%s can_handle=%s "
+            "strategy=%s selected=%s ttl_sec=%s",
+            md.get("run_id") or "",
+            check_response.execution_hint.get("can_handle"),
+            check_response.execution_hint.get("execution_strategy"),
+            check_response.execution_hint.get("selected_members"),
+            check_response.execution_hint.get("ttl_seconds"),
         )
         response_json = check_response.model_dump_json()
 
@@ -5775,10 +6339,11 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 )
 
         if upstream_info_parts:
-            parts.append(
-                "=== 上游委托上下文（已有分析结论及进展，请在此基础上规划） ===\n"
-                + "\n\n".join(upstream_info_parts)
+            banner = (
+                "=== 上游委托上下文（仅供理解关联键来源；规划远程任务时"
+                "禁止把其它域目标或整题扩写写进 description） ===\n"
             )
+            parts.append(banner + "\n\n".join(upstream_info_parts))
 
         result = "\n\n".join(parts)
         logger.debug(
@@ -6012,36 +6577,66 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             upstream_context=upstream_context,
             base_group_memory=base_group_memory,
         )
+        execution_hint = self._validated_execution_hint(metadata, query)
+        if execution_hint:
+            note = self._execution_hint_memory_note(execution_hint)
+            group_memory = f"{group_memory}\n\n{note}".strip() if group_memory else note
+            logger.info(
+                "[Capability][ExecutionHint] injected into execution context | run_id=%s "
+                "selected=%s",
+                run_id,
+                (execution_hint.get("selected_members") or [])[:10],
+            )
         logger.info(
             "[Cross-SG][CollabPlanning] group_memory prepared | base_chars=%d enriched_chars=%d",
             len(base_group_memory or ""),
             len(group_memory or ""),
         )
-        try:
-            plan = await agent.planner_agent.make_plan(
-                query,
-                augmented_pool,
-                group_memory=group_memory,
+        authoritative_plan = self._build_authoritative_execution_plan(
+            query=query,
+            own_names=own_names,
+            preferred_own_agent=self_agent_name,
+            execution_hint=execution_hint,
+        )
+        if authoritative_plan:
+            # A fresh, non-degraded member capability decision is authoritative
+            # for the primary execution attempt. Do not let a second LLM plan
+            # replace it with LocalSkill, another SG, or NONE.
+            plan = authoritative_plan
+            logger.info(
+                "[Capability][ExecutionHint] authoritative dispatch | own_expert=%s "
+                "selected_members=%s strategy=%s",
+                plan.tasks[0].agent,
+                (execution_hint.get("selected_members") or [])[:10],
+                execution_hint.get("execution_strategy") or "single",
             )
-        except ValueError as plan_err:
-            # 规划阶段失败（包含 make_plan 内部 2 次重试后仍失败的情况）：
-            # 不能再继续执行后续 own_tasks / delegation_tasks 拆解逻辑，否则
-            # 会触发 AttributeError。这里复用已经创建好的 task / updater，
-            # 把失败信息以 artifact + failed 状态正常回传给上游，避免抛到
-            # ASGI 任务组里变成 500。
-            err_msg = f"任务规划失败：{plan_err}"
-            logger.error(
-                "[Cross-SG][CollabPlanning] make_plan failed after retries | sg=%s err=%s",
-                sg_label, plan_err,
-            )
-            await updater.add_artifact(
-                [TextPart(text=err_msg)],
-                name="planning-error",
-            )
-            await updater.failed(
-                message=new_agent_text_message(err_msg, context_id=task.context_id),
-            )
-            return
+        else:
+            if execution_hint:
+                logger.warning(
+                    "[Capability][ExecutionHint] no own Expert available; "
+                    "falling back to normal planner"
+                )
+            try:
+                plan = await agent.planner_agent.make_plan(
+                    query,
+                    augmented_pool,
+                    group_memory=group_memory,
+                )
+            except ValueError as plan_err:
+                # Planning failed after retries; return a normal failed task.
+                err_msg = f"任务规划失败：{plan_err}"
+                logger.error(
+                    "[Cross-SG][CollabPlanning] make_plan failed after retries | sg=%s err=%s",
+                    sg_label, plan_err,
+                )
+                await updater.add_artifact(
+                    [TextPart(text=err_msg)],
+                    name="planning-error",
+                )
+                await updater.failed(
+                    message=new_agent_text_message(err_msg, context_id=task.context_id),
+                )
+                return
 
         own_tasks: list[PlannerTask] = []
         delegation_tasks: list[PlannerTask] = []
@@ -6507,8 +7102,23 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             max_mid_exec_rounds,
         )
         while mid_exec_round < max_mid_exec_rounds:
+            # Routing peer pool may be empty (sole can_handle root). Mid-exec
+            # must still discover remote SGs via registry broadcast — do not
+            # exit with rounds=0 just because routing_agent_pool had no peers.
             if not collaborator_cards:
-                break
+                collaborator_cards = await self._load_mid_exec_broadcast_candidates()
+                if not collaborator_cards:
+                    logger.info(
+                        "[Cross-SG][CollabMidExecLoop] no broadcast SG candidates "
+                        "in registry; exiting mid-exec loop"
+                    )
+                    break
+                logger.info(
+                    "[Cross-SG][CollabMidExecLoop] peer pool empty; loaded "
+                    "broadcast candidates | count=%d names=%s",
+                    len(collaborator_cards),
+                    [getattr(c, "name", "") for c in collaborator_cards[:12]],
+                )
 
             logger.info(
                 "[Cross-SG][CollabMidExecLoop] round %d / %d started",
@@ -6556,7 +7166,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 break
 
             synthesized_query = detection.get("synthesized_query", "")
-            target_sg_names = detection.get("target_sgs", [])
+            soft_target_hints = list(detection.get("target_sgs") or [])
             reason = detection.get("reason", "")
             detection_source = detection.get("source") or "llm_detection"
             skipped_owners = detection.get("skipped_owners") or []
@@ -6565,47 +7175,111 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 "collaboration-progress",
                 event="collab_mid_detect_result",
                 message=(
-                    f"Mid-execution detection ({detection_source}): needs "
-                    f"{', '.join(target_sg_names)}, reason: {(reason or '')[:80]}"
+                    f"Mid-execution detection ({detection_source}): gap found; "
+                    f"soft_hints={', '.join(soft_target_hints) or '(none)'}; "
+                    f"reason: {(reason or '')[:80]}"
                 ),
                 status="running",
                 extra={
                     "needs_help": True,
-                    "target_sgs": target_sg_names,
+                    "soft_target_hints": soft_target_hints,
                     "reason_preview": (reason or "")[:120],
                     "detection_source": detection_source,
                     "structured_unfulfilled_needs": detection.get("structured_unfulfilled_needs") or [],
                     "skipped_owners": skipped_owners,
                 },
             )
-            if not target_sg_names or not synthesized_query:
+            if not synthesized_query:
                 logger.info(
-                    "[Cross-SG][CollabMidExecDetect] detection returned empty targets or query, exiting loop"
+                    "[Cross-SG][CollabMidExecDetect] detection returned empty synthesized_query, exiting loop"
                 )
                 await self._emit_collab_mid_round_done(
                     updater,
                     round_num=mid_exec_round + 1,
                     max_rounds=max_mid_exec_rounds,
                     total_delegated=len(delegated_results),
-                    early_exit="empty detection targets or query",
+                    early_exit="empty detection query",
                 )
                 break
 
-            # Step 2: plan (with enriched group_memory carrying upstream + current execution context)
-            target_cards = [c for c in collaborator_cards if c.name in target_sg_names]
-            if not target_cards:
+            # Step 1.5: authoritative remote SG selection via one-shot concurrent
+            # capability_check over the full broadcast pool. Soft hints from
+            # detect only rank ties / empty-result fallback — never a sequential
+            # first-probe gate.
+            hints_by_sg: dict[str, dict] = {}
+            capability_evidence = ""
+            if self._mid_delegate_capability_select_enabled():
+                logger.info(
+                    "[Cross-SG][CollabMidExecLoop] selecting mid-delegate targets "
+                    "via concurrent capability_check | soft_hints=%s",
+                    soft_target_hints[:10],
+                )
+                selection = await self._select_mid_delegate_targets_via_capability(
+                    synthesized_query=synthesized_query,
+                    collaborator_cards=collaborator_cards,
+                    soft_target_hints=soft_target_hints,
+                    already_delegated=delegated_results,
+                    user_id=user_id,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    get_response_text=getattr(agent, "get_response_text", None),
+                )
+                target_cards = list(selection.get("target_cards") or [])
+                target_sg_names = list(selection.get("target_sg_names") or [])
+                hints_by_sg = dict(selection.get("hints_by_sg") or {})
+                capability_evidence = str(selection.get("evidence_text") or "")
+                await self.emit_progress(
+                    updater,
+                    "collaboration-progress",
+                    event="collab_mid_capability_select",
+                    message=(
+                        f"Mid-exec capability_check selected: "
+                        f"{', '.join(target_sg_names) or '(none)'}"
+                    ),
+                    status="running",
+                    extra={
+                        "target_sgs": target_sg_names,
+                        "soft_target_hints": soft_target_hints,
+                        "probed_names": selection.get("probed_names") or [],
+                        "with_execution_hint": list(hints_by_sg.keys()),
+                    },
+                )
+                if not target_cards:
+                    logger.info(
+                        "[Cross-SG][CollabMidExecLoop] capability_check found no "
+                        "capable remote SG, exiting loop | soft_hints=%s probed=%s",
+                        soft_target_hints[:10],
+                        (selection.get("probed_names") or [])[:12],
+                    )
+                    await self._emit_collab_mid_round_done(
+                        updater,
+                        round_num=mid_exec_round + 1,
+                        max_rounds=max_mid_exec_rounds,
+                        total_delegated=len(delegated_results),
+                        early_exit="no capable remote SG from capability_check",
+                    )
+                    break
+            else:
+                # Legacy fallback: name-filter collaborator cards by detect hints.
+                target_sg_names = soft_target_hints
+                target_cards = [c for c in collaborator_cards if c.name in target_sg_names]
                 logger.warning(
-                    "[Cross-SG][CollabMidExecDetect] detected targets not found in collaborator cards: %s",
+                    "[Cross-SG][CollabMidExecLoop] capability select disabled; "
+                    "legacy name-filter targets=%s",
                     target_sg_names,
                 )
-                await self._emit_collab_mid_round_done(
-                    updater,
-                    round_num=mid_exec_round + 1,
-                    max_rounds=max_mid_exec_rounds,
-                    total_delegated=len(delegated_results),
-                    early_exit="detected targets not in collaborator pool",
-                )
-                break
+                if not target_sg_names or not target_cards:
+                    logger.info(
+                        "[Cross-SG][CollabMidExecDetect] legacy path empty targets, exiting loop"
+                    )
+                    await self._emit_collab_mid_round_done(
+                        updater,
+                        round_num=mid_exec_round + 1,
+                        max_rounds=max_mid_exec_rounds,
+                        total_delegated=len(delegated_results),
+                        early_exit="empty detection targets or query",
+                    )
+                    break
 
             # Build execution context for this mid-exec round
             # 只包含真正已执行完成的任务
@@ -6641,13 +7315,24 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     ],
                     "synthesized_query": synthesized_query,
                     "detection_reason": reason,
+                    # Inject capability evidence so planner does not rely on
+                    # generic peer card descriptions.
+                    "capability_check_evidence": capability_evidence,
                 },
             )
+            if capability_evidence:
+                mid_group_memory = (
+                    f"{mid_group_memory}\n\n{capability_evidence}"
+                    if mid_group_memory
+                    else capability_evidence
+                )
 
             logger.info(
-                "[Cross-SG][CollabMidExecPlan] planning mid-exec delegation | targets=%s synth_query_len=%d",
+                "[Cross-SG][CollabMidExecPlan] planning mid-exec delegation | "
+                "targets=%s synth_query_len=%d evidence_chars=%d",
                 target_sg_names,
                 len(synthesized_query or ""),
+                len(capability_evidence or ""),
             )
 
             mid_plan = await self._plan_mid_exec_delegation(
@@ -6722,6 +7407,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 agent=agent,
                 progress_updater=updater,
                 collaboration_original_query=query,
+                execution_hints_by_sg=hints_by_sg,
             )
             # --- Data Flow: mid-exec round dispatch ---
             _mid_ctx_chars = len(json.dumps(upstream_ctx, ensure_ascii=False))
@@ -7059,7 +7745,23 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 "upstream_context": _a2a_upstream_context,
             },
         }
-
+        execution_hint = self._validated_execution_hint(
+            agent.metadata if isinstance(agent.metadata, dict) else {},
+            collaboration_original_query or _message_body,
+        )
+        if execution_hint:
+            send_payload["metadata"][SG_EXECUTION_HINT_KEY] = execution_hint
+            # Also nest under propagated_history so SD can recover the hint if
+            # some A2A transports drop top-level extension metadata keys.
+            hist = dict(send_payload["metadata"].get(PROPAGATED_HISTORY_KEY) or {})
+            hist[SG_EXECUTION_HINT_KEY] = execution_hint
+            send_payload["metadata"][PROPAGATED_HISTORY_KEY] = hist
+            logger.info(
+                "[Capability][ExecutionHint] forwarded to SG Expert | "
+                "selected=%s strategy=%s",
+                (execution_hint.get("selected_members") or [])[:10],
+                execution_hint.get("execution_strategy") or "single",
+            )
         # Same artifact task name as OrchestratorAgentExecutor.a2a_tasks so RoutingAgent
         # sees sg_expert / nested progress in the same stream channel.
         task_progress_name = f"{agent.agent_name}-result"
@@ -7377,12 +8079,17 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         gives deterministic mid-exec routing whenever the SD Expert produced a
         proper unfulfilled_needs payload, and only pays the LLM cost otherwise.
         """
-        if not own_results or not collaborator_cards:
+        if not own_results:
             return None
         try:
             from .data_inventory import build_table_owner_index
         except Exception:  # noqa: BLE001
             return None
+
+        # collaborator_cards may be empty (routing peer pool vacant). Still emit
+        # the structured signal + scoped synth so mid-exec can broadcast
+        # capability_check over the full registry.
+        peer_cards = list(collaborator_cards or [])
 
         # Aggregate unfulfilled_needs across all own-task answers.  The
         # ``_extract_structured_control_from_text`` helper lives on
@@ -7392,12 +8099,25 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         # from ``OrchestratorAgent``.
         aggregated: List[Dict[str, Any]] = []
         seen_tables: set = set()
+        join_keys: Dict[str, List[str]] = {}
         for tid, raw_answer in own_results.items():
             if not raw_answer:
                 continue
             sc = OrchestratorAgent._extract_structured_control_from_text(str(raw_answer))
             if not isinstance(sc, dict):
                 continue
+            raw_keys = sc.get("join_keys") or {}
+            if isinstance(raw_keys, dict):
+                for key, vals in raw_keys.items():
+                    name = str(key or "").strip()
+                    if not name:
+                        continue
+                    values = vals if isinstance(vals, (list, tuple)) else [vals]
+                    bucket = join_keys.setdefault(name, [])
+                    for item in values:
+                        text = str(item).strip()
+                        if text and text not in bucket:
+                            bucket.append(text)
             for need in sc.get("unfulfilled_needs") or []:
                 if not isinstance(need, dict):
                     continue
@@ -7418,7 +8138,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         if not aggregated:
             return None
 
-        owner_index = build_table_owner_index(collaborator_cards)
+        owner_index = build_table_owner_index(peer_cards)
         own_name = (
             (getattr(self.agent_card, "name", None) or "").strip()
             if getattr(self, "agent_card", None) else ""
@@ -7462,42 +8182,50 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     len(aggregated),
                     sorted(already_tried),
                 )
-            else:
-                logger.info(
-                    "[Cross-SG][CollabMidExecDetect][Structured] %d unfulfilled need(s) but no peer SG owns them — falling back to LLM",
-                    len(aggregated),
-                )
-            return None
+                return None
+            logger.info(
+                "[Cross-SG][CollabMidExecDetect][Structured] %d unfulfilled need(s) with no local owner in collaborator pool — keep signal for full-registry capability_check",
+                len(aggregated),
+            )
 
-        intent_fragments = sorted({
-            n["intent_fragment"] for n in mapped_needs if n.get("intent_fragment")
-        })
-        synthesized_lines = [
-            "请基于以下数据归属信号补齐缺失数据：",
-            f"原始问题: {query}",
-            "缺失/不可达数据 (来自上游 SD Expert 的 structured_control.unfulfilled_needs):",
-        ]
+        # Build a scoped peer sub-query: join keys + missing fields only.
+        # Do NOT embed the full original question — that causes the downstream
+        # Expert to chase out-of-scope goals from other domains.
+        need_labels: List[str] = []
         for n in mapped_needs:
-            synthesized_lines.append(
-                f"  - 表 `{n['missing_table']}` (stage={n.get('stage') or 'n/a'})"
-                + (f" / 业务意图：{n['intent_fragment']}" if n.get('intent_fragment') else "")
-            )
-        if intent_fragments:
-            synthesized_lines.append(
-                "原始任务片段汇总: " + " | ".join(intent_fragments[:6])
-            )
-        if already_tried:
-            synthesized_lines.append(
-                "已委托过且本轮跳过的 SG: " + ", ".join(sorted(already_tried))
-            )
-        synthesized_query = "\n".join(synthesized_lines)
+            frag = str(n.get("intent_fragment") or "").strip()
+            table = str(n.get("missing_table") or "").strip()
+            label = frag if frag and len(frag) <= 80 else (table or frag[:80])
+            if label and label not in need_labels:
+                need_labels.append(label)
+        need_text = "、".join(need_labels[:6]) or "缺失的外域字段"
+        key_bits: List[str] = []
+        for key, vals in (join_keys or {}).items():
+            key_name = str(key or "").strip()
+            if not key_name:
+                continue
+            value_text = ",".join(str(v).strip() for v in (vals or [])[:50] if str(v).strip())
+            if value_text:
+                key_bits.append(f"{key_name}={value_text}")
+        keys_text = "; ".join(key_bits)
+        synthesized_query = (
+            f"请仅查询并返回以下信息（勿处理本子任务以外的目标，勿扩展为完整原题）："
+            f"{need_text}。"
+        )
+        if keys_text:
+            synthesized_query += f" 关联键：{keys_text}。"
+        synthesized_query += " 按关联键返回对应结果即可。"
 
         result = {
             "synthesized_query": synthesized_query,
             "target_sgs": target_sgs,
             "reason": (
                 "structured_signal: SD Expert 报告 unfulfilled_needs，"
-                f"已通过 sovereignty index 反查命中 {len(target_sgs)} 个 owner SG"
+                + (
+                    f"已通过 local owner index 命中 {len(target_sgs)} 个 owner SG"
+                    if target_sgs
+                    else "本地 collaborator 池未命中 owner，交由全量 capability_check 选人"
+                )
                 + (
                     f"（跳过已委托过的 {len(already_tried)} 个 SG）"
                     if already_tried
@@ -7506,6 +8234,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             ),
             "structured_unfulfilled_needs": mapped_needs,
             "skipped_owners": sorted(already_tried),
+            "join_keys": join_keys,
             "source": "structured_signal",
         }
         logger.info(
@@ -7517,6 +8246,327 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         )
         return result
 
+    def _mid_delegate_capability_select_enabled(self) -> bool:
+        """Whether mid-delegate target selection uses standard capability_check."""
+        return os.getenv(
+            "SG_MID_DELEGATE_CAPABILITY_SELECT_ENABLED", "true"
+        ).strip().lower() not in ("false", "0", "no")
+
+    def _mid_delegate_max_targets(self) -> int:
+        try:
+            return max(1, int(os.getenv("SG_MID_DELEGATE_MAX_TARGETS", "3") or 3))
+        except ValueError:
+            return 3
+
+    def _mid_exec_self_agent_name(self) -> str:
+        return str(
+            getattr(self.agent_card, "name", None)
+            or getattr(self, "agent_id", None)
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _is_mid_exec_sg_card(card: Any) -> bool:
+        name = str(getattr(card, "name", "") or "")
+        url = getattr(card, "url", None)
+        return bool(name and url and "-sg-" in name)
+
+    async def _load_mid_exec_broadcast_candidates(
+        self,
+        *,
+        already_delegated: Optional[dict[str, str]] = None,
+        extra_cards: Optional[list[AgentCard]] = None,
+    ) -> list[AgentCard]:
+        """Load mid-exec remote SG candidates from the full orchestrator registry.
+
+        Mid-exec planning intentionally uses broadcast discovery rather than
+        trusting Routing's peer/contribute pool (which may be empty or incomplete).
+        """
+        already = {
+            name
+            for name, result in (already_delegated or {}).items()
+            if (result or "").strip()
+        }
+        self_name = self._mid_exec_self_agent_name()
+        by_name: dict[str, AgentCard] = {}
+
+        registry_cards = await sg_broadcast.list_all_orchestrator_agent_cards()
+        for card in registry_cards or []:
+            if not self._is_mid_exec_sg_card(card):
+                continue
+            if card.name == self_name or card.name in already:
+                continue
+            by_name[card.name] = card
+
+        # Merge any routing-peer cards that registry missed (URL refresh).
+        for card in extra_cards or []:
+            if not self._is_mid_exec_sg_card(card):
+                continue
+            if card.name == self_name or card.name in already:
+                continue
+            by_name.setdefault(card.name, card)
+
+        cards = list(by_name.values())
+        logger.info(
+            "[Cross-SG][MidCapSelect] broadcast candidate pool | count=%d "
+            "self=%s already_delegated=%s",
+            len(cards),
+            self_name,
+            sorted(already)[:12],
+        )
+        return cards
+
+    def _mid_exec_soft_hint_fallback_enabled(self) -> bool:
+        return os.getenv(
+            "SG_MID_DELEGATE_SOFT_HINT_FALLBACK", "true"
+        ).strip().lower() not in ("false", "0", "no")
+
+    def _resolve_mid_exec_soft_hint_cards(
+        self,
+        hint_names: list[str],
+        candidates: list[AgentCard],
+        extra_cards: Optional[list[AgentCard]] = None,
+    ) -> tuple[list[AgentCard], list[str]]:
+        """Resolve detect soft_hints into probeable cards.
+
+        Soft hints may name a peer that registry listing briefly missed; still
+        accept a matching card from ``extra_cards`` (routing/detect pool).
+        """
+        by_name: dict[str, AgentCard] = {}
+        for card in list(candidates or []) + list(extra_cards or []):
+            if not self._is_mid_exec_sg_card(card):
+                continue
+            name = str(getattr(card, "name", "") or "").strip()
+            if name and name not in by_name:
+                by_name[name] = card
+        hinted: list[AgentCard] = []
+        missing: list[str] = []
+        seen: set[str] = set()
+        for raw in hint_names or []:
+            name = str(raw or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            card = by_name.get(name)
+            if card is None:
+                missing.append(name)
+                continue
+            hinted.append(card)
+        return hinted, missing
+
+    @staticmethod
+    def _mid_exec_capability_probe_query(synthesized_query: str) -> str:
+        """Frame mid-exec sub-task so capability judges scope the ask, not the full original question."""
+        scoped = (synthesized_query or "").strip()
+        if not scoped:
+            return scoped
+        return (
+            "【跨 SG 补数子任务】请仅根据下列子任务判断本智能体是否拥有所需数据域"
+            "（can_handle / can_contribute）。不要按完整原题的其它域目标来否决。\n\n"
+            f"{scoped}"
+        )
+
+    @staticmethod
+    def _rank_mid_exec_capable_pairs(
+        capable_pairs: list[tuple[AgentCard, Any]],
+        soft_hint_names: list[str],
+    ) -> list[tuple[AgentCard, Any]]:
+        """Rank capability evidence; soft hints only break ties (never gate probing)."""
+        hint_set = {n for n in soft_hint_names if n}
+        hint_order = {n: i for i, n in enumerate(soft_hint_names) if n}
+
+        def _key(pair: tuple[AgentCard, Any]) -> tuple:
+            card, resp = pair
+            name = str(getattr(card, "name", "") or "")
+            return (
+                1 if getattr(resp, "can_handle", False) else 0,
+                float(getattr(resp, "confidence", 0.0) or 0.0),
+                1 if name in hint_set else 0,
+                # Earlier detect hints win among equal soft-hinted peers.
+                -hint_order.get(name, 10_000),
+            )
+
+        return sorted(capable_pairs, key=_key, reverse=True)
+
+    async def _select_mid_delegate_targets_via_capability(
+        self,
+        synthesized_query: str,
+        collaborator_cards: list[AgentCard],
+        *,
+        soft_target_hints: Optional[list[str]] = None,
+        already_delegated: Optional[dict[str, str]] = None,
+        user_id: str = "",
+        run_id: str = "",
+        trace_id: str = "",
+        get_response_text: Optional[Any] = None,
+    ) -> dict[str, Any]:
+        """Select mid-delegate peer SGs via concurrent standard ``capability_check``.
+
+        Authoritative mid-exec candidate source is a **one-shot full-registry
+        broadcast** of SG orchestrators (not Routing's peer/contribute pool).
+        Soft hints from structured/LLM detection never form a sequential first
+        probe set — they only (1) ensure missing peers stay in the pool,
+        (2) break ranking ties, and (3) optionally fall back when every probe
+        returns empty while detect already named resolvable peers.
+        """
+        empty: dict[str, Any] = {
+            "target_cards": [],
+            "target_sg_names": [],
+            "capable_pairs": [],
+            "hints_by_sg": {},
+            "evidence_text": "",
+            "probed_names": [],
+        }
+        if not (synthesized_query or "").strip():
+            logger.info(
+                "[Cross-SG][MidCapSelect] skip | reason=empty_synthesized_query"
+            )
+            return empty
+
+        candidates = await self._load_mid_exec_broadcast_candidates(
+            already_delegated=already_delegated,
+            extra_cards=collaborator_cards,
+        )
+        hint_names = [n for n in (soft_target_hints or []) if n]
+        hinted, missing_hints = self._resolve_mid_exec_soft_hint_cards(
+            hint_names,
+            candidates,
+            collaborator_cards,
+        )
+        if missing_hints:
+            logger.warning(
+                "[Cross-SG][MidCapSelect] soft_hints not resolvable to cards | missing=%s",
+                missing_hints[:10],
+            )
+        # Ensure resolved soft-hint cards are in the candidate pool even if
+        # registry listing omitted them.
+        if hinted:
+            by_name = {c.name: c for c in candidates}
+            for card in hinted:
+                by_name.setdefault(card.name, card)
+            candidates = list(by_name.values())
+
+        if not candidates:
+            logger.info(
+                "[Cross-SG][MidCapSelect] skip | reason=no_broadcast_candidates "
+                "routing_peers=%d soft_hints=%s",
+                len(collaborator_cards or []),
+                hint_names[:10],
+            )
+            return empty
+
+        probe_query = self._mid_exec_capability_probe_query(synthesized_query)
+        logger.info(
+            "[Cross-SG][MidCapSelect] concurrent capability_check | set=broadcast_pool "
+            "candidates=%d soft_hints=%s names=%s synth_query_preview=%s",
+            len(candidates),
+            hint_names[:10],
+            [c.name for c in candidates[:12]],
+            (synthesized_query or "")[:120],
+        )
+        capable_pairs = await sg_broadcast.probe_agents_capability_concurrent(
+            probe_query,
+            candidates,
+            user_id,
+            run_id,
+            trace_id,
+            get_response_text=get_response_text,
+        )
+        probed_names = [c.name for c in candidates]
+        if capable_pairs:
+            capable_pairs = self._rank_mid_exec_capable_pairs(capable_pairs, hint_names)
+            logger.info(
+                "[Cross-SG][MidCapSelect] capable peers found | set=broadcast_pool "
+                "capable=%d handlers=%s contributors=%s soft_hint_ranked=%s",
+                len(capable_pairs),
+                [c.name for c, r in capable_pairs if r.can_handle][:10],
+                [
+                    c.name
+                    for c, r in capable_pairs
+                    if (not r.can_handle) and r.can_contribute
+                ][:10],
+                [n for n in hint_names if n in {c.name for c, _ in capable_pairs}][:10],
+            )
+
+        if (
+            not capable_pairs
+            and hinted
+            and self._mid_exec_soft_hint_fallback_enabled()
+        ):
+            logger.warning(
+                "[Cross-SG][MidCapSelect] capability_check empty after probing; "
+                "falling back to detect soft_hints | hints=%s probed=%d",
+                [c.name for c in hinted][:10],
+                len(probed_names),
+            )
+            capable_pairs = [
+                (
+                    card,
+                    sg_broadcast.CapabilityCheckResponse(
+                        can_handle=True,
+                        can_contribute=True,
+                        confidence=0.55,
+                        reason=(
+                            "mid-exec soft_hint fallback: detection named this SG "
+                            "for an unresolved data gap, but capability_check "
+                            "returned no capable peer"
+                        ),
+                        agent_name=card.name,
+                        agent_url=str(getattr(card, "url", "") or ""),
+                    ),
+                )
+                for card in hinted
+            ]
+
+        if not capable_pairs:
+            logger.info(
+                "[Cross-SG][MidCapSelect] no capable remote SG | probed=%d "
+                "soft_hints=%s missing_hints=%s",
+                len(probed_names),
+                hint_names[:10],
+                missing_hints[:10],
+            )
+            return {
+                **empty,
+                "probed_names": probed_names,
+                "evidence_text": sg_broadcast.format_capability_evidence_for_planner([]),
+            }
+
+        max_targets = self._mid_delegate_max_targets()
+        selected = capable_pairs[:max_targets]
+        target_cards = [card for card, _ in selected]
+        target_sg_names = [card.name for card in target_cards]
+        hints_by_sg: dict[str, dict] = {}
+        for card, resp in selected:
+            hint = getattr(resp, "execution_hint", None) or {}
+            if isinstance(hint, dict) and hint:
+                hints_by_sg[card.name] = hint
+                logger.info(
+                    "[Cross-SG][MidCapSelect] peer issued execution_hint | "
+                    "sg=%s selected_members=%s can_handle=%s",
+                    card.name,
+                    (hint.get("selected_members") or [])[:10],
+                    hint.get("can_handle"),
+                )
+
+        evidence_text = sg_broadcast.format_capability_evidence_for_planner(selected)
+        logger.info(
+            "[Cross-SG][MidCapSelect] selected mid-delegate targets | "
+            "count=%d max=%d targets=%s with_hint=%s",
+            len(target_sg_names),
+            max_targets,
+            target_sg_names,
+            list(hints_by_sg.keys()),
+        )
+        return {
+            "target_cards": target_cards,
+            "target_sg_names": target_sg_names,
+            "capable_pairs": selected,
+            "hints_by_sg": hints_by_sg,
+            "evidence_text": evidence_text,
+            "probed_names": probed_names,
+        }
+
     async def _detect_delegation_needs(
         self,
         query: str,
@@ -7527,27 +8577,34 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         run_id: str = "",
         trace_id: str = "",
     ) -> Optional[dict]:
-        """Mid-execution Step 1: detect if another SG's help is needed.
+        """Mid-execution Step 1: detect whether a data gap still exists.
 
         Two-track design:
 
         1. **Structured fast-path** (P10): scan ``own_results`` for
            ``structured_control.unfulfilled_needs`` (P3 contract) and resolve
-           target SGs via the local owner index over ``collaborator_cards``.
-           Deterministic, LLM-free, precise.
-        2. **LLM fallback** (original behaviour): when no structured signal is
-           present, ask the LLM to reason over the natural-language outputs
-           and pick collaborator SGs.
+           soft owner hints via the local owner index over ``collaborator_cards``.
+           Deterministic, LLM-free.
+        2. **LLM fallback**: reason over natural-language outputs to decide
+           ``needs_help`` and produce ``synthesized_query``.
+
+        Final remote-SG selection happens later via concurrent standard
+        ``capability_check`` (``_select_mid_delegate_targets_via_capability``).
+        ``target_sgs`` from either track is only a soft inventory hint.
 
         Returns:
             ``None`` if no delegation is needed.
-            ``dict`` with ``synthesized_query``, ``target_sgs``, ``reason``,
-            and optionally ``source`` / ``structured_unfulfilled_needs`` when
-            the fast-path triggered.
+            ``dict`` with ``synthesized_query``, optional soft ``target_sgs``,
+            ``reason``, and optionally ``source`` / ``structured_unfulfilled_needs``.
         """
+        # Empty routing peer pool is OK: detect only decides whether a gap
+        # remains and builds synthesized_query. Final remote SG selection is
+        # always done via full-registry capability_check broadcast.
         if not collaborator_cards:
-            logger.info("[Cross-SG][CollabMidExecDetect] no collaborator cards available, skip detection")
-            return None
+            logger.info(
+                "[Cross-SG][CollabMidExecDetect] collaborator cards empty; "
+                "continuing detect (targets via broadcast capability_check)"
+            )
 
         # Track 1: structured signal (deterministic, free).  Gated by env so
         # operators can fall back to LLM-only behaviour if needed.
@@ -7560,12 +8617,14 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             structured = self._detect_delegation_via_structured(
                 query=query,
                 own_results=own_results,
-                collaborator_cards=collaborator_cards,
+                collaborator_cards=collaborator_cards or [],
                 delegated_results=delegated_results,
             )
             if structured:
                 logger.info(
-                    "[Cross-SG][CollabMidExecDetect] structured fast-path matched | targets=%s skipped=%s reason=%s",
+                    "[Cross-SG][CollabMidExecDetect] structured fast-path matched | "
+                    "soft_target_hints=%s skipped=%s reason=%s "
+                    "(final targets still require capability_check)",
                     structured.get("target_sgs"),
                     structured.get("skipped_owners") or [],
                     (structured.get("reason") or "")[:120],
@@ -7583,28 +8642,47 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         del_text = "\n".join(
             f"[{name}]: {res}" for name, res in delegated_results.items() if res
         )
-        sg_options = "\n".join(
-            f"- {c.name}: {c.description or ''}"
-            for c in collaborator_cards
-        )
+        # Names only — do NOT feed peer card descriptions as selection evidence.
+        # Authoritative remote selection is standard capability_check broadcast.
+        if collaborator_cards:
+            sg_options = "\n".join(f"- {c.name}" for c in collaborator_cards)
+        else:
+            sg_options = (
+                "(当前 Routing peer 池为空；不要据此判定无法委派。"
+                "最终远程 SG 由后续全量 capability_check 广播决定，target_sgs 可留空。)"
+            )
 
         prompt = (
             "你是一个多 agent 协作的数据缺口检测器。基于已有的执行结果和原始问题，"
             "判断是否还需要其他领域的补充数据。\n\n"
             "核心判断逻辑：\n"
             "1）首先分析本层自身执行结果是否包含可供下游使用的具体关联数据"
-            "（如 user_id、订单号、支付流水号等标识符列表）。\n"
+            "（标识符列表或 structured_control.join_keys）。\n"
             "2）如果本层结果明确表示未查询到任何有效记录（如 'not found records'、"
-            "'查询结果为空'、'0 条记录'、'no records found' 等），"
+            "'查询结果为空'、'0 条记录'、'no records found' 等），且没有 join_keys，"
             "则不得推荐任何委派——因为没有可传递的关联键，下游无法进行有效查询。\n"
             "3）只有当本层结果确实返回了可供下游使用的具体标识符列表，"
-            "且当前结果不足以完整回答原始问题时，才返回 needs_help = true。\n\n"
-            "注意: 如果已有结果已经能完整回答原始问题，应返回 needs_help=false。"
-            "只有当确实存在具体的数据缺口，且某个 SG 可以填补时，才返回需要帮助。\n\n"
-            f"原始问题：{query}\n\n"
+            "且当前结果不足以完整回答原始问题时，才返回 needs_help = true。\n"
+            "4）部分成功也要委派：若结果写了 task fail / 无法确认，但正文或 "
+            "structured_control 里已有可传递的关联键，且明确缺外域字段，"
+            "应 needs_help=true，synthesized_query 必须带上这些关联键。\n"
+            "5）outcome=partial 或 reason_code=data_sovereignty_gap 时，一律 needs_help=true。\n\n"
+            "synthesized_query 书写规则（强制）：\n"
+            "- 只写下游 SG 本轮需要交付的子问题：关联键 + 缺失字段；\n"
+            "- 禁止复述完整原题；禁止写入其它域目标或整题扩写；\n"
+            "- 禁止要求下游去计算本层已有或本层负责的指标；\n"
+            "- 下游拿到这句话应能直接执行并结束，无需理解整题其它部分。\n\n"
+            "重要约束：\n"
+            "- 不要依据 SG 的自描述文案选择目标；最终远程 SG 由后续标准 "
+            "capability_check 全量广播（成员能力证据）决定；\n"
+            "- 即使下方 SG 名称列表为空，只要存在关联键与外域缺口，仍应 "
+            "needs_help=true；\n"
+            "- target_sgs 仅为可选软提示（可留空）；不确定时请留空。\n\n"
+            "注意: 如果已有结果已经能完整回答原始问题，应返回 needs_help=false。\n\n"
+            f"原始问题（仅供判断缺口，勿整段写入 synthesized_query）：{query}\n\n"
             f"本层自身执行结果：\n{own_text}\n\n"
             f"已完成委托结果：\n{del_text}\n\n"
-            f"可委托的 SG 领域列表：\n{sg_options}\n\n"
+            f"可委托的 SG 名称列表（仅供参考，非选人依据）：\n{sg_options}\n\n"
             "请调用 detect_delegation_needs 工具来输出结果："
         )
 
@@ -7619,7 +8697,10 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         try:
             detect_tool = StructuredTool(
                 name="detect_delegation_needs",
-                description="检测是否需要委托其他语义组补充数据，如有需要则输出委派查询和原因。",
+                description=(
+                    "检测是否仍有数据缺口需要跨 SG 补充；输出 synthesized_query 与原因。"
+                    "target_sgs 仅为可选软提示，最终选人由 capability_check 完成。"
+                ),
                 args_schema=DelegationDetectionResult,
                 func=None,
                 coroutine=None,
@@ -7653,12 +8734,44 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             "source": "llm_detection",
         }
         logger.info(
-            "[Cross-SG][CollabMidExecDetect] LLM recommends delegation | source=llm_detection targets=%s reason=%s synth_query_len=%d",
+            "[Cross-SG][CollabMidExecDetect] LLM detected gap | source=llm_detection "
+            "soft_target_hints=%s reason=%s synth_query_len=%d "
+            "(final targets require capability_check)",
             result["target_sgs"],
-            result["reason"][:100],
+            (result["reason"] or "")[:100],
             len(str(result["synthesized_query"] or "")),
         )
         return result
+
+    @staticmethod
+    def _apply_scoped_mid_exec_task_descriptions(
+        plan: Optional[TaskList],
+        synthesized_query: str,
+    ) -> Optional[TaskList]:
+        """Force mid-exec peer task descriptions to the scoped synthesized_query.
+
+        The planner may expand descriptions with the full original goal.
+        Downstream Experts then chase out-of-scope work. For a mid-exec round
+        the authoritative ask is ``synthesized_query``.
+        """
+        if plan is None:
+            return None
+        scoped = (synthesized_query or "").strip()
+        if not scoped:
+            return plan
+        for task in list(getattr(plan, "tasks", None) or []):
+            prev = str(getattr(task, "description", "") or "").strip()
+            if prev != scoped:
+                logger.info(
+                    "[Cross-SG][CollabMidExecPlan] scoped task description | "
+                    "task_id=%s agent=%s prev_chars=%d scoped_chars=%d",
+                    getattr(task, "id", None),
+                    getattr(task, "agent", ""),
+                    len(prev),
+                    len(scoped),
+                )
+            task.description = scoped
+        return plan
 
     async def _plan_mid_exec_delegation(
         self,
@@ -7668,16 +8781,19 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         agent=None,
         skill_runner=None,
     ) -> Optional[TaskList]:
-        """Mid-execution Step 2: plan tasks based on the detection result.
+        """Mid-execution Step 2: plan tasks against capability-selected peers.
 
-        Calls the Planner with the synthesised sub-query and the target
-        SG cards so the Planner can produce single or multi-task plans.
+        ``target_cards`` must already be chosen by concurrent
+        ``capability_check`` (or legacy name filter when the feature is off).
+        Do NOT rebroadcast / re-resolve the planner pool here — that would
+        reintroduce card-description-based selection.
         """
         if not target_cards or not synthesized_query:
             return None
         try:
             logger.info(
-                "[Cross-SG][CollabMidExecPlan] invoking planner for mid-exec | targets=%s synth_query_len=%d group_memory_chars=%d",
+                "[Cross-SG][CollabMidExecPlan] invoking planner for mid-exec | "
+                "capability_selected_targets=%s synth_query_len=%d group_memory_chars=%d",
                 [c.name for c in target_cards],
                 len(synthesized_query or ""),
                 len(group_memory or ""),
@@ -7699,14 +8815,33 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 agent_card=self.agent_card,
                 skill_runner=skill_runner,
             )
-            _agent._init_routing_pool_from_metadata()
-            planner_cards, _, _ = await _agent._resolve_planner_agent_pool(synthesized_query)
-            plan = await _agent.planner_agent.make_plan(
-                synthesized_query,
-                planner_cards,
-                group_memory=group_memory,
+            # Scope banner: planner must not expand peer tasks into the full
+            # original multi-domain question.
+            scoped_plan_query = (
+                "【Mid-exec 子任务】下列内容即远程 SG 的全部工作范围。"
+                "规划时 description 必须忠实于该子任务，"
+                "禁止追加原题中其它域目标或整题扩写。\n\n"
+                f"{synthesized_query}"
             )
-            return plan
+            mid_memory = (
+                f"{group_memory}\n\n"
+                "【Mid-exec 规划约束】远程任务 description = 上方子任务原文；"
+                "上游上下文只用于理解关联键，不得写入 description。"
+                if group_memory
+                else (
+                    "【Mid-exec 规划约束】远程任务 description = 上方子任务原文；"
+                    "不得扩写为完整原题。"
+                )
+            )
+            # Plan only against the capability-selected peer cards.
+            plan = await _agent.planner_agent.make_plan(
+                scoped_plan_query,
+                target_cards,
+                group_memory=mid_memory,
+            )
+            return self._apply_scoped_mid_exec_task_descriptions(
+                plan, synthesized_query
+            )
         except Exception as e:
             logger.warning("Cross-SG: mid-exec plan failed: %s", e)
             return None
@@ -7725,21 +8860,27 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         agent,
         progress_updater: Optional[Any] = None,
         collaboration_original_query: str = "",
+        execution_hints_by_sg: Optional[dict[str, dict]] = None,
     ) -> dict[str, str]:
         """Mid-execution Step 3: dispatch plan tasks to target SGs.
 
         Iterates the plan's tasks, maps each to its target card, and calls
-        ``delegate_to_collaborator_sg``.  Returns ``{sg_name: result}``.
+        ``delegate_to_collaborator_sg``.  When capability_check returned an
+        ``execution_hint`` for a peer, forward it opaquely on dispatch.
+        Returns ``{sg_name: result}``.
         """
         results: dict[str, str] = {}
         name_to_card = {c.name: c for c in target_cards}
+        hints_by_sg = dict(execution_hints_by_sg or {})
         mid_exec_round = int((upstream_context or {}).get("mid_exec_round") or 0)
 
         logger.info(
-            "[Cross-SG][CollabMidExecDispatch] dispatching mid-exec tasks | task_count=%d targets=%s hop=%d",
+            "[Cross-SG][CollabMidExecDispatch] dispatching mid-exec tasks | "
+            "task_count=%d targets=%s hop=%d hints=%s",
             len(plan.tasks),
             [t.agent for t in plan.tasks],
             current_hop,
+            list(hints_by_sg.keys()),
         )
 
         for task in plan.tasks:
@@ -7799,6 +8940,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     )
 
             _mid_delegate_desc = self._truncate_progress_message(task_desc_for_delegate, 120)
+            peer_hint = hints_by_sg.get(agent_name) or {}
             if progress_updater is not None:
                 await self.emit_progress(
                     progress_updater,
@@ -7816,6 +8958,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                         "mid_exec_round": mid_exec_round,
                         "remaining_hop": next_hop,
                         "desc_preview": _mid_delegate_desc,
+                        "has_execution_hint": bool(peer_hint),
                     },
                 )
 
@@ -7830,6 +8973,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 upstream_context=ctx,
                 progress_updater=progress_updater,
                 progress_artifact_name="collaboration-progress",
+                execution_hint=peer_hint or None,
             )
             results[agent_name] = result
             if progress_updater is not None:

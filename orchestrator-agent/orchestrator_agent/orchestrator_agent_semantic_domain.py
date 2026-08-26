@@ -120,7 +120,11 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
 ## 智能体选择与任务规则（必须严格遵守）
 1. **主权优先**：根据哪个智能体的领域覆盖了主题事项来分配任务。
 2. **任务分解**：仅当查询确实涉及**多个不同领域**或存在**明确的先后依赖**时，才拆分为多个任务。不要将一个简单问题过度拆分。
-3. **"无对应"协议**：仅当任务的议题完全超出所有可用智能体的领域范围时，才使用"NONE"。
+3. **"无对应"协议（NONE）**：
+   - **仅当**用户问题的**全部**可执行议题都超出当前可用智能体的领域范围时，才使用 `agent="NONE"`。
+   - **禁止**因为问题中还夹带了本智能体无法覆盖的关联属性 / 外域切片，就把**整题**标成 NONE。
+   - 若可用智能体已覆盖问题中的**主锚定议题 / 本域可答部分**，必须把该部分派给对应智能体；外域缺口留给下游执行结果或上层编排处理，规划器不得因“答不完整题”而拒绝派活。
+   - 禁止用“端到端完整性”“强耦合所以整体不可做”作为选择 NONE 的理由。
 4. **名称准确性**：`agent` 字段必须与智能体列表中的“名称”完全一致。
 
 
@@ -208,7 +212,11 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 ## 智能体选择与任务规则（必须严格遵守）
 1. **主权优先**：根据哪个智能体的领域覆盖了主题事项来分配任务。
 2. **任务分解**：仅当查询确实涉及**多个不同领域**或存在**明确的先后依赖**时，才拆分为多个任务。不要将一个简单问题过度拆分。
-3. **"无对应"协议**：仅当任务的议题完全超出所有可用智能体的领域范围时，才使用"NONE"。
+3. **"无对应"协议（NONE）**：
+   - **仅当**用户问题的**全部**可执行议题都超出当前可用智能体的领域范围时，才使用 `agent="NONE"`。
+   - **禁止**因为问题中还夹带了本智能体无法覆盖的关联属性 / 外域切片，就把**整题**标成 NONE。
+   - 若可用智能体已覆盖问题中的**主锚定议题 / 本域可答部分**，必须把该部分派给对应智能体；外域缺口留给下游执行结果或上层编排处理，规划器不得因“答不完整题”而拒绝派活。
+   - 禁止用“端到端完整性”“强耦合所以整体不可做”作为选择 NONE 的理由。
 4. **名称准确性**：`agent` 字段必须与智能体列表中的“名称”完全一致。
 
 ## ⚠ 对话历史使用规则（指代与继承）
@@ -317,7 +325,9 @@ Orchestrator_INSTRUCTIONS_ZH = """
 6. **证据约束（强制）**
    * 只输出可被 `knowledge` 直接支持的结论。
    * 每个任务块若标注「任务状态」为 fail，或结果中声明执行失败/不可作为事实引用，则该块内的具体数据（记录、数字、字段值）**不得**写入最终结论，只能用于说明“该子任务未成功完成”。
+   * 每个任务块若标注「任务状态」为 partial，或带有 `structured_control.outcome=partial` / `reason_code=data_sovereignty_gap`：本域已查到的字段和关联键（如 `user_id`、收货人电话）**必须作为事实引用**；同时明确写出缺了哪块外域数据，供上游委派。禁止把 partial 整块打成“无法引用”。
    * 若同一问题存在成功与失败任务块，优先采信成功块；失败块不能 override 成功结论，也不能单独拼出实体级答案。
+   * 输出末尾若 `knowledge` 中含 `structured_control:` 行，必须原样保留，不得删除或改写。
 
 7. **收敛输出（强制）**
    * 必须先给结论，首段 1-2 句内明确回答用户问题核心结论（不要先讲过程）。
@@ -333,17 +343,18 @@ SUMMARY_HUMAN_TEMPLATE_ZH = (
     "状态为「fail」的任务，其返回的数据可能是局部/不完整/不正确的，"
     "严禁将其中的具体数据（如查询到的记录、数字、字段值）当作事实引用。"
     "状态为「fail」的任务数据仅能说明「该任务未成功完成」，不能证明任何事实性结论。"
+    "状态为「partial」的任务是本域部分成功：必须保留关联键（如 user_id）和已查到的本域字段，"
+    "并说明缺的外域数据；禁止把这些已查到的值写成不可引用。"
+    "knowledge 中的 structured_control 行必须在最终输出中原样保留。"
 )
 
 DOC_ORCHESTRATOR_INSTRUCTIONS_ZH = Orchestrator_INSTRUCTIONS_ZH + """
 8. **文档域专用：参考材料，非实体查询结果（强制）**
-   * 你总结的是**文档/RAG 检索结果**，不是数据库 live query。职责是提供字段含义、接口说明、表结构描述、业务口径——**不是**替 structured 回答「某订单/某用户是谁」。
-   * **禁止**把文档/API 示例里的占位数据说成用户所问实体的答案，例如：
-     - 用户问订单编号 `ORD-2025-00001`，文档示例里只有 `order_id: 1001` 或示例用户「张三」→ **不得**写「ORD-2025-00001 的购买用户是张三」；
-     - 不得把示例 JSON、Swagger 样例、教程里的记录当作该业务键在系统中的真实映射。
-   * 仅当 `knowledge` 中**明确出现与用户问题相同的业务标识**（如完全一致的订单号字符串、用户名）且任务状态为成功时，才可作实体结论；否则必须写 **无法根据文档确认** 该实体。
-   * 可以说明：文档中订单编号字段类型（如整数 order_id）、是否存在支付相关表/接口、示例数据的格式——但必须标注为**文档描述/示例**，与用户所问实体是否匹配要单独说明。
-   * 若 `knowledge` 仅有示例、无与用户问题精确匹配的条目，结论必须是「文档未记载该订单/用户，无法确认」，**不要**用最近似的示例用户或订单顶替。
+   * 你总结的是**文档/RAG 检索结果**，不是数据库 live query。职责是提供字段含义、接口说明、表结构描述、业务口径——**不是**替结构化数据域回答「某个具体业务实体的实时属性是什么」。
+   * **禁止**把文档/API 示例里的占位数据、样例记录说成用户所问实体的真实答案；不得把教程/示例 JSON 中的记录当作该业务键在系统中的真实映射。
+   * 仅当 `knowledge` 中**明确出现与用户问题相同的业务标识**（字符串完全一致）且任务状态为成功时，才可作实体结论；否则必须写 **无法根据文档确认** 该实体。
+   * 可以说明：文档中字段类型、是否存在相关接口/表、示例数据的格式——但必须标注为**文档描述/示例**，与用户所问实体是否匹配要单独说明。
+   * 若 `knowledge` 仅有示例、无与用户问题精确匹配的条目，结论必须是「文档未记载该实体，无法确认」，**不要**用最近似的示例记录顶替。
 """
 
 DOC_SUMMARY_HUMAN_TEMPLATE_ZH = (
@@ -351,7 +362,7 @@ DOC_SUMMARY_HUMAN_TEMPLATE_ZH = (
     "user question:{query}\n\n"
     "【文档域总结 · 必读】"
     "你输出的是**参考材料总结**，供下游理解字段/接口/口径，不是 structured 数据库查询的最终实体答案。"
-    "禁止把 API/文档示例中的 order_id、user_id、示例姓名邮箱等写成用户所问业务编号（如 ORD-*）的真实查询结果。"
+    "禁止把 API/文档示例中的占位 id、示例姓名邮箱等写成用户所问业务标识的真实查询结果。"
     "若 knowledge 中没有与用户问题完全一致的业务标识，结论必须是无法确认，不得用示例数据凑答案。"
     "同时遵守任务状态规则：fail 任务中的数据不可作为事实引用。"
 )
@@ -503,6 +514,47 @@ class DependencyJudgeResult(BaseModel):
     rationale: str = Field(default="", description="One-sentence reason in user's language")
 
 
+class MemberCapabilityJudgeResult(BaseModel):
+    """Tool-call schema for SD member capability LLM judgment."""
+
+    model_config = {"extra": "ignore"}
+    domain_match: bool = Field(
+        default=False,
+        description="Whether the user query is about this semantic domain's subject matter",
+    )
+    can_handle: bool = Field(
+        default=False,
+        description=(
+            "Whether this agent covers the query's primary entity / primary "
+            "responsibility from its own inventory (cross-domain attributes may "
+            "still be listed in missing_requirements)"
+        ),
+    )
+    can_contribute: bool = Field(
+        default=False,
+        description=(
+            "Whether this agent can supply non-primary or partial evidence "
+            "(join keys, related fields) when it is not the primary owner"
+        ),
+    )
+    confidence: float = Field(
+        default=0.0,
+        description="Confidence in [0, 1] for the capability judgment",
+    )
+    reason: str = Field(
+        default="",
+        description="Short explanation of the judgment in the user's language",
+    )
+    matched_evidence: List[str] = Field(
+        default_factory=list,
+        description="Concrete evidence phrases from metadata that support the judgment",
+    )
+    missing_requirements: List[str] = Field(
+        default_factory=list,
+        description="Independent business requirements not covered by this agent",
+    )
+
+
 class TaskList(BaseModel):
     """Output schema for the Planner Agent."""
 
@@ -575,6 +627,9 @@ class TaskStatus(BaseModel):
 
 # Fixed description when no agent is relevant (agent=NONE)
 NONE_TASK_DESCRIPTION = "No available agent can do this task. "
+
+# Round-tripped from SG after member capability_check (same key as SG / broadcast).
+SG_EXECUTION_HINT_KEY = "sg_execution_hint"
 NON_RETRYABLE_MARKER = "NON_RETRYABLE::OUT_OF_SCOPE"
 NON_RETRYABLE_REPEAT_MARKER = "NON_RETRYABLE::REPEATED_FAILURE"
 
@@ -693,6 +748,148 @@ def tasklist_to_string(task_list: TaskList) -> str:
             line = f"[{task.id}]: {task.description} - [{task.agent}]"
         lines.append(line)
     return "\nAll Tasks:\n" + "\n".join(lines) + "\n\n"
+
+
+def _eligible_local_plan_agent_names(
+    agent_cards: Any,
+    *,
+    local_skill_agent_name: str,
+) -> list[str]:
+    """Non-synthetic agents the planner may assign (excludes LocalSkill / NONE)."""
+    names: list[str] = []
+    seen: set[str] = set()
+    skill_name = (local_skill_agent_name or "").strip()
+    for card in agent_cards or []:
+        name = str(getattr(card, "name", "") or "").strip()
+        if not name or name in seen:
+            continue
+        if name.upper() == "NONE":
+            continue
+        if skill_name and name == skill_name:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def rewrite_all_none_plan_to_sole_local_expert(
+    tasks: TaskList,
+    agent_cards: Any,
+    *,
+    query: str = "",
+    local_skill_agent_name: str = LOCAL_SKILL_AGENT_NAME,
+) -> TaskList:
+    """If the plan is all-NONE but exactly one local domain agent exists, remap.
+
+    Structural safety net for the common planner failure mode: refusing to
+    assign because some related out-of-domain slice cannot be answered here.
+    Does not invent business routing — only remaps when membership is
+    unambiguous (sole non-synthetic local expert).
+    """
+    if tasks is None or not getattr(tasks, "tasks", None):
+        return tasks
+    if not all((t.agent or "").strip().upper() == "NONE" for t in tasks.tasks):
+        return tasks
+    eligible = _eligible_local_plan_agent_names(
+        agent_cards,
+        local_skill_agent_name=local_skill_agent_name,
+    )
+    if len(eligible) != 1:
+        return tasks
+    expert = eligible[0]
+    original = (
+        str(getattr(tasks, "original_query", None) or "").strip()
+        or str(query or "").strip()
+    )
+    if not original:
+        return tasks
+    prior_thought = str(getattr(tasks, "thought_process", None) or "").strip()
+    thought = (
+        f"{prior_thought} | " if prior_thought else ""
+    ) + (
+        "[system] Remapped all-NONE plan to the sole local domain agent: "
+        "out-of-domain related attributes must not block assigning the "
+        "in-domain primary ask."
+    )
+    logger.warning(
+        "[Planner][NoneRewrite] remapped all-NONE → sole local expert | agent=%s",
+        expert,
+    )
+    return TaskList(
+        thought_process=thought,
+        original_query=original,
+        tasks=[PlannerTask(id=1, description=original, agent=expert)],
+    )
+
+
+def extract_sg_execution_hint(metadata: Any) -> Optional[Dict[str, Any]]:
+    """Read SG execution_hint from top-level metadata or nested propagated_history."""
+    if not isinstance(metadata, dict):
+        return None
+    hint = metadata.get(SG_EXECUTION_HINT_KEY)
+    if isinstance(hint, dict) and hint:
+        return hint
+    hist = metadata.get(PROPAGATED_HISTORY_KEY)
+    if isinstance(hist, dict):
+        nested = hist.get(SG_EXECUTION_HINT_KEY)
+        if isinstance(nested, dict) and nested:
+            return nested
+    return None
+
+
+def build_plan_from_sg_execution_hint(
+    query: str,
+    hint: Dict[str, Any],
+    agent_cards: Any,
+    *,
+    local_skill_agent_name: str = LOCAL_SKILL_AGENT_NAME,
+) -> Optional[TaskList]:
+    """Skip LLM make_plan when SG member capability already confirmed can_handle.
+
+    Picks the first selected_member present in the local agent card pool
+    (excluding LocalSkill). If none match but exactly one domain expert exists,
+    uses that sole expert. Does not invent multi-agent routes.
+    """
+    if not isinstance(hint, dict) or not hint.get("can_handle"):
+        return None
+    if hint.get("degraded"):
+        return None
+    eligible = _eligible_local_plan_agent_names(
+        agent_cards,
+        local_skill_agent_name=local_skill_agent_name,
+    )
+    if not eligible:
+        return None
+    eligible_set = set(eligible)
+    selected = [
+        str(name).strip()
+        for name in (hint.get("selected_members") or [])
+        if str(name).strip()
+    ]
+    chosen = next((name for name in selected if name in eligible_set), "")
+    if not chosen and len(eligible) == 1:
+        chosen = eligible[0]
+    if not chosen:
+        return None
+    original = str(query or "").strip()
+    if not original:
+        return None
+    logger.info(
+        "[Capability][ExecutionHint][SD] skip LLM make_plan | agent=%s "
+        "selected_members=%s confidence=%.2f",
+        chosen,
+        selected[:10],
+        float(hint.get("confidence") or 0.0),
+    )
+    return TaskList(
+        thought_process=(
+            "Reusing SG member capability evidence (execution_hint); "
+            "dispatching the original query to the validated local domain agent "
+            "without a second LLM plan."
+        ),
+        original_query=original,
+        tasks=[PlannerTask(id=1, description=original, agent=chosen)],
+    )
 
 
 def log_size_trace(stage: str, **metrics: Any) -> None:
@@ -1035,7 +1232,13 @@ class PlannerAgent(BaseAgent):
 
         # When no agent is relevant, return a single task with agent "NONE" and fixed description
         json_prompt_no_agent_en: dict = {
-            "thought_process": "1. Entity Extraction: 'Starlink project' (Aerospace/Telecommunications). 2. Territory Check: No available agents cover aerospace or satellite tech domains. 3. Conclusion: Subject is outside all known agent sovereignties.",
+            "thought_process": (
+                "1. Entity Extraction: identify the query's anchoring subject. "
+                "2. Territory Check: NONE of the available agents cover that anchoring "
+                "subject (or any executable slice of the ask). "
+                "3. Conclusion: use NONE only because there is zero in-domain coverage — "
+                "not because some related out-of-domain attribute is also requested."
+            ),
             "original_query": "What is the Starlink project?",
             "tasks": [
                 {
@@ -1287,6 +1490,13 @@ class PlannerAgent(BaseAgent):
                     )
                 ],
             )
+
+        tasks = rewrite_all_none_plan_to_sole_local_expert(
+            tasks,
+            agent_cards,
+            query=str(query or ""),
+            local_skill_agent_name=LOCAL_SKILL_AGENT_NAME,
+        )
 
         log_size_trace(
             "planner-output",
@@ -1896,6 +2106,7 @@ class OrchestratorAgent(BaseAgent):
         current_agents_knowledge: list,
         retry_count: int,
         task_desc_preview: str,
+        fallback_query: str = "",
     ) -> bool:
         """Attempt LocalSkill as a fallback when planner returned ``agent=NONE``.
 
@@ -1904,7 +2115,11 @@ class OrchestratorAgent(BaseAgent):
         explicit skill declines) return ``False`` so the caller can fall back
         to the original ``NONE_TASK_DESCRIPTION`` behaviour.
         """
-        desc_preview = (task.description or "").replace("\n", " ")
+        # Prefer the real user ask: NONE description is a sentinel, not a skill query.
+        skill_query = (fallback_query or "").strip()
+        if not skill_query or skill_query.strip() == NONE_TASK_DESCRIPTION.strip():
+            skill_query = (task.description or "").strip()
+        desc_preview = skill_query.replace("\n", " ")
         if len(desc_preview) > 180:
             desc_preview = desc_preview[:180] + "..."
         logger.info(
@@ -1920,7 +2135,7 @@ class OrchestratorAgent(BaseAgent):
         t0 = _time.perf_counter()
         try:
             result = await self.skill_runner.plan_and_run(
-                query=task.description,
+                query=skill_query,
                 user_id=user_id,
                 run_id=run_id,
                 trace_id=trace_id,
@@ -2030,6 +2245,31 @@ class OrchestratorAgent(BaseAgent):
         # Fallback: use the latest structured_control emitted by expert.
         return candidates[-1]
 
+    @staticmethod
+    def _append_structured_control_to_summary(
+        summary: str,
+        task_knowledges: Optional[List[Any]] = None,
+    ) -> str:
+        """Keep P3 structured_control on the summarized answer for mid-delegate."""
+        text = str(summary or "").rstrip()
+        if "structured_control:" in text.lower():
+            return text
+        chunks: List[str] = []
+        if task_knowledges and all(isinstance(item, list) for item in task_knowledges):
+            for item in task_knowledges:
+                chunks.extend(str(part or "") for part in item)
+        else:
+            chunks = [str(item or "") for item in (task_knowledges or [])]
+        controls: List[str] = []
+        for chunk in chunks:
+            for line in str(chunk or "").splitlines():
+                stripped = line.strip()
+                if stripped.lower().startswith("structured_control:"):
+                    controls.append(stripped)
+        if not controls:
+            return text
+        return f"{text}\n{controls[-1]}" if text else controls[-1]
+
     # get all plans (agent names) for user question to execute
     async def get_plan(
         self,
@@ -2048,6 +2288,19 @@ class OrchestratorAgent(BaseAgent):
 
         if len(self.agent_cards) == 0:
             return None
+
+        # First attempt: reuse SG member capability evidence when present.
+        # Do not let a second LLM plan contradict can_handle=true.
+        if recovery_retry_index == 0:
+            hint = extract_sg_execution_hint(self.metadata)
+            hinted = build_plan_from_sg_execution_hint(
+                query,
+                hint or {},
+                self.agent_cards,
+                local_skill_agent_name=LOCAL_SKILL_AGENT_NAME,
+            )
+            if hinted is not None:
+                return hinted
 
         # Fast path: exactly one agent card and first attempt — skip LLM planner.
         # When LocalSkill is injected alongside the local expert, len >= 2 so this path is skipped.
@@ -2529,13 +2782,27 @@ class OrchestratorAgent(BaseAgent):
         last_step_last_status = ""
 
         step_status_llm_check_success = "reason:The current answer addresses the question very well."
-
-        if step_status_llm_check_success in str(step_result or ""):
+        raw = str(step_result or "")
+        if step_status_llm_check_success in raw:
             last_step_last_status = "complete"
+        elif self._is_partial_structured_control(
+            self._extract_structured_control_from_answer(raw)
+        ):
+            last_step_last_status = "partial"
         else:
             last_step_last_status = "fail"
         
         return last_step_last_status
+
+    @staticmethod
+    def _is_partial_structured_control(structured_control: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(structured_control, dict) or not structured_control:
+            return False
+        outcome = str(structured_control.get("outcome") or "").strip().lower()
+        reason = str(structured_control.get("reason_code") or "").strip().lower()
+        if outcome == "partial" or reason == "data_sovereignty_gap":
+            return True
+        return bool(structured_control.get("unfulfilled_needs") and structured_control.get("join_keys"))
 
     def _format_task_knowledge(
         self,
@@ -2553,6 +2820,12 @@ class OrchestratorAgent(BaseAgent):
                 "【此任务执行失败，以下内容为多步尝试过程摘要，其中的具体数据不可作为事实引用】\n"
                 + (result or "").strip()
             )
+        elif status == "partial":
+            result = (
+                "【此任务部分完成：本域已查到的关联键与字段可以作为事实引用；"
+                "缺的外域数据需上游委派补齐】\n"
+                + (result or "").strip()
+            )
         return (
             f"【任务 {task_id}】\n{description}\n\n"
             f"【执行 Agent】\n{agent_label}{status_line}\n【结果】\n{(result or '').strip()}"
@@ -2567,7 +2840,12 @@ class OrchestratorAgent(BaseAgent):
                 reported_reason_code = str(structured_control.get("reason_code") or "").strip()
                 reported_non_retryable = bool(structured_control.get("non_retryable", False))
                 success_marker = "reason:The current answer addresses the question very well."
-                status_final = "complete" if success_marker in raw_answer else status
+                if success_marker in raw_answer:
+                    status_final = "complete"
+                elif self._is_partial_structured_control(structured_control):
+                    status_final = "partial"
+                else:
+                    status_final = status
                 task_status.status = status_final
                 task_status.answer = raw_answer
                 task_status.answer_final = answer_final
@@ -3006,6 +3284,10 @@ class OrchestratorAgent(BaseAgent):
                 if (task.agent or "").strip().upper() == "NONE":
                     # Optional fallback: try LocalSkill once before giving up.
                     if self._has_local_skill() and LOCAL_SKILL_FALLBACK_ON_NONE:
+                        none_fallback_query = (
+                            str(getattr(current_tasks, "original_query", None) or "").strip()
+                            or str(query or "").strip()
+                        )
                         handled = await self._try_local_skill_fallback_for_none(
                             task,
                             updater=updater,
@@ -3014,6 +3296,7 @@ class OrchestratorAgent(BaseAgent):
                             current_agents_knowledge=current_agents_knowledge,
                             retry_count=retry_count,
                             task_desc_preview=task_desc_preview,
+                            fallback_query=none_fallback_query,
                         )
                         if handled:
                             continue
@@ -3138,7 +3421,7 @@ class OrchestratorAgent(BaseAgent):
                             task_name,
                             event="sd_orchestrator_task_finished",
                             message=f"completed task {task.id}",
-                            status="done" if current_task_status == "complete" else "fail",
+                            status="done" if current_task_status in ("complete", "partial") else "fail",
                             task_id=task.id,
                             extra=self._build_task_progress_extra(task.id, task.agent, current_task_status),
                         )
@@ -3194,7 +3477,7 @@ class OrchestratorAgent(BaseAgent):
                             task_name,
                             event="sd_orchestrator_task_finished",
                             message=f"completed task {task.id}",
-                            status="done" if current_task_status == "complete" else "fail",
+                            status="done" if current_task_status in ("complete", "partial") else "fail",
                             task_id=task.id,
                             extra=self._build_task_progress_extra(task.id, task.agent, current_task_status),
                         )
@@ -3749,6 +4032,513 @@ class OrchestratorAgent(BaseAgent):
         self.schedule_add_memory(query, final_answer)
 
 
+MEMBER_CAPABILITY_CHECK_MESSAGE_TYPE = "member_capability_check"
+
+
+def _capability_context_max_chars() -> int:
+    try:
+        return max(
+            2000,
+            int(os.getenv("SD_MEMBER_CAPABILITY_CONTEXT_CHARS", "50000") or 50000),
+        )
+    except ValueError:
+        return 50000
+
+
+def _descriptor_kind(descriptor_type: str) -> str:
+    dt = str(descriptor_type or "").strip().lower()
+    # Check unstructured first: the token "structured" is a substring of "unstructured".
+    if dt.startswith("unstructured") or "unstructured" in dt or dt in (
+        "document",
+        "doc",
+        "rag",
+        "pdf",
+        "markdown",
+    ):
+        return "unstructured"
+    if any(token in dt for token in ("code", "git", "repo", "source")):
+        return "code"
+    if dt.startswith("structured") or "structured-" in dt or dt in (
+        "mysql",
+        "postgres",
+        "postgresql",
+        "starrocks",
+        "clickhouse",
+    ):
+        return "structured"
+    return "other"
+
+
+def _capability_judge_system_template(descriptor_type: str) -> str:
+    kind = _descriptor_kind(descriptor_type)
+    common = (
+        "You are a capability judge for a semantic-domain agent.\n"
+        "Think step by step internally, then call judge_member_capability.\n\n"
+        "Shared rules (generic only; never invent business-specific few-shot examples):\n"
+        "Decision order (follow in sequence):\n"
+        "D1) Identify the anchoring subject(s) of the query — the entity/topic the "
+        "question is primarily about. Prefer the entity being looked up, counted, "
+        "listed, or iterated over (the report/key entity). If the query is framed as "
+        "walking instances of X and then reading related attributes of Y, X is the "
+        "anchor — Y's attributes are related fields, not a second anchor. Do not "
+        "treat the grammatical head of a requested attribute alone as the anchor when "
+        "the query is clearly keyed by another entity.\n"
+        "D2) Decide domain_match from topical overlap: inventory evidence preferred; "
+        "AgentCard / semantic_domain name may support domain_match for topical "
+        "affinity, but never alone proves can_handle.\n"
+        "D3) Decide can_handle from whether inventory covers EVERY anchoring "
+        "subject from D1 (all peer anchors if multiple). Independently decide "
+        "can_contribute from whether inventory can supply a concrete needed slice. "
+        "Both may be true when this agent owns the anchor but still has related "
+        "gaps (local slice contributes; missing Y stays in missing_requirements).\n\n"
+        "Rules:\n"
+        "1) Extract needed entities and the PRIMARY / anchoring subject (D1).\n"
+        "2) domain_match = topical overlap with the query. Prefer inventory evidence; "
+        "AgentCard / semantic_domain naming may support domain_match only. "
+        "They never grant can_handle without owning the anchor inventory.\n"
+        "3) can_handle = inventory covers the anchoring subject. Related attributes "
+        "or metrics owned elsewhere go into missing_requirements and must NOT by "
+        "themselves force can_handle=false. Do NOT require end-to-end completeness. "
+        "Owning the anchor but missing related Y is still can_handle=true "
+        "(plus missing_requirements) — never downgrade that case to "
+        "can_contribute-only. If the query first asks for X's own fields that this "
+        "inventory owns, keep can_handle=true even when a later clause asks for a "
+        "related Y metric or related Y association list. Related attributes and "
+        "association lists of an owned entity are not a second peer anchor and are "
+        "not a reason to deny can_handle.\n"
+        "4) can_contribute = inventory can supply a concrete needed slice "
+        "(anchor fields and/or related fields the query asks for). Vague "
+        "'might help' or owning an unrelated join key that does not answer any "
+        "asked attribute is NOT enough. When can_handle=true with related gaps, "
+        "can_contribute may still be true for the local slice. When this agent "
+        "is not the anchor owner, can_contribute=true only for the related slice "
+        "it actually owns — including when the join path to the anchor is missing "
+        "(put the missing join/anchor in missing_requirements; still keep "
+        "domain_match=true if a concrete asked field is in inventory).\n"
+        "5) If domain_match=false → can_handle=false AND can_contribute=false. "
+        "Do not set can_contribute=true just by listing missing_requirements.\n"
+        "6) Peer anchors = two or more independent anchoring subjects, each asked "
+        "as a first-class topic (often explicitly labeled as separate/peer topics, "
+        "or parallel independent asks). If any peer anchor is missing from "
+        "inventory, can_handle MUST be false — even when this agent fully owns one "
+        "peer. Then can_contribute=true for the owned peer and missing_requirements "
+        "for the rest. One anchor + related attribute/metric (including wording "
+        "like 'and the corresponding Y attribute') is NOT peer anchors.\n"
+        "7) HISTORY_WEAK_EVIDENCE may hint OTHER agents' ownership; it never proves "
+        "THIS agent owns inventory.\n"
+        "8) Live record lookups (concrete identifiers whose answer is a stored value) "
+        "belong to structured data agents, not docs/code samples.\n"
+        "9) can_handle=true is reserved for the anchor owner. Related-attribute "
+        "owners must use can_handle=false and (if applicable) can_contribute=true. "
+        "Owning a related asked attribute (or being able to answer part of the "
+        "query) does NOT upgrade can_handle to true when the D1 anchor itself is "
+        "absent from inventory. A join key / foreign key / identifier column that "
+        "references entity X is NOT ownership of X's attributes — if the query "
+        "asks for X's own fields and this inventory only has facts keyed by X, "
+        "treat X as missing anchor (can_handle=false, can_contribute only for the "
+        "local facts). If inventory clearly covers the D1 anchor but lacks related "
+        "Y attributes, keep can_handle=true and put Y in missing_requirements — "
+        "do not flip to can_handle=false merely because the asked attribute is "
+        "remote. Prefer can_handle=false only when it is unclear whether inventory "
+        "covers the anchor entity itself.\n"
+        "10) When unsure about domain_match for a weak overlap, prefer "
+        "domain_match=true only if a concrete needed field/slice is clearly in "
+        "inventory; otherwise domain_match=false.\n\n"
+    )
+    if kind == "structured":
+        specific = (
+            "Evidence gate for THIS descriptor (structured DB):\n"
+            "- Gate can_handle by schema/table coverage of the anchoring subject, "
+            "not AgentCard marketing text, and not full end-to-end locality.\n"
+            "- Owns anchor, lacks related attrs → can_handle=true + missing_requirements. "
+            "Do not switch to can_handle=false / can_contribute=true in this case.\n"
+            "- Lacks anchor, owns a needed related slice → can_handle=false + "
+            "can_contribute=true + missing_requirements naming the missing anchor. "
+            "Never set can_handle=true in this case. A foreign-key / join-key column "
+            "to the anchor does not count as owning the anchor.\n"
+            "- Owns neither anchor nor any needed related slice → domain_match=false.\n"
+            "- can_contribute requires the inventory to actually contain the related "
+            "field/slice being asked; a neighboring table that cannot answer that "
+            "attribute is insufficient.\n"
+        )
+    elif kind == "code":
+        specific = (
+            "Evidence gate for THIS descriptor (code/repo):\n"
+            "- Gate is repository/file coverage (file_summary, symbols, services), "
+            "not database tables.\n"
+            "- can_handle if the question's primary implementation topic is covered "
+            "by this repo evidence.\n"
+            "- Independent peer implementation topics each asked as first-class "
+            "require evidence for each; missing any peer topic → can_handle=false, "
+            "can_contribute=true only for the covered slice.\n"
+            "- A live record lookup is NOT can_handle for code; usually "
+            "can_contribute=false unless the question is about implementation itself.\n"
+        )
+    elif kind == "unstructured":
+        specific = (
+            "Evidence gate for THIS descriptor (documents/RAG):\n"
+            "- Gate is corpus coverage. Prefer the numbered file_summaries inventory "
+            "(per-file file_summary from unstructured_files) as primary evidence of "
+            "what this corpus actually contains; document_summary/topics are secondary.\n"
+            "- Gate is not database tables.\n"
+            "- can_handle if the question is about documented policy, field meaning, "
+            "or process covered by the corpus.\n"
+            "- Sample payloads / API examples in docs are NOT live records; live-record "
+            "lookups are not can_handle for docs and usually can_contribute=false. "
+            "If the corpus documents the same entity/API/field vocabulary, "
+            "domain_match may still be true even when can_handle/can_contribute "
+            "are both false.\n"
+            "- Independent peer topics each asked as first-class: if this corpus covers "
+            "only one, can_handle=false and can_contribute=true for the covered slice.\n"
+        )
+    else:
+        specific = (
+            "Evidence gate for THIS descriptor:\n"
+            "- Use the registered metadata inventory that matches the descriptor type.\n"
+            "- Do not treat AgentCard prose as proof of can_handle.\n"
+        )
+    return (
+        common
+        + specific
+        + "\nOutput guidance:\n"
+        "- matched_evidence: short phrases from the matching inventory.\n"
+        "- missing_requirements: independent uncovered entities (table/topic names), "
+        "not filters/ordering/phrasing.\n"
+        "Call the judge_member_capability tool to output your verdict."
+    )
+
+
+def _truncate_capability_text(value: Any, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 15)] + "...(truncated)"
+
+
+def _metadata_content(signature: Dict[str, Any]) -> Dict[str, Any]:
+    content = signature.get("metadata_content") or {}
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return content if isinstance(content, dict) else {}
+
+
+_CAPABILITY_PROSE_KEYS = (
+    "summary",
+    "file_summary",
+    "knowledge_summary",
+    "document_summary",
+    "description",
+    "topics",
+    "skills",
+    "capabilities",
+    "business_meaning",
+    "content_summary",
+    "semantic_domain",
+)
+
+# Full per-column schema dumps are too large for capability judging.
+_CAPABILITY_EXCLUDED_METADATA_KEYS = (
+    "tables_schema_md_list",
+    "schema_results",
+)
+
+
+def _parse_agent_card_payload(agent_card: Any) -> Dict[str, Any]:
+    """Parse AgentCard JSON/dict; return {} when unusable."""
+    if not agent_card:
+        return {}
+    payload: Any = agent_card
+    if isinstance(agent_card, str):
+        text = agent_card.strip()
+        if not text:
+            return {}
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _agent_card_description(agent_card: Any) -> str:
+    """Extract only the description field from an AgentCard JSON/dict."""
+    payload = _parse_agent_card_payload(agent_card)
+    if payload:
+        return str(payload.get("description") or "").strip()
+    if isinstance(agent_card, str):
+        return agent_card.strip()
+    return str(agent_card or "").strip()
+
+
+def _agent_card_skills(agent_card: Any) -> List[Dict[str, Any]]:
+    """Compact AgentCard skills for capability judging (no I/O mode boilerplate)."""
+    payload = _parse_agent_card_payload(agent_card)
+    skills = payload.get("skills") if payload else None
+    if not isinstance(skills, list):
+        return []
+    compacted: List[Dict[str, Any]] = []
+    for skill in skills:
+        if not isinstance(skill, dict):
+            continue
+        item: Dict[str, Any] = {}
+        for key in ("id", "name", "description", "tags", "examples"):
+            value = skill.get(key)
+            if value not in (None, "", [], {}):
+                item[key] = value
+        if item:
+            compacted.append(item)
+    return compacted
+
+
+def _capability_file_summary_limits() -> tuple[int, int]:
+    """(max_files, per-file summary chars) for doc capability inventory."""
+    try:
+        max_files = int(os.getenv("SD_CAPABILITY_FILE_SUMMARY_MAX_FILES", "500") or 500)
+    except ValueError:
+        max_files = 500
+    try:
+        summary_chars = int(os.getenv("SD_CAPABILITY_FILE_SUMMARY_CHARS", "400") or 400)
+    except ValueError:
+        summary_chars = 400
+    return max(1, min(max_files, 2000)), max(80, min(summary_chars, 2000))
+
+
+def _format_file_summaries_for_capability(
+    rows: Optional[List[Any]],
+    *,
+    max_files: Optional[int] = None,
+    summary_chars: Optional[int] = None,
+) -> str:
+    """Compact numbered inventory from unstructured_files rows (file + file_summary)."""
+    if max_files is None or summary_chars is None:
+        default_files, default_chars = _capability_file_summary_limits()
+        if max_files is None:
+            max_files = default_files
+        if summary_chars is None:
+            summary_chars = default_chars
+    lines: List[str] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        file_name = str(row.get("file_name") or "").strip()
+        minio_path = str(row.get("minio_path") or "").strip()
+        label = file_name or minio_path
+        if not label:
+            continue
+        summary = row.get("file_summary")
+        summary_text = " ".join(str(summary).split()) if summary not in (None, "") else ""
+        if summary_text:
+            summary_text = _truncate_capability_text(summary_text, summary_chars)
+            lines.append(
+                f"{len(lines) + 1}. file: {label}，summary: {summary_text}"
+            )
+        else:
+            lines.append(f"{len(lines) + 1}. file: {label}")
+        if len(lines) >= max_files:
+            break
+    return "\n".join(lines)
+
+
+def _build_member_capability_context(
+    signatures: List[Dict[str, Any]],
+    *,
+    descriptor_type: str,
+    max_chars: Optional[int] = None,
+) -> str:
+    """Build a compact metadata brief for the capability LLM judge.
+
+    Structured DBs use: full ``semantic_domain`` + AgentCard description/skills +
+    ``tables_detail``. Doc agents additionally include the per-file
+    ``file_summaries`` inventory from unstructured_files. Full column dumps
+    (``tables_schema_md_list``) are omitted.
+    """
+    if max_chars is None:
+        max_chars = _capability_context_max_chars()
+    chunks: List[str] = []
+    remaining = max_chars
+    if descriptor_type:
+        header = f"descriptor_type: {descriptor_type}"
+        chunks.append(header)
+        remaining -= len(header) + 1
+
+    for index, signature in enumerate(signatures[:8], start=1):
+        if remaining <= 200:
+            break
+        content = _metadata_content(signature)
+        # Tier 1: identity + domain prose, then compact table inventory.
+        primary: Dict[str, Any] = {
+            "index": index,
+            "dd_namespace": signature.get("dd_namespace"),
+            "dd_name": signature.get("dd_name"),
+            "descriptor_type": signature.get("descriptor_type") or descriptor_type,
+        }
+        semantic_domain = signature.get("semantic_domain")
+        if semantic_domain:
+            primary["semantic_domain"] = semantic_domain
+        card_description = _agent_card_description(signature.get("agent_card"))
+        if card_description:
+            primary["agent_card_description"] = card_description
+        card_skills = _agent_card_skills(signature.get("agent_card"))
+        if card_skills:
+            primary["agent_card_skills"] = card_skills
+        prose: Dict[str, Any] = {}
+        for key in _CAPABILITY_PROSE_KEYS:
+            value = content.get(key)
+            if value:
+                prose[key] = value
+        if prose:
+            primary["knowledge_prose"] = prose
+        tables_detail = content.get("tables_detail")
+        if tables_detail:
+            primary["tables_detail"] = tables_detail
+        file_summaries = signature.get("file_summaries") or content.get(
+            "file_summaries"
+        )
+        if file_summaries:
+            primary["file_summaries"] = file_summaries
+
+        primary_text = json.dumps(primary, ensure_ascii=False, default=str)
+        piece = _truncate_capability_text(primary_text, remaining)
+        chunks.append(piece)
+        remaining -= len(piece) + 1
+        if remaining <= 400:
+            break
+
+        # Tier 2: leftover metadata, excluding bulky per-column schema dumps.
+        residual = {
+            key: value
+            for key, value in content.items()
+            if key not in _CAPABILITY_PROSE_KEYS
+            and key not in _CAPABILITY_EXCLUDED_METADATA_KEYS
+            and key not in ("tables_detail", "file_summaries")
+            and value not in (None, "", [], {})
+        }
+        if not residual:
+            continue
+        schema_budget = min(remaining, max(800, remaining // 2))
+        residual_text = json.dumps(
+            {"index": index, "metadata_content": residual},
+            ensure_ascii=False,
+            default=str,
+        )
+        piece = _truncate_capability_text(residual_text, schema_budget)
+        chunks.append(piece)
+        remaining -= len(piece) + 1
+        if remaining <= 200:
+            break
+    return "\n".join(chunks) if chunks else "(no capability metadata)"
+
+
+def _descriptor_type_for_dd(
+    dd_name: str,
+    descriptor_types: Optional[List[str]],
+    signature: Optional[Dict[str, Any]] = None,
+) -> str:
+    if signature and signature.get("descriptor_type"):
+        return str(signature["descriptor_type"])
+    for descriptor in descriptor_types or []:
+        candidates: List[Any] = [descriptor]
+        if isinstance(descriptor, str):
+            try:
+                parsed = json.loads(descriptor)
+                candidates = parsed if isinstance(parsed, list) else [parsed]
+            except (json.JSONDecodeError, TypeError):
+                parts = descriptor.split(":")
+                if parts and parts[0] == dd_name:
+                    return parts[1] if len(parts) > 1 else parts[0]
+                continue
+        for candidate in candidates:
+            if isinstance(candidate, dict) and str(
+                candidate.get("name") or ""
+            ) == dd_name:
+                return str(
+                    candidate.get("descriptorType")
+                    or candidate.get("descriptor_type")
+                    or "semantic_domain"
+                )
+    return "semantic_domain"
+
+
+def _empty_member_capability_response(
+    *,
+    agent_name: str,
+    agent_url: str,
+    descriptor_type: str,
+    reason: str,
+    missing_requirements: Optional[List[str]] = None,
+    confidence: float = 0.0,
+) -> Dict[str, Any]:
+    return {
+        "can_handle": False,
+        "can_contribute": False,
+        "confidence": round(float(confidence), 2),
+        "reason": reason,
+        "agent_name": agent_name,
+        "agent_url": agent_url,
+        "matched_entities": [],
+        "matched_tables": [],
+        "matched_metrics": [],
+        "matched_evidence": [],
+        "missing_requirements": list(missing_requirements or []),
+        "descriptor_type": descriptor_type,
+        "domain_match": False,
+        "evidence_mode": "llm",
+    }
+
+
+def _normalize_member_capability_judgment(
+    judged: Dict[str, Any],
+    *,
+    agent_name: str,
+    agent_url: str,
+    descriptor_type: str,
+) -> Dict[str, Any]:
+    domain_match = bool(judged.get("domain_match", False))
+    can_handle = bool(judged.get("can_handle", False))
+    can_contribute = bool(judged.get("can_contribute", False)) or can_handle
+    # Schema consistency only: outside the domain cannot handle or contribute.
+    # Do not rewrite can_handle based on missing_requirements (primary-entity semantics).
+    if not domain_match:
+        can_handle = False
+        can_contribute = False
+    try:
+        confidence = float(judged.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    matched_evidence = [
+        str(item).strip()
+        for item in (judged.get("matched_evidence") or [])
+        if str(item).strip()
+    ][:20]
+    missing_requirements = [
+        str(item).strip()
+        for item in (judged.get("missing_requirements") or [])
+        if str(item).strip()
+    ][:20]
+    reason = str(judged.get("reason") or "").strip() or (
+        "LLM judged this semantic domain against the query."
+    )
+    return {
+        "can_handle": can_handle,
+        "can_contribute": can_contribute,
+        "confidence": round(confidence, 2),
+        "reason": reason[:500],
+        "agent_name": agent_name,
+        "agent_url": agent_url,
+        "matched_entities": matched_evidence[:],
+        "matched_tables": [],
+        "matched_metrics": [],
+        "matched_evidence": matched_evidence,
+        "missing_requirements": missing_requirements,
+        "descriptor_type": descriptor_type,
+        "domain_match": domain_match,
+        "evidence_mode": "llm",
+    }
+
+
 class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
     """
     A Orchestrator Agent executor call PlannerAgent to get agents, than call agents.
@@ -3816,6 +4606,130 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
             use_only,
             SkillRunner is not None,
         )
+
+    def _build_capability_judge_llm(self):
+        """Non-streaming LLM used only for member capability judgment."""
+        mgr = ModelManager()
+        _extra_body = (
+            {"enable_thinking": False}
+            if os.getenv("ENABLE_THINKING_PARAM", "true").strip().lower()
+            not in ("false", "0", "no")
+            else {}
+        )
+        return mgr.get_llm(
+            provider=self.provider,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            temperature=min(float(self.temperature or 0.01), 0.1),
+            stream=False,
+            extra_body=_extra_body,
+        )
+
+    async def _judge_member_capability_with_llm(
+        self,
+        *,
+        query: str,
+        signatures: List[Dict[str, Any]],
+        agent_name: str,
+        agent_url: str,
+        descriptor_type: str,
+        request_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Ask the LLM whether this semantic domain relates to the user query."""
+        metadata_context = _build_member_capability_context(
+            signatures,
+            descriptor_type=descriptor_type,
+        )
+        history_text = ""
+        if request_metadata:
+            history_text = history_text_from_payload(
+                parse_propagated_history(request_metadata.get("propagated_history"))
+            )
+            if len(history_text) > 1800:
+                history_text = history_text[:1800] + "...(truncated)"
+        system_template = _capability_judge_system_template(descriptor_type)
+        human_template = (
+            "AGENT_NAME: {agent_name}\n"
+            "DESCRIPTOR_TYPE: {descriptor_type}\n\n"
+            "USER_QUERY:\n{query}\n\n"
+            "CAPABILITY_METADATA:\n{metadata_context}\n\n"
+            "HISTORY_WEAK_EVIDENCE (optional, other-agent ownership hints only):\n"
+            "{history_text}"
+        )
+        try:
+            system_prompt = SystemMessagePromptTemplate.from_template(
+                template=system_template,
+            )
+            human_prompt = HumanMessagePromptTemplate.from_template(human_template)
+            chat_prompt = ChatPromptTemplate.from_messages(
+                [system_prompt, human_prompt]
+            )
+            messages = await chat_prompt.aformat_prompt(
+                agent_name=agent_name,
+                descriptor_type=descriptor_type or "semantic_domain",
+                query=query or "",
+                metadata_context=metadata_context,
+                history_text=history_text or "(none)",
+            )
+            messages = messages.to_messages()
+            judge_tool = StructuredTool(
+                name="judge_member_capability",
+                description=(
+                    "Judge whether a semantic-domain agent can handle or contribute "
+                    "to the user query based on registered metadata."
+                ),
+                args_schema=MemberCapabilityJudgeResult,
+                func=None,
+                coroutine=None,
+            )
+            parsed = await invoke_llm_with_tool(
+                llm=self._build_capability_judge_llm(),
+                tool=judge_tool,
+                messages=messages,
+                metadata=request_metadata or {},
+                tool_choice="judge_member_capability",
+                span_name="member-capability-judge",
+                span_input={
+                    "agent_name": agent_name,
+                    "descriptor_type": descriptor_type,
+                },
+            )
+            if not isinstance(parsed, dict):
+                logger.warning(
+                    "[Capability][SDOrchestrator] malformed LLM capability judgment "
+                    "| agent=%s",
+                    agent_name,
+                )
+                return _empty_member_capability_response(
+                    agent_name=agent_name,
+                    agent_url=agent_url,
+                    descriptor_type=descriptor_type,
+                    reason="Capability LLM judge returned malformed output.",
+                    confidence=0.0,
+                )
+            # Trust the LLM primary-entity judgment; do not override can_handle
+            # with keyword/table heuristics.
+            return _normalize_member_capability_judgment(
+                parsed,
+                agent_name=agent_name,
+                agent_url=agent_url,
+                descriptor_type=descriptor_type,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "[Capability][SDOrchestrator] LLM capability judge failed | "
+                "agent=%s err=%s",
+                agent_name,
+                exc,
+            )
+            return _empty_member_capability_response(
+                agent_name=agent_name,
+                agent_url=agent_url,
+                descriptor_type=descriptor_type,
+                reason="Capability LLM judge failed; support could not be evaluated.",
+                confidence=0.0,
+            )
 
     def _build_skill_runner_llm(self):
         """Build a dedicated LLM for SkillRunner using the executor-level config.
@@ -4017,6 +4931,230 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
         elif already_initialised:
             logger.debug("[LocalSkill][Shutdown] no active SkillRunner to close")
 
+    async def handle_member_capability_check(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        query: str,
+    ) -> None:
+        """Evaluate this SD from DataServices metadata without invoking an Expert."""
+        started = _time.monotonic()
+        task = context.current_task
+        if not task:
+            task = new_task(context.message)
+            await event_queue.enqueue_event(task)
+        updater = TaskUpdater(event_queue, task.id, task.context_id)
+
+        agent_name = (
+            getattr(self.agent_card, "name", "")
+            or self.agent_id
+            or "SemanticDomainAgent"
+        )
+        agent_url = getattr(self.agent_card, "url", "") or ""
+        dd_names = [
+            str(name or "").strip()
+            for name in (self.data_descriptors or [])
+            if str(name or "").strip()
+        ]
+        logger.info(
+            "[Capability][SDOrchestrator] ----- start | agent=%s | ns=%s | "
+            "dd_count=%d | dd=%s | query=%s -----",
+            agent_name,
+            self.dd_namespace or "",
+            len(dd_names),
+            dd_names[:10],
+            (query or "")[:120] + ("..." if len(query or "") > 120 else ""),
+        )
+        signatures: List[Dict[str, Any]] = []
+        fetch_errors: List[str] = []
+        descriptor_type = "semantic_domain"
+        client = DataServicesClient(
+            base_url=self.data_services_url,
+            timeout=30,
+            use_data_descriptor_header=True,
+        )
+        try:
+            seen = set()
+            for dd_name_value in self.data_descriptors or []:
+                dd_name = str(dd_name_value or "").strip()
+                key = (self.dd_namespace or "", dd_name)
+                if not dd_name or key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    added_start = len(signatures)
+                    dd_signatures = await client.search_signatures_by_dd(
+                        self.dd_namespace, dd_name
+                    )
+                    try:
+                        dd_domains = await client.search_semantic_domains_by_dd(
+                            self.dd_namespace, dd_name
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "[Capability][SDOrchestrator] semantic-domain fetch "
+                            "failed | agent=%s | dd=%s/%s | error=%s",
+                            agent_name,
+                            self.dd_namespace,
+                            dd_name,
+                            exc,
+                        )
+                        dd_domains = []
+
+                    domain_context = dd_domains[0] if dd_domains else {}
+                    if dd_signatures:
+                        for signature in dd_signatures:
+                            enriched = dict(signature)
+                            enriched.setdefault(
+                                "semantic_domain",
+                                domain_context.get("semantic_domain", ""),
+                            )
+                            enriched.setdefault(
+                                "agent_card",
+                                domain_context.get("agent_card", ""),
+                            )
+                            enriched.setdefault(
+                                "descriptor_type",
+                                domain_context.get("descriptor_type", ""),
+                            )
+                            signatures.append(enriched)
+                    elif domain_context:
+                        signatures.append(
+                            {
+                                "metadata_content": {},
+                                "semantic_domain": domain_context.get(
+                                    "semantic_domain", ""
+                                ),
+                                "agent_card": domain_context.get("agent_card", ""),
+                                "descriptor_type": domain_context.get(
+                                    "descriptor_type", ""
+                                ),
+                                "dd_namespace": self.dd_namespace,
+                                "dd_name": dd_name,
+                            }
+                        )
+                    if dd_signatures or domain_context:
+                        descriptor_type = _descriptor_type_for_dd(
+                            dd_name, self.descriptor_types, signatures[-1]
+                        )
+                    file_summaries_text = ""
+                    list_fn = getattr(client, "list_unstructured_files_by_dd", None)
+                    if callable(list_fn) and (dd_signatures or domain_context):
+                        try:
+                            file_rows = await list_fn(
+                                self.dd_namespace, dd_name
+                            )
+                            file_summaries_text = (
+                                _format_file_summaries_for_capability(file_rows)
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "[Capability][SDOrchestrator] unstructured-files "
+                                "fetch failed | agent=%s | dd=%s/%s | error=%s",
+                                agent_name,
+                                self.dd_namespace,
+                                dd_name,
+                                exc,
+                            )
+                    if file_summaries_text:
+                        for signature in signatures[added_start:]:
+                            signature["file_summaries"] = file_summaries_text
+                    logger.info(
+                        "[Capability][SDOrchestrator] metadata loaded | agent=%s | "
+                        "dd=%s/%s | signatures=%d | domain_metadata_found=%s | "
+                        "descriptor_type=%s | file_summaries_chars=%d",
+                        agent_name,
+                        self.dd_namespace,
+                        dd_name,
+                        len(dd_signatures or []),
+                        bool(domain_context),
+                        descriptor_type,
+                        len(file_summaries_text),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "[Capability][SDOrchestrator] metadata fetch failed | "
+                        "agent=%s | dd=%s/%s | error=%s",
+                        agent_name,
+                        self.dd_namespace,
+                        dd_name,
+                        exc,
+                    )
+                    fetch_errors.append(f"{self.dd_namespace}/{dd_name}")
+        finally:
+            await client.close()
+
+        if fetch_errors and not signatures:
+            response = _empty_member_capability_response(
+                agent_name=agent_name,
+                agent_url=agent_url,
+                descriptor_type=descriptor_type,
+                reason="Capability metadata fetch failed; support could not be evaluated.",
+                missing_requirements=["capability_metadata_unavailable"],
+                confidence=0.0,
+            )
+        elif not signatures:
+            response = _empty_member_capability_response(
+                agent_name=agent_name,
+                agent_url=agent_url,
+                descriptor_type=descriptor_type,
+                reason="No capability metadata is registered for the data descriptor.",
+                missing_requirements=[query or ""],
+                confidence=0.05,
+            )
+        else:
+            request_metadata = context.metadata if isinstance(context.metadata, dict) else {}
+            response = await self._judge_member_capability_with_llm(
+                query=query or "",
+                signatures=signatures,
+                agent_name=agent_name,
+                agent_url=agent_url,
+                descriptor_type=descriptor_type,
+                request_metadata=request_metadata,
+            )
+            if fetch_errors:
+                response["reason"] = (
+                    f"{response.get('reason', '')} "
+                    "Some local descriptor metadata could not be fetched."
+                ).strip()
+
+        latency_ms = int((_time.monotonic() - started) * 1000)
+        logger.info(
+            "[Capability][SDOrchestrator] ----- done | agent=%s | "
+            "can_handle=%s | can_contribute=%s | confidence=%.2f | "
+            "descriptor_type=%s | domain_match=%s | evidence_mode=%s | "
+            "signatures=%d | fetch_errors=%s | matched_evidence=%s | "
+            "missing=%s | reason=%s | latency_ms=%d -----",
+            agent_name,
+            response["can_handle"],
+            response["can_contribute"],
+            response["confidence"],
+            response.get("descriptor_type", descriptor_type),
+            response.get("domain_match", False),
+            response.get("evidence_mode", "llm"),
+            len(signatures),
+            fetch_errors[:5],
+            (response.get("matched_evidence") or response.get("matched_entities") or [])[:10],
+            response["missing_requirements"][:10],
+            str(response.get("reason", ""))[:240],
+            latency_ms,
+        )
+        await updater.add_artifact(
+            [
+                TextPart(
+                    text=json.dumps(
+                        response,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
+            ],
+            name="member-capability-check-response",
+        )
+        await updater.complete(
+            message=new_agent_text_message("", context_id=task.context_id)
+        )
+
     @override
     async def execute(
         self,
@@ -4029,6 +5167,15 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
         metadata = context.metadata
         logger.info(f"===== OrchestratorAgentExecutor, user request metadata is {metadata}.")
         _md = metadata if isinstance(metadata, dict) else {}
+        if _md.get("message_type") == MEMBER_CAPABILITY_CHECK_MESSAGE_TYPE:
+            logger.info(
+                "[Capability][SDOrchestrator] received metadata-only member "
+                "capability check, query=%s",
+                (query or "")[:100],
+            )
+            await self.handle_member_capability_check(context, event_queue, query)
+            return
+
         _am = _md.get('answer_model', '(not in metadata)')
         logger.info(
             "[Execute][SDOrchestrator] answer_model=%s",
@@ -4193,6 +5340,10 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
                         # 发送 DAC_SUMMARY 帧，携带 LLM 总结后的最终答案，供 SG Expert 解析作为最终知识
                         final_summary = "".join(conversition).strip()
                         if final_summary:
+                            final_summary = OrchestratorAgent._append_structured_control_to_summary(
+                                final_summary,
+                                task_knowledges,
+                            )
                             summary_frame = OrchestratorAgent.build_summary_artifact(summary_text=final_summary)
                             await updater.add_artifact(
                                 [TextPart(text=summary_frame)],

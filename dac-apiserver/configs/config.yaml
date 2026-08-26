@@ -65,3 +65,9 @@ database:
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: 5m
+
+# 首个管理员引导（仅当平台尚无 super_admin 时生效）
+# 留空则使用内置默认 admin / changeme，首次登录后请立即改密
+bootstrap:
+  admin: ""
+  password: ""

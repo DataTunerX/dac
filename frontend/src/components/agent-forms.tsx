@@ -207,6 +207,16 @@ export function CreateAgentDialog({
   )
   const namespaces = useMemo(() => nsData?.items?.map((n) => n.name) ?? [], [nsData])
 
+  // Auto-select the first available namespace when the current form value
+  // (e.g. "default") is not in the tenant's bound namespace list.
+  useEffect(() => {
+    if (!open || namespaces.length === 0 || isLoadingNs) return
+    const currentNs = form.getValues("namespace")
+    if (!currentNs || !namespaces.includes(currentNs)) {
+      form.setValue("namespace", namespaces[0], { shouldValidate: true })
+    }
+  }, [open, namespaces, isLoadingNs]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [sourceOpen, setSourceOpen] = useState(false)
 
@@ -234,7 +244,7 @@ export function CreateAgentDialog({
       dataSourceType: "descriptor",
       dataSourceId: "",
       description: "",
-      expertAgentMaxSteps: "1",
+      expertAgentMaxSteps: "2",
       orchestratorAgentMaxLoops: "0",
     },
   })
@@ -269,7 +279,7 @@ export function CreateAgentDialog({
       dataSourceType: "descriptor",
       dataSourceId: "",
       description: "",
-      expertAgentMaxSteps: "1",
+      expertAgentMaxSteps: "2",
       orchestratorAgentMaxLoops: "0",
     })
   }
@@ -309,7 +319,7 @@ export function CreateAgentDialog({
     if (!open) return
     if (dataSourceType === "descriptor") {
       form.setValue("orchestratorAgentMaxLoops", "0", { shouldDirty: false, shouldTouch: false })
-      form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
+      form.setValue("expertAgentMaxSteps", "2", { shouldDirty: false, shouldTouch: false })
     } else if (dataSourceType === "skill") {
       // skill 单容器默认：与设计示例对齐
       form.setValue("orchestratorAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
@@ -326,10 +336,10 @@ export function CreateAgentDialog({
     setSkills([])
     setFingerprintState({ key: "", status: "idle" })
     form.setValue("dataSourceId", "", { shouldDirty: false })
-    if (!form.getValues("namespace")) {
-      form.setValue("namespace", "default", { shouldValidate: true })
+    if (!form.getValues("namespace") && namespaces.length > 0) {
+      form.setValue("namespace", namespaces[0], { shouldValidate: true })
     }
-  }, [open, dataSourceType]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, dataSourceType, namespaces])
 
   const selectedPlannerModel: string = String(llmConfigs.find((c) => c.name === plannerModel)?.data?.model ?? "")
   const selectedExpertModel: string = String(llmConfigs.find((c) => c.name === expertModel)?.data?.model ?? "")
@@ -610,7 +620,7 @@ export function CreateAgentDialog({
     void Promise.all([
       loadDataDescriptors(),
       loadSemanticGroups(),
-      loadLlmConfigs(namespace || "default"),
+      loadLlmConfigs(namespace || ""),
     ]).catch(() => {
       // Each load* already sets error state; avoid unhandled rejection
     })
@@ -620,25 +630,22 @@ export function CreateAgentDialog({
   useEffect(() => {
     if (!open || !dataSourceId) return
     
-    // If semantic group, default to 'default' or let user choose (currently default)
+    // If semantic group, namespace is already auto-selected; don't override.
     if (dataSourceType === "semantic-group") {
-        if (!namespace) {
-            form.setValue("namespace", "default", { shouldValidate: true })
-        }
         return
     }
 
     const dd = dataDescriptors.find((d) => d.id === dataSourceId)
-    const ns = (dd?.namespace || "default").trim() || "default"
-    if (ns !== (namespace || "").trim()) {
+    const ns = (dd?.namespace || "").trim()
+    if (ns && ns !== (namespace || "").trim()) {
       form.setValue("namespace", ns, { shouldValidate: true })
     }
   }, [open, dataSourceId, dataSourceType, dataDescriptors]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // When namespace changes, reload LLM configs
   useEffect(() => {
-    if (open) {
-      loadLlmConfigs(namespace || "default")
+    if (open && namespace) {
+      loadLlmConfigs(namespace)
     }
   }, [open, namespace]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -881,7 +888,7 @@ export function CreateAgentDialog({
             ...values,
             namespace: ns,
             skills,
-            expertAgentMaxSteps: values.expertAgentMaxSteps || "1",
+            expertAgentMaxSteps: values.expertAgentMaxSteps || "2",
             orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "0",
         })
       } else {
@@ -1360,7 +1367,7 @@ export function CreateAgentDialog({
                           <FormLabel>专家最大步数</FormLabel>
                           <FormControl>
                             <Input
-                              placeholder="默认 1"
+                              placeholder={dataSourceType === "descriptor" ? "默认 2" : "默认 1"}
                               {...field}
                               disabled={isSubmitting}
                             />
@@ -1438,7 +1445,7 @@ export function CreateAgentDialog({
                             </SelectItem>
                           ) : skillCatalog.length === 0 ? (
                             <SelectItem value="__empty__" disabled>
-                              该命名空间暂无技能
+                              该技能命名空间暂无技能
                             </SelectItem>
                           ) : (
                             skillCatalog.map((s) => {

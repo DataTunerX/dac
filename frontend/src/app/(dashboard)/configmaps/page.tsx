@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useRef, useState, useDeferredValue } from
 import useSWR from "swr"
 import { useRouter, useSearchParams } from "next/navigation"
 import { api } from "@/lib/api"
-import { listConfigMaps, getConfigMap, listAllConfigMaps } from "@/lib/configmaps-api"
+import { listConfigMaps, getConfigMap, listAllConfigMaps, listAllConfigMapsAcrossNamespaces } from "@/lib/configmaps-api"
 import { listAgentsAll } from "@/lib/agents-api"
 import { ListPageSearch } from "@/components/list-page-search"
 import { filterListByQuery } from "@/lib/filter-list-by-query"
@@ -12,7 +12,6 @@ import { listAllDescriptors } from "@/lib/descriptors-api"
 import { apiFetcher } from "@/lib/swr"
 import { Button } from "@/components/ui/button"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
-import { getUserRole } from "@/lib/auth" // still needed for loadConfigIntoDialog logic
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -176,7 +175,8 @@ function ConfigMapsContent() {
     setMounted(true)
   }, [])
 
-  const [namespace, setNamespace] = useState("default")
+  const [namespace, setNamespace] = useState("")
+  const [namespaceInitialized, setNamespaceInitialized] = useState(false)
   const [type, setType] = useState<ConfigMapType>("llm")
   const [items, setItems] = useState<ConfigMapItem[]>([])
   const [totalCount, setTotalCount] = useState(0)
@@ -196,20 +196,32 @@ function ConfigMapsContent() {
   const namespaces = useMemo(() => safeNamespaces(nsData?.items ?? (nsData as { data?: { items?: unknown } })?.data?.items ?? []), [nsData])
   const nsLoadError = nsError ? "命名空间加载失败" : null
 
+  // Default to "全部命名空间" once the namespace list is loaded.
+  useEffect(() => {
+    if (!namespaceInitialized && namespaces.length > 0 && !isLoadingNs) {
+      setNamespace("all")
+      setNamespaceInitialized(true)
+    }
+  }, [namespaceInitialized, namespaces, isLoadingNs])
+
   // 删除和依赖检查相关状态
   const [deleteId, setDeleteId] = useState<string | null>(null)
-  const [deleteNamespace, setDeleteNamespace] = useState<string>("default")
+  const [deleteNamespace, setDeleteNamespace] = useState<string>("")
   const [dependentAgents, setDependentAgents] = useState<DependentResource[]>([])
   const [showDependencyDialog, setShowDependencyDialog] = useState(false)
   const [checkingDependency, setCheckingDependency] = useState(false)
 
   const allCmKey = isSearchMode
-    ? (["configmaps-all", namespace, type] as const)
+    ? (["configmaps-all", namespace, type, namespaces] as const)
     : null
   const { data: allCmRaw, isLoading: isLoadingAllCm } = useSWR(
     allCmKey,
-    async ([, ns, t]: readonly ["configmaps-all", string, ConfigMapType]) =>
-      listAllConfigMaps(ns, { type: t })
+    async ([, ns, t, nsList]: readonly ["configmaps-all", string, ConfigMapType, NamespaceItem[]]) => {
+      if (ns === "all") {
+        return listAllConfigMapsAcrossNamespaces(nsList.map((n) => n.name), { type: t })
+      }
+      return listAllConfigMaps(ns, { type: t })
+    }
   )
 
   const allCmItems = useMemo(
@@ -309,18 +321,31 @@ function ConfigMapsContent() {
     const mySeq = ++loadSeqRef.current
     setIsLoading(true)
     try {
-      const ns = (namespace || "default").trim() || "default"
-      const data = await listConfigMaps(ns, {
-        type,
-        offset: (page - 1) * pageSize,
-        limit: pageSize,
-      })
-      const list = data.items ?? []
-      const total = data.totalCount ?? 0
-      // Prevent out-of-order responses from overwriting the latest filter state.
-      if (mySeq === loadSeqRef.current) {
-        setItems(list)
-        setTotalCount(Number.isFinite(total) && total >= 0 ? total : list.length)
+      const ns = namespace || (namespaceInitialized ? namespaces[0]?.name || "default" : "default")
+      const isAll = ns === "all"
+      if (isAll) {
+        // Fetch all namespaces and merge results
+        const nsList = namespaces.map((n) => n.name)
+        const allItems = await listAllConfigMapsAcrossNamespaces(nsList, { type })
+        const total = allItems.length
+        const start = (page - 1) * pageSize
+        const paged = allItems.slice(start, start + pageSize)
+        if (mySeq === loadSeqRef.current) {
+          setItems(paged)
+          setTotalCount(total)
+        }
+      } else {
+        const data = await listConfigMaps(ns, {
+          type,
+          offset: (page - 1) * pageSize,
+          limit: pageSize,
+        })
+        const list = data.items ?? []
+        const total = data.totalCount ?? 0
+        if (mySeq === loadSeqRef.current) {
+          setItems(list)
+          setTotalCount(Number.isFinite(total) && total >= 0 ? total : list.length)
+        }
       }
     } catch (e) {
       console.error("load configmaps failed", e)
@@ -338,6 +363,8 @@ function ConfigMapsContent() {
 
   useEffect(() => {
     if (isSearchMode) return
+    // Wait until namespace has been auto-selected from the loaded list.
+    if (!namespace && !namespaceInitialized) return
     // Clear stale rows immediately when filters change to avoid "UI shows Prompts but rows are LLM" confusion.
     setItems([])
     setTotalCount(0)
@@ -348,7 +375,8 @@ function ConfigMapsContent() {
   const openCreate = () => {
     setDialogMode("create")
     resetForm()
-    setDialogNamespace(namespace)
+    const ns = namespace === "all" ? (namespaces[0]?.name || "default") : namespace
+    setDialogNamespace(ns)
     setDialogType(type)
     setOpen(true)
   }
@@ -407,24 +435,20 @@ function ConfigMapsContent() {
     if (!nsOk || !typeOk || !wantName) return
 
     pendingOpen.current = null
-    void loadConfigIntoDialog(wantName, wantMode)
+    void loadConfigIntoDialog(wantName, wantNs || namespace, wantMode)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [namespace, type])
 
-  const loadConfigIntoDialog = async (cmName: string, mode: DialogMode) => {
+  const loadConfigIntoDialog = async (cmName: string, cmNamespace: string, mode: DialogMode) => {
     try {
-      // Force 'view' mode for non-admin users even if 'edit' was requested
-      const userRole = getUserRole()
-      const safeMode = userRole !== "admin" ? "view" : mode;
-
-      const ns = (namespace || "default").trim() || "default"
+      const ns = (cmNamespace || namespace || "default").trim() || "default"
       const r = await getConfigMap(ns, cmName)
       const data = r.data ?? {}
       const labels = r.labels ?? {}
       const labelType = labels["dac.io/config-type"]
       const cmType = labelType || "llm"
 
-      setDialogMode(safeMode)
+      setDialogMode(mode)
       setEditingName(cmName)
       setName(cmName)
       setDialogNamespace(ns)
@@ -451,12 +475,12 @@ function ConfigMapsContent() {
     }
   }
 
-  const openView = async (cmName: string) => {
-    await loadConfigIntoDialog(cmName, "view")
+  const openView = async (cmName: string, cmNamespace: string) => {
+    await loadConfigIntoDialog(cmName, cmNamespace, "view")
   }
 
-  const openEdit = async (cmName: string) => {
-    await loadConfigIntoDialog(cmName, "edit")
+  const openEdit = async (cmName: string, cmNamespace: string) => {
+    await loadConfigIntoDialog(cmName, cmNamespace, "edit")
   }
 
   const submit = async () => {
@@ -504,13 +528,15 @@ function ConfigMapsContent() {
 
     try {
       if (editingName) {
-        await api.put(`/namespaces/${ns}/configmaps/${encodeURIComponent(editingName)}`, {
+        const p = dialogType === "llm" ? "llm-configmaps" : "prompt-configmaps"
+        await api.put(`/namespaces/${ns}/${p}/${encodeURIComponent(editingName)}`, {
           type: dialogType,
           data,
         })
         toast.success("更新成功")
       } else {
-        await api.post(`/namespaces/${ns}/configmaps`, {
+        const p = dialogType === "llm" ? "llm-configmaps" : "prompt-configmaps"
+        await api.post(`/namespaces/${ns}/${p}`, {
           name: cmName,
           type: dialogType,
           data,
@@ -599,7 +625,8 @@ function ConfigMapsContent() {
   const handleDelete = async () => {
     if (deleteId) {
       try {
-        await api.delete(`/namespaces/${deleteNamespace}/configmaps/${encodeURIComponent(deleteId)}`)
+        const p = type === "llm" ? "llm-configmaps" : "prompt-configmaps"
+        await api.delete(`/namespaces/${deleteNamespace}/${p}/${encodeURIComponent(deleteId)}`)
         toast.success("配置已删除")
         setDeleteId(null)
         await load()
@@ -612,6 +639,8 @@ function ConfigMapsContent() {
   }
 
   const isViewMode = dialogMode === "view"
+
+  const permissionPrefix = type === "llm" ? "llmconfig" : "promptconfig"
 
   if (!mounted) {
     return (
@@ -644,6 +673,7 @@ function ConfigMapsContent() {
                     <SelectValue placeholder="选择命名空间" />
                   </SelectTrigger>
                   <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
+                    <SelectItem value="all">全部命名空间</SelectItem>
                     {nsLoadError ? (
                       <SelectItem value="__error__" disabled>
                         {nsLoadError}
@@ -678,8 +708,7 @@ function ConfigMapsContent() {
           <RbacButton 
             className="flex items-center gap-2" 
             onClick={openCreate}
-            requiredRole="admin"
-            fallbackTitle="无权限：仅管理员可创建"
+            requiredPermission={`${permissionPrefix}:create`}
           >
             <Plus className="w-4 h-4" />
             新建配置
@@ -717,7 +746,7 @@ function ConfigMapsContent() {
                 <TableRow
                   key={`${cm.namespace}/${cm.name}`}
                   className="cursor-pointer hover:bg-surface-muted"
-                  onClick={() => void openView(cm.name)}
+                  onClick={() => void openView(cm.name, cm.namespace)}
                 >
                   <TableCell columnId="name" className="font-medium flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-cta/10 flex items-center justify-center text-cta">
@@ -767,15 +796,15 @@ function ConfigMapsContent() {
                   </TableCell>
                   <TableCell columnId="actions" className="text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => void openEdit(cm.name)} title="编辑" aria-label="编辑">
-                        <RbacWrapper requiredRole="admin">
+                      <Button variant="ghost" size="icon" onClick={() => void openEdit(cm.name, cm.namespace)} title="编辑" aria-label="编辑">
+                        <RbacWrapper requiredPermission={`${permissionPrefix}:update`}>
                           <Pencil className="w-4 h-4 text-content" />
                         </RbacWrapper>
-                        <RbacWrapper requiredRole="admin" inverse>
+                        <RbacWrapper requiredPermission={`${permissionPrefix}:update`} inverse>
                           <Eye className="w-4 h-4 text-content" />
                         </RbacWrapper>
                       </Button>
-                      <RbacWrapper requiredRole="admin">
+                      <RbacWrapper requiredPermission={`${permissionPrefix}:delete`}>
                         <Button 
                           variant="ghost" 
                           size="icon" 

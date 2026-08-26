@@ -44,6 +44,11 @@ func NewAgentContainerHandler(uc usecase.AgentContainerUsecase, logger *slog.Log
 func (h *AgentContainerHandler) Create(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	var req dto.CreateAgentContainerRequest
 	if err := c.BindAndValidate(&req); err != nil {
 		h.logger.Error("invalid request", "error", err)
@@ -116,6 +121,11 @@ func (h *AgentContainerHandler) Get(ctx context.Context, c *app.RequestContext) 
 	namespace := c.Param("namespace")
 	name := c.Param("name")
 
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	container, err := h.usecase.Get(ctx, namespace, name)
 	if err != nil {
 		h.logger.Error("failed to get agent container",
@@ -163,6 +173,10 @@ func (h *AgentContainerHandler) ListAll(ctx context.Context, c *app.RequestConte
 		return
 	}
 
+	// Tenant namespace isolation: filter to only the namespaces bound to the
+	// active tenant. Platform admins and super admins see all.
+	containers = filterByTenantNamespaces(containers, func(c *entity.AgentContainer) string { return c.Namespace }, c, h.logger)
+
 	sort.Slice(containers, func(i, j int) bool {
 		if containers[i].Namespace != containers[j].Namespace {
 			return containers[i].Namespace < containers[j].Namespace
@@ -198,6 +212,12 @@ func (h *AgentContainerHandler) ListAll(ctx context.Context, c *app.RequestConte
 //	@Router			/namespaces/{namespace}/agents [get]
 func (h *AgentContainerHandler) List(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	lo := parseLimitOffset(c, 50, 200)
 
 	opts := domain.ListOptions{
@@ -257,6 +277,11 @@ func (h *AgentContainerHandler) List(ctx context.Context, c *app.RequestContext)
 func (h *AgentContainerHandler) Update(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	var req dto.UpdateAgentContainerRequest
 	if err := c.BindAndValidate(&req); err != nil {
@@ -351,6 +376,11 @@ func (h *AgentContainerHandler) Update(ctx context.Context, c *app.RequestContex
 func (h *AgentContainerHandler) Delete(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	if err := h.usecase.Delete(ctx, namespace, name); err != nil {
 		h.logger.Error("failed to delete agent container",

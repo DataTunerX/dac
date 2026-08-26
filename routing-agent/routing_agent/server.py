@@ -347,6 +347,7 @@ CAPABILITY_CHECK_MESSAGE_TYPE = "capability_check"
 ROUTING_AGENT_POOL_KEY = "routing_agent_pool"
 ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY = "routing_skip_broadcast_eligible"
 ROUTING_SELECTED_ROOT_KEY = "routing_selected_root"
+SG_EXECUTION_HINT_KEY = "sg_execution_hint"
 
 
 class CapabilityCheckResponse(BaseModel):
@@ -394,6 +395,10 @@ class CapabilityCheckResponse(BaseModel):
         default="single",
         description="Execution strategy for the selected SG. Single-layer SG only returns 'single'."
     )
+    execution_hint: dict = Field(
+        default_factory=dict,
+        description="Opaque SG-issued execution evidence; Routing only transports it."
+    )
     latency_ms: int = Field(
         default=0,
         description="Capability check end-to-end latency in milliseconds, measured by the responding agent."
@@ -428,6 +433,12 @@ def _is_non_actionable_contribution_text(text: str) -> bool:
         r"additional information",
         r"related information",
         r"auxiliary information",
+        r"无法访问",
+        r"无法查询",
+        r"无任何业务数据库",
+        r"仅具备 weather",
+        r"cannot access",
+        r"no business database",
     )
     return any(re.search(pattern, normalized) for pattern in generic_patterns)
 
@@ -1427,6 +1438,20 @@ class RoutingAgent(BaseAgent):
             )
             response.can_contribute = False
             response.contribution = ""
+            return response
+        blob = f"{response.contribution or ''} {response.reason or ''}"
+        if _is_non_actionable_contribution_text(blob):
+            response.can_contribute = False
+            response.contribution = ""
+            return response
+        name = str(getattr(response, "agent_name", "") or "").lower()
+        if "weather" in name and not re.search(r"天气|weather|forecast|气温", blob, flags=re.I):
+            logger.info(
+                "Broadcast routing: normalize skill-mismatch contributor '%s'",
+                response.agent_name,
+            )
+            response.can_contribute = False
+            response.contribution = ""
         return response
 
     def _prior_task_payloads_for_multi_root(
@@ -1968,6 +1993,7 @@ class RoutingAgent(BaseAgent):
                     can_contribute=response_data.get("can_contribute", False),
                     contribution=response_data.get("contribution", ""),
                     execution_strategy=response_data.get("execution_strategy", "single"),
+                    execution_hint=response_data.get("execution_hint") or {},
                     latency_ms=agent_latency_ms,
                 )
         except json.JSONDecodeError as e:
@@ -2322,10 +2348,14 @@ class RoutingAgent(BaseAgent):
         ]
 
         def _execution_meta(_resp) -> dict:
-            return {
+            meta = {
                 "execution_strategy": "single",
                 PROPAGATED_HISTORY_KEY: history_payload,
             }
+            hint = getattr(_resp, "execution_hint", None) if _resp else None
+            if isinstance(hint, dict) and hint:
+                meta[SG_EXECUTION_HINT_KEY] = hint
+            return meta
 
         def _root_plan_entry(card: AgentCard, resp: CapabilityCheckResponse) -> dict:
             rps = getattr(resp, "route_paths", None) or []
@@ -2548,6 +2578,8 @@ class RoutingAgent(BaseAgent):
             ROUTING_AGENT_POOL_KEY: _build_routing_agent_pool_from_capable(capable_agents),
             ROUTING_SELECTED_ROOT_KEY: selected_card.name,
         }
+        if isinstance(selected_resp.execution_hint, dict) and selected_resp.execution_hint:
+            exec_meta[SG_EXECUTION_HINT_KEY] = selected_resp.execution_hint
 
         path_str = (
             " -> ".join(selected_resp.route_path)
@@ -3829,14 +3861,28 @@ class RoutingAgentExecutor(AgentExecutor):
                 routing_pool = (execution_meta or {}).get(ROUTING_AGENT_POOL_KEY)
                 if routing_pool:
                     send_message_payload['metadata'][ROUTING_AGENT_POOL_KEY] = routing_pool
-                    send_message_payload['metadata'][ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY] = True
+                    execution_hint = (execution_meta or {}).get(SG_EXECUTION_HINT_KEY)
+                    skip_eligible = True
+                    if isinstance(execution_hint, dict) and execution_hint.get("missing_requirements"):
+                        skip_eligible = False
+                    send_message_payload['metadata'][ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY] = skip_eligible
                     selected_root = (execution_meta or {}).get(ROUTING_SELECTED_ROOT_KEY)
                     if selected_root:
                         send_message_payload['metadata'][ROUTING_SELECTED_ROOT_KEY] = selected_root
                     logger.info(
-                        "Routing forward: routing_agent_pool size=%d skip_broadcast_eligible=true root=%s",
+                        "Routing forward: routing_agent_pool size=%d skip_broadcast_eligible=%s root=%s",
                         len(routing_pool),
+                        skip_eligible,
                         selected_root or step.agent,
+                    )
+                execution_hint = (execution_meta or {}).get(SG_EXECUTION_HINT_KEY)
+                if isinstance(execution_hint, dict) and execution_hint:
+                    send_message_payload["metadata"][SG_EXECUTION_HINT_KEY] = execution_hint
+                    logger.info(
+                        "Routing forward: opaque SG execution hint | target=%s "
+                        "selected_members=%s",
+                        execution_hint.get("agent_name") or step.agent,
+                        (execution_hint.get("selected_members") or [])[:10],
                     )
 
                 # build a2a client from agent_card.url

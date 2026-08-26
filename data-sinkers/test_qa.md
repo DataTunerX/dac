@@ -48,7 +48,7 @@
 - 涉及表：`user_management.users`、`product_management.products`、`order_management.orders`、`order_management.order_items`
 - 业务场景：找出所有购买Apple产品的用户及其订单信息
 
-**7. 查询库存变化记录中涉及销售的商品及对应订单的支付状态**
+**7. 查看商品销售出库明细，同时关联展示对应订单的支付状态**
 - 覆盖模块：商品 + 订单
 - 涉及表：`product_management.products`、`product_management.inventory_logs`、`order_management.order_items`、`order_management.orders`、`order_management.payment_records`
 - 业务场景：关联库存销售变动与订单支付状态
@@ -58,18 +58,4 @@
 - 涉及表：`user_management.user_addresses`、`order_management.orders`、`order_management.order_items`、`product_management.products`
 - 业务场景：分析不同城市用户的品牌偏好
 
----
-
-#### 🔴 高级别
-
-**9. 查询超期未发货订单的购买用户及其支付方式信息，超期范围是最近3天以内创建的**
-- 覆盖模块：用户 + 订单
-- 涉及表：`user_management.users`、`user_management.user_payment_methods`、`order_management.orders`、`order_management.order_shipping`
-- 业务场景：找出预计送达日期已过但仍未发货的订单，并获取用户默认支付方式
-
-
-**10. 统计各省份用户在不同商品品类的消费金额排名**
-- 覆盖模块：用户 + 商品 + 订单（三模块联合）
-- 涉及表：`user_management.user_addresses`、`order_management.orders`、`order_management.order_items`、`product_management.products`、`product_management.categories`
-- 业务场景：按省份统计各品类的销售情况，支持地域化营销分析
 

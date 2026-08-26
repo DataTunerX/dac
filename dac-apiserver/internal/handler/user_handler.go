@@ -16,6 +16,7 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
 	"github.com/lvyanru/dac-apiserver/internal/handler/dto"
+	rbacengine "github.com/lvyanru/dac-apiserver/pkg/rbac"
 )
 
 // UserHandler handles user-related HTTP requests
@@ -23,6 +24,15 @@ type UserHandler struct {
 	usecase        domain.UserUsecase
 	authMiddleware *jwt.HertzJWTMiddleware
 	logger         *slog.Logger
+
+	// rbacEngine, when set, enriches GET /users/me with the caller's resolved
+	// RBAC snapshot (platform roles + permission codes). It is nil in unit tests
+	// that only exercise JWT plumbing.
+	rbacEngine *rbacengine.Engine
+
+	// bootstrapAdminID, when set, resolves the built-in administrator account
+	// so destructive endpoints (DELETE /users/:id) can refuse to remove it.
+	bootstrapAdminID func(ctx context.Context) (string, error)
 }
 
 // NewUserHandler creates a new user handler
@@ -68,7 +78,6 @@ func NewUserHandler(usecase domain.UserUsecase, jwtCfg config.JWTConfig, logger 
 				return jwt.MapClaims{
 					"user_id":  user.ID,
 					"username": user.Username,
-					"role":     user.Role,
 				}
 			}
 			return jwt.MapClaims{}
@@ -80,9 +89,6 @@ func NewUserHandler(usecase domain.UserUsecase, jwtCfg config.JWTConfig, logger 
 			if userID, ok := claims["user_id"].(string); ok {
 				// Store user_id in RequestContext for all handlers to use
 				c.Set("user_id", userID)
-				if role, ok := claims["role"].(string); ok {
-					c.Set("role", role)
-				}
 				return userID
 			}
 			return ""
@@ -165,6 +171,35 @@ func NewUserHandler(usecase domain.UserUsecase, jwtCfg config.JWTConfig, logger 
 	}
 }
 
+// WithRBACEngine attaches the RBAC engine so GET /users/me can report the
+// caller's platform roles and permission codes. It is an optional wiring step:
+// leaving it unset keeps the handler usable in tests and degrades /users/me to
+// the legacy profile-only response.
+func (h *UserHandler) WithRBACEngine(engine *rbacengine.Engine) *UserHandler {
+	h.rbacEngine = engine
+	return h
+}
+
+// WithBootstrapAdminResolver attaches a resolver for the built-in
+// administrator's user ID so destructive endpoints can refuse to delete that
+// account. Optional: when unset (unit tests) the protection is skipped.
+func (h *UserHandler) WithBootstrapAdminResolver(fn func(ctx context.Context) (string, error)) *UserHandler {
+	h.bootstrapAdminID = fn
+	return h
+}
+
+func (h *UserHandler) resolveBootstrapAdminID(ctx context.Context) string {
+	if h.bootstrapAdminID == nil {
+		return ""
+	}
+	id, err := h.bootstrapAdminID(ctx)
+	if err != nil {
+		h.logger.Warn("failed to resolve bootstrap admin id", "error", err)
+		return ""
+	}
+	return id
+}
+
 // AuthMiddleware returns JWT authentication middleware (for route protection)
 func (h *UserHandler) AuthMiddleware() app.HandlerFunc {
 	return h.authMiddleware.MiddlewareFunc()
@@ -190,7 +225,7 @@ func (h *UserHandler) Register(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	user, err := h.usecase.Register(ctx, req.Username, req.Password)
+	user, err := h.usecase.Register(ctx, req.Username, req.Password, req.Email)
 	if err != nil {
 		h.logger.Error("register failed", "error", err)
 		ErrorResponse(c, err)
@@ -254,7 +289,30 @@ func (h *UserHandler) GetCurrentUser(ctx context.Context, c *app.RequestContext)
 		return
 	}
 
-	SuccessResponse(c, dto.ToUserResponse(user))
+	if h.rbacEngine == nil {
+		SuccessResponse(c, dto.ToUserResponse(user))
+		return
+	}
+
+	snap, err := h.rbacEngine.PermissionsForUser(ctx, userID)
+	if err != nil {
+		h.logger.Error("failed to resolve current user permissions", "error", err, "user_id", userID)
+		ErrorResponse(c, err)
+		return
+	}
+
+	if snap.PermissionCodes == nil {
+		snap.PermissionCodes = []string{}
+	}
+	if snap.PlatformRoles == nil {
+		snap.PlatformRoles = []string{}
+	}
+	SuccessResponse(c, dto.MeResponse{
+		User:            dto.ToUserResponse(user),
+		IsSuper:         snap.IsSuper,
+		PlatformRoles:   snap.PlatformRoles,
+		PermissionCodes: snap.PermissionCodes,
+	})
 }
 
 // GetUser retrieves user information (admin function)
@@ -308,8 +366,17 @@ func (h *UserHandler) ListUsers(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	resp := dto.ToUserListResponse(users, total, page, pageSize)
+	if builtinID := h.resolveBootstrapAdminID(ctx); builtinID != "" {
+		for _, u := range resp.Users {
+			if u.ID == builtinID {
+				u.IsBuiltin = true
+			}
+		}
+	}
+
 	// Convert to response format
-	SuccessResponse(c, dto.ToUserListResponse(users, total, page, pageSize))
+	SuccessResponse(c, resp)
 }
 
 // DeleteUser deletes a user
@@ -344,6 +411,13 @@ func (h *UserHandler) DeleteUser(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// The built-in administrator is immutable: deleting it could lock the
+	// platform out of its only guaranteed operator account.
+	if builtinID := h.resolveBootstrapAdminID(ctx); builtinID != "" && builtinID == userID {
+		ErrorResponse(c, domain.NewConflictError("the built-in administrator cannot be deleted"))
+		return
+	}
+
 	if err := h.usecase.DeleteUser(ctx, userID); err != nil {
 		h.logger.Error("failed to delete user", "error", err, "user_id", userID)
 		ErrorResponse(c, err)
@@ -353,4 +427,29 @@ func (h *UserHandler) DeleteUser(ctx context.Context, c *app.RequestContext) {
 	SuccessResponse(c, map[string]string{
 		"message": fmt.Sprintf("user %s deleted successfully", userID),
 	})
+}
+
+// UpdateUser updates a user's info (email/password).
+// PUT /api/v1/users/:id
+func (h *UserHandler) UpdateUser(ctx context.Context, c *app.RequestContext) {
+	userID := c.Param("id")
+	if userID == "" {
+		ErrorResponse(c, domain.ErrInvalidInput)
+		return
+	}
+
+	var req dto.UpdateUserRequest
+	if err := c.BindJSON(&req); err != nil {
+		ErrorResponse(c, domain.ErrInvalidInput)
+		return
+	}
+
+	user, err := h.usecase.UpdateUser(ctx, userID, req.Email, req.Password)
+	if err != nil {
+		h.logger.Error("failed to update user", "error", err, "user_id", userID)
+		ErrorResponse(c, err)
+		return
+	}
+
+	SuccessResponse(c, dto.ToUserResponse(user))
 }

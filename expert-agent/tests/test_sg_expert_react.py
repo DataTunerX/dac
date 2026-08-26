@@ -500,9 +500,12 @@ class TestSGExpertReact:
     def agent_kwargs(self):
         return {
             "provider": "openai_compatible",
-            "api_key": "sk-xxx",
-            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "model": "deepseek-v4-pro",
+            "api_key": os.getenv("DASHSCOPE_API_KEY", "sk-xxx"),
+            "base_url": os.getenv(
+                "DASHSCOPE_BASE_URL",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            ),
+            "model": os.getenv("DASHSCOPE_MODEL", "deepseek-v4-pro"),
             "semantic_group_id": "test-sg-ecommerce",
             "data_services_url": "http://localhost:9999",
             "query": "查询过去一个月销售额最高的前10个产品，并分析它们的退货率情况",
@@ -763,9 +766,12 @@ class TestSGExpertReact:
 async def main():
     kwargs = {
         "provider": "openai_compatible",
-        "api_key": "sk-xxx",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "deepseek-v4-flash",
+        "api_key": os.getenv("DASHSCOPE_API_KEY", "sk-xxx"),
+        "base_url": os.getenv(
+            "DASHSCOPE_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ),
+        "model": os.getenv("DASHSCOPE_MODEL", "deepseek-v4-flash"),
         "semantic_group_id": "test-sg-ecommerce",
         "data_services_url": "http://localhost:9999",
         "query": "查询过去一个月销售额最高的前10个产品，并分析它们的退货率情况",

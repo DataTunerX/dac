@@ -10,11 +10,12 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.utilities.logging import get_logger
 import click
 from .redis_registry import RedisRegistry, CleanupService
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from typing import List, Optional
 from pydantic import BaseModel
+from urllib.parse import unquote
 from a2a.types import AgentCard
 from .vector_client import SearchResult, VectorClient, Document, serialize_object
 import asyncio
@@ -172,6 +173,30 @@ def create_fastapi_app(registry):
             return {"agent_cards": agents}
         except Exception as e:
             logger.error(f"Error getting agents: {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @app.delete("/agents")
+    async def delete_agent(url: str = Query(..., description="Exact agent card URL to purge")):
+        """Purge one agent from Redis (hash + heartbeat + sentinel).
+
+        Used when a peer discovers DNS/connect failure, or for manual cleanup.
+        Keyspace ``del`` on the sentinel key drives vector-DB removal via watcher.
+        """
+        agent_url = unquote((url or "").strip())
+        if not agent_url:
+            raise HTTPException(status_code=400, detail="url is required")
+        try:
+            existed = bool(registry.redis.hexists(registry.registry_key, agent_url)) or (
+                registry.redis.zscore(registry.heartbeat_key, agent_url) is not None
+            )
+            ok = registry.remove_agent(agent_url, reason="api_delete")
+            if not ok:
+                raise HTTPException(status_code=500, detail="remove_agent failed")
+            return {"status": "ok", "url": agent_url, "existed": bool(existed)}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Error deleting agent %s: %s", agent_url, e)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @app.post("/search", response_model=SearchResult)

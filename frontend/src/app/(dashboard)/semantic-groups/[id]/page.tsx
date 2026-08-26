@@ -428,7 +428,7 @@ export default function SemanticGroupDetailPage() {
             <Button variant="outline" size="icon" onClick={() => void refreshData()} title="刷新" aria-label="刷新">
               <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
             </Button>
-            <RbacWrapper requiredRole="admin">
+            <RbacWrapper requiredPermission="semantic-group:manage">
               <Button
                 variant="outline"
                 onClick={() => void openDeleteGroup()}

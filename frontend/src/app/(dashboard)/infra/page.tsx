@@ -200,8 +200,7 @@ export default function InfraDiscoveryListPage() {
           <RbacButton 
             className="flex items-center gap-2" 
             onClick={() => setIsCreateOpen(true)}
-            requiredRole="admin"
-            fallbackTitle="无权限：仅管理员可创建"
+            requiredPermission="discovery:manage"
           >
             <Plus className="w-4 h-4" />
             新建扫描
@@ -267,7 +266,7 @@ export default function InfraDiscoveryListPage() {
                       <Button variant="ghost" size="icon" onClick={() => openDetail(job.id)} aria-label="查看">
                         <Eye className="w-4 h-4 text-content-muted" />
                       </Button>
-                      <RbacWrapper requiredRole="admin">
+                      <RbacWrapper requiredPermission="discovery:manage">
                         <Button variant="ghost" size="icon" onClick={() => setDeleteId(job.id)} aria-label="删除">
                           <Trash2 className="w-4 h-4 text-red-500" />
                         </Button>

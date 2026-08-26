@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	dacv1alpha1 "github.com/DataTunerX/dac/execution-engine/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func TestBuildSkillsEnvJSON(t *testing.T) {
@@ -153,6 +154,85 @@ func TestGenerateOrchestratorAgentEnvs_NormalWithoutSkillPolicy(t *testing.T) {
 	for _, e := range envs {
 		if e.Name == "SKILLS" || e.Name == "SKILL_HUB_URL" {
 			t.Fatalf("did not expect %s when skillPolicy empty, value=%q", e.Name, e.Value)
+		}
+	}
+}
+
+func TestGenerateNormalAgentEnvs_MemberCapabilityConfig(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Namespace = "ns1"
+	dac.Spec.DACType = "normal"
+	dac.Spec.AgentCard.Name = "SGAgent"
+	dac.Spec.DataPolicy.DataSourceType = "SemanticGroup"
+	dac.Spec.DataPolicy.SemanticGroupID = "sg-123"
+	cfg := &DACConfig{
+		SGMemberCapabilityEnabled:       "true",
+		SGMemberCapabilityShadow:        "false",
+		SGMemberCapabilityConcurrency:   "6",
+		SGMemberCapabilityMemberTimeout: "7",
+		SGMemberCapabilityTotalTimeout:  "19",
+	}
+
+	for name, envs := range map[string][]corev1.EnvVar{
+		"orchestrator": h.generateOrchestratorAgentEnvs(dac, "dac-sg-demo", "", cfg),
+		"expert":       h.generateExpertAgentEnvs(dac, "dac-sg-demo", "", cfg),
+	} {
+		values := map[string]string{}
+		for _, env := range envs {
+			values[env.Name] = env.Value
+		}
+		expected := map[string]string{
+			"SG_MEMBER_CAPABILITY_CHECK_ENABLED":      "true",
+			"SG_MEMBER_CAPABILITY_CHECK_SHADOW":       "false",
+			"SG_MEMBER_CAPABILITY_MAX_CONCURRENCY":    "6",
+			"SG_MEMBER_CAPABILITY_PER_MEMBER_TIMEOUT": "7",
+			"SG_MEMBER_CAPABILITY_TOTAL_TIMEOUT":      "19",
+		}
+		for key, want := range expected {
+			if got := values[key]; got != want {
+				t.Fatalf("%s %s=%q, want %q", name, key, got, want)
+			}
+		}
+		if name == "orchestrator" {
+			if got := values["SG_MEMBER_CAPABILITY_CHECK_TIMEOUT"]; got != "19" {
+				t.Fatalf("orchestrator SG_MEMBER_CAPABILITY_CHECK_TIMEOUT=%q, want %q", got, "19")
+			}
+		}
+	}
+}
+
+func TestGenerateNormalAgentEnvs_MemberCapabilityConfigSkipsEmpty(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Namespace = "ns1"
+	dac.Spec.DACType = "normal"
+	dac.Spec.AgentCard.Name = "SGAgent"
+	dac.Spec.DataPolicy.DataSourceType = "SemanticGroup"
+	dac.Spec.DataPolicy.SemanticGroupID = "sg-123"
+	// Simulates production dac-configuration without the new keys.
+	cfg := &DACConfig{}
+
+	keys := []string{
+		"SG_MEMBER_CAPABILITY_CHECK_ENABLED",
+		"SG_MEMBER_CAPABILITY_CHECK_SHADOW",
+		"SG_MEMBER_CAPABILITY_MAX_CONCURRENCY",
+		"SG_MEMBER_CAPABILITY_PER_MEMBER_TIMEOUT",
+		"SG_MEMBER_CAPABILITY_TOTAL_TIMEOUT",
+		"SG_MEMBER_CAPABILITY_CHECK_TIMEOUT",
+	}
+	for name, envs := range map[string][]corev1.EnvVar{
+		"orchestrator": h.generateOrchestratorAgentEnvs(dac, "dac-sg-demo", "", cfg),
+		"expert":       h.generateExpertAgentEnvs(dac, "dac-sg-demo", "", cfg),
+	} {
+		present := map[string]bool{}
+		for _, env := range envs {
+			present[env.Name] = true
+		}
+		for _, key := range keys {
+			if present[key] {
+				t.Fatalf("%s unexpectedly injected empty %s", name, key)
+			}
 		}
 	}
 }

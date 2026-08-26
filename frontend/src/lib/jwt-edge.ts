@@ -71,11 +71,6 @@ export function isPayloadAcceptable(payload: JWTPayload, nowMs = Date.now()): bo
   return isPayloadUsable(payload, nowMs) || isPayloadRefreshable(payload, nowMs)
 }
 
-export function roleFromPayload(payload: JWTPayload): string {
-  const role = payload.role
-  return typeof role === "string" && role.trim() ? role : "user"
-}
-
 export function usernameFromPayload(payload: JWTPayload): string {
   const username = payload.username
   return typeof username === "string" ? username : ""

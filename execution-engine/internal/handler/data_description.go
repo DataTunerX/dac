@@ -1804,9 +1804,9 @@ func (h *DataDescriptorHandler) ensureAutoDAC(ctx context.Context, dd *dacv1alph
 	agentCard.Name = fmt.Sprintf("%s-dd-%s", agentCard.Name, suffix)
 
 	// Determine orchestratorAgentMaxLoops and expertAgentMaxSteps based on descriptorType.
-	//   structured-xxx (e.g. structured-mysql, structured-postgres) → loops=2, steps=3
-	//   code                                                        → loops=1, steps=1
-	//   unstructured                                                 → loops=1, steps=1
+	//   structured-xxx (e.g. structured-mysql, structured-postgres) → loops=0, steps=2
+	//   code                                                        → loops=1, steps=2
+	//   unstructured                                                 → loops=1, steps=2
 	maxLoops, maxSteps := resolveAgentLimits(dd.Spec.DescriptorType)
 	logger.Info("Resolved agent limits from descriptorType",
 		"descriptorType", dd.Spec.DescriptorType,
@@ -1888,17 +1888,17 @@ func ddDeterministicSuffix(namespace, name string) string {
 // resolveAgentLimits returns (orchestratorAgentMaxLoops, expertAgentMaxSteps)
 // based on the DataDescriptor's descriptorType:
 //
-//	structured-xxx  (e.g. structured-mysql, structured-postgres, …) → "2", "3"
-//	code                                                             → "1", "1"
-//	unstructured                                                     → "1", "1"
-//	(unknown)                                                        → "1", "1"
+//	structured-xxx  (e.g. structured-mysql, structured-postgres, …) → "0", "2"
+//	code                                                             → "1", "2"
+//	unstructured                                                     → "1", "2"
+//	(unknown)                                                        → "1", "2"
 func resolveAgentLimits(descriptorType string) (maxLoops string, maxSteps string) {
 	dt := strings.ToLower(descriptorType)
 	if strings.HasPrefix(dt, "structured") {
-		return "0", "1"
+		return "0", "2"
 	}
 	// code, unstructured, or anything else
-	return "1", "1"
+	return "1", "2"
 }
 
 // sanitizeK8sName converts a name to a valid lowercase Kubernetes RFC-1123 name fragment.

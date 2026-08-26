@@ -147,3 +147,8 @@ body {
 [data-sidebar-nav] a:focus-visible {
   outline: none;
 }
+
+/* Hide Next.js Dev Tools indicator in bottom-left corner */
+#devtools-indicator {
+  display: none !important;
+}

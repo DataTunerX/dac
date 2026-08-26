@@ -238,40 +238,56 @@ class CapabilityCheckToolResult(BaseModel):
     reason: str = Field(default="", description="Detailed reasoning")
 
 
-SKILL_CAPABILITY_CHECK_PROMPT = """# Role：本地技能与通用工具任务判定器
+SKILL_CAPABILITY_CHECK_PROMPT = """# Role：capability judge for a skill / local-tool agent
 
-请按以下步骤**逐步思考**，将推理过程写入 reason 字段，最后**只输出一个 JSON 对象**（不要用 Markdown 代码块包裹）。
+Think step by step internally, then call evaluate_capability.
+Shared rules (generic only; never invent business-specific few-shot examples).
+Keep the same judgment semantics as SD member capability checks; only the evidence inventory differs (loaded skills instead of DB/repo/docs).
 
-## 思考步骤
+Decision order (follow in sequence):
+D1) Identify the anchoring subject(s) of the query — the entity/topic the question is primarily about. Prefer the entity being looked up, counted, listed, or iterated over (the report/key entity). If the query is framed as walking instances of X and then reading related attributes of Y, X is the anchor — Y's attributes are related fields, not a second anchor.
+D2) Decide domain_match from topical overlap with THIS agent's skill inventory (loaded skills below). AgentCard / description prose may support domain_match for topical affinity, but never alone proves can_handle.
+D3) Decide can_handle from whether the skill inventory can actually cover EVERY anchoring subject from D1 (all peer anchors if multiple) by producing the needed result. Independently decide can_contribute from whether loaded skills can supply a concrete needed slice. Both may be true only when this agent owns the skill-side anchor but still has related gaps it can partially produce.
 
-**步骤 1 - 任务类型**：用户问题是否适合通过**代码执行**（数值/统计/聚合/清洗/小型数据处理）、**联网检索**、或下方「技能参考」中已加载技能所覆盖的工具能力来解决？还是明确只需要某一**垂直业务库**的专属 SQL/行业报表（应由该领域 Agent 端到端完成）？
+Rules:
+1) Extract needed entities and the PRIMARY / anchoring subject (D1).
+2) domain_match = topical overlap between the query and loaded skills. AgentCard naming may support domain_match only. It never grants can_handle without skill coverage of the anchor.
+3) can_handle = loaded skills can actually produce results for the anchoring subject. Do NOT require end-to-end completeness across unrelated systems. If skills cover the skill-side anchor but not a related Y that another agent must supply, keep can_handle=true only when this agent's skills truly own that skill-side anchor; otherwise false.
+4) can_contribute = loaded skills can supply a concrete needed slice the query asks for. Vague 'might help', consulting advice, or suggesting another agent/SQL is NOT enough. When this agent does not own the anchor, can_contribute=true only for a slice its skills can actually produce.
+5) If domain_match=false → can_handle=false AND can_contribute=false. Do not set can_contribute=true just by explaining what is missing.
+6) Peer anchors = two or more independent anchoring subjects, each asked as a first-class topic. If any peer is outside this agent's skills, can_handle MUST be false — even when skills fully cover one peer. Then can_contribute=true only for the owned peer slice. One anchor + related attribute/metric is NOT peer anchors.
+7) History may hint OTHER agents' ownership; it never proves THIS agent can produce the answer.
+8) Live record lookups (concrete identifiers / proprietary stored business values not provided in the query) belong to structured data agents, not skill agents. For those queries: can_handle=false; usually can_contribute=false unless a loaded skill can actually produce a concrete non-record slice the query asks for.
+9) can_handle=true is reserved for when loaded skills own the anchor capability. Unrelated skills must not be promoted to can_handle=true. Prefer can_handle=false when it is unclear whether skills cover the anchor.
+10) When unsure about domain_match for a weak overlap, prefer domain_match=true only if a concrete needed skill output is clearly available; otherwise domain_match=false.
 
-**步骤 2 - 技能匹配**：对照技能参考：是否存在合理匹配（如数学计算、脚本式数据处理、tavily 检索等）。skills 仅作参考，不限定边界；明显可用代码或检索解决的通用任务，即使未逐字列举也可判为可处理。
-
-**步骤 3 - 边界**：用户**主要诉求**是产出 ECharts/Mermaid 等可视化图表时，可倾向交由专用图表 Agent（本 Agent 可 can_contribute 说明分工）。纯闲聊、与计算/检索/代码无关的长文本且无需工具 → can_handle=false。
-
-**步骤 4 - 反思**：① 纯数学、小规模数据处理、格式化、算法与脚本类任务 → 通常可由本 Agent 技能处理 → can_handle=true。② 必须访问用户未提供且无法通过通用检索补全的**专有业务数据表** → 倾向 can_handle=false。③ 不确定时，若存在典型 code/search/本地技能路径 → 倾向 can_handle=true。
-
-**步骤 5 - 结论**：给出 can_handle 与 confidence（0.0～1.0）。
-
-**步骤 6 - 可贡献性（仅当 can_handle=false）**：仅当能给出**具体、可验证**的补充说明（如缺少的字段、需确认的表名）时设 can_contribute=true；禁止「补充相关信息」等空泛表述。
+Evidence gate for THIS agent (skill / local tools):
+- Inventory = the loaded skills listed below (plus only clearly applicable general code/search paths that do not require proprietary live records).
+- Gate can_handle by whether those skills can actually execute and produce the anchoring subject's answer — not by AgentCard marketing text.
+- Skills cover the anchor topic → can_handle=true (when not a proprietary live-record lookup).
+- Skills do not cover the anchor, but can produce a concrete needed related slice → can_handle=false + can_contribute=true.
+- Skills cover neither the anchor nor any needed related slice → domain_match=false (hence handle/contribute false).
+- A neighboring/unrelated skill that cannot answer the asked attribute is insufficient for can_contribute=true.
+- Uncertain → prefer can_handle=false (do not grab the task because code/search 'might' work).
 
 ---
-**本智能体信息：**
-- 名称：{agent_name}
-- 描述：{agent_description}
-- 技能参考（已加载技能摘要；仅供参考）：
+Agent info:
+- name: {agent_name}
+- description: {agent_description}
+- skill inventory (loaded skills; evidence for judgment):
 {agent_skills}
 
-**历史对话：**
+History:
 {history}
 
-**用户问题：**
+User query:
 {query}
 
 ---
-## 输出格式
-{{"can_handle": true 或 false, "can_contribute": true 或 false, "contribution": "（仅当 can_contribute=true）", "confidence": 0.0 到 1.0, "reason": "步骤1：... 步骤2：... 步骤3：... 步骤4：... 步骤5：... 步骤6：... 结论：..."}}
+Output guidance:
+- Put D1–D3 and rules reasoning into reason (include your domain_match decision).
+- contribution: only when can_contribute=true; state the concrete skill output.
+Call evaluate_capability to output the verdict.
 """
 
 

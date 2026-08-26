@@ -10,16 +10,28 @@ import (
 
 // Config holds all configuration for the application
 type Config struct {
-	Server       ServerConfig       `mapstructure:"server"`
-	Log          LogConfig          `mapstructure:"log"`
-	Observability ObservabilityConfig `mapstructure:"observability"`
-	JWT          JWTConfig          `mapstructure:"jwt"`
+	Server          ServerConfig          `mapstructure:"server"`
+	Log             LogConfig             `mapstructure:"log"`
+	Observability   ObservabilityConfig   `mapstructure:"observability"`
+	JWT             JWTConfig             `mapstructure:"jwt"`
 	RoutingAgent    RoutingAgentConfig    `mapstructure:"routing_agent"`
 	DataServices    DataServicesConfig    `mapstructure:"data_services"`
 	SemanticGrouper SemanticGrouperConfig `mapstructure:"semantic_grouper"`
 	AgentRegistry   AgentRegistryConfig   `mapstructure:"agent_registry"`
 	SkillHub        SkillHubConfig        `mapstructure:"skill_hub"`
-	Database      DatabaseConfig      `mapstructure:"database"`
+	Database        DatabaseConfig        `mapstructure:"database"`
+	Bootstrap       BootstrapConfig       `mapstructure:"bootstrap"`
+}
+
+// BootstrapConfig carries the first-administrator bootstrap options. They are
+// used only while the platform holds no super_admin: afterwards the seeder
+// never touches the account again, so production can pre-seed a strong
+// password through env (DAC_BOOTSTRAP_ADMIN / DAC_BOOTSTRAP_PASSWORD).
+type BootstrapConfig struct {
+	// Admin is the username created as the initial super admin.
+	Admin string `mapstructure:"admin"`
+	// Password is the initial password of the bootstrap admin.
+	Password string `mapstructure:"password"`
 }
 
 // ServerConfig holds server configuration

@@ -21,6 +21,54 @@ func (f DiscoveryJobFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DiscoveryJobMutation", m)
 }
 
+// The PermissionFunc type is an adapter to allow the use of ordinary
+// function as Permission mutator.
+type PermissionFunc func(context.Context, *ent.PermissionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PermissionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.PermissionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.PermissionMutation", m)
+}
+
+// The PlatformRoleFunc type is an adapter to allow the use of ordinary
+// function as PlatformRole mutator.
+type PlatformRoleFunc func(context.Context, *ent.PlatformRoleMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PlatformRoleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.PlatformRoleMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.PlatformRoleMutation", m)
+}
+
+// The PlatformRolePermissionFunc type is an adapter to allow the use of ordinary
+// function as PlatformRolePermission mutator.
+type PlatformRolePermissionFunc func(context.Context, *ent.PlatformRolePermissionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PlatformRolePermissionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.PlatformRolePermissionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.PlatformRolePermissionMutation", m)
+}
+
+// The PlatformUserRoleFunc type is an adapter to allow the use of ordinary
+// function as PlatformUserRole mutator.
+type PlatformUserRoleFunc func(context.Context, *ent.PlatformUserRoleMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PlatformUserRoleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.PlatformUserRoleMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.PlatformUserRoleMutation", m)
+}
+
 // The RunFunc type is an adapter to allow the use of ordinary
 // function as Run mutator.
 type RunFunc func(context.Context, *ent.RunMutation) (ent.Value, error)
@@ -31,6 +79,66 @@ func (f RunFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) 
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.RunMutation", m)
+}
+
+// The TenantFunc type is an adapter to allow the use of ordinary
+// function as Tenant mutator.
+type TenantFunc func(context.Context, *ent.TenantMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TenantFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TenantMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TenantMutation", m)
+}
+
+// The TenantNamespaceFunc type is an adapter to allow the use of ordinary
+// function as TenantNamespace mutator.
+type TenantNamespaceFunc func(context.Context, *ent.TenantNamespaceMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TenantNamespaceFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TenantNamespaceMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TenantNamespaceMutation", m)
+}
+
+// The TenantRoleFunc type is an adapter to allow the use of ordinary
+// function as TenantRole mutator.
+type TenantRoleFunc func(context.Context, *ent.TenantRoleMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TenantRoleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TenantRoleMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TenantRoleMutation", m)
+}
+
+// The TenantRolePermissionFunc type is an adapter to allow the use of ordinary
+// function as TenantRolePermission mutator.
+type TenantRolePermissionFunc func(context.Context, *ent.TenantRolePermissionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TenantRolePermissionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TenantRolePermissionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TenantRolePermissionMutation", m)
+}
+
+// The TenantUserFunc type is an adapter to allow the use of ordinary
+// function as TenantUser mutator.
+type TenantUserFunc func(context.Context, *ent.TenantUserMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TenantUserFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TenantUserMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TenantUserMutation", m)
 }
 
 // The UserFunc type is an adapter to allow the use of ordinary

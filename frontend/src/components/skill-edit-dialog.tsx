@@ -313,7 +313,7 @@ export function SkillEditDialog({
             <Button variant="outline" onClick={onClose} disabled={saving}>
               关闭
             </Button>
-            <RbacWrapper requiredRole="admin">
+            <RbacWrapper requiredPermission="skill:manage">
               <Button
                 disabled={!skillDetail || saving || !!detailError}
                 onClick={onSave}

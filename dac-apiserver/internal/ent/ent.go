@@ -13,7 +13,16 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/lvyanru/dac-apiserver/internal/ent/discoveryjob"
+	"github.com/lvyanru/dac-apiserver/internal/ent/permission"
+	"github.com/lvyanru/dac-apiserver/internal/ent/platformrole"
+	"github.com/lvyanru/dac-apiserver/internal/ent/platformrolepermission"
+	"github.com/lvyanru/dac-apiserver/internal/ent/platformuserrole"
 	"github.com/lvyanru/dac-apiserver/internal/ent/run"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenant"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenantnamespace"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenantrole"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenantrolepermission"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenantuser"
 	"github.com/lvyanru/dac-apiserver/internal/ent/user"
 )
 
@@ -75,9 +84,18 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			discoveryjob.Table: discoveryjob.ValidColumn,
-			run.Table:          run.ValidColumn,
-			user.Table:         user.ValidColumn,
+			discoveryjob.Table:           discoveryjob.ValidColumn,
+			permission.Table:             permission.ValidColumn,
+			platformrole.Table:           platformrole.ValidColumn,
+			platformrolepermission.Table: platformrolepermission.ValidColumn,
+			platformuserrole.Table:       platformuserrole.ValidColumn,
+			run.Table:                    run.ValidColumn,
+			tenant.Table:                 tenant.ValidColumn,
+			tenantnamespace.Table:        tenantnamespace.ValidColumn,
+			tenantrole.Table:             tenantrole.ValidColumn,
+			tenantrolepermission.Table:   tenantrolepermission.ValidColumn,
+			tenantuser.Table:             tenantuser.ValidColumn,
+			user.Table:                   user.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

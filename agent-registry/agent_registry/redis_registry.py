@@ -1,11 +1,14 @@
 import json
+import os
 import redis
+import socket
 import threading
 import time
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List, Any, Tuple
+from urllib.parse import urlparse
 from a2a.types import AgentCard
 
 logging.basicConfig(
@@ -110,41 +113,91 @@ class RedisRegistry:
             return []
 
 
+    @staticmethod
+    def _heartbeat_timeout_sec() -> float:
+        raw = (
+            os.getenv("HEARTBEAT_TIMEOUT_SEC", "").strip()
+            or os.getenv("REGISTRY_HEARTBEAT_TIMEOUT_SEC", "").strip()
+            or "30"
+        )
+        try:
+            return max(5.0, float(raw))
+        except ValueError:
+            return 30.0
+
+    def remove_agent(self, agent_url: str, *, reason: str = "") -> bool:
+        """Delete one agent card + heartbeat + sentinel (authoritative purge)."""
+        if not agent_url:
+            return False
+        try:
+            pipe = self.redis.pipeline()
+            pipe.hdel(self.registry_key, agent_url)
+            pipe.zrem(self.heartbeat_key, agent_url)
+            pipe.delete(f"{self.registry_key}:{agent_url}")
+            results = pipe.execute()
+            self.agents = [a for a in self.agents if a.url != agent_url]
+            logger.info(
+                "Removed agent from registry | url=%s reason=%s results=%s",
+                agent_url,
+                reason or "explicit",
+                results,
+            )
+            return True
+        except redis.RedisError as e:
+            logger.error("remove_agent failed | url=%s err=%s", agent_url, e)
+            return False
+
     # It is uniformly called by the agent registry, not cleaned up by each individual agent.
     def cleanup_expired(self) -> int:
+        """Remove agents whose heartbeat is missing or older than HEARTBEAT_TIMEOUT_SEC.
+
+        Hash-only orphans (card present, no ZSET score) used to crash the sweep via
+        ``fromtimestamp(None)`` and were never expired — leaving ghost cards forever.
+        """
         expired = 0
-        # with self.lock:
         logger.info("== Starting cleanup_expired ==")
 
-        # 1. Retrieve all Agent URLs and their TTL status.
         agent_urls = set(self.redis.hkeys(self.registry_key))
         heartbeat_urls = set(self.redis.zrange(self.heartbeat_key, 0, -1))
-            
-        # All URLs that need to be checked (combining URLs from both the registry and heartbeat tables).
         all_urls = agent_urls.union(heartbeat_urls)
-        logger.info(f"Total agents to check: {len(all_urls)}")
+        logger.info("Total agents to check: %d", len(all_urls))
 
-        # 2. Check for agents with expired TTL or heartbeat timeout.
         current_time = datetime.now().timestamp()
-        heartbeat_timeout = 30
-        expired_agents = set()
+        heartbeat_timeout = self._heartbeat_timeout_sec()
+        expired_agents: set[str] = set()
 
-        # Check the TTL in the registry and the last heartbeat time in the heartbeat table.
         for url in all_urls:
-            # Check if the heartbeat has timed out.
             last_heartbeat = self.redis.zscore(self.heartbeat_key, url)
-            heartbeat_expired = (last_heartbeat is not None) and (current_time - last_heartbeat > heartbeat_timeout)
+            if last_heartbeat is None:
+                # Card without heartbeat (or heartbeat without card) is inconsistent → purge.
+                logger.warning(
+                    "Expired agents heartbeat check | url=%s last_heartbeat=missing "
+                    "heartbeat_expired=True reason=missing_score",
+                    url,
+                )
+                expired_agents.add(url)
+                continue
 
-            readable_time = datetime.fromtimestamp(last_heartbeat).strftime('%Y-%m-%d %H:%M:%S')
-            logger.info(f"Expired agents heartbeat check， url:{url} , last_heartbeat : {readable_time},  {last_heartbeat}, heartbeat_expired={heartbeat_expired}")
-            # If the heartbeat times out, mark it for cleanup.
+            age = current_time - float(last_heartbeat)
+            heartbeat_expired = age > heartbeat_timeout
+            readable_time = datetime.fromtimestamp(float(last_heartbeat)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            logger.info(
+                "Expired agents heartbeat check | url=%s last_heartbeat=%s age=%.1fs "
+                "timeout=%.1fs heartbeat_expired=%s",
+                url,
+                readable_time,
+                age,
+                heartbeat_timeout,
+                heartbeat_expired,
+            )
             if heartbeat_expired:
                 expired_agents.add(url)
 
-        logger.info(f"Expired agents count to clean: {len(expired_agents)}")
-        logger.info(f"Expired agents url to clean: {expired_agents}")
+        logger.info("Expired agents count to clean: %d", len(expired_agents))
+        logger.info("Expired agents url to clean: %s", expired_agents)
 
-        # 3. Batch cleanup of three parts of data.
         if expired_agents:
             pipe = self.redis.pipeline()
             for url in expired_agents:
@@ -153,12 +206,30 @@ class RedisRegistry:
                 pipe.delete(f"{self.registry_key}:{url}")
                 expired += 1
             pipe.execute()
-            logger.info(f"Cleaned {expired} expired agents")
-
-            # 4. Update the in-memory agents list (ensuring consistency).
+            logger.info("Cleaned %d expired agents", expired)
             self.agents = [a for a in self.agents if a.url not in expired_agents]
 
         return expired
+
+    @staticmethod
+    def probe_agent_reachable(
+        agent_url: str,
+        *,
+        timeout_sec: float = 3.0,
+    ) -> Tuple[bool, str]:
+        """TCP reachability check for a registered agent URL (DNS + connect)."""
+        parsed = urlparse(agent_url or "")
+        host = parsed.hostname
+        if not host:
+            return False, "invalid_url"
+        port = parsed.port or (443 if (parsed.scheme or "").lower() == "https" else 80)
+        try:
+            with socket.create_connection((host, int(port)), timeout=timeout_sec):
+                return True, "ok"
+        except socket.gaierror as e:
+            return False, f"dns:{e}"
+        except OSError as e:
+            return False, f"connect:{e}"
 
     def _parse_agent_url_from_channel(self, channel: str) -> Optional[str]:
         if not channel:
@@ -275,24 +346,106 @@ class RedisRegistry:
 
 # It is uniformly called by the agent registry, not cleaned up by each individual agent.
 # The CleanupService (runs every 60 seconds by default) will ultimately clean up expired agents.
-# Agents actually expire after interval * 3 = 30 seconds without a heartbeat, but it can take up to 60 seconds maximum before they are cleaned up.
+# Agents actually expire after HEARTBEAT_TIMEOUT_SEC (default 30) without a heartbeat,
+# but it can take up to cleanup interval before they are cleaned up.
+# Optional TCP reachability: DNS/connect failures purge after N consecutive fails.
 class CleanupService(threading.Thread):
-    def __init__(self, registry: RedisRegistry, interval=60):
+    def __init__(self, registry: RedisRegistry, interval=None):
         super().__init__(daemon=True)
         self.registry = registry
+        if interval is None:
+            raw = os.getenv("REGISTRY_CLEANUP_INTERVAL_SEC", "60").strip() or "60"
+            try:
+                interval = max(5, int(raw))
+            except ValueError:
+                interval = 60
         self.interval = interval
         self._running = False
+        self._reach_fail_counts: Dict[str, int] = {}
+
+    @staticmethod
+    def _reachability_enabled() -> bool:
+        return os.getenv("REGISTRY_REACHABILITY_CHECK", "true").strip().lower() not in (
+            "false",
+            "0",
+            "no",
+        )
+
+    @staticmethod
+    def _reachability_fail_threshold() -> int:
+        raw = os.getenv("REGISTRY_REACHABILITY_FAILS", "2").strip() or "2"
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return 2
+
+    @staticmethod
+    def _reachability_timeout_sec() -> float:
+        raw = os.getenv("REGISTRY_REACHABILITY_TIMEOUT_SEC", "3").strip() or "3"
+        try:
+            return max(0.5, float(raw))
+        except ValueError:
+            return 3.0
+
+    def _purge_unreachable(self) -> int:
+        if not self._reachability_enabled():
+            return 0
+        threshold = self._reachability_fail_threshold()
+        timeout = self._reachability_timeout_sec()
+        purged = 0
+        # Snapshot from Redis hash so we do not rely only on in-memory list.
+        urls = list(self.registry.redis.hkeys(self.registry.registry_key))
+        live = set(urls)
+        for url in urls:
+            ok, reason = self.registry.probe_agent_reachable(url, timeout_sec=timeout)
+            if ok:
+                self._reach_fail_counts.pop(url, None)
+                continue
+            # DNS failures are definitive ghost cards — purge on first failure.
+            immediate = reason.startswith("dns:") or reason == "invalid_url"
+            count = self._reach_fail_counts.get(url, 0) + 1
+            self._reach_fail_counts[url] = count
+            logger.warning(
+                "Registry reachability fail | url=%s reason=%s fails=%d/%d immediate=%s",
+                url,
+                reason,
+                count,
+                threshold,
+                immediate,
+            )
+            if immediate or count >= threshold:
+                if self.registry.remove_agent(url, reason=f"unreachable:{reason}"):
+                    purged += 1
+                self._reach_fail_counts.pop(url, None)
+        # Drop counters for agents already gone.
+        for stale in list(self._reach_fail_counts):
+            if stale not in live:
+                self._reach_fail_counts.pop(stale, None)
+        return purged
 
     def run(self):
         self._running = True
+        logger.info(
+            "CleanupService started | interval=%ss heartbeat_timeout=%ss "
+            "reachability=%s fail_threshold=%d",
+            self.interval,
+            self.registry._heartbeat_timeout_sec(),
+            self._reachability_enabled(),
+            self._reachability_fail_threshold(),
+        )
         while self._running:
             try:
                 cleaned = self.registry.cleanup_expired()
-                if cleaned > 0:
-                    print(f"Cleaned {cleaned} expired agents")
+                unreachable = self._purge_unreachable()
+                if cleaned > 0 or unreachable > 0:
+                    logger.info(
+                        "Cleanup pass done | heartbeat_expired=%d unreachable=%d",
+                        cleaned,
+                        unreachable,
+                    )
                 time.sleep(self.interval)
             except Exception as e:
-                print(f"Cleanup thread error: {e}")
+                logger.error("Cleanup thread error: %s", e, exc_info=True)
                 time.sleep(30)
 
     def stop(self):

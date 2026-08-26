@@ -158,6 +158,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 PROGRESS_SCHEMA_VERSION = "v1"
+SG_EXECUTION_HINT_KEY = "sg_execution_hint"
 PROGRESS_BASE_FIELDS = (
     "schema_version",
     "layer",
@@ -452,6 +453,8 @@ class ExpertAgent(BaseAgent):
         self.current_tasks_status = current_tasks_status
         # Agent identity should come from DAC instance wiring, not request metadata.
         self.agent_id = (agent_id or semantic_group_id or "").strip()
+        # Soft preference from prior capability check (never hard-filters the pool).
+        self.capability_preference: Dict[str, Any] = {}
 
         self.react_runner = ReActRunner(
             llm=self.llm,
@@ -1063,6 +1066,583 @@ class ExpertAgent(BaseAgent):
             return ""
         text = parts[0].get('text')
         return text if text else ""
+
+    @staticmethod
+    def _member_capability_unavailable(
+        member: Union[SemanticDomainInfo, SemanticGroupInfo],
+        agent_card: AgentCard,
+        reason: str,
+        *,
+        timed_out: bool = False,
+    ) -> Dict[str, Any]:
+        return {
+            "can_handle": False,
+            "can_contribute": False,
+            "confidence": 0.0,
+            "reason": reason,
+            "agent_name": getattr(agent_card, "name", "") or "",
+            "agent_url": getattr(agent_card, "url", "") or "",
+            "matched_entities": [],
+            "matched_tables": [],
+            "matched_metrics": [],
+            "missing_requirements": [],
+            "descriptor_type": (getattr(member, "descriptor_type", "") or "").strip(),
+            "available": False,
+            "timed_out": timed_out,
+            "status": "timeout" if timed_out else "unavailable",
+        }
+
+    @staticmethod
+    def _coerce_capability_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in ("true", "yes", "1"):
+                return True
+            if normalized in ("false", "no", "0"):
+                return False
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)
+        return None
+
+    @staticmethod
+    def _compact_string_list(value: Any, limit: int = 20) -> List[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, (list, tuple, set)) else [value]
+        result: List[str] = []
+        seen: set[str] = set()
+        for item in values:
+            text = str(item or "").strip()
+            key = text.casefold()
+            if text and key not in seen:
+                seen.add(key)
+                result.append(text[:200])
+            if len(result) >= limit:
+                break
+        return result
+
+    @staticmethod
+    def _parse_member_capability_json(text: str) -> Optional[Dict[str, Any]]:
+        raw = str(text or "").strip()
+        candidates = [raw]
+        fenced = _extract_embedded_json_fence(raw)
+        if fenced:
+            candidates.append(fenced)
+        bare = _extract_json_object_from_text(raw)
+        if bare:
+            candidates.append(bare)
+        if raw.startswith("```json"):
+            candidates.append(raw[7:-3].strip() if raw.endswith("```") else raw[7:].strip())
+        elif raw.startswith("```"):
+            candidates.append(raw[3:-3].strip() if raw.endswith("```") else raw[3:].strip())
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if _json_repair is not None and raw:
+            try:
+                repaired = _json_repair(raw, return_objects=True)
+                if isinstance(repaired, dict):
+                    return repaired
+            except Exception:  # noqa: BLE001
+                pass
+        return None
+
+    def _normalize_member_capability(
+        self,
+        member: Union[SemanticDomainInfo, SemanticGroupInfo],
+        agent_card: AgentCard,
+        payload: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        can_handle = self._coerce_capability_bool(payload.get("can_handle"))
+        if can_handle is None:
+            return None
+        can_contribute = self._coerce_capability_bool(payload.get("can_contribute"))
+        if can_contribute is None:
+            can_contribute = False
+        try:
+            confidence = max(0.0, min(1.0, float(payload.get("confidence", 0.0) or 0.0)))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if can_handle:
+            status = "handler"
+        elif can_contribute:
+            status = "contributor"
+        else:
+            status = "unsupported"
+        return {
+            "can_handle": can_handle,
+            "can_contribute": can_contribute,
+            "confidence": confidence,
+            "reason": str(payload.get("reason", "") or "").strip()[:500],
+            "agent_name": str(
+                payload.get("agent_name") or getattr(agent_card, "name", "") or ""
+            ).strip(),
+            "agent_url": str(
+                payload.get("agent_url") or getattr(agent_card, "url", "") or ""
+            ).strip(),
+            "matched_entities": self._compact_string_list(payload.get("matched_entities")),
+            "matched_tables": self._compact_string_list(payload.get("matched_tables")),
+            "matched_metrics": self._compact_string_list(payload.get("matched_metrics")),
+            "missing_requirements": self._compact_string_list(payload.get("missing_requirements")),
+            "descriptor_type": str(
+                payload.get("descriptor_type")
+                or getattr(member, "descriptor_type", "")
+                or ""
+            ).strip(),
+            "domain_match": bool(payload.get("domain_match", False)),
+            "available": True,
+            "timed_out": False,
+            "status": status,
+        }
+
+    async def _request_member_capability(
+        self,
+        httpx_client: httpx.AsyncClient,
+        member: Union[SemanticDomainInfo, SemanticGroupInfo],
+        agent_card: AgentCard,
+    ) -> Dict[str, Any]:
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
+        history = metadata.get("propagated_history")
+        if history is None:
+            history = metadata.get("history", {})
+        member_name = getattr(agent_card, "name", "") or "(unknown)"
+        message_type = (
+            "capability_check"
+            if isinstance(member, SemanticGroupInfo)
+            else "member_capability_check"
+        )
+        logger.info(
+            "[Capability][SGExpert] probe start | member=%s | type=%s | "
+            "descriptor=%s | message_type=%s",
+            member_name,
+            "nested_sg" if isinstance(member, SemanticGroupInfo) else "sd",
+            (getattr(member, "descriptor_type", "") or "").strip() or "-",
+            message_type,
+        )
+        payload = {
+            "message": {
+                "role": "user",
+                "parts": [{"type": "text", "text": self.query or ""}],
+                "messageId": uuid4().hex,
+            },
+            "metadata": {
+                # Leaf SD agents expose the metadata-only fast path. Nested SG
+                # members remain orchestrators and therefore use their public
+                # capability protocol, which may delegate to their own leaves.
+                "message_type": message_type,
+                "user_id": metadata.get("user_id", ""),
+                "run_id": metadata.get("run_id", ""),
+                "trace_id": metadata.get("trace_id", ""),
+                "propagated_history": history or {},
+            },
+        }
+        client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
+        request = SendStreamingMessageRequest(
+            id=uuid4().hex,
+            params=MessageSendParams(**payload),
+        )
+        parts: List[str] = []
+        async for chunk in client.send_message_streaming(request):
+            text = self._get_response_text_from_chunk(chunk)
+            if text and not self.is_progress_frame(text):
+                parts.append(text)
+        parsed = self._parse_member_capability_json("".join(parts))
+        if parsed is None:
+            logger.warning(
+                "[Capability][SGExpert] probe invalid response | member=%s | "
+                "chars=%d",
+                member_name,
+                sum(len(part) for part in parts),
+            )
+            return self._member_capability_unavailable(
+                member, agent_card, "Invalid or empty capability response"
+            )
+        normalized = self._normalize_member_capability(member, agent_card, parsed)
+        if normalized is None:
+            logger.warning(
+                "[Capability][SGExpert] probe missing can_handle | member=%s",
+                member_name,
+            )
+            return self._member_capability_unavailable(
+                member, agent_card, "Capability response omitted a valid can_handle value"
+            )
+        logger.info(
+            "[Capability][SGExpert] probe done | member=%s | status=%s | "
+            "can_handle=%s | can_contribute=%s | confidence=%.2f | "
+            "domain_match=%s | tables=%s | metrics=%s | missing=%s | reason=%s",
+            normalized.get("agent_name") or member_name,
+            normalized.get("status"),
+            normalized.get("can_handle"),
+            normalized.get("can_contribute"),
+            float(normalized.get("confidence") or 0.0),
+            normalized.get("domain_match"),
+            (normalized.get("matched_tables") or [])[:8],
+            (normalized.get("matched_metrics") or [])[:8],
+            (normalized.get("missing_requirements") or [])[:8],
+            str(normalized.get("reason", ""))[:200],
+        )
+        return normalized
+
+    @staticmethod
+    def _capability_env_float(names: Tuple[str, ...], default: float) -> float:
+        for name in names:
+            raw = os.getenv(name)
+            if raw is None:
+                continue
+            try:
+                return max(0.01, float(raw))
+            except ValueError:
+                logger.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return default
+
+    @staticmethod
+    def _capability_env_int(names: Tuple[str, ...], default: int) -> int:
+        for name in names:
+            raw = os.getenv(name)
+            if raw is None:
+                continue
+            try:
+                return max(1, int(raw))
+            except ValueError:
+                logger.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return default
+
+    async def _fan_out_member_capabilities(self) -> List[Dict[str, Any]]:
+        members = list(self.group_agent_cards)
+        group_label = self.current_agent_label()
+        if not members:
+            logger.info(
+                "[Capability][SGExpert] fan-out skipped | group=%s | members=0",
+                group_label,
+            )
+            return []
+        max_concurrency = self._capability_env_int(
+            ("SG_MEMBER_CAPABILITY_MAX_CONCURRENCY", "MEMBER_CAPABILITY_MAX_CONCURRENCY"),
+            8,
+        )
+        per_member_timeout = self._capability_env_float(
+            (
+                "SG_MEMBER_CAPABILITY_PER_MEMBER_TIMEOUT",
+                "SG_MEMBER_CAPABILITY_TIMEOUT",
+                "MEMBER_CAPABILITY_TIMEOUT",
+            ),
+            60.0,
+        )
+        total_timeout = self._capability_env_float(
+            ("SG_MEMBER_CAPABILITY_TOTAL_TIMEOUT", "MEMBER_CAPABILITY_TOTAL_TIMEOUT"),
+            180.0,
+        )
+        member_names = [
+            getattr(card, "name", "") or "(unknown)" for _, card in members
+        ]
+        logger.info(
+            "[Capability][SGExpert] fan-out start | group=%s | members=%d | "
+            "names=%s | concurrency=%d | per_member_timeout=%.1fs | "
+            "total_timeout=%.1fs",
+            group_label,
+            len(members),
+            member_names[:20],
+            max_concurrency,
+            per_member_timeout,
+            total_timeout,
+        )
+        semaphore = asyncio.Semaphore(max_concurrency)
+        started = asyncio.get_running_loop().time()
+
+        async with httpx.AsyncClient(timeout=per_member_timeout) as httpx_client:
+            async def _one(
+                index: int,
+                member: Union[SemanticDomainInfo, SemanticGroupInfo],
+                card: AgentCard,
+            ) -> Tuple[int, Dict[str, Any]]:
+                try:
+                    async with semaphore:
+                        result = await asyncio.wait_for(
+                            self._request_member_capability(httpx_client, member, card),
+                            timeout=per_member_timeout,
+                        )
+                    return index, result
+                except (asyncio.TimeoutError, httpx.TimeoutException):
+                    logger.warning(
+                        "[Capability][SGExpert] probe timeout | member=%s | "
+                        "timeout=%.1fs",
+                        getattr(card, "name", "") or getattr(card, "url", ""),
+                        per_member_timeout,
+                    )
+                    return index, self._member_capability_unavailable(
+                        member, card, "Member capability check timed out", timed_out=True
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "[Capability][SGExpert] probe failed | member=%s | error=%s",
+                        getattr(card, "name", "") or getattr(card, "url", ""),
+                        exc,
+                    )
+                    return index, self._member_capability_unavailable(
+                        member, card, f"Member capability check unavailable: {exc}"
+                    )
+
+            tasks = [
+                asyncio.create_task(_one(index, member, card))
+                for index, (member, card) in enumerate(members)
+            ]
+            done, pending = await asyncio.wait(tasks, timeout=total_timeout)
+            indexed_results: Dict[int, Dict[str, Any]] = {}
+            for task in done:
+                index, result = await task
+                indexed_results[index] = result
+            pending_indexes = {task: tasks.index(task) for task in pending}
+            for task, index in pending_indexes.items():
+                task.cancel()
+                member, card = members[index]
+                logger.warning(
+                    "[Capability][SGExpert] total timeout cut-off | member=%s | "
+                    "total_timeout=%.1fs",
+                    getattr(card, "name", "") or getattr(card, "url", ""),
+                    total_timeout,
+                )
+                indexed_results[index] = self._member_capability_unavailable(
+                    member, card, "Total member capability timeout exceeded", timed_out=True
+                )
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        results = [indexed_results[index] for index in range(len(members))]
+        available = sum(1 for item in results if item.get("available"))
+        timed_out = sum(1 for item in results if item.get("timed_out"))
+        handlers = sum(1 for item in results if item.get("can_handle"))
+        contributors = sum(
+            1
+            for item in results
+            if item.get("available")
+            and not item.get("can_handle")
+            and item.get("can_contribute")
+        )
+        logger.info(
+            "[Capability][SGExpert] fan-out done | group=%s | members=%d | "
+            "available=%d | handlers=%d | contributors=%d | timed_out=%d | "
+            "unavailable=%d | latency_ms=%d",
+            group_label,
+            len(results),
+            available,
+            handlers,
+            contributors,
+            timed_out,
+            len(results) - available,
+            int((asyncio.get_running_loop().time() - started) * 1000),
+        )
+        return results
+
+    def _aggregate_member_capabilities(
+        self,
+        member_results: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        group_name = self.current_agent_label()
+        available = [result for result in member_results if result.get("available")]
+        unavailable_count = len(member_results) - len(available)
+        handlers = [result for result in available if result.get("can_handle")]
+        contributors = [
+            result
+            for result in available
+            if not result.get("can_handle") and result.get("can_contribute")
+        ]
+
+        evidence_fields = ("matched_entities", "matched_tables", "matched_metrics")
+        evidence_keys: set[str] = set()
+        missing_by_key: Dict[str, str] = {}
+        def _coverage_key(value: Any) -> str:
+            return re.sub(
+                r"\s+", " ",
+                re.sub(r"[_./:$-]+", " ", str(value or "").casefold()),
+            ).strip()
+
+        for result in contributors:
+            for field in evidence_fields:
+                evidence_keys.update(
+                    _coverage_key(item)
+                    for item in result.get(field, [])
+                    if _coverage_key(item)
+                )
+            for item in result.get("missing_requirements", []):
+                text = str(item).strip()
+                if text:
+                    missing_by_key.setdefault(_coverage_key(text), text)
+        unresolved_missing = [
+            text
+            for key, text in missing_by_key.items()
+            if not any(key in evidence or evidence in key for evidence in evidence_keys)
+        ]
+        contributor_evidence = [
+            result for result in contributors
+            if any(result.get(field) for field in evidence_fields)
+        ]
+        collaboration = (
+            len(contributor_evidence) >= 2
+            and not unresolved_missing
+            and len(evidence_keys) >= 2
+        )
+
+        selected: List[Dict[str, Any]] = []
+        if handlers:
+            best = sorted(
+                handlers,
+                key=lambda result: (
+                    -float(result.get("confidence", 0.0)),
+                    str(result.get("agent_name", "")).casefold(),
+                    str(result.get("agent_url", "")),
+                ),
+            )[0]
+            can_handle = True
+            can_contribute = False
+            confidence = float(best.get("confidence", 0.0))
+            reason = best.get("reason") or f"Member {best.get('agent_name', '')} can handle the query"
+            strategy = "single"
+            selected = [best]
+            missing_requirements: List[str] = []
+            # A positive, evidence-backed member result is conclusive even if
+            # unrelated peers are offline.
+            degraded = False
+        elif collaboration:
+            selected = sorted(
+                contributor_evidence,
+                key=lambda result: (
+                    -float(result.get("confidence", 0.0)),
+                    str(result.get("agent_name", "")).casefold(),
+                ),
+            )
+            can_handle = True
+            can_contribute = True
+            confidence = min(float(result.get("confidence", 0.0)) for result in selected)
+            reason = "Multiple members provide complementary structured evidence covering the query"
+            strategy = "collaboration"
+            missing_requirements = []
+            degraded = False
+        else:
+            selected = sorted(
+                contributors,
+                key=lambda result: (
+                    -float(result.get("confidence", 0.0)),
+                    str(result.get("agent_name", "")).casefold(),
+                ),
+            )
+            can_handle = False
+            can_contribute = bool(selected)
+            confidence = (
+                max(float(result.get("confidence", 0.0)) for result in selected)
+                if selected else 0.0
+            )
+            strategy = "single"
+            missing_requirements = unresolved_missing
+            # Negative/partial results are inconclusive while any member is
+            # unavailable; zero members is likewise a degraded condition.
+            degraded = unavailable_count > 0 or not member_results
+            if selected:
+                reason = "Members can contribute partial evidence but do not jointly cover all requirements"
+            elif available and len(available) == len(member_results):
+                reason = "All resolved members explicitly reported that they cannot handle the query"
+            elif available:
+                reason = "No available member can handle the query; some members were unavailable"
+            else:
+                reason = "No member capability result was available"
+
+        collaboration_agents = [result.get("agent_name", "") for result in selected]
+        collaboration_agents = [name for name in collaboration_agents if name]
+        collaboration_roles = {
+            result.get("agent_name", ""): (
+                "handle" if result.get("can_handle") else "contribute"
+            )
+            for result in selected
+            if result.get("agent_name")
+        }
+        collaboration_paths = [
+            {
+                "agent": result.get("agent_name", ""),
+                "path": [result.get("agent_name", "")],
+                "confidence": result.get("confidence", 0.0),
+            }
+            for result in selected
+            if result.get("agent_name")
+        ]
+        route_path = [group_name]
+        result = {
+            "can_handle": can_handle,
+            "confidence": confidence,
+            "reason": reason,
+            "agent_name": group_name,
+            "agent_url": "",
+            "route_path": route_path,
+            "route_paths": [{"path": route_path, "confidence": confidence}],
+            "can_contribute": can_contribute,
+            "contribution": reason if can_contribute and not can_handle else "",
+            "execution_strategy": strategy,
+            "collaboration_agents": collaboration_agents,
+            "collaboration_roles": collaboration_roles,
+            "collaboration_paths": collaboration_paths,
+            "member_results": member_results,
+            "degraded": degraded,
+            "unavailable_count": unavailable_count,
+            "missing_requirements": missing_requirements,
+        }
+        logger.info(
+            "[Capability][SGExpert] aggregate | group=%s | strategy=%s | "
+            "can_handle=%s | can_contribute=%s | confidence=%.2f | "
+            "selected=%s | roles=%s | degraded=%s | unavailable=%d | "
+            "missing=%s | reason=%s",
+            group_name,
+            strategy,
+            can_handle,
+            can_contribute,
+            float(confidence or 0.0),
+            collaboration_agents[:10],
+            collaboration_roles,
+            degraded,
+            unavailable_count,
+            missing_requirements[:10],
+            str(reason)[:240],
+        )
+        return result
+
+    async def check_group_member_capability(self) -> Dict[str, Any]:
+        started_at = asyncio.get_running_loop().time()
+        group_label = self.current_agent_label()
+        logger.info(
+            "[Capability][SGExpert] ----- start | group=%s | sg_id=%s | query=%s -----",
+            group_label,
+            self.semantic_group_id or "",
+            (self.query or "")[:120] + ("..." if len(self.query or "") > 120 else ""),
+        )
+        await self.resolve_agents_for_semantic_group()
+        logger.info(
+            "[Capability][SGExpert] members resolved | group=%s | count=%d",
+            group_label,
+            len(self.group_agent_cards),
+        )
+        member_results = await self._fan_out_member_capabilities()
+        result = self._aggregate_member_capabilities(member_results)
+        result["latency_ms"] = int(
+            (asyncio.get_running_loop().time() - started_at) * 1000
+        )
+        logger.info(
+            "[Capability][SGExpert] ----- done | group=%s | strategy=%s | "
+            "can_handle=%s | can_contribute=%s | confidence=%.2f | "
+            "selected=%s | degraded=%s | latency_ms=%d -----",
+            group_label,
+            result.get("execution_strategy"),
+            result.get("can_handle"),
+            result.get("can_contribute"),
+            float(result.get("confidence") or 0.0),
+            result.get("collaboration_agents") or [],
+            result.get("degraded"),
+            result["latency_ms"],
+        )
+        return result
 
     async def _fetch_knowledge_from_agent(
         self,
@@ -1690,6 +2270,7 @@ class ExpertAgent(BaseAgent):
                 react_max_steps=20,
                 nudge_retries=2,
                 progress_emitter=_react_progress_emitter,
+                capability_preference=self.capability_preference or {},
             )
 
         react_trace = getattr(self.react_runner, "last_run_trace", None) or {}
@@ -1800,6 +2381,167 @@ class ExpertAgent(BaseAgent):
         kwargs = {**(kwargs if role == "tool" else {})}
         self.memory.add_message(message_map[role](content, **kwargs))
 
+    @staticmethod
+    def _agent_name_aliases(name: str) -> set[str]:
+        """Build generic aliases for matching capability names to registry cards."""
+        raw = str(name or "").strip()
+        if not raw:
+            return set()
+        aliases = {raw, raw.casefold()}
+        for sep in ("-dd-", "-sg-"):
+            if sep in raw:
+                prefix = raw.split(sep, 1)[0].strip()
+                if prefix:
+                    aliases.add(prefix)
+                    aliases.add(prefix.casefold())
+        return {item for item in aliases if item}
+
+    def _resolve_preferred_member_cards(
+        self,
+        selected_names: List[str],
+    ) -> Tuple[List[Tuple[Any, AgentCard]], List[str]]:
+        """Map preferred names onto current cards without dropping the full pool."""
+        resolved: List[Tuple[Any, AgentCard]] = []
+        unresolved: List[str] = []
+        used_urls: set[str] = set()
+        for selected in selected_names:
+            selected_aliases = self._agent_name_aliases(selected)
+            match = None
+            for member, card in self.group_agent_cards:
+                card_name = str(getattr(card, "name", "") or "").strip()
+                card_aliases = self._agent_name_aliases(card_name)
+                if selected_aliases & card_aliases:
+                    match = (member, card)
+                    break
+            if not match:
+                unresolved.append(selected)
+                continue
+            url = str(getattr(match[1], "url", "") or "")
+            key = url or str(getattr(match[1], "name", "") or "")
+            if key in used_urls:
+                continue
+            used_urls.add(key)
+            resolved.append(match)
+        return resolved, unresolved
+
+    def _apply_sg_execution_hint(self) -> bool:
+        """Load capability preference as soft guidance; keep the full member pool."""
+        self.capability_preference = {}
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
+        hint = metadata.get(SG_EXECUTION_HINT_KEY)
+        if not isinstance(hint, dict) or hint.get("version") != "v1":
+            return False
+        if str(hint.get("semantic_group_id") or "") != str(self.semantic_group_id or ""):
+            logger.warning("[Capability][SGExpert] execution hint ignored: SG mismatch")
+            return False
+        normalized_query = re.sub(
+            r"\s+", " ", str(self.query or "").strip()
+        ).casefold()
+        fingerprint = hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()
+        if str(hint.get("query_fingerprint") or "") != fingerprint:
+            logger.warning("[Capability][SGExpert] execution hint ignored: query mismatch")
+            return False
+        try:
+            age = datetime.now().timestamp() - float(
+                hint.get("created_at_epoch", 0) or 0
+            )
+            ttl = max(1.0, float(hint.get("ttl_seconds", 300) or 300))
+        except (TypeError, ValueError):
+            return False
+        if age > ttl or not hint.get("can_handle") or hint.get("degraded"):
+            logger.warning(
+                "[Capability][SGExpert] execution hint ignored | age_sec=%.1f "
+                "ttl_sec=%.1f can_handle=%s degraded=%s",
+                age,
+                ttl,
+                hint.get("can_handle"),
+                hint.get("degraded"),
+            )
+            return False
+
+        selected_names = self._compact_string_list(
+            hint.get("selected_members"), limit=100
+        )
+        if not selected_names:
+            return False
+
+        member_roles = {
+            str(key).strip(): str(value).strip()
+            for key, value in dict(hint.get("member_roles") or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+        preferred_cards, unresolved = self._resolve_preferred_member_cards(selected_names)
+        preferred_names = [
+            str(getattr(card, "name", "") or "").strip()
+            for _, card in preferred_cards
+            if str(getattr(card, "name", "") or "").strip()
+        ]
+        preferred_handlers = [
+            name
+            for name in preferred_names
+            if member_roles.get(name) == "handle"
+            or any(
+                member_roles.get(selected) == "handle"
+                and (self._agent_name_aliases(selected) & self._agent_name_aliases(name))
+                for selected in selected_names
+            )
+        ]
+        if not preferred_handlers:
+            # No explicit handle role: treat all resolved preferred members as handlers.
+            preferred_handlers = list(preferred_names)
+        preferred_contributors = [
+            name
+            for name in preferred_names
+            if name not in preferred_handlers
+        ]
+
+        # Soft reorder only: preferred members first, others remain available.
+        if preferred_cards:
+            preferred_keys = {
+                str(getattr(card, "url", "") or "") or str(getattr(card, "name", "") or "")
+                for _, card in preferred_cards
+            }
+            remainder = [
+                item
+                for item in self.group_agent_cards
+                if (
+                    str(getattr(item[1], "url", "") or "")
+                    or str(getattr(item[1], "name", "") or "")
+                )
+                not in preferred_keys
+            ]
+            self.group_agent_cards = preferred_cards + remainder
+
+        evidence = [
+            item
+            for item in list(hint.get("member_evidence") or [])
+            if isinstance(item, dict)
+        ][:20]
+        self.capability_preference = {
+            "enabled": True,
+            "execution_strategy": str(hint.get("execution_strategy") or "single"),
+            "confidence": float(hint.get("confidence") or 0.0),
+            "reason": str(hint.get("reason") or "")[:500],
+            "selected_members": selected_names,
+            "preferred_handlers": preferred_handlers,
+            "preferred_contributors": preferred_contributors,
+            "member_roles": member_roles,
+            "member_evidence": evidence,
+            "unresolved_members": unresolved,
+        }
+        logger.info(
+            "[Capability][SGExpert] execution hint loaded as soft preference | "
+            "strategy=%s preferred_handlers=%s preferred_contributors=%s "
+            "unresolved=%s pool_size=%d age_sec=%.1f",
+            self.capability_preference["execution_strategy"],
+            preferred_handlers[:10],
+            preferred_contributors[:10],
+            unresolved[:10],
+            len(self.group_agent_cards),
+            age,
+        )
+        return True
+
     async def run(self) -> AsyncIterable[str]:
         """Run the agent with streaming support."""
 
@@ -1813,6 +2555,7 @@ class ExpertAgent(BaseAgent):
         # Resolve semantic group members -> agent registry for A2A (get_knowledge will use group_agent_cards)
         if self.semantic_group_id:
             await self.resolve_agents_for_semantic_group()
+            self._apply_sg_execution_hint()
             downstream_agents = [
                 getattr(ac, "name", "") or str(getattr(member, "group_name", "") or getattr(member, "dd_name", "") or "")
                 for member, ac in self.group_agent_cards[:5]
@@ -1888,7 +2631,7 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
 
         query = context.get_user_input()
 
-        metadata = context.metadata
+        metadata = context.metadata if isinstance(context.metadata, dict) else {}
         logger.info(f"=====user request metadata is {metadata}.")
         _upk = (metadata or {}).get("upstream_prior_knowledge") if isinstance(metadata, dict) else None
         _upk_s = str(_upk or "").strip()
@@ -1903,6 +2646,47 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
                 "[Execute][SemanticGroupExpert] upstream_prior_knowledge: (absent or empty) raw=%r",
                 _upk,
             )
+
+        task = context.current_task
+        if not task:
+            task = new_task(context.message)
+            await event_queue.enqueue_event(task)
+        updater = TaskUpdater(event_queue, task.id, task.context_id)
+
+        if metadata.get("message_type") == "group_member_capability_check":
+            logger.info(
+                "[Capability][SGExpert] fast-path | message_type=group_member_capability_check | "
+                "sg_id=%s | query=%s",
+                self.semantic_group_id or "",
+                (query or "")[:120] + ("..." if len(query or "") > 120 else ""),
+            )
+            agent = ExpertAgent(
+                provider=self.provider,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
+                stream=False,
+                temperature=self.temperature,
+                semantic_group_id=self.semantic_group_id,
+                data_services_url=self.data_services_url,
+                query=query,
+                metadata=metadata,
+                max_steps=self.max_steps,
+                current_tasks_status=TaskStatusList(tasks=[]),
+                agent_id=self.agent_id or self.semantic_group_id,
+            )
+            try:
+                result = await agent.check_group_member_capability()
+                await updater.add_artifact(
+                    [TextPart(text=json.dumps(result, ensure_ascii=False, separators=(",", ":")))],
+                    name="group-member-capability-check-response",
+                )
+                await updater.complete(
+                    message=new_agent_text_message("", context_id=task.context_id)
+                )
+            finally:
+                await agent.data_services_client.close()
+            return
 
         current_tasks_status = None
         current_tasks_status_str = metadata.get('current_tasks_status', '')
@@ -1933,13 +2717,6 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
             current_task_id=current_task_id,
             agent_id=self.agent_id or self.semantic_group_id,
         )
-
-        task = context.current_task
-        if not task:
-            task = new_task(context.message)
-            await event_queue.enqueue_event(task)
-
-        updater = TaskUpdater(event_queue, task.id, task.context_id)
 
         try:
             async def _progress_callback(text: str) -> None:

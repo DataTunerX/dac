@@ -26,6 +26,8 @@ describe("requiresAuth", () => {
     expect(requiresAuth("/")).toBe(true)
     expect(requiresAuth("/agents")).toBe(true)
     expect(requiresAuth("/semantic-groups/123")).toBe(true)
+    expect(requiresAuth("/rbac")).toBe(true)
+    expect(requiresAuth("/rbac/roles")).toBe(true)
   })
 
   it("ignores unrelated paths", () => {

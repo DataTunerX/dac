@@ -191,6 +191,7 @@ def _coerce_standalone_sql_to_llm_dict(text: str) -> Optional[Dict[str, Any]]:
         "conclusion": "terminate",
         "requery": "",
         "reason_code": "",
+        "reason_detail": "",
     }
 
 
@@ -425,6 +426,15 @@ class LLMResult(BaseModel):
         description='Structured reason code. Use out_of_scope_non_retryable when task is outside this expert domain.'
     )
 
+    reason_detail: str = Field(
+        default="",
+        description=(
+            "Human-readable explanation for why SQL/answer was not produced. "
+            "Required when conclusion=continue and answer is empty "
+            "(e.g. missing core tables/fields)."
+        ),
+    )
+
 class RequeryResult(BaseModel):
 
     requery: Optional[str] = Field(
@@ -638,6 +648,20 @@ class AgentState(str, Enum):
     RUNNING = "RUNNING"
     FINISHED = "FINISHED"
     ERROR = "ERROR"
+
+
+JOIN_KEY_COLUMNS = (
+    "user_id", "userid", "customer_id", "member_id",
+    "order_id", "order_number", "order_no",
+    "sku_id", "product_id", "goods_id", "item_id",
+)
+ENTITY_TABLE_HINTS = (
+    (re.compile(r"下单用户姓名|下单用户|用户姓名|用户表|\busers?\b|username|user_name", re.I), "users"),
+    (re.compile(r"默认收货地址|用户地址|\buser_addresses\b", re.I), "user_addresses"),
+    (re.compile(r"支付方式|\buser_payment_methods\b", re.I), "user_payment_methods"),
+    (re.compile(r"商品类目|sku编号|库存总量|\bproducts?\b|\binventory\b", re.I), "products"),
+)
+
 
 class ExpertAgent(BaseAgent):
     """Expert Agent"""
@@ -972,6 +996,9 @@ class ExpertAgent(BaseAgent):
         retryable: bool = True,
         sql_failure_kind: str = "",
         unfulfilled_needs: Optional[List[Dict[str, Any]]] = None,
+        outcome: str = "",
+        join_keys: Optional[Dict[str, List[str]]] = None,
+        fulfilled_fields: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         d: Dict[str, Any] = {
             "reason_code": str(reason_code or ""),
@@ -981,8 +1008,28 @@ class ExpertAgent(BaseAgent):
             "error_stage": str(error_stage or ""),
             "retryable": bool(retryable),
         }
+        if str(outcome or "").strip():
+            d["outcome"] = str(outcome).strip()
         if str(sql_failure_kind or "").strip():
             d["sql_failure_kind"] = str(sql_failure_kind).strip()
+        if join_keys:
+            cleaned_keys: Dict[str, List[str]] = {}
+            for raw_key, raw_vals in join_keys.items():
+                key = str(raw_key or "").strip()
+                if not key:
+                    continue
+                values = raw_vals if isinstance(raw_vals, (list, tuple)) else [raw_vals]
+                cleaned_vals = [str(v).strip() for v in values if str(v).strip()][:50]
+                if cleaned_vals:
+                    cleaned_keys[key] = cleaned_vals
+            if cleaned_keys:
+                d["join_keys"] = cleaned_keys
+        if fulfilled_fields:
+            cleaned_fields = [
+                str(item).strip() for item in fulfilled_fields if str(item).strip()
+            ]
+            if cleaned_fields:
+                d["fulfilled_fields"] = cleaned_fields[:40]
         if unfulfilled_needs:
             # Structured "what this DD could not reach" payload so upstream
             # planners (SG Orchestrator / mid-exec detector) can do precise
@@ -1007,6 +1054,124 @@ class ExpertAgent(BaseAgent):
             if cleaned:
                 d["unfulfilled_needs"] = cleaned
         return d
+
+    def _local_table_name_set(self) -> set:
+        names = set()
+        for source in (
+            getattr(self, "_selected_table_whitelist", None) or [],
+            getattr(self, "_cached_available_tables", None) or [],
+        ):
+            for raw in source:
+                normalized = self._normalize_db_object_name(raw)
+                if normalized:
+                    names.add(normalized)
+        return names
+
+    @classmethod
+    def _extract_join_keys_from_sql_result(
+        cls,
+        sql_result: Union[List[Dict[str, Any]], Dict[str, Any], None],
+    ) -> Dict[str, List[str]]:
+        rows: List[Dict[str, Any]] = []
+        if isinstance(sql_result, list):
+            rows = [row for row in sql_result if isinstance(row, dict)]
+        elif isinstance(sql_result, dict):
+            rows = [sql_result]
+        collected: Dict[str, List[str]] = {}
+        seen_values: Dict[str, set] = {}
+        preferred = {name.lower() for name in JOIN_KEY_COLUMNS}
+        for row in rows[:200]:
+            for raw_key, raw_val in row.items():
+                key = str(raw_key or "").strip()
+                if not key:
+                    continue
+                key_l = key.lower()
+                if key_l not in preferred and not key_l.endswith("_id"):
+                    continue
+                value = str(raw_val).strip() if raw_val is not None else ""
+                if not value or value.lower() in ("none", "null"):
+                    continue
+                bucket = collected.setdefault(key, [])
+                seen = seen_values.setdefault(key, set())
+                if value in seen:
+                    continue
+                seen.add(value)
+                bucket.append(value)
+                if len(bucket) >= 50:
+                    continue
+        return {k: v for k, v in collected.items() if v}
+
+    @classmethod
+    def _infer_missing_tables_from_observe(
+        cls,
+        *,
+        observe_reason: str,
+        query: str,
+        local_tables: Optional[set] = None,
+    ) -> List[str]:
+        blob = f"{observe_reason or ''}\n{query or ''}"
+        local = {str(t).strip().lower() for t in (local_tables or set()) if str(t).strip()}
+        missing: List[str] = []
+        seen: set = set()
+        for pattern, table in ENTITY_TABLE_HINTS:
+            if not pattern.search(blob):
+                continue
+            table_l = table.lower()
+            if table_l in local or table_l in seen:
+                continue
+            seen.add(table_l)
+            missing.append(table)
+        return missing
+
+    @classmethod
+    def _try_build_observe_sovereignty_gap(
+        cls,
+        *,
+        observe_reason: str,
+        sql_result: Union[List[Dict[str, Any]], Dict[str, Any], None],
+        query: str,
+        local_tables: Optional[set] = None,
+        original_query: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """If SQL returned rows but the gap is an out-of-DD table, emit P3 payload.
+
+        Local SQL bugs (wrong join/filter on tables we do own) still requery.
+        """
+        rows: List[Dict[str, Any]] = []
+        if isinstance(sql_result, list):
+            rows = [row for row in sql_result if isinstance(row, dict)]
+        elif isinstance(sql_result, dict) and sql_result:
+            rows = [sql_result]
+        if not rows:
+            return None
+        missing_tables = cls._infer_missing_tables_from_observe(
+            observe_reason=observe_reason,
+            query=query,
+            local_tables=local_tables or set(),
+        )
+        if not missing_tables:
+            return None
+        join_keys = cls._extract_join_keys_from_sql_result(sql_result)
+        intent_hint = (query or original_query or "").strip()
+        unfulfilled = [
+            {
+                "missing_table": table,
+                "reason": "outside_local_dd",
+                "intent_fragment": intent_hint or str(observe_reason or "")[:180],
+                "stage": "observe_partial",
+            }
+            for table in missing_tables
+        ]
+        fulfilled = []
+        for key in rows[0].keys():
+            name = str(key).strip()
+            if name and name not in fulfilled:
+                fulfilled.append(name)
+        return {
+            "unfulfilled_needs": unfulfilled,
+            "join_keys": join_keys,
+            "fulfilled_fields": fulfilled,
+        }
 
     @staticmethod
     def _extract_structured_error_from_text(text: str) -> Dict[str, Any]:
@@ -1957,12 +2122,14 @@ class ExpertAgent(BaseAgent):
                 "answer": "System error: Unable to process model response",
                 "conclusion": "error",
                 "requery": "",
-                "reason_code": ""
+                "reason_code": "",
+                "reason_detail": "System error: Unable to process model response",
             }
         else:
             data_dict = result
 
         llm_result = LLMResult(**data_dict)
+        self._log_llm_decision(llm_result, stage="common_answer")
 
         logger.info(f" === ExpertAgent.invoke_common , llm_result = {llm_result}")
 
@@ -2083,7 +2250,11 @@ class ExpertAgent(BaseAgent):
         # 基于数据库 schema、维度和知识，生成 SQL 查询和答案
         generate_sql_tool = StructuredTool(
             name="generate_sql",
-            description="Generate SQL query and answer based on database schema, dimensions, and knowledge. Set conclusion to 'terminate' if satisfied, 'continue' if needs requery.",
+            description=(
+                "Generate SQL query and answer based on database schema, dimensions, and knowledge. "
+                "Set conclusion to 'terminate' if satisfied, 'continue' if needs requery. "
+                "When skipping SQL (continue + empty answer), always fill reason_detail."
+            ),
             args_schema=LLMResult,
             func=None,
             coroutine=None,
@@ -2113,12 +2284,15 @@ class ExpertAgent(BaseAgent):
             data_dict = {
                 "answer": "System error: Unable to process model response",
                 "conclusion": "error",
-                "requery": ""
+                "requery": "",
+                "reason_code": "",
+                "reason_detail": "System error: Unable to process model response",
             }
         else:
             data_dict = result
 
         llm_result = LLMResult(**data_dict)
+        self._log_llm_decision(llm_result, stage="sql_generate_dictionary")
 
         logger.info(f" === ExpertAgent.invoke_structured_dictionary_mode , llm_result = {llm_result}")
 
@@ -2176,7 +2350,11 @@ class ExpertAgent(BaseAgent):
         # 基于数据库知识生成 SQL，无需维度/字典信息
         generate_sql_simple_tool = StructuredTool(
             name="generate_sql_simple",
-            description="Generate SQL query and answer based on database knowledge. Set conclusion to 'terminate' if satisfied, 'continue' if needs requery.",
+            description=(
+                "Generate SQL query and answer based on database knowledge. "
+                "Set conclusion to 'terminate' if satisfied, 'continue' if needs requery. "
+                "When skipping SQL (continue + empty answer), always fill reason_detail."
+            ),
             args_schema=LLMResult,
             func=None,
             coroutine=None,
@@ -2206,12 +2384,15 @@ class ExpertAgent(BaseAgent):
             data_dict = {
                 "answer": "System error: Unable to process model response",
                 "conclusion": "error",
-                "requery": ""
+                "requery": "",
+                "reason_code": "",
+                "reason_detail": "System error: Unable to process model response",
             }
         else:
             data_dict = result
 
         llm_result = LLMResult(**data_dict)
+        self._log_llm_decision(llm_result, stage="sql_generate_simple")
 
         logger.info(f" === ExpertAgent.invoke_structured , llm_result = {llm_result}")
 
@@ -2764,11 +2945,32 @@ class ExpertAgent(BaseAgent):
 
                 logger.info(f"get_knowledge: Total unique selected knowledge IDs: {len(unique_ids)}")
 
+                # Validate / correct LLM ids against inventory before Stage 2.
+                # Prevents empty knowledge when the model typos a UUID by one char.
+                if unique_ids:
+                    resolved_ids = knowledge_blocks.resolve_knowledge_ids(unique_ids)
+                    if resolved_ids != unique_ids:
+                        logger.warning(
+                            "get_knowledge: resolved knowledge ids %s -> %s",
+                            unique_ids,
+                            resolved_ids,
+                        )
+                    unique_ids = resolved_ids
+                    logger.info(
+                        "get_knowledge: Inventory-resolved knowledge IDs: %d",
+                        len(unique_ids),
+                    )
+
                 # ── Stage 2: 精取 ──────────────────────────────────────
                 # 按选中的 ID 从同一个 MetadataValuesResult 中提取 text 全文，无需额外网络请求
                 if unique_ids:
                     knowledge_str = knowledge_blocks.get_text_by_ids(unique_ids)
                     logger.info(f"get_knowledge: Retrieved full knowledge content, length: {len(knowledge_str)}")
+                    if not knowledge_str:
+                        logger.warning(
+                            "get_knowledge: resolved ids=%s but text empty; check dataservices text field",
+                            unique_ids,
+                        )
 
                 if unique_ids:
                     self._consecutive_empty_knowledge_rounds = 0
@@ -2874,6 +3076,45 @@ class ExpertAgent(BaseAgent):
         except (json.JSONDecodeError, Exception) as e:
             logger.error(f"analyze_descriptor_types: failed to parse JSON: {e}, raw={first_item[:200]}")
             return "", "unknown", ""
+
+    def _log_llm_decision(self, llm_result: LLMResult, *, stage: str) -> None:
+        """Emit a business-readable decision log for SQL/answer generation.
+
+        Especially important when conclusion=continue and no SQL/answer is
+        produced: ``reason_detail`` explains why (e.g. missing core tables).
+        """
+        conclusion = str(getattr(llm_result, "conclusion", "") or "").strip()
+        answer = str(getattr(llm_result, "answer", "") or "")
+        reason_code = str(getattr(llm_result, "reason_code", "") or "").strip()
+        reason_detail = str(getattr(llm_result, "reason_detail", "") or "").strip()
+        requery = str(getattr(llm_result, "requery", "") or "").strip()
+        if conclusion == "continue" and not answer.strip():
+            logger.info(
+                "[SQLGenerate][Skip] stage=%s conclusion=continue reason_code=%s "
+                "reason_detail=%s requery=%s query_preview=%s",
+                stage,
+                reason_code or "(empty)",
+                reason_detail or "(empty)",
+                requery[:200],
+                str(self.query or "")[:120],
+            )
+            if not reason_detail:
+                logger.warning(
+                    "[SQLGenerate][Skip] stage=%s missing reason_detail while "
+                    "skipping SQL/answer generation",
+                    stage,
+                )
+            return
+        logger.info(
+            "[LLMDecision] stage=%s conclusion=%s reason_code=%s "
+            "reason_detail=%s answer_chars=%d requery_chars=%d",
+            stage,
+            conclusion or "(empty)",
+            reason_code or "(empty)",
+            reason_detail or "(empty)",
+            len(answer),
+            len(requery),
+        )
 
     def _should_fast_fail_out_of_scope(self, llm_result: LLMResult, knowledge: str) -> bool:
         # Preserve AI flexibility: allow one exploratory step first.
@@ -3143,13 +3384,57 @@ class ExpertAgent(BaseAgent):
                                     observe_message = f"\nsql: {llm_result.answer}, \n\nsql query result: {sql_result_str}, \n\nreason:{step_status_llm_check_success} ,{observe_result.reason}"
                                     llm_result.answer = observe_message
                                 else:
-                                    # Case: The large model successfully generated SQL and data was retrieved, but the evaluation indicates that the data does not match the question, meaning the generated SQL is incorrect. In this case, the question needs to be rephrased to proceed to the next step for generating new SQL.
-                                    llm_result.conclusion = "continue"
-                                    requery = await self.invoke_requery_sql(llm_result.answer, "searched records do not meet query", knowledge)
-                                    if requery.conclusion == "terminate" and requery.requery:
-                                        llm_result.requery = requery.requery
-                                        self.state = AgentState.IDLE
-                                        llm_result.answer = f"searched records do not meet query, sql: {llm_result.answer}, \n\nsql query result: {sql_result_str}, \n\nreason: {observe_result.reason}"
+                                    sovereignty_gap = self._try_build_observe_sovereignty_gap(
+                                        observe_reason=str(getattr(observe_result, "reason", "") or ""),
+                                        sql_result=sql_result,
+                                        query=str(self.query or self.original_query or ""),
+                                        local_tables=self._local_table_name_set(),
+                                        original_query=str(self.original_query or ""),
+                                    )
+                                    if sovereignty_gap:
+                                        # Partial success: local rows are valid, but required
+                                        # fields live in another DD. Stop local requery and
+                                        # emit P3 unfulfilled_needs + join_keys for mid-delegate.
+                                        structured_control = self._build_structured_control(
+                                            reason_code="data_sovereignty_gap",
+                                            non_retryable=False,
+                                            retryable=False,
+                                            error_stage="observe_partial",
+                                            unfulfilled_needs=sovereignty_gap.get("unfulfilled_needs"),
+                                            outcome="partial",
+                                            join_keys=sovereignty_gap.get("join_keys"),
+                                            fulfilled_fields=sovereignty_gap.get("fulfilled_fields"),
+                                        )
+                                        llm_result.reason_code = "data_sovereignty_gap"
+                                        llm_result.conclusion = "terminate"
+                                        llm_result.requery = ""
+                                        self.state = AgentState.FINISHED
+                                        llm_result.answer = (
+                                            "partial success: local query returned usable rows, "
+                                            "but required fields are outside this data descriptor.\n"
+                                            f"sql: {llm_result.answer}, \n\n"
+                                            f"sql query result: {sql_result_str}, \n\n"
+                                            f"reason: {observe_result.reason}\n"
+                                            f"structured_control: {json.dumps(structured_control, ensure_ascii=False)}"
+                                        )
+                                        logger.info(
+                                            "[SovereigntyGap][Expert] observe_partial | task_id=%s "
+                                            "missing=%s join_keys=%s",
+                                            self.current_task_id,
+                                            [
+                                                n.get("missing_table")
+                                                for n in (sovereignty_gap.get("unfulfilled_needs") or [])
+                                            ],
+                                            list((sovereignty_gap.get("join_keys") or {}).keys()),
+                                        )
+                                    else:
+                                        # Local SQL likely wrong: rephrase and retry in this DD.
+                                        llm_result.conclusion = "continue"
+                                        requery = await self.invoke_requery_sql(llm_result.answer, "searched records do not meet query", knowledge)
+                                        if requery.conclusion == "terminate" and requery.requery:
+                                            llm_result.requery = requery.requery
+                                            self.state = AgentState.IDLE
+                                            llm_result.answer = f"searched records do not meet query, sql: {llm_result.answer}, \n\nsql query result: {sql_result_str}, \n\nreason: {observe_result.reason}"
                             else:
                                 # Case: The large model successfully generated SQL, but no data was retrieved. It is necessary to review whether the result is genuinely empty. If it is determined that the SQL is problematic, the question should be rephrased to proceed to the next step for generating new SQL.
                                 # if sql no result, will requery and enter next loop

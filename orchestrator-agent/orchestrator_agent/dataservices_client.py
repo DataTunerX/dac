@@ -269,7 +269,130 @@ class DataServicesClient:
         if self.session and not self.session.closed:
             await self.session.close()
             self.session = None
-    
+
+    async def search_signatures_by_dd(
+        self,
+        dd_namespace: str,
+        dd_name: str,
+    ) -> List[Dict[str, Any]]:
+        """Return signature records for one data descriptor."""
+        return await self._search_records_by_dd(
+            "/signatures/search/by-dd",
+            dd_namespace,
+            dd_name,
+            "signature",
+        )
+
+    async def search_semantic_domains_by_dd(
+        self,
+        dd_namespace: str,
+        dd_name: str,
+    ) -> List[Dict[str, Any]]:
+        """Return semantic-domain records for one data descriptor."""
+        return await self._search_records_by_dd(
+            "/semantic_domains/search/by-dd",
+            dd_namespace,
+            dd_name,
+            "semantic-domain",
+        )
+
+    async def _search_records_by_dd(
+        self,
+        path: str,
+        dd_namespace: str,
+        dd_name: str,
+        record_type: str,
+    ) -> List[Dict[str, Any]]:
+        if not dd_namespace or not dd_name:
+            raise ValueError("dd_namespace and dd_name are required")
+        await self._create_session()
+        url = f"{self.base_url}{path}"
+        payload = {"dd_namespace": dd_namespace, "dd_name": dd_name}
+        try:
+            async with self.session.post(url, json=payload) as response:
+                response_text = await response.text()
+                if response.status != 200:
+                    raise ValueError(
+                        f"HTTP error: {response.status}, response: {response_text}"
+                    )
+                try:
+                    data = await response.json()
+                except (json.JSONDecodeError, aiohttp.ContentTypeError) as exc:
+                    raise ValueError(f"JSON parse fail: {response_text}") from exc
+        except aiohttp.ClientError as exc:
+            raise ConnectionError(f"network request error: {exc}") from exc
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"request timeout: {self.timeout} seconds"
+            ) from exc
+
+        if not isinstance(data, dict) or data.get("status") != "success":
+            raise ValueError(f"{record_type} search returned an unsuccessful response")
+        records = data.get("data")
+        if records is None:
+            return []
+        if not isinstance(records, list):
+            raise ValueError(f"{record_type} search response data must be a list")
+        return [item for item in records if isinstance(item, dict)]
+
+    async def list_unstructured_files_by_dd(
+        self,
+        dd_namespace: str,
+        dd_name: str,
+        *,
+        page_size: int = 500,
+        max_rows: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Paginate GET /unstructured-files for one DataDescriptor."""
+        if not dd_namespace or not dd_name:
+            raise ValueError("dd_namespace and dd_name are required")
+        await self._create_session()
+        url = f"{self.base_url}/unstructured-files"
+        collected: List[Dict[str, Any]] = []
+        offset = 0
+        page_size = max(1, min(int(page_size), 500))
+        max_rows = max(1, int(max_rows))
+        while len(collected) < max_rows:
+            params = {
+                "dd_namespace": dd_namespace,
+                "dd_name": dd_name,
+                "limit": min(page_size, max_rows - len(collected)),
+                "offset": offset,
+            }
+            try:
+                async with self.session.get(url, params=params) as response:
+                    response_text = await response.text()
+                    if response.status != 200:
+                        raise ValueError(
+                            f"HTTP error: {response.status}, response: {response_text}"
+                        )
+                    try:
+                        data = await response.json()
+                    except (json.JSONDecodeError, aiohttp.ContentTypeError) as exc:
+                        raise ValueError(f"JSON parse fail: {response_text}") from exc
+            except aiohttp.ClientError as exc:
+                raise ConnectionError(f"network request error: {exc}") from exc
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"request timeout: {self.timeout} seconds"
+                ) from exc
+            if not isinstance(data, dict) or data.get("status") != "success":
+                raise ValueError(
+                    "unstructured-files list returned an unsuccessful response"
+                )
+            rows = data.get("data") or []
+            if not isinstance(rows, list) or not rows:
+                break
+            for item in rows:
+                if isinstance(item, dict):
+                    collected.append(item)
+                    if len(collected) >= max_rows:
+                        break
+            if len(rows) < params["limit"]:
+                break
+            offset += len(rows)
+        return collected
+
     #################### Knowledge pyramid API endpoints
     def _parse_search_response(self, response_data: Dict[str, Any]) -> SearchResult:
         """Parse search response data - strictly follows API format"""

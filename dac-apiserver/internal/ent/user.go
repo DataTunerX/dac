@@ -23,8 +23,8 @@ type User struct {
 	Username string `json:"username,omitempty"`
 	// 密码哈希
 	PasswordHash string `json:"-"`
-	// 用户角色：admin/user
-	Role string `json:"role,omitempty"`
+	// 用户邮箱（可选）
+	Email *string `json:"email,omitempty"`
 	// 最后登录时间
 	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 	// 软删除时间（NULL 表示未删除）
@@ -62,7 +62,7 @@ func (*User) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case user.FieldUsername, user.FieldPasswordHash, user.FieldRole:
+		case user.FieldUsername, user.FieldPasswordHash, user.FieldEmail:
 			values[i] = new(sql.NullString)
 		case user.FieldLastLoginAt, user.FieldDeletedAt, user.FieldCreatedAt, user.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -101,11 +101,12 @@ func (_m *User) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.PasswordHash = value.String
 			}
-		case user.FieldRole:
+		case user.FieldEmail:
 			if value, ok := values[i].(*sql.NullString); !ok {
-				return fmt.Errorf("unexpected type %T for field role", values[i])
+				return fmt.Errorf("unexpected type %T for field email", values[i])
 			} else if value.Valid {
-				_m.Role = value.String
+				_m.Email = new(string)
+				*_m.Email = value.String
 			}
 		case user.FieldLastLoginAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -179,8 +180,10 @@ func (_m *User) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("password_hash=<sensitive>")
 	builder.WriteString(", ")
-	builder.WriteString("role=")
-	builder.WriteString(_m.Role)
+	if v := _m.Email; v != nil {
+		builder.WriteString("email=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	if v := _m.LastLoginAt; v != nil {
 		builder.WriteString("last_login_at=")

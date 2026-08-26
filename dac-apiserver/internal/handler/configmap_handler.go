@@ -24,32 +24,63 @@ func NewConfigMapHandler(uc domain.ConfigMapUsecase, logger *slog.Logger) *Confi
 	}
 }
 
-// Create creates a new configmap
-//
-//	@Summary		Create ConfigMap
-//	@Description	Create a DAC configmap (llm/prompts) in the specified namespace
-//	@Tags			ConfigMap Management
-//	@Accept			json
-//	@Produce		json
-//	@Security		BearerAuth
-//	@Param			namespace	path		string					true	"namespace"
-//	@Param			request		body		dto.CreateConfigMapRequest	true	"configmap"
-//	@Success		201			{object}	dto.ConfigMapResponse
-//	@Failure		400			{object}	map[string]string
-//	@Router			/namespaces/{namespace}/configmaps [post]
-func (h *ConfigMapHandler) Create(ctx context.Context, c *app.RequestContext) {
+// ------- LLM ConfigMap (model management) -------
+
+func (h *ConfigMapHandler) CreateLLM(ctx context.Context, c *app.RequestContext) {
+	h.create(ctx, c, domain.ConfigMapTypeLLM)
+}
+
+func (h *ConfigMapHandler) GetLLM(ctx context.Context, c *app.RequestContext) {
+	h.get(ctx, c)
+}
+
+func (h *ConfigMapHandler) ListLLM(ctx context.Context, c *app.RequestContext) {
+	h.list(ctx, c, domain.ConfigMapTypeLLM)
+}
+
+func (h *ConfigMapHandler) UpdateLLM(ctx context.Context, c *app.RequestContext) {
+	h.update(ctx, c)
+}
+
+func (h *ConfigMapHandler) DeleteLLM(ctx context.Context, c *app.RequestContext) {
+	h.remove(ctx, c)
+}
+
+// ------- Prompt ConfigMap (prompt management) -------
+
+func (h *ConfigMapHandler) CreatePrompt(ctx context.Context, c *app.RequestContext) {
+	h.create(ctx, c, domain.ConfigMapTypePrompts)
+}
+
+func (h *ConfigMapHandler) GetPrompt(ctx context.Context, c *app.RequestContext) {
+	h.get(ctx, c)
+}
+
+func (h *ConfigMapHandler) ListPrompt(ctx context.Context, c *app.RequestContext) {
+	h.list(ctx, c, domain.ConfigMapTypePrompts)
+}
+
+func (h *ConfigMapHandler) UpdatePrompt(ctx context.Context, c *app.RequestContext) {
+	h.update(ctx, c)
+}
+
+func (h *ConfigMapHandler) DeletePrompt(ctx context.Context, c *app.RequestContext) {
+	h.remove(ctx, c)
+}
+
+// create is an internal helper for creating a configmap of the given type.
+func (h *ConfigMapHandler) create(ctx context.Context, c *app.RequestContext, t domain.ConfigMapType) {
 	namespace := c.Param("namespace")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	var req dto.CreateConfigMapRequest
 	if err := c.BindAndValidate(&req); err != nil {
 		h.logger.Error("invalid request", "error", err)
 		ErrorResponse(c, domain.ErrInvalidInput)
-		return
-	}
-
-	t, err := dto.ParseConfigMapType(req.Type)
-	if err != nil {
-		ErrorResponse(c, err)
 		return
 	}
 
@@ -65,24 +96,18 @@ func (h *ConfigMapHandler) Create(ctx context.Context, c *app.RequestContext) {
 		ErrorResponse(c, err)
 		return
 	}
-
 	CreatedResponse(c, dto.ToConfigMapResponse(created))
 }
 
-// Get gets a configmap
-//
-//	@Summary		Get ConfigMap
-//	@Description	Get a configmap in the specified namespace
-//	@Tags			ConfigMap Management
-//	@Produce		json
-//	@Security		BearerAuth
-//	@Param			namespace	path		string	true	"namespace"
-//	@Param			name		path		string	true	"configmap name"
-//	@Success		200			{object}	dto.ConfigMapResponse
-//	@Router			/namespaces/{namespace}/configmaps/{name} [get]
-func (h *ConfigMapHandler) Get(ctx context.Context, c *app.RequestContext) {
+// get is an internal helper for getting a configmap by name.
+func (h *ConfigMapHandler) get(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	cm, err := h.usecase.Get(ctx, namespace, name)
 	if err != nil {
@@ -93,33 +118,19 @@ func (h *ConfigMapHandler) Get(ctx context.Context, c *app.RequestContext) {
 	SuccessResponse(c, dto.ToConfigMapResponse(cm))
 }
 
-// List lists configmaps
-//
-//	@Summary		List ConfigMaps
-//	@Description	List configmaps in the specified namespace, optionally filtered by type
-//	@Tags			ConfigMap Management
-//	@Produce		json
-//	@Security		BearerAuth
-//	@Param			namespace	path		string	true	"namespace"
-//	@Param			type		query		string	false	"llm|prompts"
-//	@Param			labelSelector	query		string	false	"extra label selector"
-//	@Success		200			{object}	map[string]any
-//	@Router			/namespaces/{namespace}/configmaps [get]
-func (h *ConfigMapHandler) List(ctx context.Context, c *app.RequestContext) {
+// list is an internal helper for listing configmaps of the given type.
+func (h *ConfigMapHandler) list(ctx context.Context, c *app.RequestContext, t domain.ConfigMapType) {
 	namespace := c.Param("namespace")
-	typeStr := c.Query("type")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	labelSelector := c.Query("labelSelector")
 	lo := parseLimitOffset(c, 50, 200)
 
-	opts := domain.ConfigMapListOptions{LabelSelector: labelSelector}
-	if typeStr != "" {
-		t, err := dto.ParseConfigMapType(typeStr)
-		if err != nil {
-			ErrorResponse(c, err)
-			return
-		}
-		opts.Type = t
-	}
+	opts := domain.ConfigMapListOptions{LabelSelector: labelSelector, Type: t}
 
 	items, err := h.usecase.List(ctx, namespace, opts)
 	if err != nil {
@@ -147,22 +158,15 @@ func (h *ConfigMapHandler) List(ctx context.Context, c *app.RequestContext) {
 	})
 }
 
-// Update updates a configmap
-//
-//	@Summary		Update ConfigMap
-//	@Description	Update a configmap in the specified namespace
-//	@Tags			ConfigMap Management
-//	@Accept			json
-//	@Produce		json
-//	@Security		BearerAuth
-//	@Param			namespace	path		string	true	"namespace"
-//	@Param			name		path		string	true	"configmap name"
-//	@Param			request		body		dto.UpdateConfigMapRequest	true	"configmap"
-//	@Success		200			{object}	dto.ConfigMapResponse
-//	@Router			/namespaces/{namespace}/configmaps/{name} [put]
-func (h *ConfigMapHandler) Update(ctx context.Context, c *app.RequestContext) {
+// update is an internal helper for updating a configmap.
+func (h *ConfigMapHandler) update(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	var req dto.UpdateConfigMapRequest
 	if err := c.BindAndValidate(&req); err != nil {
@@ -191,24 +195,18 @@ func (h *ConfigMapHandler) Update(ctx context.Context, c *app.RequestContext) {
 		ErrorResponse(c, err)
 		return
 	}
-
 	SuccessResponse(c, dto.ToConfigMapResponse(updated))
 }
 
-// Delete deletes a configmap
-//
-//	@Summary		Delete ConfigMap
-//	@Description	Delete a configmap in the specified namespace
-//	@Tags			ConfigMap Management
-//	@Produce		json
-//	@Security		BearerAuth
-//	@Param			namespace	path		string	true	"namespace"
-//	@Param			name		path		string	true	"configmap name"
-//	@Success		204
-//	@Router			/namespaces/{namespace}/configmaps/{name} [delete]
-func (h *ConfigMapHandler) Delete(ctx context.Context, c *app.RequestContext) {
+// remove is an internal helper for deleting a configmap.
+func (h *ConfigMapHandler) remove(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	if err := h.usecase.Delete(ctx, namespace, name); err != nil {
 		h.logger.Error("failed to delete configmap", "error", err)

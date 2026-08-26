@@ -23,4 +23,9 @@ data:
   skill-agent-image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" (.Values.executionEngine.agentImages.skillAgent.repository | default "skill-agent") "tag" .Values.executionEngine.agentImages.skillAgent.tag) | quote }}
   default-planner-llm: {{ .Values.executionEngine.dacConfig.defaultPlannerLLM | default "llm-default" | quote }}
   default-expert-llm: {{ .Values.executionEngine.dacConfig.defaultExpertLLM | default "llm-default" | quote }}
+  sg-member-capability-check-enabled: {{ .Values.executionEngine.dacConfig.memberCapabilityCheckEnabled | quote }}
+  sg-member-capability-check-shadow: {{ .Values.executionEngine.dacConfig.memberCapabilityCheckShadow | default false | quote }}
+  sg-member-capability-max-concurrency: {{ .Values.executionEngine.dacConfig.memberCapabilityMaxConcurrency | default 8 | quote }}
+  sg-member-capability-member-timeout-sec: {{ .Values.executionEngine.dacConfig.memberCapabilityMemberTimeoutSec | default 60 | quote }}
+  sg-member-capability-total-timeout-sec: {{ .Values.executionEngine.dacConfig.memberCapabilityTotalTimeoutSec | default 180 | quote }}
 {{- end }}

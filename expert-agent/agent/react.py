@@ -197,6 +197,10 @@ Before routing to a **structured** (SQL) agent, analyze whether accurate data re
 
 In Structured Thought (optional), you may track: `"needs_code_or_doc_for_sql": true/false` and `"foundation_satisfied": true/false` to guide routing.
 
+## Member Capability Preference (from prior capability check)
+
+{capability_preference_section}
+
 ## Available Agent Tools
 
 Each tool accepts a natural language `query` (user semantics preserved) and returns that SD Expert's answer.
@@ -212,9 +216,24 @@ Each tool accepts a natural language `query` (user semantics preserved) and retu
 {user_query}
 """
 
+_CAPABILITY_PREFERENCE_POLICY = """\
+Policy for using this preference (soft guidance, not an exclusive allowlist):
+1. Treat preferred members as strong prior evidence for tool selection; start with them when the question matches their evidenced scope.
+2. Other members remain available; you may call them for complementary needs or after preferred members prove insufficient.
+3. Do not conclude the task as unanswerable until each preferred handler has been tried at least once (unless that preferred agent is unavailable).
+4. A negative result from a non-preferred member does not by itself prove that preferred members cannot answer.
+"""
+
 _REACT_NUDGE_MESSAGE = (
     "You did not call any tool. Call at least one agent tool with the user's question (preserve original semantics), "
     "or call `finish` if you already have sufficient evidence to answer."
+)
+
+_REACT_COVERAGE_DUTY_MESSAGE = (
+    "Coverage duty from prior capability preference: you attempted to finish before trying "
+    "these preferred handler tool(s): {untried_tools}. "
+    "Call at least one of them with the user's question before finishing as unanswerable. "
+    "Other tools remain available afterward if preferred handlers are still insufficient."
 )
 
 _REACT_FORCE_FINISH_MESSAGE = (
@@ -470,16 +489,99 @@ class ReActRunner:
             raise last_exc
         raise RuntimeError("LLM invoke failed without exception")
 
+    @staticmethod
+    def _name_aliases(name: str) -> set[str]:
+        raw = str(name or "").strip()
+        if not raw:
+            return set()
+        aliases = {raw, raw.casefold()}
+        for sep in ("-dd-", "-sg-"):
+            if sep in raw:
+                prefix = raw.split(sep, 1)[0].strip()
+                if prefix:
+                    aliases.add(prefix)
+                    aliases.add(prefix.casefold())
+        return {item for item in aliases if item}
+
+    @classmethod
+    def _names_match(cls, left: str, right: str) -> bool:
+        return bool(cls._name_aliases(left) & cls._name_aliases(right))
+
+    @classmethod
+    def _card_in_preferred(cls, card: AgentCard, preferred_names: List[str]) -> bool:
+        card_name = str(getattr(card, "name", "") or "").strip()
+        return any(cls._names_match(card_name, name) for name in preferred_names)
+
+    def _format_capability_preference_section(
+        self,
+        capability_preference: Optional[Dict[str, Any]],
+    ) -> str:
+        pref = capability_preference if isinstance(capability_preference, dict) else {}
+        if not pref.get("enabled"):
+            return "(No prior capability preference for this request.)"
+
+        lines = [
+            "A prior member-capability check produced the following soft preference:",
+            f"- strategy: {pref.get('execution_strategy') or 'single'}",
+            f"- confidence: {pref.get('confidence', 0.0)}",
+            f"- preferred_handlers: {pref.get('preferred_handlers') or []}",
+            f"- preferred_contributors: {pref.get('preferred_contributors') or []}",
+        ]
+        reason = str(pref.get("reason") or "").strip()
+        if reason:
+            lines.append(f"- reason: {reason}")
+        evidence_items = [
+            item for item in list(pref.get("member_evidence") or []) if isinstance(item, dict)
+        ][:12]
+        if evidence_items:
+            lines.append("- member_evidence:")
+            for item in evidence_items:
+                matched = item.get("matched_evidence") or []
+                lines.append(
+                    "  - "
+                    f"agent={item.get('agent_name')} role={item.get('role')} "
+                    f"confidence={item.get('confidence')} "
+                    f"matched={matched[:6]} "
+                    f"note={str(item.get('reason') or '')[:160]}"
+                )
+        lines.append("")
+        lines.append(_CAPABILITY_PREFERENCE_POLICY.strip())
+        return "\n".join(lines)
+
     def _build_agent_tools(
         self,
         agents: List[Tuple[MemberInfo, AgentCard]],
         name_to_agent: Dict[str, Tuple[MemberInfo, AgentCard]],
+        *,
+        capability_preference: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[StructuredTool], Dict[str, Tuple[MemberInfo, AgentCard]]]:
         tools: List[StructuredTool] = []
         tool_to_agent: Dict[str, Tuple[MemberInfo, AgentCard]] = {}
         used_names: set[str] = set()
+        pref = capability_preference if isinstance(capability_preference, dict) else {}
+        preferred_handlers = [
+            str(name).strip()
+            for name in (pref.get("preferred_handlers") or [])
+            if str(name).strip()
+        ]
+        preferred_all = preferred_handlers + [
+            str(name).strip()
+            for name in (pref.get("preferred_contributors") or [])
+            if str(name).strip()
+        ]
 
-        for member, ac in agents:
+        # Soft ordering: preferred members first, full pool retained.
+        ordered_agents = list(agents)
+        if preferred_all:
+            preferred_items = [
+                item for item in agents if self._card_in_preferred(item[1], preferred_all)
+            ]
+            remainder = [
+                item for item in agents if item not in preferred_items
+            ]
+            ordered_agents = preferred_items + remainder
+
+        for member, ac in ordered_agents:
             tool_name = self.make_tool_name(member, ac)
             suffix = 2
             while tool_name in used_names:
@@ -488,6 +590,16 @@ class ReActRunner:
             used_names.add(tool_name)
 
             tool_description = self.build_tool_description(member, ac, name_to_agent)
+            if preferred_handlers and self._card_in_preferred(ac, preferred_handlers):
+                tool_description = (
+                    "[PREFERRED_HANDLER_BY_CAPABILITY_CHECK] "
+                    + tool_description
+                )
+            elif preferred_all and self._card_in_preferred(ac, preferred_all):
+                tool_description = (
+                    "[PREFERRED_CONTRIBUTOR_BY_CAPABILITY_CHECK] "
+                    + tool_description
+                )
             tool = StructuredTool(
                 name=tool_name,
                 description=tool_description,
@@ -507,6 +619,27 @@ class ReActRunner:
         )
         tools.append(finish_tool)
         return tools, tool_to_agent
+
+    def _preferred_handler_tool_names(
+        self,
+        tool_to_agent: Dict[str, Tuple[MemberInfo, AgentCard]],
+        capability_preference: Optional[Dict[str, Any]],
+    ) -> List[str]:
+        pref = capability_preference if isinstance(capability_preference, dict) else {}
+        preferred_handlers = [
+            str(name).strip()
+            for name in (pref.get("preferred_handlers") or [])
+            if str(name).strip()
+        ]
+        if not preferred_handlers:
+            return []
+        names: List[str] = []
+        for tool_name, (_member, card) in tool_to_agent.items():
+            if tool_name == "finish":
+                continue
+            if self._card_in_preferred(card, preferred_handlers):
+                names.append(tool_name)
+        return names
 
     @staticmethod
     def _extract_finish_answer(raw_args: Any, thought_fallback: str = "") -> str:
@@ -1253,8 +1386,13 @@ class ReActRunner:
         react_max_steps: int = 20,
         nudge_retries: int = 2,
         progress_emitter: Optional[ProgressEmitter] = None,
+        capability_preference: Optional[Dict[str, Any]] = None,
     ) -> str:
-        tools, tool_to_agent = self._build_agent_tools(agents, name_to_agent)
+        tools, tool_to_agent = self._build_agent_tools(
+            agents,
+            name_to_agent,
+            capability_preference=capability_preference,
+        )
 
         if not agents:
             logger.info("[ReAct] no agents configured, returning prior_context")
@@ -1263,10 +1401,18 @@ class ReActRunner:
         tool_desc_lines = [f"- **{t.name}**: {t.description}" for t in tools]
         agent_tools_description = "\n\n".join(tool_desc_lines)
         prior_context_str = prior_context.strip() or "(No upstream prior context.)"
+        capability_preference_section = self._format_capability_preference_section(
+            capability_preference
+        )
+        preferred_handler_tools = self._preferred_handler_tool_names(
+            tool_to_agent,
+            capability_preference,
+        )
 
         system_text = _REACT_SYSTEM_PROMPT_TEMPLATE.format(
             sg_name=self.agent_name,
             max_steps=react_max_steps,
+            capability_preference_section=capability_preference_section,
             agent_tools_description=agent_tools_description,
             prior_context=prior_context_str,
             user_query=user_query,
@@ -1288,6 +1434,8 @@ class ReActRunner:
         total_fails = 0
         total_fail_budget = 6
         nudge_retries_left = nudge_retries
+        coverage_duty_retries_left = 1 if preferred_handler_tools else 0
+        invoked_tools: set[str] = set()
         last_result_by_tool: Dict[str, str] = {}
         previous_gaps_sig: Optional[Tuple[str, ...]] = None
         run_status = "max_steps_exceeded"
@@ -1312,6 +1460,12 @@ class ReActRunner:
             len(agents), len(tools), react_max_steps,
         )
         logger.info("[ReAct] 用户问题：%s", self._log_text_preview(user_query, max_chars=800))
+        if preferred_handler_tools:
+            logger.info(
+                "[ReAct] capability preference preferred_handler_tools=%s coverage_duty_retries=%d",
+                preferred_handler_tools,
+                coverage_duty_retries_left,
+            )
         if prior_context_str and prior_context_str != "(No upstream prior context.)":
             logger.info(
                 "[ReAct] 上游已有上下文：%d 字",
@@ -1331,6 +1485,7 @@ class ReActRunner:
                     "prior_context_len": len(prior_context_str),
                     "agents": [getattr(ac, "name", "") for _, ac in agents],
                     "max_steps": react_max_steps,
+                    "preferred_handler_tools": preferred_handler_tools,
                 },
             )
 
@@ -1560,6 +1715,63 @@ class ReActRunner:
                         call["id"] = tool_id
 
                     if tool_name == "finish":
+                        untried_preferred = [
+                            name
+                            for name in preferred_handler_tools
+                            if name not in invoked_tools
+                        ]
+                        if untried_preferred and coverage_duty_retries_left > 0:
+                            coverage_duty_retries_left -= 1
+                            coverage_msg = _REACT_COVERAGE_DUTY_MESSAGE.format(
+                                untried_tools=", ".join(untried_preferred)
+                            )
+                            logger.info(
+                                "[ReAct] coverage duty blocked finish | step=%d "
+                                "untried_preferred=%s retries_left=%d",
+                                step_no,
+                                untried_preferred,
+                                coverage_duty_retries_left,
+                            )
+                            # Satisfy the pending finish tool_call, then nudge.
+                            messages.append(
+                                ToolMessage(
+                                    content=(
+                                        "finish rejected by coverage duty; "
+                                        + coverage_msg
+                                    ),
+                                    tool_call_id=tool_id,
+                                )
+                            )
+                            messages.append(
+                                HumanMessage(
+                                    content=coverage_msg,
+                                    additional_kwargs={"sg_react_internal": True},
+                                )
+                            )
+                            tool_history.append(
+                                {
+                                    "step": step_no,
+                                    "coverage_duty_block": True,
+                                    "untried_preferred": untried_preferred,
+                                }
+                            )
+                            await self._emit_progress(
+                                progress_emitter,
+                                "sg_react_coverage_duty",
+                                message=self._truncate_progress_message(
+                                    f"step {step_no}: coverage duty → try {untried_preferred}",
+                                    480,
+                                ),
+                                status="running",
+                                extra={
+                                    "step": step_no,
+                                    "untried_preferred": untried_preferred,
+                                    "coverage_duty_retries_left": coverage_duty_retries_left,
+                                },
+                            )
+                            finished_this_step = True
+                            break
+
                         final_answer = self._extract_finish_answer(tool_args, thought_text)
                         return await self._complete_via_finish(
                             final_answer=final_answer,
@@ -1575,6 +1787,7 @@ class ReActRunner:
                         )
 
                     if tool_name in tool_to_agent:
+                        invoked_tools.add(tool_name)
                         member, ac = tool_to_agent[tool_name]
                         dt = _normalize_descriptor_type(member)
                         agent_display_name = getattr(ac, "name", "") or "(unknown)"

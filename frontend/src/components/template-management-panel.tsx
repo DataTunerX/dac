@@ -24,7 +24,8 @@ import {
   SYSTEM_CONFIG_NAMESPACE,
   SYSTEM_CONFIG_NAMES,
 } from "@/lib/system-config-meta"
-import { useAuthHydrated, useUserRole } from "@/lib/use-user-role"
+import { useAuthHydrated } from "@/lib/use-user-role"
+import { hasAnyPermission } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -195,8 +196,8 @@ const TEMPLATE_HISTORY_COLUMNS = [
 
 export function TemplateManagementPanel() {
   const authHydrated = useAuthHydrated()
-  const userRole = useUserRole()
-  const isViewOnly = !authHydrated || userRole !== "admin"
+  const canEdit = hasAnyPermission(["system:config:manage"])
+  const isViewOnly = !authHydrated || !canEdit
   const [mounted, setMounted] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [items, setItems] = useState<SystemConfigurationResponse[]>([])
@@ -489,7 +490,7 @@ export function TemplateManagementPanel() {
                           >
                             查看
                           </Button>
-                          <RbacWrapper requiredRole="admin">
+                          <RbacWrapper requiredPermission="system:config:manage">
                             <Button
                               variant="ghost"
                               size="sm"
@@ -512,8 +513,7 @@ export function TemplateManagementPanel() {
                         <RbacButton
                           variant="ghost"
                           size="sm"
-                          requiredRole="admin"
-                          fallbackTitle="无权限"
+                          requiredPermission="system:config:manage"
                           onClick={() => void startCreate(name)}
                         >
                           创建
@@ -707,7 +707,7 @@ export function TemplateManagementPanel() {
               <Button variant="outline" onClick={closeDialog}>
                 取消
               </Button>
-              <RbacButton requiredRole="admin" onClick={() => void handleSave()} disabled={isSaving || isDialogLoading}>
+              <RbacButton requiredPermission="system:config:manage" onClick={() => void handleSave()} disabled={isSaving || isDialogLoading}>
                 {isSaving ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />

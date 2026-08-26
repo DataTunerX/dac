@@ -18,9 +18,11 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/config"
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/handler"
+	rbachandler "github.com/lvyanru/dac-apiserver/internal/handler/rbac"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/a2a"
 	agentregistryinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/agentregistry"
 	infradb "github.com/lvyanru/dac-apiserver/internal/infrastructure/database"
+	rbacstore "github.com/lvyanru/dac-apiserver/internal/infrastructure/database/rbac"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/dataservices"
 	discoveryinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/discovery"
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/k8s"
@@ -29,9 +31,11 @@ import (
 	skillhubinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/skillhub"
 	"github.com/lvyanru/dac-apiserver/internal/router"
 	"github.com/lvyanru/dac-apiserver/internal/usecase"
+	rbachusecase "github.com/lvyanru/dac-apiserver/internal/usecase/rbac"
 	dbpkg "github.com/lvyanru/dac-apiserver/pkg/database"
 	k8sclient "github.com/lvyanru/dac-apiserver/pkg/k8s"
 	"github.com/lvyanru/dac-apiserver/pkg/logger"
+	rbacengine "github.com/lvyanru/dac-apiserver/pkg/rbac"
 )
 
 //	@title			DAC API Server
@@ -231,14 +235,40 @@ func runServer(cmd *cobra.Command, args []string) {
 	userUsecase := usecase.NewUserUsecase(userRepo, appLogger)
 	userHandler := handler.NewUserHandler(userUsecase, cfg.JWT, appLogger)
 
-	slog.Info("user module initialized")
+	// Initialize RBAC module: engine + management usecase + handler
+	rbacRepo := rbacstore.NewStore(dbClient, appLogger)
+	rbacEngine := rbacengine.NewEngine(rbacRepo, appLogger)
+	rbacSeedOptions := &rbachusecase.BootstrapOptions{
+		Admin:    cfg.Bootstrap.Admin,
+		Password: cfg.Bootstrap.Password,
+	}
+	rbacUsecase := rbachusecase.New(rbachusecase.Options{
+		Store:     rbacRepo,
+		Engine:    rbacEngine,
+		Users:     userRepo,
+		Logger:    appLogger,
+		Bootstrap: rbacSeedOptions,
+	})
+	rbacHandler := rbachandler.NewRBACHandler(rbacUsecase, appLogger)
+	// Enrich GET /users/me with the caller's platform roles + permission codes.
+	userHandler = userHandler.WithRBACEngine(rbacEngine)
+	// Protect the built-in administrator from deletion.
+	userHandler = userHandler.WithBootstrapAdminResolver(rbacUsecase.BootstrapAdminID)
+	// Wire RBAC engine into skill hub handler for default namespace protection.
+	skillHubHandler = skillHubHandler.WithRBACEngine(rbacEngine)
 
-	// Seed admin user
-	if err := userUsecase.SeedAdmin(context.Background()); err != nil {
-		slog.Error("failed to seed admin user", "error", err)
-		// Don't exit, just log error, maybe database issue or already exists handling failed
+	slog.Info("user module initialized")
+	slog.Info("rbac module initialized")
+
+	// Seed RBAC defaults (permission catalog, super-admin role, default tenant),
+	// bootstrap the first administrator on fresh installs. This replaces the
+	// legacy SeedAdmin/Casbin bootstrap: the RBAC engine is the single source of truth.
+	if err := rbacUsecase.SeedDefaults(context.Background()); err != nil {
+		slog.Error("failed to seed rbac defaults", "error", err)
+		// Don't exit: seeding failures surface again on the next start, and the
+		// service must still serve /ping and daemon endpoints.
 	} else {
-		slog.Info("admin user check/seeding completed")
+		slog.Info("rbac seeding completed")
 	}
 
 	// Initialize Chat components
@@ -288,6 +318,8 @@ func runServer(cmd *cobra.Command, args []string) {
 		ddGroupRelationHandler,
 		knowledgeGraphHandler,
 		healthHandler,
+		rbacHandler,
+		rbacEngine,
 	)
 
 	// Start server

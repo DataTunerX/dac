@@ -6,12 +6,14 @@ import { cn } from "@/lib/utils"
 export function TableWrapper({
   className,
   children,
+  noBorder,
   ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+}: React.HTMLAttributes<HTMLDivElement> & { noBorder?: boolean }) {
   return (
     <div
       className={cn(
-        "w-full overflow-hidden rounded-lg border border-line bg-surface",
+        "w-full overflow-hidden bg-surface",
+        !noBorder && "rounded-lg border border-line",
         className,
       )}
       {...props}

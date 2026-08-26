@@ -11,15 +11,86 @@ import (
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/handler/dto"
+	rbacengine "github.com/lvyanru/dac-apiserver/pkg/rbac"
 )
 
 type SkillHubHandler struct {
-	usecase domain.SkillHubUsecase
-	logger  *slog.Logger
+	usecase    domain.SkillHubUsecase
+	logger     *slog.Logger
+	rbacEngine *rbacengine.Engine
 }
 
 func NewSkillHubHandler(uc domain.SkillHubUsecase, logger *slog.Logger) *SkillHubHandler {
 	return &SkillHubHandler{usecase: uc, logger: logger}
+}
+
+// WithRBACEngine wires the RBAC engine for platform-level permission checks
+// on protected resources (e.g. the "default" skill namespace).
+func (h *SkillHubHandler) WithRBACEngine(engine *rbacengine.Engine) *SkillHubHandler {
+	h.rbacEngine = engine
+	return h
+}
+
+// isDefaultNamespace returns true when the namespace is the protected built-in default.
+const defaultNamespace = "default"
+
+// checkDefaultRead returns nil if the user is allowed to view the default namespace.
+// Requires platform-level skill:read AND skill:namespace:read (or super admin).
+func (h *SkillHubHandler) checkDefaultRead(ctx context.Context, c *app.RequestContext) error {
+	if h.rbacEngine == nil {
+		return domain.ErrUnauthorized
+	}
+	userID, ok := GetUserIDFromContext(c, h.logger)
+	if !ok {
+		return domain.ErrUnauthorized
+	}
+	allowed, err := h.rbacEngine.HasAllPlatformPermissions(ctx, userID, "skill:read", "skill:namespace:read")
+	if err != nil {
+		h.logger.Error("check default read permission failed", "error", err, "user_id", userID)
+		return domain.NewInternalError(err)
+	}
+	if !allowed {
+		return domain.ErrForbidden
+	}
+	return nil
+}
+
+// checkDefaultManage returns nil if the user is allowed to manage the default namespace.
+// Requires platform-level skill:manage AND skill:namespace:manage (or super admin).
+func (h *SkillHubHandler) checkDefaultManage(ctx context.Context, c *app.RequestContext) error {
+	if h.rbacEngine == nil {
+		return domain.ErrUnauthorized
+	}
+	userID, ok := GetUserIDFromContext(c, h.logger)
+	if !ok {
+		return domain.ErrUnauthorized
+	}
+	allowed, err := h.rbacEngine.HasAllPlatformPermissions(ctx, userID, "skill:manage", "skill:namespace:manage")
+	if err != nil {
+		h.logger.Error("check default manage permission failed", "error", err, "user_id", userID)
+		return domain.NewInternalError(err)
+	}
+	if !allowed {
+		return domain.ErrForbidden
+	}
+	return nil
+}
+
+// canSeeDefault returns true if the user can see the default namespace in listings.
+func (h *SkillHubHandler) canSeeDefault(ctx context.Context, c *app.RequestContext) bool {
+	if h.rbacEngine == nil {
+		return false
+	}
+	userID, ok := GetUserIDFromContext(c, h.logger)
+	if !ok {
+		return false
+	}
+	allowed, err := h.rbacEngine.HasAllPlatformPermissions(ctx, userID, "skill:read", "skill:namespace:read")
+	if err != nil {
+		h.logger.Error("check default namespace visibility failed", "error", err, "user_id", userID)
+		return false
+	}
+	return allowed
 }
 
 // ListNamespaces lists skill-hub namespaces.
@@ -37,8 +108,12 @@ func (h *SkillHubHandler) ListNamespaces(ctx context.Context, c *app.RequestCont
 		ErrorResponse(c, err)
 		return
 	}
+	canSee := h.canSeeDefault(ctx, c)
 	resp := make([]dto.SkillNamespaceResponse, 0, len(items))
 	for _, item := range items {
+		if item.ID == defaultNamespace && !canSee {
+			continue
+		}
 		resp = append(resp, dto.ToSkillNamespaceResponse(item))
 	}
 	SuccessResponse(c, map[string]any{"items": resp, "totalCount": len(resp)})
@@ -62,6 +137,10 @@ func (h *SkillHubHandler) CreateNamespace(ctx context.Context, c *app.RequestCon
 	}
 	if strings.TrimSpace(req.Name) == "" {
 		ErrorResponse(c, domain.NewInvalidInputError("name is required"))
+		return
+	}
+	if strings.TrimSpace(req.Name) == defaultNamespace {
+		ErrorResponse(c, domain.NewInvalidInputError("cannot create the built-in \"default\" namespace"))
 		return
 	}
 	item, err := h.usecase.CreateNamespace(ctx, req.Name)
@@ -103,6 +182,12 @@ func (h *SkillHubHandler) NamespaceExists(ctx context.Context, c *app.RequestCon
 //	@Router			/skills/namespaces/{ns} [delete]
 func (h *SkillHubHandler) DeleteNamespace(ctx context.Context, c *app.RequestContext) {
 	ns := c.Param("ns")
+	if ns == defaultNamespace {
+		if err := h.checkDefaultManage(ctx, c); err != nil {
+			ErrorResponse(c, err)
+			return
+		}
+	}
 	if err := h.usecase.DeleteNamespace(ctx, ns); err != nil {
 		h.logger.Error("failed to delete skill namespace", "error", err, "namespace", ns)
 		ErrorResponse(c, err)
@@ -172,6 +257,12 @@ func (h *SkillHubHandler) GetSkill(ctx context.Context, c *app.RequestContext) {
 //	@Router			/skills/namespaces/{ns}/skills/create [post]
 func (h *SkillHubHandler) CreateSkill(ctx context.Context, c *app.RequestContext) {
 	ns := c.Param("ns")
+	if ns == defaultNamespace {
+		if err := h.checkDefaultManage(ctx, c); err != nil {
+			ErrorResponse(c, err)
+			return
+		}
+	}
 	var req dto.CreateSkillRequest
 	if err := c.BindAndValidate(&req); err != nil {
 		ErrorResponse(c, domain.NewInvalidInputError(err.Error()))
@@ -219,6 +310,12 @@ func (h *SkillHubHandler) CreateSkill(ctx context.Context, c *app.RequestContext
 //	@Router			/skills/namespaces/{ns}/skills/{name}/update [post]
 func (h *SkillHubHandler) UpdateSkill(ctx context.Context, c *app.RequestContext) {
 	ns := c.Param("ns")
+	if ns == defaultNamespace {
+		if err := h.checkDefaultManage(ctx, c); err != nil {
+			ErrorResponse(c, err)
+			return
+		}
+	}
 	name := c.Param("name")
 	sourceVersion := string(c.Query("version"))
 	var req dto.CreateSkillRequest
@@ -269,6 +366,12 @@ func (h *SkillHubHandler) UpdateSkill(ctx context.Context, c *app.RequestContext
 //	@Router			/skills/namespaces/{ns}/skills [post]
 func (h *SkillHubHandler) UploadSkill(ctx context.Context, c *app.RequestContext) {
 	ns := c.Param("ns")
+	if ns == defaultNamespace {
+		if err := h.checkDefaultManage(ctx, c); err != nil {
+			ErrorResponse(c, err)
+			return
+		}
+	}
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		ErrorResponse(c, domain.NewInvalidInputError("multipart field 'file' is required"))
@@ -346,6 +449,12 @@ func (h *SkillHubHandler) DownloadSkill(ctx context.Context, c *app.RequestConte
 //	@Router			/skills/namespaces/{ns}/skills/{name} [delete]
 func (h *SkillHubHandler) DeleteSkill(ctx context.Context, c *app.RequestContext) {
 	ns := c.Param("ns")
+	if ns == defaultNamespace {
+		if err := h.checkDefaultManage(ctx, c); err != nil {
+			ErrorResponse(c, err)
+			return
+		}
+	}
 	name := c.Param("name")
 	version := string(c.Query("version"))
 	if err := h.usecase.DeleteSkill(ctx, ns, name, version); err != nil {

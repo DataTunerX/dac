@@ -8,14 +8,21 @@ import (
 
 // RegisterRequest User registration请求（HTTP）
 type RegisterRequest struct {
-	Username string `json:"username" binding:"required,min=3,max=50"`
-	Password string `json:"password" binding:"required,min=6,max=72"` // bcrypt 限制72字节
+	Username string  `json:"username" binding:"required,min=3,max=50"`
+	Password string  `json:"password" binding:"required,min=6,max=72"` // bcrypt 限制72字节
+	Email    *string `json:"email,omitempty"`                          // 可选邮箱
 }
 
 // LoginRequest User login请求（HTTP）
 type LoginRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
+}
+
+// UpdateUserRequest 更新用户请求（HTTP）
+type UpdateUserRequest struct {
+	Email    *string `json:"email,omitempty"`    // 可选邮箱
+	Password *string `json:"password,omitempty"` // 可选密码，不传或为空则不更新
 }
 
 // LoginResponse 登录响应（HTTP）
@@ -28,7 +35,8 @@ type LoginResponse struct {
 type UserResponse struct {
 	ID          string  `json:"id"`
 	Username    string  `json:"username"`
-	Role        string  `json:"role"`
+	Email       *string `json:"email,omitempty"`
+	IsBuiltin   bool    `json:"is_builtin"`
 	LastLoginAt *string `json:"last_login_at,omitempty"`
 	CreatedAt   string  `json:"created_at"`
 }
@@ -42,12 +50,22 @@ type UserListResponse struct {
 	TotalPages int             `json:"total_pages"`
 }
 
+// MeResponse is the payload of GET /users/me: the caller's own profile plus
+// the resolved RBAC snapshot (platform roles and permission codes) so the
+// frontend can render UX gates without re-reading the JWT.
+type MeResponse struct {
+	User            *UserResponse `json:"user"`
+	IsSuper         bool          `json:"isSuper"`
+	PlatformRoles   []string      `json:"platformRoles"`
+	PermissionCodes []string      `json:"permissionCodes"`
+}
+
 // ToUserResponse converts entity.User to UserResponse DTO
 func ToUserResponse(user *entity.User) *UserResponse {
 	resp := &UserResponse{
 		ID:        user.ID,
 		Username:  user.Username,
-		Role:      user.Role,
+		Email:     user.Email,
 		CreatedAt: user.CreatedAt.Format(time.RFC3339),
 	}
 

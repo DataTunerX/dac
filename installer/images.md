@@ -16,7 +16,7 @@ nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/code-agent:v0.11.0-amd
 
 # 4. dac-api-server
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/dac-apiserver:v0.11.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/dac-apiserver:v0.12.0-amd64
 
 
 # 5. dac-data-services
@@ -61,7 +61,7 @@ nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/expert-agent:v0.11.0-a
 
 # 13. frontend
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/frontend:v0.11.0-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/frontend:v0.12.0-amd64
 
 
 # 14. orchestrator-agent

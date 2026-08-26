@@ -15,7 +15,7 @@ func toUserEntity(u *ent.User) *entity.User {
 		ID:           u.ID.String(),
 		Username:     u.Username,
 		PasswordHash: u.PasswordHash,
-		Role:         u.Role,
+		Email:        u.Email,
 		LastLoginAt:  u.LastLoginAt,
 		DeletedAt:    u.DeletedAt,
 		CreatedAt:    u.CreatedAt,

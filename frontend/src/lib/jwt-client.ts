@@ -7,7 +7,6 @@ import { jwtDecode } from "jwt-decode"
 export type JwtPayload = {
   exp?: number
   orig_iat?: number
-  role?: string
   user_id?: string
   username?: string
 }
@@ -35,9 +34,9 @@ export function isJwtUsable(token: string | undefined | null, nowMs = Date.now()
   return payload.exp * 1000 > nowMs - 30_000
 }
 
-export function getJwtRole(token: string | undefined | null): string {
-  if (!isJwtUsable(token)) return "anonymous"
+export function getJwtUsername(token: string | undefined | null): string {
+  if (!isJwtUsable(token)) return ""
   const payload = decodeJwtPayload(token!)
-  const role = payload?.role
-  return typeof role === "string" && role.trim() ? role : "user"
+  const username = payload?.username
+  return typeof username === "string" && username.trim() ? username.trim() : ""
 }

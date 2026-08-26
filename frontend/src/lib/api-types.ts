@@ -488,3 +488,140 @@ export type RegisteredAgentListResponse = {
   totalCount: number
   registry: string
 }
+
+// ----- RBAC management (internal/handler/dto/rbac.go, user.go) -----
+
+/** GET/POST/DELETE .../rbac/tenants. */
+export type RbacTenant = {
+  id: string
+  code: string
+  name: string
+  status: string // "active" | "disabled"
+  description?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type RbacTenantListResponse = {
+  items: RbacTenant[]
+  totalCount: number
+}
+
+export type CreateTenantRequest = {
+  code: string
+  name: string
+  description?: string
+}
+
+export type UpdateTenantRequest = {
+  name?: string
+  description?: string
+  status?: string
+}
+
+/** GET/POST .../rbac/tenants/:id/roles. */
+export type RbacTenantRole = {
+  id: string
+  tenantId: string
+  code: string
+  name: string
+  isDefault: boolean
+  description?: string
+  createdAt: string
+}
+
+export type CreateRoleRequest = {
+  code: string
+  name: string
+  description?: string
+}
+
+export type UpdateRoleRequest = {
+  name: string
+  description?: string
+}
+
+/** PUT .../rbac/.../roles/:rid/permissions body. */
+export type SetRolePermissionsRequest = {
+  permissionCodes: string[]
+}
+
+/** GET .../rbac/tenants/:id/users. */
+export type RbacTenantMember = {
+  id: string
+  tenantId: string
+  userId: string
+  roleId: string
+  roleCode: string
+  createdAt: string
+}
+
+export type RbacTenantMemberListResponse = {
+  items: RbacTenantMember[]
+  totalCount: number
+}
+
+export type AddTenantMemberRequest = {
+  userId: string
+  roleId: string
+}
+
+export type ChangeMemberRoleRequest = {
+  roleId: string
+}
+
+/** GET/POST .../rbac/platform/roles. */
+export type RbacPlatformRole = {
+  id: string
+  code: string
+  name: string
+  isSuper: boolean
+  description?: string
+  createdAt: string
+}
+
+/** GET .../rbac/platform/roles/:rid/users. */
+export type PlatformRoleUser = {
+  userId: string
+  roleCode: string
+}
+
+/** POST .../rbac/platform/users. */
+export type GrantPlatformRoleRequest = {
+  userId: string
+  roleId: string
+}
+
+/** GET .../rbac/permissions. */
+export type RbacPermission = {
+  id: string
+  code: string
+  name: string
+  resource: string
+  action: string
+  httpMethod: string
+  httpPath: string
+  description?: string
+}
+
+/** GET .../rbac/me/tenants. */
+export type RbacMyTenant = RbacTenant
+
+/** GET /users (internal/handler/dto/user.go). */
+export type UserResponse = {
+  id: string
+  username: string
+  email?: string
+  role: string
+  is_builtin?: boolean
+  last_login_at?: string
+  created_at: string
+}
+
+export type UserListResponse = {
+  users: UserResponse[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}

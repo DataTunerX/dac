@@ -63,8 +63,4 @@ spec:
             items:
               - key: config.yaml
                 path: config.yaml
-              - key: model.conf
-                path: authz/model.conf
-              - key: policy.csv
-                path: authz/policy.csv
 {{- end }}

@@ -77,21 +77,21 @@ export default function SkillNamespacesPage() {
   const onCreate = async () => {
     const name = newName.trim()
     if (!name) {
-      toast.error("请输入命名空间名称")
+      toast.error("请输入技能命名空间名称")
       return
     }
     if (!NS_PATTERN.test(name)) {
-      toast.error("命名空间须小写字母或数字开头，仅含 a-z、0-9、.、_、-")
+      toast.error("技能命名空间须小写字母或数字开头，仅含 a-z、0-9、.、_、-")
       return
     }
     if (name === "default") {
-      toast.error("default 为系统保留命名空间，不可创建")
+      toast.error("default 为系统保留技能命名空间，不可创建")
       return
     }
     setCreating(true)
     try {
       await createSkillNamespace(name)
-      toast.success(`已创建命名空间 ${name}`)
+      toast.success(`已创建技能命名空间 ${name}`)
       setCreateOpen(false)
       setNewName("")
       await mutate()
@@ -107,11 +107,11 @@ export default function SkillNamespacesPage() {
     setDeleting(true)
     try {
       await deleteSkillNamespace(deleteTarget.id)
-      toast.success(`已删除命名空间 ${deleteTarget.id}`)
+      toast.success(`已删除技能命名空间 ${deleteTarget.id}`)
       setDeleteTarget(null)
       await mutate()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "删除失败（需为空命名空间）")
+      toast.error(err instanceof Error ? err.message : "删除失败（需为空技能命名空间）")
     } finally {
       setDeleting(false)
     }
@@ -121,7 +121,7 @@ export default function SkillNamespacesPage() {
     <div className="space-y-6 p-4 sm:space-y-8 sm:p-6 lg:p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="text-sm font-medium text-content">
-          <span className="font-semibold text-content">命名空间</span>
+          <span className="font-semibold text-content">技能命名空间</span>
           <span className="ml-2 text-content-muted">
             {data?.totalCount != null ? `${data.totalCount} 个` : ""}
           </span>
@@ -130,7 +130,7 @@ export default function SkillNamespacesPage() {
           <ListPageSearch
             value={searchQuery}
             onChange={setSearchQuery}
-            placeholder="搜索命名空间…"
+            placeholder="搜索技能命名空间…"
           />
           <Button
             variant="outline"
@@ -144,11 +144,10 @@ export default function SkillNamespacesPage() {
           <RbacButton
             className="flex items-center gap-2"
             onClick={() => setCreateOpen(true)}
-            requiredRole="admin"
-            fallbackTitle="无权限：仅管理员可创建"
+            requiredPermission="skill:manage"
           >
             <FolderPlus className="h-4 w-4" />
-            新建命名空间
+            新建技能命名空间
           </RbacButton>
         </div>
       </div>
@@ -165,7 +164,7 @@ export default function SkillNamespacesPage() {
         <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed border-line-hover bg-surface-muted">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Package className="h-10 w-10 opacity-20" />
-            <p>{items.length === 0 ? "暂无命名空间" : "没有匹配的命名空间"}</p>
+            <p>{items.length === 0 ? "暂无技能命名空间" : "没有匹配的技能命名空间"}</p>
           </div>
         </div>
       ) : (
@@ -204,16 +203,16 @@ export default function SkillNamespacesPage() {
                       className="text-right"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <RbacWrapper requiredRole="admin">
+                      <RbacWrapper requiredPermission="skill:manage">
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="删除命名空间"
+                          aria-label="删除技能命名空间"
                           disabled={isDefault}
                           title={
                             isDefault
-                              ? "default 命名空间不可删除"
-                              : "仅可删除空命名空间"
+                              ? "default 技能命名空间不可删除"
+                              : "仅可删除空技能命名空间"
                           }
                           onClick={() => setDeleteTarget(ns)}
                         >
@@ -234,7 +233,7 @@ export default function SkillNamespacesPage() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>新建命名空间</DialogTitle>
+            <DialogTitle>新建技能命名空间</DialogTitle>
             <DialogDescription>
               名称须小写字母或数字开头，仅含 a-z、0-9、.、_、-；default 为系统保留。
             </DialogDescription>
@@ -266,9 +265,9 @@ export default function SkillNamespacesPage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除命名空间</AlertDialogTitle>
+            <AlertDialogTitle>删除技能命名空间</AlertDialogTitle>
             <AlertDialogDescription>
-              确认删除命名空间{" "}
+              确认删除技能命名空间{" "}
               <span className="font-medium text-content">{deleteTarget?.id}</span>
               ？仅当其中没有任何技能时才能删除。
             </AlertDialogDescription>

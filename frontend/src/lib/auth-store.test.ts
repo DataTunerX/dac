@@ -20,9 +20,15 @@ function installBrowserGlobals() {
   return { windowTarget, documentTarget }
 }
 
-function sessionResponse(role: string, username: string) {
+function sessionResponse(username: string) {
   return new Response(
-    JSON.stringify({ authenticated: true, role, username }),
+    JSON.stringify({
+      authenticated: true,
+      username,
+      isSuper: false,
+      platformRoles: [],
+      permissionCodes: [],
+    }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   )
 }
@@ -52,8 +58,8 @@ describe("auth store hydration", () => {
     const { windowTarget } = installBrowserGlobals()
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(sessionResponse("admin", "alice"))
-      .mockResolvedValueOnce(sessionResponse("user", "bob"))
+      .mockResolvedValueOnce(sessionResponse("alice"))
+      .mockResolvedValueOnce(sessionResponse("bob"))
     Object.defineProperty(globalThis, "fetch", {
       value: fetchMock,
       configurable: true,
@@ -65,15 +71,61 @@ describe("auth store hydration", () => {
     const unsubscribe = store.subscribeAuth(() => {})
 
     await vi.waitFor(() => {
-      expect(session.getClientSession()).toEqual({ role: "admin", username: "alice" })
+      expect(session.getClientSession()).toEqual({
+        username: "alice",
+        isSuper: false,
+        platformRoles: [],
+        permissionCodes: [],
+      })
     })
 
     windowTarget.dispatchEvent(new Event("focus"))
 
     await vi.waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2)
-      expect(session.getClientSession()).toEqual({ role: "user", username: "bob" })
+      expect(session.getClientSession()).toEqual({
+        username: "bob",
+        isSuper: false,
+        platformRoles: [],
+        permissionCodes: [],
+      })
     })
+    unsubscribe()
+  })
+
+  it("hydrates permission codes / platform roles from the session route", async () => {
+    const { windowTarget } = installBrowserGlobals()
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          authenticated: true,
+          username: "admin",
+          isSuper: true,
+          platformRoles: ["super_admin"],
+          permissionCodes: ["tenant:manage", "platform:role:manage", "user:manage", "permission:read"],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    )
+    Object.defineProperty(globalThis, "fetch", {
+      value: fetchMock,
+      configurable: true,
+      writable: true,
+    })
+
+    const store = await import("./auth-store")
+    const session = await import("./auth-session")
+    const unsubscribe = store.subscribeAuth(() => {})
+
+    await vi.waitFor(() => {
+      expect(session.getClientSession()).toEqual({
+        username: "admin",
+        isSuper: true,
+        platformRoles: ["super_admin"],
+        permissionCodes: ["tenant:manage", "platform:role:manage", "user:manage", "permission:read"],
+      })
+    })
+    windowTarget.dispatchEvent(new Event("visibilitychange"))
     unsubscribe()
   })
 
@@ -88,13 +140,18 @@ describe("auth store hydration", () => {
 
     const session = await import("./auth-session")
     const store = await import("./auth-store")
-    session.establishSession({ role: "admin", username: "alice" })
+    session.establishSession({ username: "alice" })
     const unsubscribe = store.subscribeAuth(() => {})
 
     await vi.waitFor(() => {
       expect(store.isAuthSessionHydrated()).toBe(true)
     })
-    expect(session.getClientSession()).toEqual({ role: "admin", username: "alice" })
+    expect(session.getClientSession()).toEqual({
+      username: "alice",
+      isSuper: false,
+      platformRoles: [],
+      permissionCodes: [],
+    })
     unsubscribe()
   })
 })

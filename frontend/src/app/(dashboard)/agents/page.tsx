@@ -13,7 +13,7 @@ import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import { listAllAgentContainers } from "@/lib/agents-api";
-import { apiFetcherWithParams } from "@/lib/swr";
+import { apiFetcherWithParams, apiFetcher } from "@/lib/swr";
 import { AGENTS_LIST_KEY } from "@/lib/swr-keys";
 import { filterListByQuery } from "@/lib/filter-list-by-query";
 import { RbacButton, RbacWrapper } from "@/components/rbac";
@@ -299,7 +299,7 @@ const AgentCard = memo(function AgentCard({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <StatusBadge status={a.status} />
-            <RbacWrapper requiredRole="admin">
+            <RbacWrapper requiredPermission="agent:delete">
               <Button
                 variant="ghost"
                 size="icon"
@@ -401,6 +401,7 @@ export default function AgentsPage() {
   const [typeFilter, setTypeFilter] = useState<
     "all" | "descriptor" | "semantic-group" | "skill"
   >("semantic-group");
+  const [namespaceFilter, setNamespaceFilter] = useState<string>("all");
 
   const deferredSearch = useDeferredValue(searchQuery);
 
@@ -420,6 +421,18 @@ export default function AgentsPage() {
     sgKey,
     apiFetcherWithParams,
   );
+
+  const { data: nsData } = useSWR<{ items?: unknown[] }>(
+    "/namespaces",
+    apiFetcher,
+  );
+
+  const namespaces = useMemo(() => {
+    const items = nsData?.items ?? [];
+    return items
+      .map((it) => (isRecord(it) ? asString(it.name) : undefined))
+      .filter((n): n is string => Boolean(n));
+  }, [nsData]);
 
   const sgNameById = useMemo(() => {
     const r = sgData as unknown;
@@ -452,10 +465,14 @@ export default function AgentsPage() {
     const searched = filterListByQuery(agents, deferredSearch, (a) =>
       agentSearchText(a, sgNameById),
     );
-    const nextFiltered =
+    const byType =
       typeFilter === "all"
         ? searched
         : searched.filter((a) => a.dataSourceType === typeFilter);
+    const nextFiltered =
+      namespaceFilter === "all"
+        ? byType
+        : byType.filter((a) => a.namespace === namespaceFilter);
     const count = nextFiltered.length;
     const pages = Math.max(1, Math.ceil(count / pageSize));
     const safePage = Math.min(page, pages);
@@ -466,11 +483,11 @@ export default function AgentsPage() {
       totalCount: count,
       totalPages: pages,
     };
-  }, [agents, deferredSearch, typeFilter, sgNameById, page, pageSize]);
+  }, [agents, deferredSearch, typeFilter, namespaceFilter, sgNameById, page, pageSize]);
 
   useEffect(() => {
     setPage(1);
-  }, [deferredSearch, typeFilter]);
+  }, [deferredSearch, typeFilter, namespaceFilter]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -556,7 +573,8 @@ export default function AgentsPage() {
           expertLLM: data.expertModel,
           embedding: "embedding-config",
         },
-        expertAgentMaxSteps: data.expertAgentMaxSteps || "1",
+        expertAgentMaxSteps:
+          data.expertAgentMaxSteps || (isSemanticGroup ? "1" : "2"),
         orchestratorAgentMaxLoops:
           data.orchestratorAgentMaxLoops || (isSemanticGroup ? "1" : "0"),
       };
@@ -608,10 +626,11 @@ export default function AgentsPage() {
   const clearFilters = () => {
     setSearchQuery("");
     setTypeFilter("semantic-group");
+    setNamespaceFilter("all");
   };
 
   const hasActiveFilters =
-    searchQuery.trim() !== "" || typeFilter !== "semantic-group";
+    searchQuery.trim() !== "" || typeFilter !== "semantic-group" || namespaceFilter !== "all";
 
   const showEmpty = !isLoading && agents.length === 0;
   const showNoMatch = !isLoading && agents.length > 0 && filtered.length === 0;
@@ -628,6 +647,22 @@ export default function AgentsPage() {
             onChange={setSearchQuery}
             placeholder="搜索名称、命名空间、描述…"
           />
+          <Select
+            value={namespaceFilter}
+            onValueChange={setNamespaceFilter}
+          >
+            <SelectTrigger className="h-9 w-[min(10rem,40vw)] bg-surface">
+              <SelectValue placeholder="命名空间" />
+            </SelectTrigger>
+            <SelectContent align="end">
+              <SelectItem value="all">全部命名空间</SelectItem>
+              {namespaces.map((ns) => (
+                <SelectItem key={ns} value={ns}>
+                  {ns}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <ListViewModeToggle value={viewMode} onChange={setViewMode} />
           <Select
             value={typeFilter}
@@ -659,8 +694,7 @@ export default function AgentsPage() {
           <RbacButton
             className="flex items-center gap-2"
             onClick={() => setIsCreateOpen(true)}
-            requiredRole="admin"
-            fallbackTitle="无权限：仅管理员可创建"
+            requiredPermission="agent:create"
           >
             <Plus className="h-4 w-4" />
             新建智能体
@@ -675,7 +709,7 @@ export default function AgentsPage() {
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Bot className="h-10 w-10 opacity-20" />
             <p>暂无智能体</p>
-            <RbacWrapper requiredRole="admin">
+            <RbacWrapper requiredPermission="agent:create">
               <Button
                 variant="link"
                 className="text-content-muted underline underline-offset-4 hover:text-content"
@@ -711,7 +745,15 @@ export default function AgentsPage() {
                 <TableHead columnId="namespace" className="whitespace-nowrap">命名空间</TableHead>
                 <TableHead columnId="type" className="whitespace-nowrap">类型</TableHead>
                 <TableHead columnId="status" className="whitespace-nowrap">状态</TableHead>
-                <TableHead columnId="binding">关联语义组</TableHead>
+                <TableHead columnId="binding">
+                  {typeFilter === "descriptor"
+                    ? "关联数据源"
+                    : typeFilter === "skill"
+                      ? "关联技能"
+                      : typeFilter === "all"
+                        ? "关联对象"
+                        : "关联语义组"}
+                </TableHead>
                 <TableHead columnId="created" className="whitespace-nowrap">创建时间</TableHead>
                 <TableHead columnId="actions" className="text-right">操作</TableHead>
               </TableRow>
@@ -790,7 +832,7 @@ export default function AgentsPage() {
                         >
                           <Eye className="h-4 w-4" />
                         </Button>
-                        <RbacWrapper requiredRole="admin">
+                        <RbacWrapper requiredPermission="agent:delete">
                           <Button
                             variant="ghost"
                             size="icon"

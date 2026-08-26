@@ -1,17 +1,14 @@
 package router
 
 import (
-	"context"
-
-	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/hertz-contrib/swagger"
 	swaggerFiles "github.com/swaggo/files"
 
 	"github.com/lvyanru/dac-apiserver/internal/handler"
+	rbachandler "github.com/lvyanru/dac-apiserver/internal/handler/rbac"
 	"github.com/lvyanru/dac-apiserver/internal/middleware"
-
-	"github.com/casbin/casbin/v2"
+	rbacengine "github.com/lvyanru/dac-apiserver/pkg/rbac"
 )
 
 // Setup sets up all routes
@@ -33,6 +30,8 @@ func Setup(
 	ddGroupRelationHandler *handler.DDGroupRelationHandler,
 	knowledgeGraphHandler *handler.KnowledgeGraphHandler,
 	healthHandler *handler.HealthHandler,
+	rbacHandler *rbachandler.RBACHandler,
+	rbacEngine *rbacengine.Engine,
 ) {
 	// Global middleware
 	h.Use(middleware.Recovery())
@@ -48,38 +47,14 @@ func Setup(
 	h.GET("/health/ready", healthHandler.Readiness)
 	h.GET("/health/live", healthHandler.Liveness)
 
-	// Initialize Casbin Enforcer
-	enforcer, err := casbin.NewEnforcer("configs/authz/model.conf", "configs/authz/policy.csv")
-	if err != nil {
-		panic(err)
-	}
-
-	// Custom Casbin Middleware for Path/Method Authorization
-	// Note: We use a custom middleware because hertz-contrib/casbin does not support
-	// automatic RoutePermission (Path/Method matching) out of the box like Fiber's middleware.
-	authzMiddleware := func(ctx context.Context, c *app.RequestContext) {
-		path := string(c.Request.URI().Path())
-		method := string(c.Request.Method())
-
-		// Get current user role from context (set by JWT middleware)
-		role := "anonymous"
-		if v, exists := c.Get("role"); exists {
-			role = v.(string)
-		}
-
-		// Enforce policy: sub, obj, act
-		allowed, err := enforcer.Enforce(role, path, method)
-		if err != nil {
-			c.AbortWithStatusJSON(500, map[string]string{"message": "error checking permissions"})
-			return
-		}
-		if !allowed {
-			c.AbortWithStatusJSON(403, map[string]string{"message": "forbidden"})
-			return
-		}
-
-		c.Next(ctx)
-	}
+	// RBAC engine middleware: database-backed authorization (see pkg/rbac).
+	// It reads the authenticated user from the JWT context (user_id) and the
+	// active tenant from the X-Tenant-Id header, then matches the request
+	// (method, path) against the user's resolved permission codes.
+	//   - platform super admin      → always allowed;
+	//   - tenant member with codes  → allowed when a rule matches;
+	//   - everyone else             → 403 (deny-by-default).
+	authzMiddleware := rbacEngine.Middleware()
 
 	// API v1 routes
 	apiV1 := h.Group("/api/v1")
@@ -111,7 +86,52 @@ func Setup(
 				users.GET("/me", userHandler.GetCurrentUser) // Get current user info
 				users.GET("", userHandler.ListUsers)         // List users
 				users.GET("/:id", userHandler.GetUser)       // Get user info
+				users.PUT("/:id", userHandler.UpdateUser)    // Update user info
 				users.DELETE("/:id", userHandler.DeleteUser) // Delete user
+			}
+
+			// RBAC management routes (tenants/roles/members/platform admins)
+			rbac := authorized.Group("/rbac")
+			{
+				rbac.GET("/permissions", rbacHandler.ListPermissions)
+				rbac.GET("/me/tenants", rbacHandler.MyTenants)
+
+				rbac.GET("/tenants", rbacHandler.ListTenants)
+				rbac.POST("/tenants", rbacHandler.CreateTenant)
+				rbac.GET("/tenants/:id", rbacHandler.GetTenant)
+				rbac.PUT("/tenants/:id", rbacHandler.UpdateTenant)
+				rbac.DELETE("/tenants/:id", rbacHandler.DeleteTenant)
+				rbac.POST("/tenants/:id/disable", rbacHandler.DisableTenant)
+				rbac.POST("/tenants/:id/enable", rbacHandler.EnableTenant)
+
+				rbac.GET("/tenants/:id/namespaces", rbacHandler.ListTenantNamespaces)
+				rbac.POST("/tenants/:id/namespaces", rbacHandler.AddTenantNamespace)
+				rbac.DELETE("/tenants/:id/namespaces/:namespace", rbacHandler.RemoveTenantNamespace)
+
+				rbac.GET("/tenants/:id/roles", rbacHandler.ListTenantRoles)
+				rbac.POST("/tenants/:id/roles", rbacHandler.CreateTenantRole)
+				rbac.PUT("/tenants/:id/roles/:rid", rbacHandler.UpdateTenantRole)
+				rbac.DELETE("/tenants/:id/roles/:rid", rbacHandler.DeleteTenantRole)
+				rbac.GET("/tenants/:id/roles/:rid/permissions", rbacHandler.GetTenantRolePermissions)
+				rbac.PUT("/tenants/:id/roles/:rid/permissions", rbacHandler.SetTenantRolePermissions)
+
+				rbac.GET("/tenants/:id/users", rbacHandler.ListTenantMembers)
+				rbac.POST("/tenants/:id/users", rbacHandler.AddTenantMember)
+				rbac.PUT("/tenants/:id/users/:uid/role", rbacHandler.ChangeTenantMemberRole)
+				rbac.DELETE("/tenants/:id/users/:uid", rbacHandler.RemoveTenantMember)
+
+				rbac.GET("/platform/roles", rbacHandler.ListPlatformRoles)
+				rbac.POST("/platform/roles", rbacHandler.CreatePlatformRole)
+				rbac.PUT("/platform/roles/:rid", rbacHandler.UpdatePlatformRole)
+				rbac.DELETE("/platform/roles/:rid", rbacHandler.DeletePlatformRole)
+				rbac.GET("/platform/roles/:rid/permissions", rbacHandler.GetPlatformRolePermissions)
+				rbac.PUT("/platform/roles/:rid/permissions", rbacHandler.SetPlatformRolePermissions)
+				rbac.GET("/platform/roles/:rid/users", rbacHandler.ListPlatformRoleUsers)
+
+				rbac.POST("/platform/users", rbacHandler.GrantPlatformRole)
+				rbac.DELETE("/platform/users/:uid/roles/:rid", rbacHandler.RevokePlatformRole)
+
+				rbac.GET("/available-users", rbacHandler.AvailableUsers)
 			}
 
 			// Agent Container routes - all namespaces (cluster-scoped)
@@ -164,14 +184,24 @@ func Setup(
 				descriptors.POST("/:name/knowledge/delete", descriptorHandler.DeleteKnowledge)
 			}
 
-			// ConfigMap routes - namespaced (for LLM / prompts management)
-			configmaps := authorized.Group("/namespaces/:namespace/configmaps")
+			// LLM ConfigMap routes - namespaced (model management)
+			llmConfigmaps := authorized.Group("/namespaces/:namespace/llm-configmaps")
 			{
-				configmaps.POST("", configMapHandler.Create)
-				configmaps.GET("", configMapHandler.List)
-				configmaps.GET("/:name", configMapHandler.Get)
-				configmaps.PUT("/:name", configMapHandler.Update)
-				configmaps.DELETE("/:name", configMapHandler.Delete)
+				llmConfigmaps.POST("", configMapHandler.CreateLLM)
+				llmConfigmaps.GET("", configMapHandler.ListLLM)
+				llmConfigmaps.GET("/:name", configMapHandler.GetLLM)
+				llmConfigmaps.PUT("/:name", configMapHandler.UpdateLLM)
+				llmConfigmaps.DELETE("/:name", configMapHandler.DeleteLLM)
+			}
+
+			// Prompt ConfigMap routes - namespaced (prompt management)
+			promptConfigmaps := authorized.Group("/namespaces/:namespace/prompt-configmaps")
+			{
+				promptConfigmaps.POST("", configMapHandler.CreatePrompt)
+				promptConfigmaps.GET("", configMapHandler.ListPrompt)
+				promptConfigmaps.GET("/:name", configMapHandler.GetPrompt)
+				promptConfigmaps.PUT("/:name", configMapHandler.UpdatePrompt)
+				promptConfigmaps.DELETE("/:name", configMapHandler.DeletePrompt)
 			}
 
 			// System configuration (cluster-wide dac-configuration / dd-configuration)
