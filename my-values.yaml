@@ -11,7 +11,7 @@ global:
   embedding:
     provider: "openai_compatible"
     apiKey: "sk-youre-real-key-123"
-    baseUrl: "http://10.124.48.181:11434/api/embed"
+    baseUrl: "http://10.124.48.181:11434/v1"
     model: "bge-m3"
     dims: "1024"
 
@@ -39,7 +39,7 @@ dataServices:
 executionEngine:
   image:
     repository: "execution-engine"
-    tag: "12-amd64"
+    tag: "13-amd64"
   agentImages:
     orchestratorAgent:
       repository: "orchestrator-agent"
@@ -65,6 +65,12 @@ executionEngine:
     dataSinkersObserver:
       repository: "data-sinkers-observer"
       tag: "12-amd64"
+    # 14-amd64 carries the model_sdk fix that drops `temperature` for models
+    # which only accept the default (gpt-5.6-*, o-series). Without it those
+    # models 400 on every call, including the capability check.
+    skillAgent:
+      repository: "skill-agent"
+      tag: "14-amd64"
   llmConfigs:
     - name: "llm-default"
       provider: "openai_compatible"
@@ -101,14 +107,28 @@ bizChartAgent:
     tag: "12-amd64"
 
 bizSkillAgent:
+  config:
+    # Pin to the explicit SKILLS whitelist. With watch-all on, this shared agent
+    # pulls every skill-hub skill (incl. the tdb-* domain skills) into its agent
+    # card and outbids the per-domain agents in capability routing.
+    skillSyncWatchAll: "false"
   image:
     repository: "skill-agent"
-    tag: "12-amd64"
+    tag: "14-amd64"
 
 skillHub:
   image:
     repository: "skill-hub"
     tag: "12-amd64"
+  # PINNED to hostPath on purpose. The chart default is now "pvc", but this
+  # cluster's existing skill zips (incl. TDB-SKILL) live on node dce4 at
+  # /var/lib/dac/skill-hub/skills. Switching to a fresh PVC would start empty and
+  # the init container would reseed only the image-baked defaults, silently
+  # dropping user-uploaded skills.
+  # TODO: copy that directory into the PVC, then delete this pin to pick up the
+  # chart default and become reschedule-safe.
+  persistence:
+    type: hostPath
 
 mysql:
   image:

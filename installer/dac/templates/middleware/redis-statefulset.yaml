@@ -33,6 +33,13 @@ spec:
             - {{ .Values.redis.password | quote }}
             - "--appendonly"
             - "yes"
+            # Keyspace notifications must be set here, not at runtime. The agent
+            # registry enables them via CONFIG SET on startup only; a Redis restart
+            # resets the flag, its pubsub then receives nothing, and agents
+            # registered afterwards stay invisible to routing until the registry
+            # itself is restarted.
+            - "--notify-keyspace-events"
+            - "AKE"
           volumeMounts:
             - name: data
               mountPath: /data

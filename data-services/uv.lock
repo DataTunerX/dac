@@ -1061,7 +1061,7 @@ dependencies = [
     { name = "tiktoken" },
 ]
 wheels = [
-    { filename = "model_sdk-0.2.0-py3-none-any.whl", hash = "sha256:b04f235103b0ada3a608c6e5c53c526e9162e9342e918fcd25ebcbe4a7db68ba" },
+    { filename = "model_sdk-0.2.0-py3-none-any.whl", hash = "sha256:c7ca361a63c7aacd3ac153861dbb7ffa0dca89f436f2eee4e9b1594ae30ecafd" },
 ]
 
 [package.metadata]

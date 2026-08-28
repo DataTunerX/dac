@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
+
 	dacv1alpha1 "github.com/DataTunerX/dac/execution-engine/api/v1alpha1"
 	"github.com/DataTunerX/dac/execution-engine/client/k8s"
 	"github.com/go-logr/logr"
@@ -16,7 +18,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
 )
 
 // DataAgentContainerHandler handles the reconciliation logic for DataAgentContainer resources.
@@ -43,6 +44,7 @@ type DACConfig struct {
 	RedisPort                    string
 	RedisPassword                string
 	DataServicesURL              string
+	TDBBaseURL                   string
 	DSOrchestratorAgentRegistry  string
 	BIZOrchestratorAgentRegistry string
 	OrchestratorAgentImage       string
@@ -51,6 +53,7 @@ type DACConfig struct {
 	CodeAgentImage               string
 	DocAgentImage                string
 	DDSyncObserverImage          string
+	ImagePullPolicy              corev1.PullPolicy
 	// SkillAgentImage is used by dacType=skill single-container Deployments.
 	SkillAgentImage string
 }
@@ -125,15 +128,10 @@ func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.D
 			return err
 		}
 
-		deploymentName := h.GenerateDataAgentContainerDeploymentName(dac)
-		if _, err := h.K8sServices.GetDeployment(dac.Namespace, deploymentName); err != nil {
-			if !errors.IsNotFound(err) {
-				return err
-			}
-			err = h.K8sServices.CreateDeployment(dac.Namespace, deployment)
-			if err != nil {
-				return err
-			}
+		// Reconcile updates so skillPolicy, AgentCard, model, and resource changes
+		// reach an existing normal DAC Deployment and trigger a rollout.
+		if err := h.K8sServices.CreateOrUpdateDeployment(dac.Namespace, deployment); err != nil {
+			return err
 		}
 	}
 
@@ -181,7 +179,7 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerServiceName(dac 
 	return DataAgentContainerResourceName(dac)
 }
 
-func (h *DataAgentContainerGenerator) generateExpertAgentEnvs(dac *dacv1alpha1.DataAgentContainer, serviceName string, ddDescriptorTypes string, dacConfig *DACConfig) []corev1.EnvVar {
+func (h *DataAgentContainerGenerator) generateExpertAgentEnvs(dac *dacv1alpha1.DataAgentContainer, serviceName string, ddDescriptorTypes string, dacConfig *DACConfig, llmConfig *LLMConfig) []corev1.EnvVar {
 	envs := []corev1.EnvVar{}
 
 	agentCardURL := serviceName + "." + dac.Namespace + ".svc.cluster.local"
@@ -275,6 +273,7 @@ func (h *DataAgentContainerGenerator) generateExpertAgentEnvs(dac *dacv1alpha1.D
 	}
 
 	if dacConfig != nil {
+		envs = appendTDBBaseURLEnv(envs, dacConfig)
 		envs = append(envs, corev1.EnvVar{
 			Name:  "LANGFUSE_BASE_URL",
 			Value: dacConfig.ObservationBaseURL,
@@ -291,10 +290,12 @@ func (h *DataAgentContainerGenerator) generateExpertAgentEnvs(dac *dacv1alpha1.D
 		})
 	}
 
+	envs = appendEnableThinkingEnv(envs, llmConfig)
+
 	return envs
 }
 
-func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1alpha1.DataAgentContainer, serviceName string, ddDescriptorTypes string, dacConfig *DACConfig) []corev1.EnvVar {
+func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1alpha1.DataAgentContainer, serviceName string, ddDescriptorTypes string, dacConfig *DACConfig, llmConfig *LLMConfig) []corev1.EnvVar {
 	envs := []corev1.EnvVar{}
 
 	agentCardURL := serviceName + "." + dac.Namespace + ".svc.cluster.local"
@@ -396,6 +397,7 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 	}
 
 	if dacConfig != nil {
+		envs = appendTDBBaseURLEnv(envs, dacConfig)
 		envs = append(envs, corev1.EnvVar{
 			Name:  "LANGFUSE_BASE_URL",
 			Value: dacConfig.ObservationBaseURL,
@@ -411,6 +413,8 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 			Value: dacConfig.ObservationPublicKey,
 		})
 	}
+
+	envs = appendEnableThinkingEnv(envs, llmConfig)
 
 	return envs
 }
@@ -491,6 +495,7 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 		RedisPort:                    configMap.Data["redis-port"],
 		RedisPassword:                configMap.Data["redis-password"],
 		DataServicesURL:              configMap.Data["data-services-url"],
+		TDBBaseURL:                   configMap.Data["tdb-url"],
 		BIZOrchestratorAgentRegistry: configMap.Data["biz-orchestrator-agent-registry"],
 		DSOrchestratorAgentRegistry:  configMap.Data["orchestrator-agent-registry"],
 		OrchestratorAgentImage:       configMap.Data["orchestrator-agent-image"],
@@ -499,8 +504,46 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 		CodeAgentImage:               configMap.Data["code-agent-image"],
 		DocAgentImage:                configMap.Data["doc-agent-image"],
 		DDSyncObserverImage:          configMap.Data["dd-sync-observer-image"],
+		ImagePullPolicy:              corev1.PullPolicy(configMap.Data["image-pull-policy"]),
 		SkillAgentImage:              configMap.Data["skill-agent-image"],
 	}, nil
+}
+
+func resolveDACImagePullPolicy(config *DACConfig) corev1.PullPolicy {
+	if config != nil {
+		switch config.ImagePullPolicy {
+		case corev1.PullAlways, corev1.PullIfNotPresent, corev1.PullNever:
+			return config.ImagePullPolicy
+		}
+	}
+	return corev1.PullIfNotPresent
+}
+
+func appendTDBBaseURLEnv(envs []corev1.EnvVar, config *DACConfig) []corev1.EnvVar {
+	if config != nil && config.TDBBaseURL != "" {
+		envs = append(envs, corev1.EnvVar{Name: "TDB_BASE_URL", Value: config.TDBBaseURL})
+	}
+	return envs
+}
+
+// rejectsEnableThinking reports whether the LLM endpoint refuses the
+// enable_thinking extra_body key. It is a DashScope/Qwen extension; the real
+// OpenAI API answers 400 "Unknown parameter: 'enable_thinking'".
+func rejectsEnableThinking(llmConfig *LLMConfig) bool {
+	if llmConfig == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(llmConfig.BaseURL), "api.openai.com")
+}
+
+// appendEnableThinkingEnv disables the enable_thinking extra_body param for
+// endpoints that reject it. Agents default it on (ENABLE_THINKING_PARAM unset
+// means true), so without this every request to such an endpoint fails.
+func appendEnableThinkingEnv(envs []corev1.EnvVar, llmConfig *LLMConfig) []corev1.EnvVar {
+	if rejectsEnableThinking(llmConfig) {
+		envs = append(envs, corev1.EnvVar{Name: "ENABLE_THINKING_PARAM", Value: "false"})
+	}
+	return envs
 }
 
 // getPlannerLLMConfig get data from configmap
@@ -646,7 +689,7 @@ func (h *DataAgentContainerGenerator) buildObserverSidecar(ctx context.Context, 
 	return &corev1.Container{
 		Name:            "dd-sync-observer",
 		Image:           observerImage,
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		ImagePullPolicy: resolveDACImagePullPolicy(dacConfig),
 		Command:         []string{"python", "-m", "data_sinkers.observer"},
 		Env:             envs,
 		Resources: corev1.ResourceRequirements{
@@ -1139,7 +1182,7 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 			{
 				Name:            "orchestrator",
 				Image:           orchestratorAgentImage,
-				ImagePullPolicy: corev1.PullIfNotPresent,
+				ImagePullPolicy: resolveDACImagePullPolicy(dacConfig),
 				Args:            orchestratorAgentArgs,
 				Ports: []corev1.ContainerPort{
 					{
@@ -1148,7 +1191,7 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 						Protocol:      corev1.ProtocolTCP,
 					},
 				},
-				Env: h.generateOrchestratorAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig),
+				Env: h.generateOrchestratorAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig, plannerLLMConfig),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("1000m"),
@@ -1163,7 +1206,7 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 			{
 				Name:            "expert",
 				Image:           actualExpertImage,
-				ImagePullPolicy: corev1.PullIfNotPresent,
+				ImagePullPolicy: resolveDACImagePullPolicy(dacConfig),
 				Args:            expertAgentArgs,
 				Ports: []corev1.ContainerPort{
 					{
@@ -1172,7 +1215,7 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 						Protocol:      corev1.ProtocolTCP,
 					},
 				},
-				Env: h.generateExpertAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig),
+				Env: h.generateExpertAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig, expertLLMConfig),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("1000m"),
@@ -1187,7 +1230,7 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 			{
 				Name:            "data-services",
 				Image:           dataServicesImage,
-				ImagePullPolicy: corev1.PullIfNotPresent,
+				ImagePullPolicy: resolveDACImagePullPolicy(dacConfig),
 				Ports: []corev1.ContainerPort{
 					{
 						Name:          "data-services",
@@ -1210,6 +1253,10 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 		},
 	}
 
+	if err := configureLocalSkillAttachments(dac, &podSpec); err != nil {
+		return nil, err
+	}
+
 	// Add dd-sync-observer sidecar when any referenced DD has syncPolicy.enabled
 	if observerContainer := h.buildObserverSidecar(ctx, dac, dacConfig); observerContainer != nil {
 		podSpec.Containers = append(podSpec.Containers, *observerContainer)
@@ -1226,8 +1273,8 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 	if dac.Spec.AgentCard.Skills != nil {
 		skillsConfigMapName := DataAgentContainerResourceName(dac)
 
-		podSpec.Volumes = []corev1.Volume{
-			{
+		podSpec.Volumes = append(podSpec.Volumes,
+			corev1.Volume{
 				Name: "skills-config",
 				VolumeSource: corev1.VolumeSource{
 					ConfigMap: &corev1.ConfigMapVolumeSource{
@@ -1237,16 +1284,16 @@ func (h *DataAgentContainerGenerator) GenerateDSDataAgentContainerDeployment(ctx
 					},
 				},
 			},
-		}
+		)
 
 		for i := range podSpec.Containers {
-			podSpec.Containers[i].VolumeMounts = []corev1.VolumeMount{
-				{
+			podSpec.Containers[i].VolumeMounts = append(podSpec.Containers[i].VolumeMounts,
+				corev1.VolumeMount{
 					Name:      "skills-config",
 					MountPath: "/app/skills.json",
 					SubPath:   "skills.json",
 				},
-			}
+			)
 		}
 	}
 
@@ -1329,7 +1376,7 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 			{
 				Name:            "orchestrator",
 				Image:           orchestratorAgentImage,
-				ImagePullPolicy: corev1.PullIfNotPresent,
+				ImagePullPolicy: resolveDACImagePullPolicy(dacConfig),
 				Args:            orchestratorAgentArgs,
 				Ports: []corev1.ContainerPort{
 					{
@@ -1338,7 +1385,7 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 						Protocol:      corev1.ProtocolTCP,
 					},
 				},
-				Env: h.generateOrchestratorAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig),
+				Env: h.generateOrchestratorAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig, plannerLLMConfig),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("1000m"),
@@ -1353,7 +1400,7 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 			{
 				Name:            "expert",
 				Image:           expertAgentImage,
-				ImagePullPolicy: corev1.PullIfNotPresent,
+				ImagePullPolicy: resolveDACImagePullPolicy(dacConfig),
 				Args:            expertAgentArgs,
 				Ports: []corev1.ContainerPort{
 					{
@@ -1362,7 +1409,7 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 						Protocol:      corev1.ProtocolTCP,
 					},
 				},
-				Env: h.generateExpertAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig),
+				Env: h.generateExpertAgentEnvs(dac, serviceName, ddDescriptorTypes, dacConfig, expertLLMConfig),
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("1000m"),
@@ -1377,11 +1424,15 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 		},
 	}
 
+	if err := configureLocalSkillAttachments(dac, &podSpec); err != nil {
+		return nil, err
+	}
+
 	if dac.Spec.AgentCard.Skills != nil {
 		skillsConfigMapName := DataAgentContainerResourceName(dac)
 
-		podSpec.Volumes = []corev1.Volume{
-			{
+		podSpec.Volumes = append(podSpec.Volumes,
+			corev1.Volume{
 				Name: "skills-config",
 				VolumeSource: corev1.VolumeSource{
 					ConfigMap: &corev1.ConfigMapVolumeSource{
@@ -1391,16 +1442,16 @@ func (h *DataAgentContainerGenerator) GenerateDataAgentContainerDeployment(ctx c
 					},
 				},
 			},
-		}
+		)
 
 		for i := range podSpec.Containers {
-			podSpec.Containers[i].VolumeMounts = []corev1.VolumeMount{
-				{
+			podSpec.Containers[i].VolumeMounts = append(podSpec.Containers[i].VolumeMounts,
+				corev1.VolumeMount{
 					Name:      "skills-config",
 					MountPath: "/app/skills.json",
 					SubPath:   "skills.json",
 				},
-			}
+			)
 		}
 	}
 
@@ -1462,6 +1513,11 @@ type skillRefForEnv struct {
 	Version   string `json:"version"`
 }
 
+const (
+	localSkillsVolumeName = "local-skills"
+	localSkillsMountPath  = "/var/run/dac-skills"
+)
+
 // buildSkillsEnvJSON builds SKILLS from skillPolicy (source of truth for zip download).
 func buildSkillsEnvJSON(dac *dacv1alpha1.DataAgentContainer) (string, error) {
 	refs := make([]skillRefForEnv, 0, len(dac.Spec.SkillPolicy.Skills))
@@ -1482,6 +1538,53 @@ func buildSkillsEnvJSON(dac *dacv1alpha1.DataAgentContainer) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// configureLocalSkillAttachments mounts an ephemeral skill directory into the
+// orchestrator and tells its existing startup downloader/SkillRunner to load
+// the packages selected through skillPolicy. Dedicated dacType=skill workloads
+// keep using their single skill-agent container and do not pass through here.
+func configureLocalSkillAttachments(dac *dacv1alpha1.DataAgentContainer, podSpec *corev1.PodSpec) error {
+	if dac.Spec.DACType == "skill" || len(dac.Spec.SkillPolicy.Skills) == 0 {
+		return nil
+	}
+
+	skillsJSON, err := buildSkillsEnvJSON(dac)
+	if err != nil {
+		return fmt.Errorf("marshal local skill attachments: %w", err)
+	}
+
+	for i := range podSpec.Containers {
+		if podSpec.Containers[i].Name != "orchestrator" {
+			continue
+		}
+		podSpec.Containers[i].Env = append(podSpec.Containers[i].Env,
+			corev1.EnvVar{Name: "ENABLE_LOCAL_SKILLS", Value: "true"},
+			corev1.EnvVar{Name: "LOCAL_SKILL_FORCE_ATTACHED", Value: "true"},
+			corev1.EnvVar{Name: "SKILLS", Value: skillsJSON},
+			corev1.EnvVar{Name: "SKILL_HUB_URL", Value: "http://skill-hub.dac.svc.cluster.local:8000"},
+			corev1.EnvVar{Name: "SKILLS_DOWNLOAD_DIR", Value: localSkillsMountPath},
+			corev1.EnvVar{Name: "LOCAL_SKILLS_DIR", Value: localSkillsMountPath},
+			corev1.EnvVar{Name: "SKILL_DOWNLOAD_OVERWRITE", Value: "true"},
+			corev1.EnvVar{Name: "SKILL_DOWNLOAD_CONCURRENCY", Value: "8"},
+			// Local attachments are an explicit set. Do not implicitly pull every
+			// package published in the same Skill Hub namespace.
+			corev1.EnvVar{Name: "SKILL_SYNC_WATCH_ALL", Value: "false"},
+		)
+		podSpec.Containers[i].VolumeMounts = append(
+			podSpec.Containers[i].VolumeMounts,
+			corev1.VolumeMount{Name: localSkillsVolumeName, MountPath: localSkillsMountPath},
+		)
+		podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+			Name: localSkillsVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+		return nil
+	}
+
+	return fmt.Errorf("orchestrator container not found for local skill attachments")
 }
 
 // generateSkillAgentArgs builds skill-agent CLI args.
@@ -1523,7 +1626,7 @@ func (h *DataAgentContainerGenerator) generateSkillAgentArgs(dac *dacv1alpha1.Da
 
 // generateSkillAgentEnvs builds env for the skill-agent container.
 // REGISTER_AGENT=true + redis-db 2 → self-registers into the biz Redis registry.
-func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.DataAgentContainer, serviceName string, skillsJSON string, dacConfig *DACConfig) []corev1.EnvVar {
+func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.DataAgentContainer, serviceName string, skillsJSON string, dacConfig *DACConfig, llmConfig *LLMConfig) []corev1.EnvVar {
 	envs := []corev1.EnvVar{
 		{Name: "Agent_Host", Value: fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, dac.Namespace)},
 		{Name: "Agent_Port", Value: "10100"},
@@ -1540,12 +1643,15 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 		envs = append(envs, corev1.EnvVar{Name: "LOCAL_SKILL_MAX_STEPS", Value: dac.Spec.ExpertAgentMaxSteps})
 	}
 	if dacConfig != nil {
+		envs = appendTDBBaseURLEnv(envs, dacConfig)
 		envs = append(envs,
 			corev1.EnvVar{Name: "LANGFUSE_BASE_URL", Value: dacConfig.ObservationBaseURL},
 			corev1.EnvVar{Name: "LANGFUSE_SECRET_KEY", Value: dacConfig.ObservationSecretKey},
 			corev1.EnvVar{Name: "LANGFUSE_PUBLIC_KEY", Value: dacConfig.ObservationPublicKey},
 		)
 	}
+	envs = appendEnableThinkingEnv(envs, llmConfig)
+
 	return envs
 }
 
@@ -1594,14 +1700,14 @@ func (h *DataAgentContainerGenerator) GenerateSkillDataAgentContainerDeployment(
 
 	// skill DAC has no orchestrator: LLM comes from expertLLM (not plannerLLM).
 	args := h.generateSkillAgentArgs(dac, expertLLMConfig, dacConfig)
-	envs := h.generateSkillAgentEnvs(dac, serviceName, skillsJSON, dacConfig)
+	envs := h.generateSkillAgentEnvs(dac, serviceName, skillsJSON, dacConfig, expertLLMConfig)
 
 	podSpec := corev1.PodSpec{
 		Containers: []corev1.Container{
 			{
 				Name:            "skill-agent",
 				Image:           skillAgentImage,
-				ImagePullPolicy: corev1.PullIfNotPresent,
+				ImagePullPolicy: resolveDACImagePullPolicy(dacConfig),
 				Args:            args,
 				Ports: []corev1.ContainerPort{
 					{Name: "skill", ContainerPort: 10100, Protocol: corev1.ProtocolTCP},

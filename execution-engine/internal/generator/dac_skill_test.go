@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	dacv1alpha1 "github.com/DataTunerX/dac/execution-engine/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func TestBuildSkillsEnvJSON(t *testing.T) {
@@ -63,7 +64,8 @@ func TestGenerateSkillAgentEnvs_RegisterAndSkills(t *testing.T) {
 		ObservationBaseURL:   "http://lf",
 		ObservationSecretKey: "sk",
 		ObservationPublicKey: "pk",
-	})
+		TDBBaseURL:           "http://tdb.dac.svc.cluster.local:8080",
+	}, nil)
 	m := map[string]string{}
 	for _, e := range envs {
 		m[e.Name] = e.Value
@@ -83,6 +85,9 @@ func TestGenerateSkillAgentEnvs_RegisterAndSkills(t *testing.T) {
 	if m["LOCAL_SKILL_MAX_STEPS"] != "15" {
 		t.Fatalf("LOCAL_SKILL_MAX_STEPS=%q", m["LOCAL_SKILL_MAX_STEPS"])
 	}
+	if m["TDB_BASE_URL"] != "http://tdb.dac.svc.cluster.local:8080" {
+		t.Fatalf("TDB_BASE_URL=%q", m["TDB_BASE_URL"])
+	}
 	args := h.generateSkillAgentArgs(dac, &LLMConfig{Provider: "openai_compatible", APIKey: "k", BaseURL: "u", Model: "m"}, nil)
 	foundDB := false
 	for i := 0; i+1 < len(args); i++ {
@@ -95,5 +100,159 @@ func TestGenerateSkillAgentEnvs_RegisterAndSkills(t *testing.T) {
 	}
 	if !foundDB {
 		t.Fatalf("expected --redis-db 2 in %v", args)
+	}
+}
+
+func TestAppendTDBBaseURLEnvSkipsEmptyURL(t *testing.T) {
+	envs := appendTDBBaseURLEnv(nil, &DACConfig{})
+	if len(envs) != 0 {
+		t.Fatalf("unexpected envs: %+v", envs)
+	}
+}
+
+func TestConfigureLocalSkillAttachments(t *testing.T) {
+	dac := &dacv1alpha1.DataAgentContainer{
+		Spec: dacv1alpha1.DataAgentContainerSpec{
+			DACType: "normal",
+			SkillPolicy: dacv1alpha1.SkillPolicy{Skills: []dacv1alpha1.SkillRef{
+				{Namespace: "team-a", Name: "report", Version: "1.0.0"},
+			}},
+		},
+	}
+	pod := corev1.PodSpec{Containers: []corev1.Container{
+		{Name: "orchestrator"},
+		{Name: "expert"},
+	}}
+
+	if err := configureLocalSkillAttachments(dac, &pod); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pod.Volumes) != 1 || pod.Volumes[0].Name != localSkillsVolumeName || pod.Volumes[0].EmptyDir == nil {
+		t.Fatalf("unexpected volumes: %+v", pod.Volumes)
+	}
+	if len(pod.Containers[1].Env) != 0 || len(pod.Containers[1].VolumeMounts) != 0 {
+		t.Fatalf("expert container must not receive local skills: %+v", pod.Containers[1])
+	}
+
+	env := map[string]string{}
+	for _, item := range pod.Containers[0].Env {
+		env[item.Name] = item.Value
+	}
+	if env["ENABLE_LOCAL_SKILLS"] != "true" || env["LOCAL_SKILLS_DIR"] != localSkillsMountPath {
+		t.Fatalf("missing local skill env: %+v", env)
+	}
+	if env["SKILL_SYNC_WATCH_ALL"] != "false" {
+		t.Fatalf("local attachments must not watch all skills: %+v", env)
+	}
+	if env["LOCAL_SKILL_FORCE_ATTACHED"] != "true" {
+		t.Fatalf("local attachments must force in-DAC execution: %+v", env)
+	}
+	var refs []skillRefForEnv
+	if err := json.Unmarshal([]byte(env["SKILLS"]), &refs); err != nil || len(refs) != 1 {
+		t.Fatalf("invalid SKILLS env: %q err=%v", env["SKILLS"], err)
+	}
+	if refs[0].Namespace != "team-a" || refs[0].Version != "1.0.0" {
+		t.Fatalf("unexpected ref: %+v", refs[0])
+	}
+}
+
+func TestConfigureLocalSkillAttachmentsSkippedForDedicatedSkillDAC(t *testing.T) {
+	dac := &dacv1alpha1.DataAgentContainer{
+		Spec: dacv1alpha1.DataAgentContainerSpec{
+			DACType: "skill",
+			SkillPolicy: dacv1alpha1.SkillPolicy{Skills: []dacv1alpha1.SkillRef{
+				{Namespace: "default", Name: "weather"},
+			}},
+		},
+	}
+	pod := corev1.PodSpec{Containers: []corev1.Container{{Name: "skill-agent"}}}
+	if err := configureLocalSkillAttachments(dac, &pod); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pod.Volumes) != 0 || len(pod.Containers[0].Env) != 0 {
+		t.Fatalf("dedicated skill DAC should be unchanged: %+v", pod)
+	}
+}
+
+func TestConfigureMultipleLocalSkillAttachmentsForceInDAC(t *testing.T) {
+	dac := &dacv1alpha1.DataAgentContainer{
+		Spec: dacv1alpha1.DataAgentContainerSpec{
+			DACType: "normal",
+			SkillPolicy: dacv1alpha1.SkillPolicy{Skills: []dacv1alpha1.SkillRef{
+				{Namespace: "default", Name: "weather"},
+				{Namespace: "team-a", Name: "report"},
+			}},
+		},
+	}
+	pod := corev1.PodSpec{Containers: []corev1.Container{{Name: "orchestrator"}}}
+	if err := configureLocalSkillAttachments(dac, &pod); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	env := map[string]string{}
+	for _, item := range pod.Containers[0].Env {
+		env[item.Name] = item.Value
+	}
+	if env["LOCAL_SKILL_FORCE_ATTACHED"] != "true" {
+		t.Fatalf("multiple local attachments must remain inside DAC: %+v", env)
+	}
+}
+
+func TestResolveDACImagePullPolicy(t *testing.T) {
+	if got := resolveDACImagePullPolicy(&DACConfig{ImagePullPolicy: corev1.PullAlways}); got != corev1.PullAlways {
+		t.Fatalf("configured policy=%q", got)
+	}
+	if got := resolveDACImagePullPolicy(&DACConfig{ImagePullPolicy: "invalid"}); got != corev1.PullIfNotPresent {
+		t.Fatalf("invalid policy fallback=%q", got)
+	}
+	if got := resolveDACImagePullPolicy(nil); got != corev1.PullIfNotPresent {
+		t.Fatalf("nil policy fallback=%q", got)
+	}
+}
+
+// enable_thinking is a DashScope/Qwen extension that the real OpenAI API rejects
+// with 400. The operator must switch it off for those endpoints, otherwise every
+// LLM call from the generated agent fails.
+func TestGenerateSkillAgentEnvsDisablesEnableThinkingForOpenAI(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Name = "demo"
+	dac.Namespace = "ns1"
+
+	cases := []struct {
+		name    string
+		baseURL string
+		want    bool
+	}{
+		{name: "openai", baseURL: "https://api.openai.com/v1", want: true},
+		{name: "openai uppercase", baseURL: "https://API.OpenAI.com/v1", want: true},
+		{name: "self-hosted vllm", baseURL: "http://10.124.48.200:8001/v1", want: false},
+		{name: "dashscope", baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			envs := h.generateSkillAgentEnvs(dac, "dac-demo", "[]", &DACConfig{}, &LLMConfig{BaseURL: tc.baseURL})
+
+			got := ""
+			found := false
+			for _, e := range envs {
+				if e.Name == "ENABLE_THINKING_PARAM" {
+					got, found = e.Value, true
+				}
+			}
+			if found != tc.want {
+				t.Fatalf("ENABLE_THINKING_PARAM present=%v, want %v (base-url %s)", found, tc.want, tc.baseURL)
+			}
+			if tc.want && got != "false" {
+				t.Fatalf("ENABLE_THINKING_PARAM=%q, want \"false\"", got)
+			}
+		})
+	}
+}
+
+// A nil LLMConfig must not panic or emit the override.
+func TestAppendEnableThinkingEnvNilConfig(t *testing.T) {
+	if envs := appendEnableThinkingEnv(nil, nil); len(envs) != 0 {
+		t.Fatalf("expected no envs for nil llmConfig, got %v", envs)
 	}
 }

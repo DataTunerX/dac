@@ -1,6 +1,7 @@
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Sequence, Type, Union
 from ...api.base import BaseLLM
 import logging
+import os
 from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import CallbackManagerForLLMRun, AsyncCallbackManagerForLLMRun
 from langchain_core.outputs import ChatGenerationChunk
@@ -23,6 +24,39 @@ logger = logging.getLogger(__name__)
 def _is_minimax_model(model: str) -> bool:
     """True if model id contains 'minimax' (case-insensitive, e.g. MiniMax-M2)."""
     return "minimax" in (model or "").lower()
+
+
+# Models that reject any non-default ``temperature`` and answer 400
+# "Unsupported value: 'temperature' does not support X with this model."
+# Extend at runtime with TEMPERATURE_UNSUPPORTED_MODELS (comma-separated
+# substrings) so a new model does not require rebuilding every agent image.
+_TEMPERATURE_UNSUPPORTED_PREFIXES = ("o1", "o3", "o4")
+_TEMPERATURE_UNSUPPORTED_SUBSTRINGS = ("gpt-5.6",)
+
+
+def _rejects_custom_temperature(model: str) -> bool:
+    name = (model or "").strip().lower()
+    if not name:
+        return False
+    extra = tuple(
+        p.strip().lower()
+        for p in (os.getenv("TEMPERATURE_UNSUPPORTED_MODELS") or "").split(",")
+        if p.strip()
+    )
+    if any(name.startswith(p) for p in _TEMPERATURE_UNSUPPORTED_PREFIXES):
+        return True
+    return any(p in name for p in _TEMPERATURE_UNSUPPORTED_SUBSTRINGS + extra)
+
+
+def _strip_unsupported_temperature(kwargs: Dict[str, Any], model: str) -> None:
+    """Drop ``temperature`` for models that only accept the default value."""
+    if "temperature" in kwargs and _rejects_custom_temperature(model):
+        removed = kwargs.pop("temperature")
+        logger.info(
+            "Dropped unsupported temperature=%s for model %s (only the default is accepted)",
+            removed,
+            model,
+        )
 
 
 def _strip_enable_thinking_from_extra_body(kwargs: Dict[str, Any], model: str) -> None:
@@ -60,6 +94,7 @@ class OpenAICompatibleLLM(BaseLLM):
         # Initialize model_kwargs with any additional kwargs
         model_kwargs = kwargs.copy()
         _strip_enable_thinking_from_extra_body(model_kwargs, model)
+        _strip_unsupported_temperature(model_kwargs, model)
 
         super().__init__(
             provider=provider,
@@ -106,6 +141,7 @@ class OpenAICompatibleLLM(BaseLLM):
         final_kwargs = self.model_kwargs.copy()
         final_kwargs.update(kwargs)
         _strip_enable_thinking_from_extra_body(final_kwargs, self.model)
+        _strip_unsupported_temperature(final_kwargs, self.model)
         if stop is not None:
             final_kwargs["stop"] = stop
         return final_kwargs
