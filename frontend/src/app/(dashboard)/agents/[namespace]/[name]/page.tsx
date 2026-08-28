@@ -179,6 +179,11 @@ export default function AgentDetailPage() {
       .filter((x) => x.id || x.name)
   }, [agentCard])
 
+  const attachedSkillRefs = useMemo(() => {
+    const raw = agent?.skillPolicy?.skills ?? []
+    return raw.filter((ref) => ref.namespace && ref.name)
+  }, [agent])
+
   const filteredSkills = useMemo(() => {
     const q = skillQuery.trim().toLowerCase()
     if (!q) return skills
@@ -245,6 +250,24 @@ export default function AgentDetailPage() {
             <Info className="w-4 h-4 text-content-muted" />
             基础信息
           </div>
+          {attachedSkillRefs.length > 0 ? (
+            <div className="rounded-lg border border-line bg-surface px-4 py-3">
+              <div className="mb-2 text-xs font-medium text-content-muted">
+                {isSkillAgent ? "Skill Hub 绑定" : "本地执行附件"}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {attachedSkillRefs.map((ref) => (
+                  <Badge
+                    key={`${ref.namespace}/${ref.name}@${ref.version || "latest"}`}
+                    variant="outline"
+                    className="font-mono text-xs"
+                  >
+                    {ref.namespace}/{ref.name}@{ref.version || "latest"}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <Card className="rounded-lg border border-line">
             <CardContent className="pt-6">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -607,4 +630,3 @@ export default function AgentDetailPage() {
     </div>
   )
 }
-

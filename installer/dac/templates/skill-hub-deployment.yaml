@@ -1,13 +1,15 @@
 {{- if .Values.skillHub.enabled }}
 {{- /*
   Persist uploaded/created skill zips. Without a volume, SKILLS_DIR lives in the
-  container FS and is wiped on restart. hostPath is the default (single-node);
-  set persistence.type=pvc for StorageClass-backed volumes.
+  container FS and is wiped on restart. pvc is the default (StorageClass-backed,
+  survives rescheduling); set persistence.type=hostPath only for single-node /
+  lab clusters — hostPath data is node-local and is lost the moment the pod is
+  rescheduled onto another node.
 */ -}}
 {{- $persist := .Values.skillHub.persistence | default dict }}
 {{- $persistEnabled := false }}
 {{- if $persist.enabled }}{{ $persistEnabled = true }}{{ end }}
-{{- $persistType := $persist.type | default "hostPath" }}
+{{- $persistType := $persist.type | default "pvc" }}
 {{- $mountPath := $persist.mountPath | default "/app/skills" }}
 {{- $hostPath := $persist.hostPath | default dict }}
 {{- $pvc := $persist.pvc | default dict }}
@@ -34,7 +36,8 @@ spec:
     matchLabels:
       {{- include "dac.selectorLabels" (dict "context" . "name" "skill-hub") | nindent 6 }}
   {{- if $persistEnabled }}
-  # Avoid rolling updates swapping nodes while hostPath data stays on the old node.
+  # RWO PVC can attach to only one pod; hostPath data is node-local. Either way a
+  # rolling update must not run two pods at once, so replace rather than surge.
   strategy:
     type: Recreate
   {{- end }}

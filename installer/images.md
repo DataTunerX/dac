@@ -81,7 +81,7 @@ nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/semantic-grouper:12-am
 
 # 17. skill-agent
 
-nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:12-amd64
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:13-amd64
 
 
 # 18. skill-hub
@@ -89,23 +89,27 @@ nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:12-amd64
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-hub:12-amd64
 
 
-# 19. neo4j
+# 19. tdb-gateway
+
+nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/tdb-gateway:12-amd64
+
+
+# 20. neo4j
 
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/neo4j:5.18.0
 
-# 20. mysql
+# 21. mysql
 
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/mysql:8.0
 
-# 21. redis
+# 22. redis
 
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/redis:7.0.4
 
-# 22. pgvector
+# 23. pgvector
 
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/pgvector:pg16-amd64
 
-# 23. busybox (initContainers)
+# 24. busybox (initContainers)
 
 nerdctl pull registry.cn-shanghai.aliyuncs.com/jamesxiong/busybox:1.36
-

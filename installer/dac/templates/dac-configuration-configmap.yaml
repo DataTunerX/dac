@@ -11,6 +11,10 @@ data:
   redis-host: {{ include "dac.redis.host" . | quote }}
   redis-port: {{ include "dac.redis.port" . | quote }}
   redis-password: {{ include "dac.redis.password" . | quote }}
+  image-pull-policy: {{ .Values.global.imagePullPolicy | quote }}
+  {{- if .Values.tdb.enabled }}
+  tdb-url: {{ include "dac.tdb.url" . | quote }}
+  {{- end }}
   data-services-url: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.dataServices.serviceName" .) .Release.Namespace (.Values.dataServices.service.port | default 8000) | quote }}
   biz-orchestrator-agent-registry: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.bizOrchestratorRegistry.serviceName" .) .Release.Namespace (.Values.bizOrchestratorRegistry.service.port | default 8000) | quote }}
   orchestrator-agent-registry: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.orchestratorRegistry.serviceName" .) .Release.Namespace (.Values.orchestratorRegistry.service.port | default 8000) | quote }}

@@ -107,3 +107,24 @@ func TestValidateSkillPolicy_MissingNamespace(t *testing.T) {
 		t.Fatalf("want InvalidInput, got %v", err)
 	}
 }
+
+func TestValidateSkillRefs_OptionalLocalAttachments(t *testing.T) {
+	if err := validateSkillRefs(entity.SkillPolicy{}, false); err != nil {
+		t.Fatalf("empty optional policy should be valid: %v", err)
+	}
+	if err := validateSkillRefs(entity.SkillPolicy{Skills: []entity.SkillRef{
+		{Namespace: "team-a", Name: "report", Version: "1.2.0"},
+	}}, false); err != nil {
+		t.Fatalf("valid local attachment rejected: %v", err)
+	}
+}
+
+func TestValidateSkillRefs_LocalAttachmentDuplicateName(t *testing.T) {
+	err := validateSkillRefs(entity.SkillPolicy{Skills: []entity.SkillRef{
+		{Namespace: "default", Name: "report"},
+		{Namespace: "team-a", Name: "report"},
+	}}, false)
+	if err == nil || !domain.IsInvalidInput(err) {
+		t.Fatalf("expected invalid duplicate attachment, got %v", err)
+	}
+}

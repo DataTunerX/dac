@@ -1,0 +1,16 @@
+{{- if .Values.tdb.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dac.tdb.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "tdb") | nindent 4 }}
+spec:
+  type: {{ .Values.tdb.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.tdb.service.port }}
+      targetPort: http
+  selector:
+    {{- include "dac.selectorLabels" (dict "context" . "name" "tdb") | nindent 4 }}
+{{- end }}

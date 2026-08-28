@@ -113,7 +113,7 @@ export type CreateAgentPayload = FormValues & {
   skills: Skill[]
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
-  /** skill DAC 原始绑定；与 agentCard.skills 联动提交 */
+  /** Dedicated skill binding or normal/DS DAC local attachments. */
   skillPolicy?: SkillPolicy
 }
 
@@ -198,6 +198,7 @@ export function CreateAgentDialog({
   const [skillDetailLoading, setSkillDetailLoading] = useState(false)
   const [skillDetailFailed, setSkillDetailFailed] = useState(false)
   const [skillDetailErrorMsg, setSkillDetailErrorMsg] = useState<string | null>(null)
+  const [localAttachmentsEnabled, setLocalAttachmentsEnabled] = useState(false)
 
   // Namespaces: SWR when dialog open for dedup/cache with configmaps page
   const { data: nsData, isLoading: isLoadingNs } = useSWR<NamespaceListResponse>(
@@ -243,6 +244,7 @@ export function CreateAgentDialog({
     lastAutoDesc.current = ""
     setFingerprintState({ key: "", status: "idle" })
     setSkillPolicySkills([])
+    setLocalAttachmentsEnabled(false)
     setSkillPickerNs("default")
     setSkillCatalog([])
     setSkillCatalogError(null)
@@ -311,8 +313,11 @@ export function CreateAgentDialog({
       form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
     } else if (dataSourceType === "skill") {
       // skill 单容器默认：与设计示例对齐
+      // maxSteps=30：skill 的 ReAct 循环（检索 → 深挖 → provenance → 扩展轮次 → 归纳）
+      // 通常需要 20+ 步；10 会在归纳前触发 max_steps_exceeded，导致 skill 被判定失败并
+      // 从候选中剔除，最终整体 declined。
       form.setValue("orchestratorAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
-      form.setValue("expertAgentMaxSteps", "10", { shouldDirty: false, shouldTouch: false })
+      form.setValue("expertAgentMaxSteps", "30", { shouldDirty: false, shouldTouch: false })
     } else {
       form.setValue("orchestratorAgentMaxLoops", "1", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
@@ -388,16 +393,20 @@ export function CreateAgentDialog({
     }
   }
 
-  // skill 分支：加载 skill-hub namespaces + catalog
+  // Load Skill Hub catalog for a dedicated skill DAC or optional local attachments.
   useEffect(() => {
-    if (!open || dataSourceType !== "skill") return
+    if (!open || (dataSourceType !== "skill" && !localAttachmentsEnabled)) return
     void loadSkillNamespaces()
-  }, [open, dataSourceType]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, dataSourceType, localAttachmentsEnabled]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!open || dataSourceType !== "skill" || !skillPickerNs) return
+    if (
+      !open ||
+      (dataSourceType !== "skill" && !localAttachmentsEnabled) ||
+      !skillPickerNs
+    ) return
     void loadSkillCatalog(skillPickerNs)
-  }, [open, dataSourceType, skillPickerNs]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, dataSourceType, localAttachmentsEnabled, skillPickerNs]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // skillPolicy → agentCard.skills：对每个 SkillRef 拉 hub detail；失败则阻止提交
   useEffect(() => {
@@ -880,6 +889,10 @@ export function CreateAgentDialog({
             ...values,
             namespace: ns,
             skills,
+            skillPolicy:
+              localAttachmentsEnabled && skillPolicySkills.length > 0
+                ? { skills: skillPolicySkills }
+                : undefined,
             expertAgentMaxSteps: values.expertAgentMaxSteps || "1",
             orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "0",
         })
@@ -894,6 +907,10 @@ export function CreateAgentDialog({
             ...values,
             namespace: values.namespace || "default", // Semantic Group defaults to 'default' or user selection if we expose it
             skills,
+            skillPolicy:
+              localAttachmentsEnabled && skillPolicySkills.length > 0
+                ? { skills: skillPolicySkills }
+                : undefined,
             expertAgentMaxSteps: values.expertAgentMaxSteps || "1",
             orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "1",
         })
@@ -935,6 +952,7 @@ export function CreateAgentDialog({
                           if (val !== "skill") {
                             setSkillPolicySkills([])
                             setSkillVersionsByKey({})
+                            setLocalAttachmentsEnabled(false)
                           }
                         }}
                         disabled={isSubmitting}
@@ -1187,6 +1205,162 @@ export function CreateAgentDialog({
                   )}
                 />
                 )}
+
+                {dataSourceType !== "skill" ? (
+                  <div className="sm:col-span-2 space-y-3 rounded-lg border border-line bg-surface p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold text-content-muted">
+                          本地技能附件（可选）
+                        </div>
+                        <div className="mt-1 text-xs text-content-muted">
+                          技能包将在智能体启动时从 Skill Hub 下载，并直接由当前 DAC 的 orchestrator 执行。
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant={localAttachmentsEnabled ? "default" : "outline"}
+                        size="sm"
+                        disabled={isSubmitting}
+                        onClick={() => {
+                          const next = !localAttachmentsEnabled
+                          setLocalAttachmentsEnabled(next)
+                          if (!next) {
+                            setSkillPolicySkills([])
+                            setSkillVersionsByKey({})
+                          }
+                        }}
+                      >
+                        {localAttachmentsEnabled ? "已启用" : "启用"}
+                      </Button>
+                    </div>
+
+                    {localAttachmentsEnabled ? (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <div className="text-xs text-content-muted">技能命名空间</div>
+                            <Select
+                              value={skillPickerNs}
+                              onValueChange={setSkillPickerNs}
+                              disabled={isSubmitting || isLoadingSkillNs}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="选择技能命名空间" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {(skillHubNamespaces.length > 0
+                                  ? skillHubNamespaces
+                                  : [{ id: "default", visibility: "public" }]
+                                ).map((ns) => (
+                                  <SelectItem key={ns.id} value={ns.id}>
+                                    {ns.id}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="text-xs text-content-muted">添加本地技能</div>
+                            <Select
+                              key={`add-local-skill-${skillPolicySkills.length}-${skillPickerNs}`}
+                              onValueChange={(val) => {
+                                const skill = skillCatalog.find((s) => s.name === val)
+                                if (skill) addSkillRef(skill)
+                              }}
+                              disabled={isSubmitting || isLoadingSkillCatalog}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue
+                                  placeholder={
+                                    isLoadingSkillCatalog
+                                      ? "加载中…"
+                                      : skillCatalogError || "选择要附加的技能"
+                                  }
+                                />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {skillCatalog.length === 0 ? (
+                                  <SelectItem value="__empty_local__" disabled>
+                                    {skillCatalogError || "该命名空间暂无技能"}
+                                  </SelectItem>
+                                ) : (
+                                  skillCatalog.map((skill) => (
+                                    <SelectItem
+                                      key={`${skill.namespace || skillPickerNs}/${skill.name}`}
+                                      value={skill.name}
+                                      disabled={selectedSkillKeySet.has(
+                                        `${skill.namespace || skillPickerNs}/${skill.name}`
+                                      )}
+                                    >
+                                      {skill.name}
+                                    </SelectItem>
+                                  ))
+                                )}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+
+                        {skillPolicySkills.length === 0 ? (
+                          <div className="text-sm text-content-muted">尚未附加本地技能</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {skillPolicySkills.map((ref) => {
+                              const key = `${ref.namespace}/${ref.name}`
+                              const versions = skillVersionsByKey[key] ?? []
+                              return (
+                                <div
+                                  key={key}
+                                  className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-muted/30 px-3 py-2"
+                                >
+                                  <Badge variant="outline" className="font-mono text-xs">
+                                    {ref.namespace}
+                                  </Badge>
+                                  <span className="text-sm font-medium">{ref.name}</span>
+                                  <Select
+                                    value={ref.version || "__latest__"}
+                                    onValueChange={(val) =>
+                                      updateSkillRefVersion(
+                                        ref.name,
+                                        ref.namespace,
+                                        val === "__latest__" ? "" : val
+                                      )
+                                    }
+                                    disabled={isSubmitting}
+                                  >
+                                    <SelectTrigger className="h-8 w-[140px]">
+                                      <SelectValue placeholder="版本" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="__latest__">最新</SelectItem>
+                                      {versions.map((version) => (
+                                        <SelectItem key={version} value={version}>
+                                          {version}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="ml-auto h-8 w-8 text-content-muted hover:text-red-600"
+                                    disabled={isSubmitting}
+                                    onClick={() => removeSkillRef(ref.name, ref.namespace)}
+                                    aria-label="移除本地技能"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <FormField
                   control={form.control}

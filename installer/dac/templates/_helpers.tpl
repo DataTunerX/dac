@@ -84,6 +84,10 @@ app.kubernetes.io/component: {{ .name }}
 {{- include "dac.componentName" (dict "context" . "name" "pgvector") -}}
 {{- end }}
 
+{{- define "dac.tdb.serviceName" -}}
+{{- include "dac.componentName" (dict "context" . "name" "tdb") -}}
+{{- end }}
+
 {{- define "dac.neo4j.serviceName" -}}
 {{- include "dac.componentName" (dict "context" . "name" "neo4j") -}}
 {{- end }}
@@ -163,6 +167,30 @@ app.kubernetes.io/component: {{ .name }}
 {{- else }}
 {{- .Values.pgvector.password }}
 {{- end }}
+{{- end }}
+
+{{- define "dac.tdb.databaseHost" -}}
+{{- .Values.tdb.database.host | default (include "dac.pgvector.host" .) -}}
+{{- end }}
+
+{{- define "dac.tdb.databasePort" -}}
+{{- .Values.tdb.database.port | default (include "dac.pgvector.port" .) -}}
+{{- end }}
+
+{{- define "dac.tdb.databaseUser" -}}
+{{- .Values.tdb.database.user | default .Values.pgvector.user -}}
+{{- end }}
+
+{{- define "dac.tdb.databasePassword" -}}
+{{- .Values.tdb.database.password | default (include "dac.pgvector.password" .) -}}
+{{- end }}
+
+{{- define "dac.tdb.databaseURL" -}}
+{{- printf "postgres://%s:%s@%s:%s/%s" (include "dac.tdb.databaseUser" . | urlquery) (include "dac.tdb.databasePassword" . | urlquery) (include "dac.tdb.databaseHost" .) (include "dac.tdb.databasePort" .) .Values.tdb.database.name -}}
+{{- end }}
+
+{{- define "dac.tdb.url" -}}
+{{- printf "http://%s.%s.svc.cluster.local:%v" (include "dac.tdb.serviceName" .) .Release.Namespace .Values.tdb.service.port -}}
 {{- end }}
 
 {{- define "dac.neo4j.host" -}}

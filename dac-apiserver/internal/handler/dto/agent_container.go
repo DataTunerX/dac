@@ -57,14 +57,14 @@ type CreateAgentContainerRequest struct {
 
 // UpdateAgentContainerRequest represents the HTTP update request
 type UpdateAgentContainerRequest struct {
-	Labels                    map[string]string  `json:"labels,omitempty"`
-	DACType                   *string            `json:"dacType,omitempty"`
-	DataPolicy                *DataPolicyDTO     `json:"dataPolicy,omitempty"`
-	SkillPolicy               *SkillPolicyDTO    `json:"skillPolicy,omitempty"`
-	AgentCard                 *AgentCardDTO      `json:"agentCard,omitempty"`
-	Model                     *ModelSpecDTO      `json:"model,omitempty"`
-	ExpertAgentMaxSteps       *string            `json:"expertAgentMaxSteps,omitempty"`
-	OrchestratorAgentMaxLoops *string            `json:"orchestratorAgentMaxLoops,omitempty"`
+	Labels                    map[string]string `json:"labels,omitempty"`
+	DACType                   *string           `json:"dacType,omitempty"`
+	DataPolicy                *DataPolicyDTO    `json:"dataPolicy,omitempty"`
+	SkillPolicy               *SkillPolicyDTO   `json:"skillPolicy,omitempty"`
+	AgentCard                 *AgentCardDTO     `json:"agentCard,omitempty"`
+	Model                     *ModelSpecDTO     `json:"model,omitempty"`
+	ExpertAgentMaxSteps       *string           `json:"expertAgentMaxSteps,omitempty"`
+	OrchestratorAgentMaxLoops *string           `json:"orchestratorAgentMaxLoops,omitempty"`
 }
 
 // AgentContainerResponse represents the HTTP response for agent container
@@ -145,14 +145,14 @@ type ConditionResponse struct {
 // ToAgentContainerResponse converts entity to response DTO
 func ToAgentContainerResponse(container *entity.AgentContainer) AgentContainerResponse {
 	resp := AgentContainerResponse{
-		Name:                container.Name,
-		Namespace:           container.Namespace,
+		Name:                      container.Name,
+		Namespace:                 container.Namespace,
 		Labels:                    container.Labels,
 		DACType:                   container.DACType,
 		ExpertAgentMaxSteps:       container.ExpertAgentMaxSteps,
 		OrchestratorAgentMaxLoops: container.OrchestratorAgentMaxLoops,
 		CreatedAt:                 container.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:           container.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:                 container.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	// DataPolicy
@@ -162,7 +162,7 @@ func ToAgentContainerResponse(container *entity.AgentContainer) AgentContainerRe
 		SourceNameSelector: container.DataPolicy.SourceNameSelector,
 	}
 
-	// SkillPolicy (skill DAC binding)
+	// SkillPolicy (dedicated skill DAC or local attachments)
 	if len(container.SkillPolicy.Skills) > 0 {
 		skillRefs := make([]SkillRefResponse, len(container.SkillPolicy.Skills))
 		for i, s := range container.SkillPolicy.Skills {

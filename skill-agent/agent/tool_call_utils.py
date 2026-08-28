@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time as _time
 from typing import Any, Optional
 
@@ -42,6 +43,11 @@ def extract_tool_call_result(ai_msg: Any, tool_name: str) -> Optional[dict]:
     LangChain 的 bind_tools 机制让 LLM 返回一个 AIMessage，其中 tool_calls 字段
     记录了 LLM 决定调用的工具名称和参数。遍历所有 tool_calls，找到匹配
     tool_name 的那一个，将其 args 解析为 dict 返回。
+
+    部分本地部署的模型（如 vLLM 上的 gemma）即使带了 tool_choice，也可能把结构化
+    结果当作普通 JSON 文本写进 content 而不发起 tool_call。此时回退到从 content 中
+    解析 JSON，避免整次判定被当成失败（capability_check 会因此把 confidence 归零，
+    导致该 agent 被路由丢弃）。
 
     Args:
         ai_msg: LLM 返回的 AIMessage 对象。
@@ -60,7 +66,36 @@ def extract_tool_call_result(ai_msg: Any, tool_name: str) -> Optional[dict]:
                 except (json.JSONDecodeError, TypeError):
                     return None
             return args if isinstance(args, dict) else {}
-    return None
+    return _parse_json_object_from_content(getattr(ai_msg, "content", None))
+
+
+def _parse_json_object_from_content(content: Any) -> Optional[dict]:
+    """从模型的自由文本回复里抢救出一个 JSON 对象（tool_call 缺失时的兜底）。
+
+    支持裸 JSON 与 ```json 代码块包裹两种形式；解析失败返回 None。
+    """
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    if not text:
+        return None
+    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    logger.warning(
+        " === tool_call_utils: LLM returned JSON text instead of a tool call — "
+        "recovered %d field(s) from content", len(parsed),
+    )
+    return parsed
 
 
 async def invoke_llm_with_tool(

@@ -2,8 +2,8 @@
 
 At startup the agent downloads its subscribed skills once (see
 :mod:`agent.skill_download`). This module adds the *ongoing* half: a daemon
-thread that periodically polls ``GET {SKILL_HUB_URL}/skills`` and, when it sees
-a **new** skill or a **newer version** of a watched skill, pulls the zip into
+thread that periodically polls the relevant Skill Hub namespace indexes and,
+when it sees a **new** skill or a **newer version** of a watched skill, pulls the zip into
 ``SKILLS_DOWNLOAD_DIR`` (overwriting) and fires an ``on_change`` callback. The
 server wires that callback to hot-reload the ``SkillRunner`` and re-register the
 refreshed AgentCard — so a ``docker push``-style upload to the hub shows up on
@@ -20,10 +20,9 @@ SKILL_SYNC_INTERVAL
     the watcher.
 
 SKILL_SYNC_WATCH_ALL
-    When truthy (default ``true``), the watcher also downloads skills that are
-    **not** in the ``SKILLS`` subscription list — i.e. it picks up brand-new
-    skills the moment they are pushed to the hub. Set to ``false`` to only track
-    version updates of the subscribed set.
+    When truthy (default ``true``), the watcher also downloads unconfigured
+    skills from the legacy ``default`` namespace. Set to ``false`` to track only
+    the explicit namespace/name/version subscriptions in ``SKILLS``.
 
 It also honours the same ``SKILL_HUB_URL`` / ``SKILLS`` / ``SKILLS_DOWNLOAD_DIR``
 / ``SKILL_DOWNLOAD_TIMEOUT`` / ``TAVILY_API_KEY`` variables as
@@ -36,14 +35,17 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
+from urllib.parse import quote
 
 import httpx
 
 from .skill_download import (
+    DEFAULT_NAMESPACE,
     DEFAULT_SKILL_HUB_URL,
     DEFAULT_SKILLS_DIR,
     DEFAULT_TIMEOUT,
+    SkillRef,
     _parse_skills_env,
     _sanitize_skill_name,
     download_skills,
@@ -104,7 +106,7 @@ class SkillHubWatcher(threading.Thread):
         on_change: Callable[[List[str]], None],
         base_url: Optional[str] = None,
         skills_dir: Optional[str] = None,
-        subscribed: Optional[Sequence[str]] = None,
+        subscribed: Optional[Sequence[Union[str, SkillRef]]] = None,
         watch_all: Optional[bool] = None,
         interval: Optional[float] = None,
         timeout: Optional[float] = None,
@@ -120,9 +122,19 @@ class SkillHubWatcher(threading.Thread):
         )
         if subscribed is None:
             subscribed = _parse_skills_env(os.getenv("SKILLS"))
-        self.subscribed = {
-            n for n in (_sanitize_skill_name(s) for s in subscribed) if n
-        }
+        subscribed_by_name: Dict[str, SkillRef] = {}
+        for item in subscribed:
+            if isinstance(item, SkillRef):
+                ref = item
+            else:
+                name = _sanitize_skill_name(str(item))
+                if not name:
+                    continue
+                ref = SkillRef(name=name)
+            # The downloader writes <name>.zip into a flat directory, so the
+            # same name cannot safely be subscribed from two namespaces.
+            subscribed_by_name.setdefault(ref.name, ref)
+        self.subscribed = subscribed_by_name
         self.watch_all = (
             _env_truthy(os.getenv("SKILL_SYNC_WATCH_ALL"), default=True)
             if watch_all is None
@@ -147,43 +159,92 @@ class SkillHubWatcher(threading.Thread):
         if self.is_alive() and threading.current_thread() is not self:
             self.join(timeout=max(1.0, min(self.interval + 1.0, 10.0)))
 
-    def _poll_hub(self) -> Optional[Dict[str, str]]:
-        """Return ``{name: latest_version}`` from the hub, or ``None`` on error."""
-        url = f"{self.base_url}/skills"
-        try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-                resp = client.get(url)
-            resp.raise_for_status()
-            payload = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[SkillSync] poll %s failed: %s", url, exc)
-            return None
-        skills = payload.get("skills") if isinstance(payload, dict) else None
-        if not isinstance(skills, list):
-            logger.warning("[SkillSync] unexpected /skills payload shape from %s", url)
-            return None
-        out: Dict[str, str] = {}
-        for entry in skills:
-            if not isinstance(entry, dict):
-                continue
-            name = _sanitize_skill_name(str(entry.get("name") or ""))
-            version = str(entry.get("version") or "").strip()
-            if name and version:
-                out[name] = version
-        return out
+    def _poll_hub(self) -> Optional[Dict[Tuple[str, str], Tuple[str, frozenset[str]]]]:
+        """Return hub versions keyed by ``(namespace, name)``.
 
-    def _select_targets(self, hub: Dict[str, str]) -> List[str]:
-        """Names to (re)download this cycle: new skills + version bumps."""
-        watch = set(hub) if self.watch_all else (self.subscribed & set(hub))
-        # Always keep tracking subscribed skills even if watch_all is off.
-        watch |= self.subscribed & set(hub)
-        targets: List[str] = []
-        for name in sorted(watch):
-            hub_ver = hub[name]
-            local_present = (self.skills_dir / f"{name}.zip").exists()
-            if self._known.get(name) == hub_ver and local_present:
+        ``watch_all`` retains its legacy meaning for the default namespace.
+        Explicit subscriptions add any non-default namespaces that must also be
+        queried. This keeps local DAC attachments namespace-aware without
+        importing unrelated packages from those namespaces.
+        """
+        namespaces = {ref.namespace for ref in self.subscribed.values()}
+        if self.watch_all:
+            namespaces.add(DEFAULT_NAMESPACE)
+        if not namespaces:
+            return {}
+
+        out: Dict[Tuple[str, str], Tuple[str, frozenset[str]]] = {}
+        successful = 0
+        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            for namespace in sorted(namespaces):
+                if namespace == DEFAULT_NAMESPACE:
+                    url = f"{self.base_url}/skills"
+                else:
+                    url = f"{self.base_url}/namespaces/{quote(namespace, safe='')}/skills"
+                try:
+                    resp = client.get(url)
+                    resp.raise_for_status()
+                    payload = resp.json()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[SkillSync] poll %s failed: %s", url, exc)
+                    continue
+                skills = payload.get("skills") if isinstance(payload, dict) else None
+                if not isinstance(skills, list):
+                    logger.warning("[SkillSync] unexpected skills payload from %s", url)
+                    continue
+                successful += 1
+                for entry in skills:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = _sanitize_skill_name(str(entry.get("name") or ""))
+                    latest = str(entry.get("version") or "").strip()
+                    raw_versions = entry.get("available_versions")
+                    versions = (
+                        frozenset(str(v).strip() for v in raw_versions if str(v).strip())
+                        if isinstance(raw_versions, list)
+                        else frozenset({latest} if latest else set())
+                    )
+                    if name and latest:
+                        out[(namespace, name)] = (latest, versions)
+        return out if successful else None
+
+    def _select_targets(
+        self,
+        hub: Dict[Tuple[str, str], Tuple[str, frozenset[str]]],
+    ) -> List[Tuple[SkillRef, str]]:
+        """Return ``(download_ref, desired_version)`` entries needing refresh."""
+        desired: Dict[str, Tuple[SkillRef, str]] = {}
+
+        if self.watch_all:
+            for (namespace, name), (latest, _versions) in hub.items():
+                if namespace == DEFAULT_NAMESPACE:
+                    desired[name] = (SkillRef(name=name), latest)
+
+        # Explicit subscriptions override same-name watch-all entries and retain
+        # their namespace/version pin.
+        for name, ref in self.subscribed.items():
+            entry = hub.get((ref.namespace, name))
+            if entry is None:
                 continue
-            targets.append(name)
+            latest, versions = entry
+            wanted = ref.version or latest
+            if ref.version and ref.version not in versions:
+                logger.warning(
+                    "[SkillSync] pinned version missing: %s/%s@%s",
+                    ref.namespace,
+                    name,
+                    ref.version,
+                )
+                continue
+            desired[name] = (ref, wanted)
+
+        targets: List[Tuple[SkillRef, str]] = []
+        for name in sorted(desired):
+            ref, wanted = desired[name]
+            local_present = (self.skills_dir / f"{name}.zip").exists()
+            if self._known.get(name) == wanted and local_present:
+                continue
+            targets.append((ref, wanted))
         return targets
 
     def _sync_once(self) -> None:
@@ -193,14 +254,18 @@ class SkillHubWatcher(threading.Thread):
         targets = self._select_targets(hub)
         if not targets:
             return
+        labels = [
+            f"{ref.namespace}/{ref.name}" + (f"@{ref.version}" if ref.version else "")
+            for ref, _wanted in targets
+        ]
         logger.info(
             "[SkillSync] change detected — pulling %d skill(s): %s",
             len(targets),
-            ", ".join(targets),
+            ", ".join(labels),
         )
         try:
             downloaded = download_skills(
-                targets,
+                [ref for ref, _wanted in targets],
                 skill_hub_url=self.base_url,
                 target_dir=str(self.skills_dir),
                 timeout=self.timeout,
@@ -211,13 +276,14 @@ class SkillHubWatcher(threading.Thread):
             return
 
         got = {p.stem for p in downloaded}
-        applied = [n for n in targets if n in got]
-        for name in applied:
-            self._known[name] = hub[name]
+        applied = [ref.name for ref, _wanted in targets if ref.name in got]
+        for ref, wanted in targets:
+            if ref.name in got:
+                self._known[ref.name] = wanted
         if not applied:
             logger.warning(
                 "[SkillSync] nothing was successfully downloaded (targets=%s)",
-                ", ".join(targets),
+                ", ".join(labels),
             )
             return
         try:
@@ -233,7 +299,11 @@ class SkillHubWatcher(threading.Thread):
             self.skills_dir,
             self.interval,
             self.watch_all,
-            sorted(self.subscribed) or "(none)",
+            [
+                f"{ref.namespace}/{ref.name}" + (f"@{ref.version}" if ref.version else "")
+                for ref in self.subscribed.values()
+            ]
+            or "(none)",
         )
         # Poll once immediately. The startup downloader fetched subscriptions,
         # while this initial registry scan also discovers every existing skill

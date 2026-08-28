@@ -595,6 +595,7 @@ NON_RETRYABLE_REPEAT_MARKER = "NON_RETRYABLE::REPEATED_FAILURE"
 #   LOCAL_SKILL_MAX_CONCURRENCY    : max concurrent plan_cmd executions, 0 = unlimited
 #   LOCAL_SKILL_FALLBACK_ON_NONE   : when planner emits agent=NONE, try LocalSkill first
 #   LOCAL_SKILL_INJECT_CARD        : auto|always|never (default: auto)
+#   LOCAL_SKILL_FORCE_ATTACHED     : keep all explicitly attached skills inside this DAC
 #
 # ``USE_ONLY_OWN_CAPABILITY`` (default true, read in ``list_agent_cards``) is separate:
 # when true, skip the external agent registry and use only ``self.agent_card`` at
@@ -605,6 +606,10 @@ LOCAL_SKILLS_ENABLED = os.getenv("ENABLE_LOCAL_SKILLS", "true").strip().lower() 
 LOCAL_SKILLS_DIR = os.getenv("LOCAL_SKILLS_DIR", "/app/skills/").strip()
 LOCAL_SKILL_FALLBACK_ON_NONE = os.getenv("LOCAL_SKILL_FALLBACK_ON_NONE", "true").strip().lower() in ("1", "true", "yes")
 LOCAL_SKILL_INJECT_MODE = os.getenv("LOCAL_SKILL_INJECT_CARD", "auto").strip().lower()
+LOCAL_SKILL_FORCE_ATTACHED = os.getenv(
+    "LOCAL_SKILL_FORCE_ATTACHED",
+    os.getenv("LOCAL_SKILL_FORCE_SINGLE", "false"),
+).strip().lower() in ("1", "true", "yes")
 try:
     LOCAL_SKILL_MAX_STEPS = int(os.getenv("LOCAL_SKILL_MAX_STEPS", "20"))
 except (TypeError, ValueError):
@@ -1408,6 +1413,58 @@ class OrchestratorAgent(BaseAgent):
             return False
         return (getattr(task, "agent", "") or "").strip() == self.local_skill_agent_name
 
+    def _single_local_skill(self):
+        """Return the sole loaded skill, or ``None`` when the inventory is not singular."""
+        if not self._has_local_skill():
+            return None
+        try:
+            skills = list(getattr(self.skill_runner.lister, "skills", []) or [])
+        except Exception:  # noqa: BLE001
+            logger.exception("[LocalSkill][ForceSingle] failed to inspect skill inventory")
+            return None
+        return skills[0] if len(skills) == 1 else None
+
+    def _has_loaded_local_skills(self) -> bool:
+        if not self._has_local_skill():
+            return False
+        try:
+            return bool(getattr(self.skill_runner.lister, "skills", []) or [])
+        except Exception:  # noqa: BLE001
+            logger.exception("[LocalSkill][ForceAttached] failed to inspect skill inventory")
+            return False
+
+    def _should_force_attached_local_skills(self) -> bool:
+        return LOCAL_SKILL_FORCE_ATTACHED and self._has_loaded_local_skills()
+
+    async def _run_local_skill_query(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        """Run the sole attachment directly when forced; otherwise use normal selection."""
+        skill = self._single_local_skill()
+        if LOCAL_SKILL_FORCE_ATTACHED and skill is not None:
+            logger.info(
+                "[LocalSkill][ForceSingle] executing skill=%s directly inside DAC",
+                getattr(skill, "name", "(unknown)"),
+            )
+            return await self.skill_runner.run(
+                query=query,
+                skill=skill,
+                user_id=user_id,
+                run_id=run_id,
+                trace_id=trace_id,
+            )
+        return await self.skill_runner.plan_and_run(
+            query=query,
+            user_id=user_id,
+            run_id=run_id,
+            trace_id=trace_id,
+        )
+
     def _should_inject_local_skill_card(self) -> bool:
         """Decide whether to add the synthetic LocalSkill card to agent_cards."""
         if not self._has_local_skill():
@@ -1774,7 +1831,7 @@ class OrchestratorAgent(BaseAgent):
         t0 = _time.perf_counter()
 
         try:
-            result = await self.skill_runner.plan_and_run(
+            result = await self._run_local_skill_query(
                 query=task.description,
                 user_id=user_id,
                 run_id=run_id,
@@ -1919,7 +1976,7 @@ class OrchestratorAgent(BaseAgent):
         run_id = metadata.get("run_id") if isinstance(metadata, dict) else None
         t0 = _time.perf_counter()
         try:
-            result = await self.skill_runner.plan_and_run(
+            result = await self._run_local_skill_query(
                 query=task.description,
                 user_id=user_id,
                 run_id=run_id,
@@ -2043,6 +2100,24 @@ class OrchestratorAgent(BaseAgent):
         >= 1 = replan after failed execution rounds inside a2a_tasks (aligned with retry_count after increment);
         those calls always run make_plan for single-agent so the LLM sees replan_context.
         """
+
+        if self._should_force_attached_local_skills():
+            skills = list(getattr(self.skill_runner.lister, "skills", []) or [])
+            logger.info(
+                "[LocalSkill][ForceAttached] bypassing agent planner for %d attached skill(s)",
+                len(skills),
+            )
+            return TaskList(
+                thought_process="Explicitly attached skills are forced to execute inside this DAC.",
+                original_query=query,
+                tasks=[
+                    PlannerTask(
+                        id=1,
+                        description=query,
+                        agent=self.local_skill_agent_name,
+                    )
+                ],
+            )
 
         self.agent_cards = await self.list_agent_cards(query)
 

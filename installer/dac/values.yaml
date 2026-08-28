@@ -186,6 +186,53 @@ pgvector:
     password: ""
 
 # ---------------------------------------------------------------------------
+# TDB temporal/semantic data service.
+# Runs a stateless HTTP gateway + Rust backend and stores data in a dedicated
+# logical database on the pgvector PostgreSQL server by default.
+# ---------------------------------------------------------------------------
+tdb:
+  enabled: true
+  image:
+    repository: tdb-gateway
+    tag: "12-amd64"
+  replicas: 1
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+  database:
+    # Empty host/port/user/password values inherit the chart's pgvector values.
+    host: ""
+    port: ""
+    name: tdb
+    user: ""
+    password: ""
+    # Reuse a Secret containing DATABASE_URL instead of creating one.
+    existingSecret: ""
+    secretKey: DATABASE_URL
+    migrationProfile: full
+  gateway:
+    logLevel: info
+    backendTimeoutMs: "30000"
+    bodyLimitBytes: "10485760"
+  embedding:
+    enabled: false
+    baseUrl: ""
+    apiKey: ""
+    model: qwen3-embedding:8b
+    timeoutSecs: "120"
+    batchSize: "8"
+    vectorDocMaxChars: "3000"
+    strict: false
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+# ---------------------------------------------------------------------------
 # Neo4j (used by: data-services)
 # Mirrors docker compose: 5.18.0, 7474/7687, APOC, data/logs/import volumes.
 # For docker.m.daocloud.io/neo4j: set global.imageRegistry: "docker.m.daocloud.io"
@@ -479,7 +526,7 @@ executionEngine:
     # -- Image for dacType=skill single-container skill-agent Deployments
     skillAgent:
       repository: "skill-agent"
-      tag: "12-amd64"
+      tag: "13-amd64"
 
   # -- dac-configuration ConfigMap values (read by DAC controller)
   dacConfig:
@@ -676,7 +723,7 @@ bizSkillAgent:
   enabled: true
   image:
     repository: skill-agent
-    tag: "12-amd64"
+    tag: "13-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state / registration
@@ -746,7 +793,7 @@ skillHub:
   image:
     repository: skill-hub
     tag: "12-amd64"
-  # hostPath persistence is node-local — keep replicas at 1.
+  # Skill storage is ReadWriteOnce (PVC) / node-local (hostPath) — keep replicas at 1.
   replicas: 1
   config:
     # -- Silence the transitive langfuse "client disabled" log from skill_sdk.
@@ -756,12 +803,19 @@ skillHub:
     #    default (/app/skills/). Ignored when persistence is enabled (mountPath
     #    is always used as SKILLS_DIR then).
     skillsDir: ""
-  # Persist skill zips across pod restarts. Default hostPath is enough for
-  # single-node / lab clusters; switch type to "pvc" for multi-node / prod.
+  # Persist skill zips across pod restarts AND rescheduling.
+  #
+  # Default is "pvc". User-uploaded skill zips exist ONLY here, and a hostPath
+  # stores them on a single node's local disk while nothing pins the pod to that
+  # node. Any reschedule (node drain/failure, eviction) starts the pod on another
+  # node against an empty DirectoryOrCreate dir; the init container then reseeds
+  # only the image-baked defaults, so every user-uploaded skill silently
+  # disappears. Use "hostPath" only on single-node / lab clusters with no
+  # StorageClass available.
   persistence:
     enabled: true
-    # -- "hostPath" | "pvc"
-    type: hostPath
+    # -- "pvc" | "hostPath"
+    type: pvc
     # -- Container mount path (= SKILLS_DIR when persistence is on)
     mountPath: /app/skills
     hostPath:

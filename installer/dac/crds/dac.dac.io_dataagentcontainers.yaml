@@ -106,7 +106,7 @@ spec:
               orchestratorAgentMaxLoops:
                 type: string
               skillPolicy:
-                description: SkillPolicy is the raw skill-hub selection for dacType=skill
+                description: SkillPolicy selects packages for a dedicated skill DAC or local orchestrator attachments
                   (empty for ds/normal).
                 properties:
                   skills:

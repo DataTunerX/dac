@@ -76,7 +76,7 @@ export type DataPolicyResponse = {
   sourceNameSelector?: string[]
 }
 
-/** Skill-hub package ref for dacType=skill (editable binding: ns/name/version only). */
+/** Skill-hub package ref for a dedicated skill DAC or a local DAC attachment. */
 export type SkillRef = {
   namespace: string
   name: string
@@ -84,7 +84,7 @@ export type SkillRef = {
   version?: string
 }
 
-/** Symmetric with dataPolicy: skill DACs bind via skillPolicy. */
+/** Package bindings: dedicated skill DAC execution or local orchestrator attachments. */
 export type SkillPolicy = {
   skills?: SkillRef[]
 }
@@ -135,7 +135,7 @@ export type AgentContainerResponse = {
   labels?: Record<string, string>
   dacType?: string
   dataPolicy: DataPolicyResponse
-  /** Present when dacType=skill. */
+  /** Present for dedicated skill DACs or normal/DS DACs with local attachments. */
   skillPolicy?: SkillPolicy
   agentCard: AgentCardResponse
   model: ModelSpecResponse

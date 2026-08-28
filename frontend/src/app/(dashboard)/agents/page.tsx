@@ -521,7 +521,7 @@ export default function AgentsPage() {
             expertLLM: llm,
             embedding: "embedding-config",
           },
-          expertAgentMaxSteps: data.expertAgentMaxSteps || "10",
+          expertAgentMaxSteps: data.expertAgentMaxSteps || "30",
           orchestratorAgentMaxLoops: data.orchestratorAgentMaxLoops || "2",
         };
         await api.post(`/namespaces/${data.namespace}/agents`, payload);
@@ -548,6 +548,9 @@ export default function AgentsPage() {
           semanticGroupID: isSemanticGroup ? data.dataSourceId : undefined,
           sourceNameSelector: !isSemanticGroup ? [data.dataSourceId] : undefined,
         },
+        ...(data.skillPolicy?.skills?.length
+          ? { skillPolicy: data.skillPolicy }
+          : {}),
         model: {
           plannerLLM: data.plannerModel,
           expertLLM: data.expertModel,

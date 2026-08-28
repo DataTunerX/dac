@@ -23,6 +23,9 @@ Namespace: {{ .Release.Namespace }}
 {{- if .Values.skillHub.enabled }}
   Skill Hub:      {{ include "dac.skillHub.serviceName" . }}:{{ .Values.skillHub.service.port }}
 {{- end }}
+{{- if .Values.tdb.enabled }}
+  TDB API:        {{ include "dac.tdb.url" . }}
+{{- end }}
 
 ------------------------------------------------------------
   Middleware

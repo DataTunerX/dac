@@ -56,6 +56,13 @@ def test_download_path_non_default_namespace():
     )
 
 
+def test_download_path_encodes_version_query_value():
+    assert (
+        SkillRef(name="report", namespace="team-a", version="v1+build").download_path()
+        == "/namespaces/team-a/skills/report.zip?version=v1%2Bbuild"
+    )
+
+
 def test_dedupe_by_name():
     refs = dedupe_refs(
         [

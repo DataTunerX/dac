@@ -12,7 +12,7 @@ type AgentContainer struct {
 	// Spec
 	DACType                   string
 	DataPolicy                DataPolicy
-	SkillPolicy               SkillPolicy // skill DAC: raw skill-hub selection
+	SkillPolicy               SkillPolicy // dedicated skill DAC or local attachments
 	AgentCard                 AgentCard
 	Model                     ModelSpec
 	ExpertAgentMaxSteps       string
@@ -35,7 +35,8 @@ type DataPolicy struct {
 	SourceNameSelector []string
 }
 
-// SkillPolicy binds skill-hub packages for dacType=skill.
+// SkillPolicy binds skill-hub packages. For dacType=skill they are executed by
+// the dedicated skill-agent; for other DAC types they are local orchestrator attachments.
 type SkillPolicy struct {
 	Skills []SkillRef
 }

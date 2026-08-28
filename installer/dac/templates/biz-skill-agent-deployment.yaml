@@ -44,6 +44,10 @@ spec:
               value: {{ .Values.bizSkillAgent.config.cmdTimeoutSec | quote }}
             - name: LOCAL_SKILL_MAX_CONCURRENCY
               value: {{ .Values.bizSkillAgent.config.maxConcurrency | quote }}
+            {{- if .Values.tdb.enabled }}
+            - name: TDB_BASE_URL
+              value: {{ include "dac.tdb.url" . | quote }}
+            {{- end }}
             # Startup-time skill download from skill-hub. Agent will fetch each
             # {name}.zip into SKILLS_DOWNLOAD_DIR before SkillRunner preload.
             - name: SKILLS

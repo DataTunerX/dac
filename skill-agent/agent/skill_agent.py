@@ -240,7 +240,7 @@ class CapabilityCheckToolResult(BaseModel):
 
 SKILL_CAPABILITY_CHECK_PROMPT = """# Role：本地技能与通用工具任务判定器
 
-请按以下步骤**逐步思考**，将推理过程写入 reason 字段，最后**只输出一个 JSON 对象**（不要用 Markdown 代码块包裹）。
+请按以下步骤**逐步思考**，每步写出你的推理，最后给出结论。
 
 ## 思考步骤
 
@@ -271,7 +271,7 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# Role：本地技能与通用工具任务判
 
 ---
 ## 输出格式
-{{"can_handle": true 或 false, "can_contribute": true 或 false, "contribution": "（仅当 can_contribute=true）", "confidence": 0.0 到 1.0, "reason": "步骤1：... 步骤2：... 步骤3：... 步骤4：... 步骤5：... 步骤6：... 结论：..."}}
+请调用 evaluate_capability 工具来输出判定结果。将步骤 1～6 的推理过程写入 reason 字段。
 """
 
 

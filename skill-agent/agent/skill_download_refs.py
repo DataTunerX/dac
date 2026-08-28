@@ -12,6 +12,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -28,15 +29,17 @@ class SkillRef:
 
     def download_path(self) -> str:
         """Relative URL path (no leading hub base)."""
-        filename = f"{self.name}.zip"
+        filename = f"{quote(self.name, safe='')}.zip"
+        namespace = quote(self.namespace, safe="")
+        version = quote(self.version, safe="")
         # default + no version keeps legacy agent path used by biz-skill-agent
         if self.namespace == DEFAULT_NAMESPACE and not self.version:
             return f"/skills/{filename}"
         if self.namespace == DEFAULT_NAMESPACE:
-            return f"/skills/{filename}?version={self.version}"
+            return f"/skills/{filename}?version={version}"
         if self.version:
-            return f"/namespaces/{self.namespace}/skills/{filename}?version={self.version}"
-        return f"/namespaces/{self.namespace}/skills/{filename}"
+            return f"/namespaces/{namespace}/skills/{filename}?version={version}"
+        return f"/namespaces/{namespace}/skills/{filename}"
 
 
 def sanitize_skill_name(name: str) -> Optional[str]:

@@ -1,0 +1,133 @@
+{{- if .Values.tdb.enabled }}
+{{- if ne (int .Values.tdb.replicas) 1 }}
+{{- fail "tdb.replicas must be 1 because database migrations run in the Pod init container" }}
+{{- end }}
+{{- $secretName := .Values.tdb.database.existingSecret | default (include "dac.tdb.serviceName" .) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dac.tdb.serviceName" . }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "tdb") | nindent 4 }}
+spec:
+  replicas: {{ .Values.tdb.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "dac.selectorLabels" (dict "context" . "name" "tdb") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dac.selectorLabels" (dict "context" . "name" "tdb") | nindent 8 }}
+    spec:
+      initContainers:
+        - name: migrate
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.tdb.image.repository "tag" .Values.tdb.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              {{- if .Values.tdb.database.existingSecret }}
+              until pg_isready -d "$DATABASE_URL"; do
+                echo "waiting for the configured TDB PostgreSQL database"
+                sleep 2
+              done
+              {{- else }}
+              until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER"; do
+                echo "waiting for TDB PostgreSQL at ${PGHOST}:${PGPORT}"
+                sleep 2
+              done
+              if ! psql -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname = '$TDB_DATABASE'" | grep -qx 1; then
+                # Feed the statement on stdin: psql performs :"var" interpolation for
+                # stdin/file input but NOT for -c, where the literal ":" reaches the
+                # server and fails with `syntax error at or near ":"`.
+                psql -d postgres -v dbname="$TDB_DATABASE" <<<'CREATE DATABASE :"dbname"'
+              fi
+              {{- end }}
+              TDB_MIGRATIONS_DIR=/app/db/migrations_v2 /app/scripts/db_migrate.sh
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ .Values.tdb.database.secretKey }}
+            {{- if not .Values.tdb.database.existingSecret }}
+            - name: PGHOST
+              value: {{ include "dac.tdb.databaseHost" . | quote }}
+            - name: PGPORT
+              value: {{ include "dac.tdb.databasePort" . | quote }}
+            - name: PGUSER
+              value: {{ include "dac.tdb.databaseUser" . | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: PGPASSWORD
+            - name: TDB_DATABASE
+              value: {{ .Values.tdb.database.name | quote }}
+            {{- end }}
+            - name: TDB_MIGRATION_PROFILE
+              value: {{ .Values.tdb.database.migrationProfile | quote }}
+      containers:
+        - name: tdb
+          image: {{ include "dac.image" (dict "registry" .Values.global.imageRegistry "repository" .Values.tdb.image.repository "tag" .Values.tdb.image.tag) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.tdb.service.targetPort }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ .Values.tdb.database.secretKey }}
+            - name: TDB_DOCKER_REWRITE_LOCALHOST_DATABASE_URL
+              value: "false"
+            - name: TDB_GATEWAY_HOST
+              value: "0.0.0.0"
+            - name: TDB_GATEWAY_PORT
+              value: {{ .Values.tdb.service.targetPort | quote }}
+            - name: TDB_GATEWAY_BACKEND_ADDR
+              value: "127.0.0.1:50051"
+            - name: TDB_GATEWAY_BACKEND_TIMEOUT_MS
+              value: {{ .Values.tdb.gateway.backendTimeoutMs | quote }}
+            - name: TDB_GATEWAY_BODY_LIMIT_BYTES
+              value: {{ .Values.tdb.gateway.bodyLimitBytes | quote }}
+            - name: TDB_GATEWAY_LOG_LEVEL
+              value: {{ .Values.tdb.gateway.logLevel | quote }}
+            - name: TDB_ENABLE_PGVECTOR
+              value: {{ .Values.tdb.embedding.enabled | quote }}
+            - name: TDB_EMBED_BASE_URL
+              value: {{ .Values.tdb.embedding.baseUrl | quote }}
+            - name: TDB_EMBED_API_KEY
+              value: {{ .Values.tdb.embedding.apiKey | quote }}
+            - name: TDB_EMBED_MODEL
+              value: {{ .Values.tdb.embedding.model | quote }}
+            - name: TDB_EMBED_TIMEOUT_SECS
+              value: {{ .Values.tdb.embedding.timeoutSecs | quote }}
+            - name: TDB_EMBED_BATCH_SIZE
+              value: {{ .Values.tdb.embedding.batchSize | quote }}
+            - name: TDB_VECTOR_DOC_MAX_CHARS
+              value: {{ .Values.tdb.embedding.vectorDocMaxChars | quote }}
+            - name: TDB_EMBED_STRICT
+              value: {{ .Values.tdb.embedding.strict | quote }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.tdb.resources | nindent 12 }}
+{{- end }}

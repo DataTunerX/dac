@@ -97,6 +97,13 @@ SkillRunner.plan_and_run(query=task.description)
 
 This avoids an A2A network hop, but the skills are private to that orchestrator process unless also served through `skill-agent`.
 
+For a normal DD/SG DAC with explicit local attachments, the execution engine
+sets `LOCAL_SKILL_FORCE_ATTACHED=true`. The orchestrator bypasses the external
+agent-routing planner so execution stays inside that DAC. With exactly one
+attachment it calls `SkillRunner.run(...)` directly; with multiple attachments
+the in-process `SkillRunner.plan_and_run(...)` selects the matching attached
+skill. No attached skill is executed through a remote A2A agent.
+
 Relevant files:
 
 - `orchestrator-agent/orchestrator_agent/orchestrator_agent_semantic_domain.py`
