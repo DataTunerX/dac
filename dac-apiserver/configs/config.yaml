@@ -76,6 +76,10 @@ tdb_pipeline:
     runs_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/runs"
     status_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/jobs/status"
     attempt_status_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/jobs/attempt-status"
+  # 运行成功后自动为该目标发布 TDB 问答技能（幂等：技能已存在则跳过）
+  skill:
+    auto_publish: true
+    namespace: "default"
   targets:
     - id: "archeology"
       domain: "archeology"

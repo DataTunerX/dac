@@ -24,7 +24,7 @@ global:
 apiserver:
   image:
     repository: "dac-apiserver"
-    tag: "13-amd64"
+    tag: "14-amd64"
 
 frontend:
   image:

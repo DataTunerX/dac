@@ -387,6 +387,11 @@ apiserver:
         runs_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/runs"
         status_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/jobs/status"
         attempt_status_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/jobs/attempt-status"
+      # -- Publish a TDB QA skill for a target once a run has ingested content
+      # into it. Idempotent: an existing skill of the same name is left alone.
+      skill:
+        auto_publish: true
+        namespace: "default"
       # -- Selectable TDB targets. Must stay in step with the controller's
       # domain-config ConfigMap. Each gateway_url is the same TDB gateway the
       # named skill_agent queries, so ingestion and Q&A share one database.

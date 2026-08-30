@@ -222,6 +222,14 @@ type TDBPipelineRunStore interface {
 	List(ctx context.Context, filter TDBPipelineRunFilter) ([]*TDBPipelineRun, int, error)
 }
 
+// TDBPipelineSkillProvisioner publishes the TDB QA skill that answers over a
+// pipeline target's gateway, so an ingested corpus becomes queryable without
+// anyone hand-writing and uploading a skill. Implementations must be idempotent:
+// it is called on every run that reaches a successful terminal state.
+type TDBPipelineSkillProvisioner interface {
+	EnsureSkill(ctx context.Context, target TDBPipelineTarget, collection string) (string, error)
+}
+
 // TDBPipelineUsecase is the DAC-facing pipeline ingestion API.
 type TDBPipelineUsecase interface {
 	Options(ctx context.Context) TDBPipelineOptionSet

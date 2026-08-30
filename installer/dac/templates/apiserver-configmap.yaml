@@ -66,6 +66,8 @@ data:
         {{- toYaml .Values.apiserver.config.tdbPipeline.llmProfiles | nindent 8 }}
       images:
         {{- toYaml .Values.apiserver.config.tdbPipeline.images | nindent 8 }}
+      skill:
+        {{- toYaml .Values.apiserver.config.tdbPipeline.skill | nindent 8 }}
       defaults:
         {{- toYaml .Values.apiserver.config.tdbPipeline.defaults | nindent 8 }}
       targets:

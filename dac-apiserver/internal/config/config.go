@@ -104,6 +104,24 @@ type TDBPipelineConfig struct {
 	LLMProfiles []string                  `mapstructure:"llm_profiles"`
 	Defaults    TDBPipelineDefaultsConfig `mapstructure:"defaults"`
 	Targets     []TDBPipelineTargetConfig `mapstructure:"targets"`
+	Skill       TDBPipelineSkillConfig    `mapstructure:"skill"`
+}
+
+// TDBPipelineSkillConfig controls automatic publication of a TDB QA skill for a
+// target once a run has ingested content into it.
+type TDBPipelineSkillConfig struct {
+	// AutoPublish turns the behaviour on. Default true.
+	AutoPublish *bool  `mapstructure:"auto_publish"`
+	// Namespace is the skill-hub namespace generated skills are published into.
+	Namespace string `mapstructure:"namespace"`
+}
+
+// SkillAutoPublishEnabled reports whether finished runs publish a skill.
+func (c TDBPipelineConfig) SkillAutoPublishEnabled() bool {
+	if c.Skill.AutoPublish == nil {
+		return true
+	}
+	return *c.Skill.AutoPublish
 }
 
 // TDBPipelineTargetConfig is one selectable TDB target.

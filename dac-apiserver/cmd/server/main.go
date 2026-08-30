@@ -277,10 +277,23 @@ func runServer(cmd *cobra.Command, args []string) {
 		slog.Error("failed to initialize tdb pipeline run store", "error", err)
 		os.Exit(1)
 	}
+	// A finished run publishes the QA skill for its target, so freshly ingested
+	// content is answerable without hand-writing a skill.
+	tdbSkillNamespace := cfg.TDBPipeline.Skill.Namespace
+	if tdbSkillNamespace == "" {
+		tdbSkillNamespace = "default"
+	}
+	tdbSkillProvisioner := tdbpipelineinfra.NewSkillProvisioner(
+		skillHubClient,
+		tdbSkillNamespace,
+		cfg.TDBPipeline.SkillAutoPublishEnabled(),
+		appLogger,
+	)
 	tdbPipelineUsecase := usecase.NewTDBPipelineUsecase(
 		tdbPipelineClient,
 		tdbPipelineStore,
 		tdbpipelineinfra.OptionSetFromConfig(cfg.TDBPipeline),
+		tdbSkillProvisioner,
 		appLogger,
 	)
 	tdbPipelineHandler := handler.NewTDBPipelineHandler(tdbPipelineUsecase, appLogger)

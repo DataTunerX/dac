@@ -25,15 +25,20 @@ type tdbPipelineUsecase struct {
 	controller domain.TDBPipelineControllerRepository
 	store      domain.TDBPipelineRunStore
 	options    domain.TDBPipelineOptionSet
+	skills     domain.TDBPipelineSkillProvisioner
 	logger     *slog.Logger
 }
 
 // NewTDBPipelineUsecase wires the controller client, the run store and the
 // deployment's target allowlist together.
+// NewTDBPipelineUsecase wires the controller client, the run store, the target
+// allowlist and the skill provisioner together. skills may be nil, in which case
+// no skill is published when a run finishes.
 func NewTDBPipelineUsecase(
 	controller domain.TDBPipelineControllerRepository,
 	store domain.TDBPipelineRunStore,
 	options domain.TDBPipelineOptionSet,
+	skills domain.TDBPipelineSkillProvisioner,
 	logger *slog.Logger,
 ) domain.TDBPipelineUsecase {
 	if logger == nil {
@@ -43,6 +48,7 @@ func NewTDBPipelineUsecase(
 		controller: controller,
 		store:      store,
 		options:    options,
+		skills:     skills,
 		logger:     logger,
 	}
 }
@@ -205,11 +211,59 @@ func (u *tdbPipelineUsecase) refresh(ctx context.Context, run *domain.TDBPipelin
 		return
 	}
 
+	previousStatus := run.Status
 	run.Status = summary.Status
 	run.Counters = summary.Counters
 	if err := u.store.UpdateSummary(ctx, run.RunID, summary.Status, summary.Counters); err != nil {
 		u.logger.Warn("failed to persist pipeline run summary", "error", err, "run_id", run.RunID)
 	}
+
+	// Publish the target's skill the first time a run lands content there.
+	if !isTerminalRunStatus(previousStatus) && isTerminalRunStatus(run.Status) {
+		u.provisionSkill(ctx, run)
+	}
+}
+
+// provisionSkill publishes the QA skill for a finished run's target, so the
+// corpus it just ingested is answerable. Failures are logged, never surfaced:
+// the ingestion itself already succeeded, and re-running this recovers it.
+func (u *tdbPipelineUsecase) provisionSkill(ctx context.Context, run *domain.TDBPipelineRun) {
+	if u.skills == nil {
+		return
+	}
+	if run.Counters.Succeeded == 0 {
+		// Nothing was written to the gateway, so there is nothing to answer over.
+		return
+	}
+
+	target, ok := u.targetForRun(run)
+	if !ok {
+		u.logger.Warn("no configured target matches finished run; skipping skill publish",
+			"run_id", run.RunID, "domain", run.Domain, "gateway", run.GatewayURL)
+		return
+	}
+
+	name, err := u.skills.EnsureSkill(ctx, target, run.Collection)
+	if err != nil {
+		u.logger.Error("failed to publish skill for finished run",
+			"error", err, "run_id", run.RunID, "target", target.ID)
+		return
+	}
+	if name != "" {
+		u.logger.Info("skill available for finished run",
+			"run_id", run.RunID, "target", target.ID, "skill", name)
+	}
+}
+
+// targetForRun finds the configured target a stored run was submitted against.
+// The gateway is what identifies it: one domain can have several gateways.
+func (u *tdbPipelineUsecase) targetForRun(run *domain.TDBPipelineRun) (domain.TDBPipelineTarget, bool) {
+	for _, target := range u.options.Targets {
+		if target.GatewayURL == run.GatewayURL && target.Domain == run.Domain {
+			return target, true
+		}
+	}
+	return domain.TDBPipelineTarget{}, false
 }
 
 // resolveTarget matches the requested domain against the configured targets and
