@@ -249,9 +249,23 @@ func (u *tdbPipelineUsecase) provisionSkill(ctx context.Context, run *domain.TDB
 			"error", err, "run_id", run.RunID, "target", target.ID)
 		return
 	}
-	if name != "" {
-		u.logger.Info("skill available for finished run",
-			"run_id", run.RunID, "target", target.ID, "skill", name)
+	if name == "" {
+		return
+	}
+	u.logger.Info("skill available for finished run",
+		"run_id", run.RunID, "target", target.ID, "skill", name)
+
+	// A published skill is available, not loaded: agents read an explicit skill
+	// list, so without an agent nothing queries the corpus that was just ingested.
+	agent, err := u.skills.EnsureAgent(ctx, target, name)
+	if err != nil {
+		u.logger.Error("failed to create skill agent for finished run",
+			"error", err, "run_id", run.RunID, "target", target.ID, "skill", name)
+		return
+	}
+	if agent != "" {
+		u.logger.Info("skill agent ready for finished run",
+			"run_id", run.RunID, "target", target.ID, "skill", name, "agent", agent)
 	}
 }
 

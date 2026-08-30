@@ -111,9 +111,33 @@ type TDBPipelineConfig struct {
 // target once a run has ingested content into it.
 type TDBPipelineSkillConfig struct {
 	// AutoPublish turns the behaviour on. Default true.
-	AutoPublish *bool  `mapstructure:"auto_publish"`
+	AutoPublish *bool `mapstructure:"auto_publish"`
 	// Namespace is the skill-hub namespace generated skills are published into.
 	Namespace string `mapstructure:"namespace"`
+	// Agent controls the skill agent created to load the generated skill.
+	Agent TDBPipelineAgentConfig `mapstructure:"agent"`
+}
+
+// TDBPipelineAgentConfig describes the DataAgentContainer created to load a
+// generated skill. Publishing a skill only makes it available; an agent has to
+// list it before anything can query the ingested corpus.
+type TDBPipelineAgentConfig struct {
+	// AutoCreate turns agent creation on. Default true.
+	AutoCreate *bool `mapstructure:"auto_create"`
+	// Namespace is where the DataAgentContainer is created.
+	Namespace                 string `mapstructure:"namespace"`
+	ExpertLLM                 string `mapstructure:"expert_llm"`
+	PlannerLLM                string `mapstructure:"planner_llm"`
+	ExpertAgentMaxSteps       string `mapstructure:"expert_agent_max_steps"`
+	OrchestratorAgentMaxLoops string `mapstructure:"orchestrator_agent_max_loops"`
+}
+
+// AgentAutoCreateEnabled reports whether a finished run creates a skill agent.
+func (c TDBPipelineConfig) AgentAutoCreateEnabled() bool {
+	if c.Skill.Agent.AutoCreate == nil {
+		return true
+	}
+	return *c.Skill.Agent.AutoCreate
 }
 
 // SkillAutoPublishEnabled reports whether finished runs publish a skill.

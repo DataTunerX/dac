@@ -55,13 +55,26 @@ type SkillPublisher interface {
 // target the right granularity: a gateway is a database, and a skill that spans
 // two of them would silently answer across corpora.
 type SkillProvisioner struct {
-	publisher SkillPublisher
-	namespace string
-	enabled   bool
-	logger    *slog.Logger
+	publisher     SkillPublisher
+	agents        domain.AgentContainerRepository
+	namespace     string
+	enabled       bool
+	agentsEnabled bool
+	agentDefaults AgentDefaults
+	logger        *slog.Logger
 }
 
-func NewSkillProvisioner(publisher SkillPublisher, namespace string, enabled bool, logger *slog.Logger) *SkillProvisioner {
+// NewSkillProvisioner builds the provisioner. agents may be nil, in which case
+// the skill is published but no agent is created to load it.
+func NewSkillProvisioner(
+	publisher SkillPublisher,
+	agents domain.AgentContainerRepository,
+	namespace string,
+	enabled bool,
+	agentsEnabled bool,
+	agentDefaults AgentDefaults,
+	logger *slog.Logger,
+) *SkillProvisioner {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -69,10 +82,13 @@ func NewSkillProvisioner(publisher SkillPublisher, namespace string, enabled boo
 		namespace = "default"
 	}
 	return &SkillProvisioner{
-		publisher: publisher,
-		namespace: namespace,
-		enabled:   enabled,
-		logger:    logger,
+		publisher:     publisher,
+		agents:        agents,
+		namespace:     namespace,
+		enabled:       enabled,
+		agentsEnabled: agentsEnabled,
+		agentDefaults: agentDefaults,
+		logger:        logger,
 	}
 }
 

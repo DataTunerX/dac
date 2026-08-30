@@ -228,6 +228,10 @@ type TDBPipelineRunStore interface {
 // it is called on every run that reaches a successful terminal state.
 type TDBPipelineSkillProvisioner interface {
 	EnsureSkill(ctx context.Context, target TDBPipelineTarget, collection string) (string, error)
+	// EnsureAgent creates (or extends) the skill agent that loads skillName.
+	// Publishing a skill only makes it available: agents load skills from an
+	// explicit list, so without this nothing reads the newly ingested corpus.
+	EnsureAgent(ctx context.Context, target TDBPipelineTarget, skillName string) (string, error)
 }
 
 // TDBPipelineUsecase is the DAC-facing pipeline ingestion API.

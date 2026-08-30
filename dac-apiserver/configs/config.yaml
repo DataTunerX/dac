@@ -80,6 +80,14 @@ tdb_pipeline:
   skill:
     auto_publish: true
     namespace: "default"
+    # 发布技能后自动创建加载该技能的技能 Agent（技能仅"可用"，Agent 才会"加载"）
+    agent:
+      auto_create: true
+      namespace: "default"
+      expert_llm: "gpt-5.6-luna"
+      planner_llm: "gpt-5.6-luna"
+      expert_agent_max_steps: "30"
+      orchestrator_agent_max_loops: "2"
   targets:
     - id: "archeology"
       domain: "archeology"

@@ -392,6 +392,15 @@ apiserver:
       skill:
         auto_publish: true
         namespace: "default"
+        # -- Create the skill agent that loads the generated skill. Publishing a
+        # skill only makes it available; agents load from an explicit list.
+        agent:
+          auto_create: true
+          namespace: "default"
+          expert_llm: "gpt-5.6-luna"
+          planner_llm: "gpt-5.6-luna"
+          expert_agent_max_steps: "30"
+          orchestrator_agent_max_loops: "2"
       # -- Selectable TDB targets. Must stay in step with the controller's
       # domain-config ConfigMap. Each gateway_url is the same TDB gateway the
       # named skill_agent queries, so ingestion and Q&A share one database.

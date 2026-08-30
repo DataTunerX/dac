@@ -285,8 +285,17 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 	tdbSkillProvisioner := tdbpipelineinfra.NewSkillProvisioner(
 		skillHubClient,
+		agentRepo,
 		tdbSkillNamespace,
 		cfg.TDBPipeline.SkillAutoPublishEnabled(),
+		cfg.TDBPipeline.AgentAutoCreateEnabled(),
+		tdbpipelineinfra.AgentDefaults{
+			Namespace:                 cfg.TDBPipeline.Skill.Agent.Namespace,
+			ExpertLLM:                 cfg.TDBPipeline.Skill.Agent.ExpertLLM,
+			PlannerLLM:                cfg.TDBPipeline.Skill.Agent.PlannerLLM,
+			ExpertAgentMaxSteps:       cfg.TDBPipeline.Skill.Agent.ExpertAgentMaxSteps,
+			OrchestratorAgentMaxLoops: cfg.TDBPipeline.Skill.Agent.OrchestratorAgentMaxLoops,
+		},
 		appLogger,
 	)
 	tdbPipelineUsecase := usecase.NewTDBPipelineUsecase(
