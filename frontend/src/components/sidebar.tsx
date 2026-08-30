@@ -59,9 +59,10 @@ const sidebarNav: Array<SidebarLinkItem | SidebarGroupItem> = [
     type: "group",
     icon: Database,
     label: "数据管理",
-    sectionPaths: ["/datasources", "/configmaps?type=prompts"],
+    sectionPaths: ["/datasources", "/tdb-pipeline", "/configmaps?type=prompts"],
     children: [
       { label: "数据源", href: "/datasources" },
+      { label: "TDB 入库", href: "/tdb-pipeline" },
       { label: "提示词", href: "/configmaps?type=prompts" },
     ],
   },

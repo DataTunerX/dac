@@ -54,6 +54,84 @@ agent_registry:
 skill_hub:
   timeout: 120s
 
+# TDB Pipeline Controller 配置
+# 控制器在 fw-worker 集群 tdb-pipeline 命名空间中运行，DAC 通过它异步提交入库任务。
+# targets 是控制器 domain-config ConfigMap 允许列表在 DAC 侧的副本（控制器没有暴露该列表的接口），
+# gateway_url 与各领域技能 Agent 查询的 TDB 网关保持一致，保证入库与问答使用同一个 TDB。
+tdb_pipeline:
+  base_url: "http://tdb-pipeline-controller.tdb-pipeline.svc.cluster.local:8080"
+  caller_id: "dac"
+  token: "" # 由 DAC_TDB_PIPELINE_TOKEN 注入
+  timeout: 60s
+  llm_profiles:
+    - "local"
+    - "openai"
+  images:
+    - "10.124.48.120/tdb/pipeline-runner:v0.4.0-rc"
+    - "10.124.48.120/tdb/pipeline-runner:v0.4.0-rc-openai"
+  defaults:
+    collection: "academic_papers"
+    image: "10.124.48.120/tdb/pipeline-runner:v0.4.0-rc-openai"
+    llm_profile: "openai"
+    runs_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/runs"
+    status_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/jobs/status"
+    attempt_status_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/jobs/attempt-status"
+  targets:
+    - id: "archeology"
+      domain: "archeology"
+      label: "考古学"
+      gateway_url: "http://10.124.48.91:8989"
+      domain_profile: "pipeline/profiles/archeology.v2.json"
+      skill_agent: "tdb-archeology-qa"
+    - id: "history"
+      domain: "history"
+      label: "历史学"
+      gateway_url: "http://10.124.48.91:8990"
+      domain_profile: "pipeline/profiles/history.v2.json"
+      skill_agent: "tdb-history-qa"
+    - id: "art_history"
+      domain: "art_history"
+      label: "艺术史"
+      gateway_url: "http://10.124.48.91:8991"
+      domain_profile: "pipeline/profiles/art_history.v2.json"
+      skill_agent: "tdb-art-history-qa"
+    - id: "anthropology_sociology"
+      domain: "anthropology_sociology"
+      label: "人类学与社会学"
+      gateway_url: "http://10.124.48.91:8992"
+      domain_profile: "pipeline/profiles/anthropology_sociology.v2.json"
+      skill_agent: "tdb-anthropology-sociology-qa"
+    - id: "philosophy_theory"
+      domain: "philosophy_theory"
+      label: "哲学与理论"
+      gateway_url: "http://10.124.48.91:8993"
+      domain_profile: "pipeline/profiles/philosophy_theory.v2.json"
+      skill_agent: "tdb-philosophy-theory-qa"
+    - id: "geo_environment"
+      domain: "geo_environment"
+      label: "地理与环境"
+      gateway_url: "http://10.124.48.91:8994"
+      domain_profile: "pipeline/profiles/geo_environment.v2.json"
+      skill_agent: "tdb-geo-environment-qa"
+    - id: "literature_humanities"
+      domain: "literature_humanities"
+      label: "文学与人文"
+      gateway_url: "http://10.124.48.91:8995"
+      domain_profile: "pipeline/profiles/literature_humanities.v2.json"
+      skill_agent: "tdb-literature-humanities-qa"
+    - id: "wwybsj"
+      domain: "wwybsj"
+      label: "文物艺术博物馆"
+      gateway_url: "http://10.124.48.91:8997"
+      domain_profile: "pipeline/profiles/wwybsj.v2.json"
+      skill_agent: "tdb-wwybsj-answering"
+    - id: "archeology_papers_test"
+      domain: "archeology"
+      label: "考古学（论文测试库，隔离）"
+      gateway_url: "http://10.124.48.91:8996"
+      domain_profile: "pipeline/profiles/archeology.v2.json"
+      test: true
+
 # 数据库配置
 database:
   driver: "mysql"

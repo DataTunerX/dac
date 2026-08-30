@@ -487,3 +487,129 @@ export type RegisteredAgentListResponse = {
   totalCount: number
   registry: string
 }
+
+// ----- TDB pipeline (internal/handler/dto/tdb_pipeline.go) -----
+
+/** One selectable TDB ingestion target. `gateway_url` is the same TDB gateway
+ *  the named `skill_agent` queries, so ingestion and Q&A share one database. */
+export type TDBPipelineTarget = {
+  id: string
+  domain: string
+  label: string
+  gateway_url: string
+  domain_profile: string
+  skill_agent?: string
+  test: boolean
+}
+
+export type TDBPipelineDefaults = {
+  collection: string
+  image: string
+  llm_profile: string
+  runs_prefix: string
+  status_prefix: string
+  attempt_status_prefix: string
+}
+
+export type TDBPipelineOptionsResponse = {
+  targets: TDBPipelineTarget[]
+  images: string[]
+  llm_profiles: string[]
+  defaults: TDBPipelineDefaults
+}
+
+export type TDBPipelineCounters = {
+  total_jobs: number
+  queued: number
+  starting: number
+  running: number
+  uploading: number
+  succeeded: number
+  failed: number
+  canceled: number
+}
+
+export type TDBPipelineRun = {
+  run_id: string
+  status: string
+  collection: string
+  source_type: string
+  source_uri: string
+  gateway_url: string
+  domain: string
+  domain_profile: string
+  image: string
+  llm_profile: string
+  idempotency_key: string
+  created_by: string
+  created_at: string
+  updated_at: string
+  counters: TDBPipelineCounters
+  metadata?: Record<string, unknown>
+  /** Set when the controller could not be reached; the row shows last known values. */
+  summary_error?: string
+}
+
+export type TDBPipelineRunListResponse = {
+  items: TDBPipelineRun[]
+  totalCount: number
+}
+
+export type TDBPipelineActionResponse = {
+  run_id: string
+  status: string
+  deleted_jobs?: string[]
+  retried_jobs?: number
+  requested_uploads?: number
+}
+
+/** Create-run body. Only `source` and `target.target_id` are required; the
+ *  deployment's defaults fill in collection, image, profile and prefixes. */
+export type CreateTDBPipelineRunRequest = {
+  source: {
+    type: "s3" | "pvc"
+    uri?: string
+    claim_name?: string
+    path?: string
+  }
+  target: {
+    target_id?: string
+    domain?: string
+    gateway_url?: string
+    domain_profile?: string
+  }
+  collection?: string
+  image?: string
+  options?: {
+    llm_profile?: string
+    generate_qa?: boolean
+    auto_eval?: boolean
+    llm_grade?: boolean
+    open_layer_predicate_merge_every?: number
+    open_layer_predicate_autopromote?: boolean
+    /** Accepted and stored by the controller, but not yet enforced. */
+    max_concurrent?: number
+    /** Accepted and stored by the controller, but not yet enforced. */
+    start_stagger_seconds?: number
+    /** Accepted and stored by the controller, but not yet enforced. */
+    start_stagger_jitter_seconds?: number
+    question_workers?: number
+    question_repair_timeout_seconds?: number
+  }
+  artifact_upload?: {
+    runs_prefix?: string
+    status_prefix?: string
+    attempt_status_prefix?: string
+    /** Accepted and stored by the controller, but not yet wired to S3_BEST_EFFORT. */
+    strict?: boolean
+  }
+  /** Optional; the controller's callback host allowlist is fail-closed. */
+  callback?: {
+    url: string
+    events?: string[]
+  }
+  metadata?: Record<string, unknown>
+  dataset_id?: string
+  source_version?: string
+  idempotency_key?: string
+}

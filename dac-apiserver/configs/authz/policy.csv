@@ -29,6 +29,9 @@ p, user, /api/v1/skills/namespaces/*/exists, GET
 p, user, /api/v1/skills/namespaces/*/skills, GET
 p, user, /api/v1/skills/namespaces/*/skills/*, GET
 p, user, /api/v1/skills/namespaces/*/skills/*/download, GET
+p, user, /api/v1/tdb-pipeline/options, GET
+p, user, /api/v1/tdb-pipeline/runs, GET
+p, user, /api/v1/tdb-pipeline/runs/*, GET
 p, user, /v1/chat/completions, POST
 
 g, admin, admin

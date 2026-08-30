@@ -32,6 +32,7 @@ func Setup(
 	semanticGroupHandler *handler.SemanticGroupHandler,
 	ddGroupRelationHandler *handler.DDGroupRelationHandler,
 	knowledgeGraphHandler *handler.KnowledgeGraphHandler,
+	tdbPipelineHandler *handler.TDBPipelineHandler,
 	healthHandler *handler.HealthHandler,
 ) {
 	// Global middleware
@@ -268,6 +269,22 @@ func Setup(
 				knowledgeGraph.POST("/search-with-source", knowledgeGraphHandler.SearchWithSource)
 				knowledgeGraph.POST("/get-graph-by-source", knowledgeGraphHandler.GetGraphBySource)
 				knowledgeGraph.DELETE("/delete-with-source", knowledgeGraphHandler.DeleteWithSource)
+			}
+
+			// TDB Pipeline routes (tdb-pipeline-controller integration).
+			// Ingestion runs write into a TDB gateway, so submitting and
+			// controlling them is an admin action; reads are open to users.
+			tdbPipeline := authorized.Group("/tdb-pipeline")
+			{
+				tdbPipeline.GET("/options", tdbPipelineHandler.Options)
+				tdbPipeline.POST("/runs", tdbPipelineHandler.CreateRun)
+				tdbPipeline.GET("/runs", tdbPipelineHandler.ListRuns)
+				tdbPipeline.GET("/runs/:runId", tdbPipelineHandler.GetRun)
+				tdbPipeline.POST("/runs/:runId/pause", tdbPipelineHandler.Pause)
+				tdbPipeline.POST("/runs/:runId/resume", tdbPipelineHandler.Resume)
+				tdbPipeline.POST("/runs/:runId/cancel", tdbPipelineHandler.Cancel)
+				tdbPipeline.POST("/runs/:runId/retry-failed", tdbPipelineHandler.RetryFailed)
+				tdbPipeline.POST("/runs/:runId/retry-s3-upload", tdbPipelineHandler.RetryS3Upload)
 			}
 		}
 	}

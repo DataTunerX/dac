@@ -356,6 +356,96 @@ apiserver:
       cookieSecure: false
       # -- Optional authentication cookie domain
       cookieDomain: ""
+    # -- TDB pipeline controller integration (DAC Data Management submits
+    # ingestion runs to it). The controller runs outside DAC, on the fw-worker
+    # cluster in namespace tdb-pipeline.
+    tdbPipeline:
+      # -- Controller API base URL
+      baseUrl: "http://tdb-pipeline-controller.tdb-pipeline.svc.cluster.local:8080"
+      # -- Caller ID the controller allowlists for DAC
+      callerId: "dac"
+      # -- Timeout for controller calls
+      timeout: "60s"
+      # -- Secret holding the controller bearer token, injected as
+      # DAC_TDB_PIPELINE_TOKEN. Leave name empty to inject nothing.
+      tokenSecret:
+        name: "tdb-pipeline-controller-token"
+        key: "token"
+      # -- LLM profiles the controller accepts
+      llmProfiles:
+        - "local"
+        - "openai"
+      # -- Allowlisted pipeline worker images
+      images:
+        - "10.124.48.120/tdb/pipeline-runner:v0.4.0-rc"
+        - "10.124.48.120/tdb/pipeline-runner:v0.4.0-rc-openai"
+      # -- Create-run form defaults. snake_case: passed to apiserver verbatim.
+      defaults:
+        collection: "academic_papers"
+        image: "10.124.48.120/tdb/pipeline-runner:v0.4.0-rc-openai"
+        llm_profile: "openai"
+        runs_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/runs"
+        status_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/jobs/status"
+        attempt_status_prefix: "s3://tdb-archaeology-pipeline/tdb/pipeline/jobs/attempt-status"
+      # -- Selectable TDB targets. Must stay in step with the controller's
+      # domain-config ConfigMap. Each gateway_url is the same TDB gateway the
+      # named skill_agent queries, so ingestion and Q&A share one database.
+      # snake_case: passed to apiserver verbatim.
+      targets:
+        - id: "archeology"
+          domain: "archeology"
+          label: "考古学"
+          gateway_url: "http://10.124.48.91:8989"
+          domain_profile: "pipeline/profiles/archeology.v2.json"
+          skill_agent: "tdb-archeology-qa"
+        - id: "history"
+          domain: "history"
+          label: "历史学"
+          gateway_url: "http://10.124.48.91:8990"
+          domain_profile: "pipeline/profiles/history.v2.json"
+          skill_agent: "tdb-history-qa"
+        - id: "art_history"
+          domain: "art_history"
+          label: "艺术史"
+          gateway_url: "http://10.124.48.91:8991"
+          domain_profile: "pipeline/profiles/art_history.v2.json"
+          skill_agent: "tdb-art-history-qa"
+        - id: "anthropology_sociology"
+          domain: "anthropology_sociology"
+          label: "人类学与社会学"
+          gateway_url: "http://10.124.48.91:8992"
+          domain_profile: "pipeline/profiles/anthropology_sociology.v2.json"
+          skill_agent: "tdb-anthropology-sociology-qa"
+        - id: "philosophy_theory"
+          domain: "philosophy_theory"
+          label: "哲学与理论"
+          gateway_url: "http://10.124.48.91:8993"
+          domain_profile: "pipeline/profiles/philosophy_theory.v2.json"
+          skill_agent: "tdb-philosophy-theory-qa"
+        - id: "geo_environment"
+          domain: "geo_environment"
+          label: "地理与环境"
+          gateway_url: "http://10.124.48.91:8994"
+          domain_profile: "pipeline/profiles/geo_environment.v2.json"
+          skill_agent: "tdb-geo-environment-qa"
+        - id: "literature_humanities"
+          domain: "literature_humanities"
+          label: "文学与人文"
+          gateway_url: "http://10.124.48.91:8995"
+          domain_profile: "pipeline/profiles/literature_humanities.v2.json"
+          skill_agent: "tdb-literature-humanities-qa"
+        - id: "wwybsj"
+          domain: "wwybsj"
+          label: "文物艺术博物馆"
+          gateway_url: "http://10.124.48.91:8997"
+          domain_profile: "pipeline/profiles/wwybsj.v2.json"
+          skill_agent: "tdb-wwybsj-answering"
+        - id: "archeology_papers_test"
+          domain: "archeology"
+          label: "考古学（论文测试库，隔离）"
+          gateway_url: "http://10.124.48.91:8996"
+          domain_profile: "pipeline/profiles/archeology.v2.json"
+          test: true
   resources:
     requests:
       cpu: 200m

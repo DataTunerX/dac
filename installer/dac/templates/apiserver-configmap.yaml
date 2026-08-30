@@ -52,6 +52,25 @@ data:
     skill_hub:
       timeout: 120s
 
+    # TDB pipeline controller (runs outside DAC, on the fw-worker cluster).
+    # `targets` is DAC's copy of the controller's domain-config allowlist: the
+    # controller exposes no endpoint for it. Each gateway is the same TDB the
+    # matching domain skill agent queries, so ingestion and Q&A share one TDB.
+    # Keys under targets/defaults are snake_case because they are passed to the
+    # apiserver config verbatim.
+    tdb_pipeline:
+      base_url: {{ .Values.apiserver.config.tdbPipeline.baseUrl | quote }}
+      caller_id: {{ .Values.apiserver.config.tdbPipeline.callerId | quote }}
+      timeout: {{ .Values.apiserver.config.tdbPipeline.timeout | quote }}
+      llm_profiles:
+        {{- toYaml .Values.apiserver.config.tdbPipeline.llmProfiles | nindent 8 }}
+      images:
+        {{- toYaml .Values.apiserver.config.tdbPipeline.images | nindent 8 }}
+      defaults:
+        {{- toYaml .Values.apiserver.config.tdbPipeline.defaults | nindent 8 }}
+      targets:
+        {{- toYaml .Values.apiserver.config.tdbPipeline.targets | nindent 8 }}
+
     database:
       driver: "mysql"
       host: {{ include "dac.mysql.host" . | quote }}
@@ -102,6 +121,9 @@ data:
     p, user, /api/v1/skills/namespaces/*/exists, GET
     p, user, /api/v1/skills/namespaces/*/skills, GET
     p, user, /api/v1/skills/namespaces/*/skills/*/download, GET
+    p, user, /api/v1/tdb-pipeline/options, GET
+    p, user, /api/v1/tdb-pipeline/runs, GET
+    p, user, /api/v1/tdb-pipeline/runs/*, GET
     p, user, /v1/chat/completions, POST
 
     g, admin, admin

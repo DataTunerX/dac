@@ -19,6 +19,7 @@ type Config struct {
 	SemanticGrouper SemanticGrouperConfig `mapstructure:"semantic_grouper"`
 	AgentRegistry   AgentRegistryConfig   `mapstructure:"agent_registry"`
 	SkillHub        SkillHubConfig        `mapstructure:"skill_hub"`
+	TDBPipeline     TDBPipelineConfig     `mapstructure:"tdb_pipeline"`
 	Database      DatabaseConfig      `mapstructure:"database"`
 }
 
@@ -90,6 +91,42 @@ type SkillHubConfig struct {
 	Timeout time.Duration `mapstructure:"timeout"`
 }
 
+// TDBPipelineConfig holds the TDB pipeline controller endpoint, the DAC caller
+// credentials it allowlists, and DAC's copy of its target allowlist. The
+// controller exposes no endpoint for the allowlist, so the targets below must
+// be kept in step with the controller's domain-config ConfigMap.
+type TDBPipelineConfig struct {
+	BaseURL     string                    `mapstructure:"base_url"`
+	CallerID    string                    `mapstructure:"caller_id"`
+	Token       string                    `mapstructure:"token"`
+	Timeout     time.Duration             `mapstructure:"timeout"`
+	Images      []string                  `mapstructure:"images"`
+	LLMProfiles []string                  `mapstructure:"llm_profiles"`
+	Defaults    TDBPipelineDefaultsConfig `mapstructure:"defaults"`
+	Targets     []TDBPipelineTargetConfig `mapstructure:"targets"`
+}
+
+// TDBPipelineTargetConfig is one selectable TDB target.
+type TDBPipelineTargetConfig struct {
+	ID            string `mapstructure:"id"`
+	Domain        string `mapstructure:"domain"`
+	Label         string `mapstructure:"label"`
+	GatewayURL    string `mapstructure:"gateway_url"`
+	DomainProfile string `mapstructure:"domain_profile"`
+	SkillAgent    string `mapstructure:"skill_agent"`
+	Test          bool   `mapstructure:"test"`
+}
+
+// TDBPipelineDefaultsConfig pre-fills the create-run form.
+type TDBPipelineDefaultsConfig struct {
+	Collection          string `mapstructure:"collection"`
+	Image               string `mapstructure:"image"`
+	LLMProfile          string `mapstructure:"llm_profile"`
+	RunsPrefix          string `mapstructure:"runs_prefix"`
+	StatusPrefix        string `mapstructure:"status_prefix"`
+	AttemptStatusPrefix string `mapstructure:"attempt_status_prefix"`
+}
+
 // DatabaseConfig holds database configuration
 type DatabaseConfig struct {
 	Driver          string        `mapstructure:"driver"`
@@ -120,6 +157,19 @@ func Load(cfgFile string) (*Config, error) {
 	v.AutomaticEnv()
 
 	v.SetDefault("skill_hub.timeout", "120s")
+	v.SetDefault("tdb_pipeline.timeout", "60s")
+
+	// AutomaticEnv does not reach nested keys reliably through Unmarshal, and
+	// the controller token must come from a Secret rather than the config file.
+	if err := v.BindEnv("tdb_pipeline.token", "DAC_TDB_PIPELINE_TOKEN"); err != nil {
+		return nil, fmt.Errorf("failed to bind tdb pipeline token env: %w", err)
+	}
+	if err := v.BindEnv("tdb_pipeline.base_url", "DAC_TDB_PIPELINE_BASE_URL"); err != nil {
+		return nil, fmt.Errorf("failed to bind tdb pipeline base url env: %w", err)
+	}
+	if err := v.BindEnv("tdb_pipeline.caller_id", "DAC_TDB_PIPELINE_CALLER_ID"); err != nil {
+		return nil, fmt.Errorf("failed to bind tdb pipeline caller id env: %w", err)
+	}
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
@@ -138,6 +188,12 @@ func Load(cfgFile string) (*Config, error) {
 	}
 	if cfg.SkillHub.Timeout == 0 {
 		cfg.SkillHub.Timeout = 120 * time.Second
+	}
+	if cfg.TDBPipeline.Timeout == 0 {
+		cfg.TDBPipeline.Timeout = 60 * time.Second
+	}
+	if len(cfg.TDBPipeline.LLMProfiles) == 0 {
+		cfg.TDBPipeline.LLMProfiles = []string{"local", "openai"}
 	}
 
 	return &cfg, nil

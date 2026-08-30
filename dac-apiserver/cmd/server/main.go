@@ -27,6 +27,7 @@ import (
 	"github.com/lvyanru/dac-apiserver/internal/infrastructure/probe"
 	semanticgrouperinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/semanticgrouper"
 	skillhubinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/skillhub"
+	tdbpipelineinfra "github.com/lvyanru/dac-apiserver/internal/infrastructure/tdbpipeline"
 	"github.com/lvyanru/dac-apiserver/internal/router"
 	"github.com/lvyanru/dac-apiserver/internal/usecase"
 	dbpkg "github.com/lvyanru/dac-apiserver/pkg/database"
@@ -199,10 +200,16 @@ func runServer(cmd *cobra.Command, args []string) {
 	namespaceUsecase := usecase.NewNamespaceUsecase(namespaceRepo, appLogger)
 	namespaceHandler := handler.NewNamespaceHandler(namespaceUsecase, appLogger)
 
-	// Initialize Database
-	dbClient, err := dbpkg.NewClient(cfg.Database, appLogger)
+	// Initialize Database. The raw pool is kept so components that need plain
+	// SQL (the TDB pipeline run store) share it with the ent client.
+	sqlDB, err := dbpkg.NewSQLDB(cfg.Database)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
+		os.Exit(1)
+	}
+	dbClient, err := dbpkg.NewClientWithDB(sqlDB, cfg.Database, appLogger)
+	if err != nil {
+		slog.Error("failed to initialize database schema", "error", err)
 		os.Exit(1)
 	}
 
@@ -256,6 +263,33 @@ func runServer(cmd *cobra.Command, args []string) {
 	)
 	chatHandler := handler.NewChatHandler(chatUsecase, appLogger)
 
+	// TDB Pipeline module: submit ingestion runs to the TDB pipeline controller
+	// and track the runs DAC has submitted (the controller has no list API).
+	tdbPipelineClient := tdbpipelineinfra.NewClient(
+		cfg.TDBPipeline.BaseURL,
+		cfg.TDBPipeline.CallerID,
+		cfg.TDBPipeline.Token,
+		cfg.TDBPipeline.Timeout,
+		appLogger,
+	)
+	tdbPipelineStore, err := tdbpipelineinfra.NewStore(context.Background(), sqlDB, appLogger)
+	if err != nil {
+		slog.Error("failed to initialize tdb pipeline run store", "error", err)
+		os.Exit(1)
+	}
+	tdbPipelineUsecase := usecase.NewTDBPipelineUsecase(
+		tdbPipelineClient,
+		tdbPipelineStore,
+		tdbpipelineinfra.OptionSetFromConfig(cfg.TDBPipeline),
+		appLogger,
+	)
+	tdbPipelineHandler := handler.NewTDBPipelineHandler(tdbPipelineUsecase, appLogger)
+	slog.Info("tdb pipeline client configured",
+		"base_url", cfg.TDBPipeline.BaseURL,
+		"caller_id", cfg.TDBPipeline.CallerID,
+		"targets", len(cfg.TDBPipeline.Targets),
+	)
+
 	slog.Info("handlers initialized with dynamic client")
 
 	healthHandler := handler.NewHealthHandler(k8sClient, appLogger)
@@ -287,6 +321,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		semanticGroupHandler,
 		ddGroupRelationHandler,
 		knowledgeGraphHandler,
+		tdbPipelineHandler,
 		healthHandler,
 	)
 

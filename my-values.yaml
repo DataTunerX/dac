@@ -24,12 +24,12 @@ global:
 apiserver:
   image:
     repository: "dac-apiserver"
-    tag: "12-amd64"
+    tag: "13-amd64"
 
 frontend:
   image:
     repository: "frontend"
-    tag: "12-amd64"
+    tag: "13-amd64"
 
 dataServices:
   image:

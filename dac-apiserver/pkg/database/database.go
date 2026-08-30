@@ -14,8 +14,10 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-// NewClient createdatabaseclient
-func NewClient(cfg config.DatabaseConfig, logger *slog.Logger) (*ent.Client, error) {
+// NewSQLDB opens the MySQL connection pool. It is exported so that components
+// which need raw SQL (the TDB pipeline run store) can share the same pool as
+// the ent client instead of opening a second one.
+func NewSQLDB(cfg config.DatabaseConfig) (*sql.DB, error) {
 	// 构造 DSN
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=True&loc=Local&charset=utf8mb4",
 		cfg.User,
@@ -45,6 +47,12 @@ func NewClient(cfg config.DatabaseConfig, logger *slog.Logger) (*ent.Client, err
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	return db, nil
+}
+
+// NewClientWithDB wraps an already-open pool in an ent client and runs the
+// schema auto-migration.
+func NewClientWithDB(db *sql.DB, cfg config.DatabaseConfig, logger *slog.Logger) (*ent.Client, error) {
 	// create ent 驱动
 	drv := entsql.OpenDB(cfg.Driver, db)
 	client := ent.NewClient(ent.Driver(drv))
@@ -64,6 +72,15 @@ func NewClient(cfg config.DatabaseConfig, logger *slog.Logger) (*ent.Client, err
 	)
 
 	return client, nil
+}
+
+// NewClient createdatabaseclient
+func NewClient(cfg config.DatabaseConfig, logger *slog.Logger) (*ent.Client, error) {
+	db, err := NewSQLDB(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return NewClientWithDB(db, cfg, logger)
 }
 
 // Close 关闭database连接

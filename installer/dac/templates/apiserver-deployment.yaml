@@ -38,6 +38,17 @@ spec:
           env:
             - name: TZ
               value: "Asia/Shanghai"
+            {{- with .Values.apiserver.config.tdbPipeline.tokenSecret }}
+            {{- if .name }}
+            # Bearer token the TDB pipeline controller allowlists for caller "dac".
+            - name: DAC_TDB_PIPELINE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name | quote }}
+                  key: {{ .key | default "token" | quote }}
+                  optional: true
+            {{- end }}
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /app/configs
