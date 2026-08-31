@@ -29,7 +29,7 @@ apiserver:
 frontend:
   image:
     repository: "frontend"
-    tag: "16-amd64"
+    tag: "17-amd64"
 
 dataServices:
   image:

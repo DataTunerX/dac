@@ -20,7 +20,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion"
 import { cn } from "@/lib/utils"
-import { getProgressRowDisplay, shouldShowProgressItem } from "@/lib/chat-progress"
+import { getProgressDetails, getProgressRowDisplay, shouldShowProgressItem } from "@/lib/chat-progress"
 import type { ChatProgressPayload } from "@/lib/api-types"
 import { EMPTY_PROGRESS } from "@/components/chat/chat-message-types"
 
@@ -181,7 +181,10 @@ export const ThinkingProcess = ({
   /** Frozen duration (seconds) after stream ends. */
   elapsedSec?: number | null
 }) => {
-  const [userExpanded, setUserExpanded] = useState(false)
+  // Open by default: the log is the point of the panel, and keeping it behind a
+  // click meant the planning and reasoning the agents produce were never seen.
+  // Collapsing is still one click away and the choice sticks for this message.
+  const [userExpanded, setUserExpanded] = useState(true)
   const wasThinkingOrLiveRef = useRef(false)
   useEffect(() => {
     const now = Boolean(isLive || isThinking)
@@ -719,6 +722,9 @@ export const ThinkingProcess = ({
             >
               {progressList.map((payload, i) => {
                 const { agent, layer, event, message } = getProgressRowDisplay(payload)
+                const details = getProgressDetails(payload)
+                const primaryDetails = details.filter((d) => d.primary)
+                const secondaryDetails = details.filter((d) => !d.primary)
                 const isLast = i === progressList.length - 1
                 const showShimmerOnRow = isLast && isThinking
                 const triggerParts: ReactNode[] = []
@@ -772,15 +778,38 @@ export const ThinkingProcess = ({
                         />
                       ) : null}
                     </AccordionTrigger>
+                    {primaryDetails.length > 0 ? (
+                      <div className="px-3 pb-2.5 space-y-1.5">
+                        {primaryDetails.map((d) => (
+                          <div key={d.key} className="min-w-0">
+                            <div className="text-[11px] font-medium text-content-muted">{d.label}</div>
+                            <div className="font-mono text-[12px] text-content leading-relaxed whitespace-pre-wrap break-words">
+                              {d.value}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                     <AccordionContent className="px-3 pb-3 pt-0">
-                      <div className="rounded-b-lg border-t border-line/60 bg-surface-muted/30 py-2 px-2.5">
+                      <div className="rounded-b-lg border-t border-line/60 bg-surface-muted/30 py-2 px-2.5 space-y-2">
                         {message ? (
-                          <span className="font-mono text-[12px] text-content leading-relaxed whitespace-pre-wrap break-words">
+                          <span className="block font-mono text-[12px] text-content leading-relaxed whitespace-pre-wrap break-words">
                             {message}
                           </span>
-                        ) : (
+                        ) : null}
+                        {secondaryDetails.length > 0 ? (
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1 border-t border-line/40">
+                            {secondaryDetails.map((d) => (
+                              <span key={d.key} className="text-[11px] text-content-muted">
+                                {d.label}
+                                <span className="ml-1 font-mono text-content">{d.value}</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        {!message && secondaryDetails.length === 0 ? (
                           <span className="text-content-muted text-[12px]">—</span>
-                        )}
+                        ) : null}
                       </div>
                     </AccordionContent>
                   </AccordionItem>
