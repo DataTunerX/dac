@@ -76,6 +76,7 @@ type TDBPipelineTargetResponse struct {
 	Label         string `json:"label"`
 	GatewayURL    string `json:"gateway_url"`
 	DomainProfile string `json:"domain_profile"`
+	Collection    string `json:"collection"`
 	SkillAgent    string `json:"skill_agent,omitempty"`
 	Test          bool   `json:"test"`
 }
@@ -199,6 +200,7 @@ func ToTDBPipelineOptionsResponse(options domain.TDBPipelineOptionSet) TDBPipeli
 			Label:         target.Label,
 			GatewayURL:    target.GatewayURL,
 			DomainProfile: target.DomainProfile,
+			Collection:    target.Collection,
 			SkillAgent:    target.SkillAgent,
 			Test:          target.Test,
 		})

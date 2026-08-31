@@ -73,7 +73,7 @@ func (u *tdbPipelineUsecase) CreateRun(ctx context.Context, req *domain.CreateTD
 	if err != nil {
 		return nil, err
 	}
-	if err := u.applyDefaults(req); err != nil {
+	if err := u.applyDefaults(req, target); err != nil {
 		return nil, err
 	}
 	if err := validateSource(req.Source); err != nil {
@@ -323,11 +323,11 @@ func (u *tdbPipelineUsecase) resolveTarget(req *domain.CreateTDBPipelineRunReque
 }
 
 // applyDefaults fills the fields the deployment, not the operator, decides.
-func (u *tdbPipelineUsecase) applyDefaults(req *domain.CreateTDBPipelineRunRequest) error {
+func (u *tdbPipelineUsecase) applyDefaults(req *domain.CreateTDBPipelineRunRequest, target domain.TDBPipelineTarget) error {
 	defaults := u.options.Defaults
 
 	if strings.TrimSpace(req.Collection) == "" {
-		req.Collection = defaults.Collection
+		req.Collection = DefaultCollectionForTarget(target, defaults.Collection)
 	}
 	if strings.TrimSpace(req.Collection) == "" {
 		return domain.NewInvalidInputError("collection is required")
@@ -398,6 +398,25 @@ func sourceLocation(source domain.TDBPipelineSource) string {
 		return source.ClaimName + ":" + source.Path
 	}
 	return source.URI
+}
+
+// DefaultCollectionForTarget picks the collection a run gets when the caller
+// does not name one.
+//
+// The collection is not cosmetic: it becomes part of the stream IDs written
+// into TDB and part of the S3 artifact path. A single global default is
+// therefore wrong for every target but the one it was chosen for -- a fixed
+// "academic_papers" would file museum material into the papers collection. So
+// the target decides: an explicit per-target collection wins, otherwise the
+// target's domain, and the global default is only a last resort.
+func DefaultCollectionForTarget(target domain.TDBPipelineTarget, globalDefault string) string {
+	if configured := strings.TrimSpace(target.Collection); configured != "" {
+		return configured
+	}
+	if domainLabel := strings.TrimSpace(target.Domain); domainLabel != "" {
+		return domainLabel
+	}
+	return strings.TrimSpace(globalDefault)
 }
 
 func isTerminalRunStatus(status string) bool {

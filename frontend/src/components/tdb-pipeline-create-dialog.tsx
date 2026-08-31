@@ -51,6 +51,7 @@ type FormState = {
   datasetId: string
   sourceVersion: string
   idempotencyKey: string
+  forceReingest: boolean
   generateQa: boolean
   autoEval: boolean
   llmGrade: boolean
@@ -80,12 +81,13 @@ function initialState(options: TDBPipelineOptionsResponse): FormState {
     sourceUri: "",
     claimName: "",
     path: "",
-    collection: options.defaults.collection,
+    collection: firstNonTest?.collection || firstNonTest?.domain || options.defaults.collection,
     image: options.defaults.image,
     llmProfile: options.defaults.llm_profile,
     datasetId: "",
     sourceVersion: "",
     idempotencyKey: "",
+    forceReingest: false,
     generateQa: true,
     autoEval: true,
     llmGrade: true,
@@ -158,6 +160,24 @@ export function TDBPipelineCreateDialog({
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
+  }
+
+  /**
+   * Changing the target also re-derives the collection, because the collection
+   * shapes stream IDs and the artifact path -- carrying "academic_papers" over
+   * to a museum target would file the content in the wrong place.
+   */
+  function selectTarget(targetId: string) {
+    const next = options?.targets.find((t) => t.id === targetId)
+    setForm((prev) =>
+      prev
+        ? {
+            ...prev,
+            targetId,
+            collection: next?.collection || next?.domain || prev.collection,
+          }
+        : prev
+    )
   }
 
   function validate(state: FormState): string | null {
@@ -248,7 +268,12 @@ export function TDBPipelineCreateDialog({
       metadata,
       dataset_id: state.datasetId.trim() || undefined,
       source_version: state.sourceVersion.trim() || undefined,
-      idempotency_key: state.idempotencyKey.trim() || undefined,
+      // The controller dedupes on the idempotency key, so re-submitting an
+      // unchanged source normally returns the original run. A unique key is
+      // what makes it actually run again.
+      idempotency_key:
+        state.idempotencyKey.trim() ||
+        (state.forceReingest ? `force-${Date.now()}-${state.targetId}` : undefined),
     }
   }
 
@@ -292,7 +317,7 @@ export function TDBPipelineCreateDialog({
           <div className="flex-1 space-y-5 overflow-y-auto px-6 py-4">
             <div className="space-y-2">
               <Label>入库目标</Label>
-              <Select value={form.targetId} onValueChange={(v) => update("targetId", v)}>
+              <Select value={form.targetId} onValueChange={selectTarget}>
                 <SelectTrigger>
                   <SelectValue placeholder="选择领域" />
                 </SelectTrigger>
@@ -374,91 +399,12 @@ export function TDBPipelineCreateDialog({
               </div>
             )}
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>流水线镜像</Label>
-                <Select value={form.image} onValueChange={(v) => update("image", v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {options.images.map((image) => (
-                      <SelectItem key={image} value={image}>
-                        {image.split("/").pop()}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>LLM 配置</Label>
-                <Select value={form.llmProfile} onValueChange={(v) => update("llmProfile", v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {options.llm_profiles.map((profile) => (
-                      <SelectItem key={profile} value={profile}>
-                        {profile}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <fieldset className="space-y-3 rounded-lg border border-line p-4">
-              <legend className="px-1 text-sm font-medium text-content">流水线选项</legend>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <ToggleRow id="tdb-generate-qa" label="生成 QA 集" checked={form.generateQa} onChange={(v) => update("generateQa", v)} />
-                <ToggleRow id="tdb-auto-eval" label="自动评估与修复" checked={form.autoEval} onChange={(v) => update("autoEval", v)} />
-                <ToggleRow id="tdb-llm-grade" label="LLM 评分" checked={form.llmGrade} onChange={(v) => update("llmGrade", v)} />
-                <ToggleRow id="tdb-autopromote" label="开放层谓词自动提升" checked={form.autopromote} onChange={(v) => update("autopromote", v)} />
-              </div>
-            </fieldset>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="tdb-dataset">数据集标识（可选）</Label>
-                <Input
-                  id="tdb-dataset"
-                  placeholder="用于生成幂等键，留空则取源地址"
-                  value={form.datasetId}
-                  onChange={(e) => update("datasetId", e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tdb-version">源版本（可选）</Label>
-                <Input
-                  id="tdb-version"
-                  placeholder="ETag 或修订号，源内容变化时更新"
-                  value={form.sourceVersion}
-                  onChange={(e) => update("sourceVersion", e.target.value)}
-                />
-              </div>
-            </div>
-
-            <fieldset className="space-y-3 rounded-lg border border-line p-4">
-              <legend className="px-1 text-sm font-medium text-content">产物上传</legend>
-              <div className="space-y-2">
-                <Label htmlFor="tdb-runs-prefix">运行产物前缀</Label>
-                <Input id="tdb-runs-prefix" value={form.runsPrefix} onChange={(e) => update("runsPrefix", e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tdb-status-prefix">状态前缀</Label>
-                <Input id="tdb-status-prefix" value={form.statusPrefix} onChange={(e) => update("statusPrefix", e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tdb-attempt-prefix">单次尝试状态前缀</Label>
-                <Input id="tdb-attempt-prefix" value={form.attemptStatusPrefix} onChange={(e) => update("attemptStatusPrefix", e.target.value)} />
-              </div>
-              <ToggleRow
-                id="tdb-strict"
-                label="严格上传（strict，控制器尚未接线）"
-                checked={form.strict}
-                onChange={(v) => update("strict", v)}
-              />
-            </fieldset>
+            <ToggleRow
+              id="tdb-force"
+              label="强制重新入库（同一来源已入库过时仍再跑一次）"
+              checked={form.forceReingest}
+              onChange={(v) => update("forceReingest", v)}
+            />
 
             <div>
               <button
@@ -473,6 +419,88 @@ export function TDBPipelineCreateDialog({
 
             {advancedOpen ? (
               <div className="space-y-5">
+            <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>流水线镜像</Label>
+                    <Select value={form.image} onValueChange={(v) => update("image", v)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {options.images.map((image) => (
+                          <SelectItem key={image} value={image}>
+                            {image.split("/").pop()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>LLM 配置</Label>
+                    <Select value={form.llmProfile} onValueChange={(v) => update("llmProfile", v)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {options.llm_profiles.map((profile) => (
+                          <SelectItem key={profile} value={profile}>
+                            {profile}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+            <fieldset className="space-y-3 rounded-lg border border-line p-4">
+                  <legend className="px-1 text-sm font-medium text-content">流水线选项</legend>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <ToggleRow id="tdb-generate-qa" label="生成 QA 集" checked={form.generateQa} onChange={(v) => update("generateQa", v)} />
+                    <ToggleRow id="tdb-auto-eval" label="自动评估与修复" checked={form.autoEval} onChange={(v) => update("autoEval", v)} />
+                    <ToggleRow id="tdb-llm-grade" label="LLM 评分" checked={form.llmGrade} onChange={(v) => update("llmGrade", v)} />
+                    <ToggleRow id="tdb-autopromote" label="开放层谓词自动提升" checked={form.autopromote} onChange={(v) => update("autopromote", v)} />
+                  </div>
+                </fieldset>
+            <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="tdb-dataset">数据集标识（可选）</Label>
+                    <Input
+                      id="tdb-dataset"
+                      placeholder="用于生成幂等键，留空则取源地址"
+                      value={form.datasetId}
+                      onChange={(e) => update("datasetId", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tdb-version">源版本（可选）</Label>
+                    <Input
+                      id="tdb-version"
+                      placeholder="ETag 或修订号，源内容变化时更新"
+                      value={form.sourceVersion}
+                      onChange={(e) => update("sourceVersion", e.target.value)}
+                    />
+                  </div>
+                </div>
+            <fieldset className="space-y-3 rounded-lg border border-line p-4">
+                  <legend className="px-1 text-sm font-medium text-content">产物上传</legend>
+                  <div className="space-y-2">
+                    <Label htmlFor="tdb-runs-prefix">运行产物前缀</Label>
+                    <Input id="tdb-runs-prefix" value={form.runsPrefix} onChange={(e) => update("runsPrefix", e.target.value)} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tdb-status-prefix">状态前缀</Label>
+                    <Input id="tdb-status-prefix" value={form.statusPrefix} onChange={(e) => update("statusPrefix", e.target.value)} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tdb-attempt-prefix">单次尝试状态前缀</Label>
+                    <Input id="tdb-attempt-prefix" value={form.attemptStatusPrefix} onChange={(e) => update("attemptStatusPrefix", e.target.value)} />
+                  </div>
+                  <ToggleRow
+                    id="tdb-strict"
+                    label="严格上传（strict，控制器尚未接线）"
+                    checked={form.strict}
+                    onChange={(v) => update("strict", v)}
+                  />
+                </fieldset>
                 <fieldset className="space-y-3 rounded-lg border border-line p-4">
                   <legend className="px-1 text-sm font-medium text-content">目标覆盖</legend>
                   <p className="text-xs text-content-muted">

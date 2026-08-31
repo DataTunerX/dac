@@ -498,6 +498,8 @@ export type TDBPipelineTarget = {
   label: string
   gateway_url: string
   domain_profile: string
+  /** Collection this target defaults to; empty means the target's domain. */
+  collection: string
   skill_agent?: string
   test: boolean
 }

@@ -30,6 +30,7 @@ func OptionSetFromConfig(cfg config.TDBPipelineConfig) domain.TDBPipelineOptionS
 			Label:         label,
 			GatewayURL:    target.GatewayURL,
 			DomainProfile: target.DomainProfile,
+			Collection:    target.Collection,
 			SkillAgent:    target.SkillAgent,
 			Test:          target.Test,
 		})

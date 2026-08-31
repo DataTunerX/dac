@@ -39,6 +39,9 @@ type TDBPipelineTarget struct {
 	GatewayURL string
 	// DomainProfile is the profile path inside the pipeline image.
 	DomainProfile string
+	// Collection overrides the collection a run into this target defaults to.
+	// Empty means the target's domain is used. See DefaultCollectionForTarget.
+	Collection string
 	// SkillAgent names the skill that reads this gateway, when one exists.
 	SkillAgent string
 	// Test marks isolated test targets that hold no production content.

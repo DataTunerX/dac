@@ -459,6 +459,9 @@ apiserver:
           label: "考古学（论文测试库，隔离）"
           gateway_url: "http://10.124.48.91:8996"
           domain_profile: "pipeline/profiles/archeology.v2.json"
+          # Paper batches keep the papers collection; every other target
+          # defaults its collection to the target domain.
+          collection: "academic_papers"
           test: true
   resources:
     requests:

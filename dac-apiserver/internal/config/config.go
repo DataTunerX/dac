@@ -155,6 +155,7 @@ type TDBPipelineTargetConfig struct {
 	Label         string `mapstructure:"label"`
 	GatewayURL    string `mapstructure:"gateway_url"`
 	DomainProfile string `mapstructure:"domain_profile"`
+	Collection    string `mapstructure:"collection"`
 	SkillAgent    string `mapstructure:"skill_agent"`
 	Test          bool   `mapstructure:"test"`
 }
