@@ -1,0 +1,3228 @@
+[
+  {
+    "entity_id": "wwybsj.term.acquisition.1957年陕西省西安市鲜于庭诲墓出土",
+    "facet": "acquisition",
+    "label": "1957年陕西省西安市鲜于庭诲墓出土",
+    "artifact_uses": 1,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.1968年河北满城中山靖王刘胜妻窦绾墓出土",
+    "facet": "acquisition",
+    "label": "1968年河北满城中山靖王刘胜妻窦绾墓出土",
+    "artifact_uses": 1,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.发掘",
+    "facet": "acquisition",
+    "label": "发掘",
+    "artifact_uses": 166,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.征集",
+    "facet": "acquisition",
+    "label": "征集",
+    "artifact_uses": 1,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.征集购买",
+    "facet": "acquisition",
+    "label": "征集购买",
+    "artifact_uses": 92,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.拨交",
+    "facet": "acquisition",
+    "label": "拨交",
+    "artifact_uses": 46,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.接受捐赠",
+    "facet": "acquisition",
+    "label": "接受捐赠",
+    "artifact_uses": 15,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.旧藏",
+    "facet": "acquisition",
+    "label": "旧藏",
+    "artifact_uses": 86,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.河南安阳武官村一带出土",
+    "facet": "acquisition",
+    "label": "河南安阳武官村一带出土",
+    "artifact_uses": 1,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.清宫旧藏",
+    "facet": "acquisition",
+    "label": "清宫旧藏",
+    "artifact_uses": 1,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.移交",
+    "facet": "acquisition",
+    "label": "移交",
+    "artifact_uses": 5,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.acquisition.采集",
+    "facet": "acquisition",
+    "label": "采集",
+    "artifact_uses": 56,
+    "status": "not_applicable",
+    "reason": "文物来源是藏品管理词汇（发掘/征集购买/旧藏…），入藏途径不是器物属性",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.category.漆器",
+    "facet": "category",
+    "label": "漆器",
+    "artifact_uses": 1,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "漆器",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "漆器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:54:52-04:00",
+        "concept_ids": [
+          "1145be70-bf57-56f6-8b51-c934652760e6",
+          "12bec43a-8a17-5322-849a-291453ed1b9a",
+          "1c8809f8-ef0f-5dd3-8dab-07d948a5a74b",
+          "30740e83-f1c0-5fc8-ac7e-030a9057f132",
+          "37888b46-ca87-5db9-b4de-1c2e7634433d",
+          "3c79707e-6e81-5257-a951-b04664ec8900",
+          "53c62070-42a7-5db7-b937-54f685e1e50a",
+          "598d8fd7-593b-5bcb-8329-bbbcad1f7018",
+          "5d0ac69c-85e2-5dea-922f-57738095bab7",
+          "60df3c4d-816d-5fea-a983-3a0dd90e1b9b",
+          "769c5d6a-89be-5132-9a3d-dfd83e4dcbc8",
+          "780ba1e6-c005-5252-8e78-04134e4b0d0d",
+          "85df299c-7ce9-52af-8b1e-2ce833775e0c",
+          "a0bdee6f-2392-5424-b6e9-f6fa2320b964",
+          "a505d64f-25d9-5124-8d10-3bd8ca91c498",
+          "ab2ca73e-c840-5867-a0da-1eed703c0386",
+          "ade9559a-faed-5a4c-88ad-78759525cdcf",
+          "b0320c92-9e41-53a4-9e14-ecb94290e84d",
+          "b25fc102-0df5-5b99-b6a4-9a75505210f7",
+          "ba962502-65e2-578b-9df3-c491c3110f9b",
+          "c352dd33-8262-5bbb-8d30-3cfd0e47ec26",
+          "d1a8cc74-d137-575e-804d-16475eccbe72",
+          "d3d1a976-aa4f-5612-bbc7-3228f556214a",
+          "dfedd75c-aecc-5a5b-acbd-6d9a3cb93d61",
+          "dfeed0ac-59d5-5803-b8d2-0c5f229dec5c",
+          "e32b5e42-e18f-50fa-a74f-5c238bc1c78b",
+          "e5170c26-b0da-5fc2-b2e5-5bc0d0b9a381"
+        ],
+        "primary_concept_id": "1145be70-bf57-56f6-8b51-c934652760e6",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 27,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "漆器"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.category.玉石器、宝石",
+    "facet": "category",
+    "label": "玉石器、宝石",
+    "artifact_uses": 229,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "玉石器",
+        "is_whole_label": false,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "玉石器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:54:54-04:00",
+        "concept_ids": [
+          "06cbfce1-7d77-5814-9076-73f5f273df2a",
+          "09e9df5f-cc3a-5404-8249-67bd6a5c13a3",
+          "288ad32e-e282-55e9-8f48-befe8a20b22e",
+          "2aa03ca6-948b-5421-a52d-550a4309ec7e",
+          "3bb894fc-0f5c-5cc1-9c21-217cc472dc14",
+          "5266abe7-bd5b-5fcc-a307-ab8a9ff0403a",
+          "6d301da4-5a28-5743-bf25-f1c6dfb3ceb2",
+          "d5f4ab95-8595-5fd8-97b3-157df7dfb086"
+        ],
+        "primary_concept_id": "06cbfce1-7d77-5814-9076-73f5f273df2a",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 8,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "宝石",
+        "is_whole_label": false,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "宝石",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:54:56-04:00",
+        "concept_ids": [
+          "04ab3ac5-534a-5dc4-ae53-7c0d6003eb3c",
+          "32f2c449-efbd-5e12-80fc-e7bdfae84643",
+          "3f98aafa-52e9-5444-8c05-59e4c461e704",
+          "43b53622-8f7b-5c43-a59c-298027665983",
+          "44cd8432-2a61-5d19-831d-a7e11d8094ac",
+          "5273c668-59b2-5b0c-9343-a44b00998a12",
+          "63fb0576-d056-5531-808c-bdcdee4bcaaa",
+          "7c16890f-1a3d-5f3d-b2b2-e6426e21e26a",
+          "8d594317-242e-5e0f-bd53-caf95a766619",
+          "bd20f8ab-744a-5d77-b944-f706d9aee8ee",
+          "c1193a96-49f7-553b-9a15-89dd136f9d89",
+          "ca5cb86a-17e8-5a3d-8d27-aeb4e73592da",
+          "cff3e7de-89ec-570b-b548-1d83105e9cf3"
+        ],
+        "primary_concept_id": "04ab3ac5-534a-5dc4-ae53-7c0d6003eb3c",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 13,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "玉石器、宝石",
+      "玉石器",
+      "宝石"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.category.瓷器",
+    "facet": "category",
+    "label": "瓷器",
+    "artifact_uses": 38,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "瓷器",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "瓷器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:54:57-04:00",
+        "concept_ids": [
+          "111deb07-565d-5881-bb6c-98f36705bd19",
+          "277634ce-a1ae-54b3-9aca-db7194c6e030",
+          "2a4a81be-3f56-5448-a9c6-ba00e06a5861",
+          "54e69ae5-e62d-5b28-ad12-ff139e7de07e",
+          "59160930-fd4a-593f-972c-cfe2e0b62830",
+          "766148c0-de7f-5fc7-8b46-69a50c59192a",
+          "830b36b9-9dce-50fc-bdfe-1a91b86c6fbc",
+          "84ba2dbe-ab14-5dd8-b502-0a17889fb19c",
+          "85d899ed-c74a-539d-82ce-d06cba82b05e",
+          "94e76cf9-a5aa-53f2-b61f-e9ec9b84f23b",
+          "a5367462-8582-53da-8cd5-08f3e9acea51",
+          "e04c30f4-a5bb-5b9c-966d-ad2e16ad4e37"
+        ],
+        "primary_concept_id": "111deb07-565d-5881-bb6c-98f36705bd19",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 12,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "陶瓷器",
+        "is_whole_label": false,
+        "match_relation": "broader",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "陶瓷器",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:54:58-04:00",
+        "concept_ids": [
+          "201303db-5f77-5874-ba01-c18f4f06117e",
+          "26d3bcd4-510f-573b-8452-cfc192b103c4",
+          "71d3377d-8b85-5cd8-99c9-a39f08993525",
+          "93c8cc79-7934-5e7f-b958-222c50240079",
+          "a304375e-ffc3-5eb7-8328-8b1bac558c46",
+          "a9afcfdd-667a-59c3-8f9c-ba3c1cf2178f",
+          "aacba03a-ec5d-5363-879a-9dfb896d63f8",
+          "be0d1d44-f01b-5352-94a7-2362c874c28a",
+          "d427cd50-ffe5-5ba6-a005-2fd4fc25f2f5",
+          "fba607f1-2a9a-5fb6-a4cc-d2d52407edb2"
+        ],
+        "primary_concept_id": "201303db-5f77-5874-ba01-c18f4f06117e",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 10,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "保留上位通路：陶瓷器簇带成分分析事实，精确锚点没有。",
+          "evidence": "陶瓷器 -characterized_by-> Si/Al/Ca/Mg/K/Na",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "瓷器"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "category",
+        "label": "瓷器",
+        "surface": "瓷器",
+        "decision": "confirm_exact",
+        "reason": "13 个同名概念，含保护修复与产地知识。v1 误判为『远端无干净瓷器概念』。",
+        "evidence": "瓷器 -uses_method-> 瓷器粘补; 景德鎮 -produced_by-> 瓷器; 瓷器 -excavated_at-> 辽宁绥中三道岗海域"
+      },
+      {
+        "facet": "category",
+        "label": "瓷器",
+        "decision": "align",
+        "relation": "broader",
+        "target_kind": "concept",
+        "target_name": "陶瓷器",
+        "reason": "保留上位通路：陶瓷器簇带成分分析事实，精确锚点没有。",
+        "evidence": "陶瓷器 -characterized_by-> Si/Al/Ca/Mg/K/Na"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.category.石器、石刻、砖瓦",
+    "facet": "category",
+    "label": "石器、石刻、砖瓦",
+    "artifact_uses": 51,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "石器",
+        "is_whole_label": false,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "石器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:00-04:00",
+        "concept_ids": [
+          "32118194-d092-5f29-b919-bad8e2b9628d",
+          "61e1e22a-0869-5c24-a249-a896ec65ad7a",
+          "b5fbb9fc-5a76-56b4-afc5-c10f093f1a8d"
+        ],
+        "primary_concept_id": "32118194-d092-5f29-b919-bad8e2b9628d",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 3,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "石刻",
+        "is_whole_label": false,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "石刻",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:02-04:00",
+        "concept_ids": [
+          "7dbd6300-1132-5103-9a8c-11bfe77267c2",
+          "de1d406f-d509-55aa-8349-81b6840d838e"
+        ],
+        "primary_concept_id": "7dbd6300-1132-5103-9a8c-11bfe77267c2",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 2,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "砖瓦",
+        "is_whole_label": false,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "砖瓦",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:03-04:00",
+        "concept_ids": [
+          "0a77051c-3ddc-5e61-b3f3-8c011c1d6f1f",
+          "0bda82a8-019b-5abb-be49-b8651166a3b6",
+          "144014eb-479f-5f1e-b520-23b6c2d434b1",
+          "6f4f8607-fe41-56d5-9338-b033230f4d3a",
+          "9e71df31-d8f5-5112-88da-7ca7d8024356",
+          "a7d102c2-fb36-512e-bac6-9caa2c5c8a9b",
+          "d73756c1-a3dc-5e31-9668-eebebb545cb7",
+          "e315f8bd-00c1-5405-ac43-c35e2633b134",
+          "ff72b7e0-f0e3-5452-b2dc-3988e6cba1bb"
+        ],
+        "primary_concept_id": "0a77051c-3ddc-5e61-b3f3-8c011c1d6f1f",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 9,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "石器、石刻、砖瓦",
+      "石器",
+      "石刻",
+      "砖瓦"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "category",
+        "label": "石器、石刻、砖瓦",
+        "surface": "石刻",
+        "decision": "confirm_exact",
+        "reason": "17 个同名概念，所指正是石刻器物本身。v1 只看到 wiki 页(Burin 石凿)和『石刻文献』类概念而误拒。",
+        "evidence": "石刻 -has_property-> 历史、艺术、科学价值; 石刻 -consists_of-> 马/牛/羊; 不可移动文物 -consists_of-> 石刻"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.category.金银器",
+    "facet": "category",
+    "label": "金银器",
+    "artifact_uses": 11,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "金银器",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "金银器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:04-04:00",
+        "concept_ids": [
+          "01046614-ec3f-5c48-adf4-33365c1273dd",
+          "1079d039-fc37-5bd5-ad65-490ccda8ef73",
+          "13cb07e4-c2ba-5a4b-8bd0-97055f6920c0",
+          "1c769168-4743-5548-9cf3-becd543de752",
+          "1ebe8e64-4fd1-578a-b79c-ed1271e48907",
+          "388df4b7-cdfc-5e47-834f-1fae4a0f1374",
+          "4fef6e95-d285-5645-b5f4-4676178940fb",
+          "698f81e5-c29c-5ee7-bf4f-c527b838a34a",
+          "bd31e1bb-ce10-5e78-b656-4540125253ee",
+          "ca0048e4-14f0-59e2-8a1e-e63fca91e01c",
+          "d2815238-ac45-5b9e-bf3a-9efdfefeee96",
+          "d9b17348-2fc8-55bc-b903-996477ff6823",
+          "edc6a735-d0ed-5687-80d9-93e14d189647"
+        ],
+        "primary_concept_id": "01046614-ec3f-5c48-adf4-33365c1273dd",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 13,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "金银器"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.category.钱币",
+    "facet": "category",
+    "label": "钱币",
+    "artifact_uses": 6,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "钱币",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "钱币",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:06-04:00",
+        "concept_ids": [
+          "030a44d2-1aa4-5ce3-a184-bdd169b6591b",
+          "0b74e952-36c4-5fb4-8c7f-faba6b53bd41",
+          "0c9be451-c2f7-5bf1-b953-2cfe73c6f626",
+          "4c912e56-a114-50be-aefa-6e112ec2cabe",
+          "5a5163c4-55e7-5f3d-9b52-ff6164d85c2f",
+          "7c6b2c4b-cc2a-5003-a5d5-981565855d1f",
+          "8f25b917-d2be-56ad-a228-61af8f7bb784",
+          "9262541a-1ca2-5098-93f4-a33c9f8d541e",
+          "ac814953-9e91-5ed4-85e1-615eaa62d99c",
+          "c2bb4668-f051-5c55-a757-d7c01e45abf3",
+          "c4cc36b8-86c1-5021-909f-5ba756ed081b",
+          "ffe7d712-399b-56f5-9fa9-8beb3bb09447"
+        ],
+        "primary_concept_id": "030a44d2-1aa4-5ce3-a184-bdd169b6591b",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 12,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "钱币"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.category.铁器、其他金属器",
+    "facet": "category",
+    "label": "铁器、其他金属器",
+    "artifact_uses": 26,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "铁器",
+        "is_whole_label": false,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "铁器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:08-04:00",
+        "concept_ids": [
+          "03564405-018d-582c-a02d-bbdd65653933",
+          "0b8061cf-cc4a-50c2-a250-abe8b62c22f7",
+          "0c1b1739-5b5c-5bb1-818a-c8f5b692f5d1",
+          "12795099-256a-556d-a271-a8f81055bb87",
+          "205a906a-0f32-5637-8626-7b8e46573212",
+          "2f6d5cd0-4633-5489-b46c-588cba7b57c9",
+          "3c472fad-0f46-5606-b172-8b6d9dee9365",
+          "48041df2-6615-517f-a8a8-aaa6df6c3626",
+          "5e1d45ff-5d84-55a3-87b7-6b6b8e758266",
+          "67e83635-bd34-5434-a9d5-81b0156be45a",
+          "7072b2f1-f98c-5c68-922b-a611e5581a03",
+          "72a3c256-d906-5034-9920-7cb5639c9dce",
+          "7b77cdd9-c3c4-5e9d-bc61-582645992d93",
+          "82543164-76fb-5bba-a5f2-d1ef62281282",
+          "907c1d0b-dd79-5576-9850-50b9181bec66",
+          "b1d7b20d-451b-512f-a61d-7248aafaebdf",
+          "c6a1ff7b-9af0-5179-99d9-41242a9d9480",
+          "e3333bad-5d28-579c-abf1-648536a8dd49",
+          "ff5be8d0-ca21-56a7-a927-e6b290e72d3e"
+        ],
+        "primary_concept_id": "03564405-018d-582c-a02d-bbdd65653933",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 19,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "铁器、其他金属器",
+      "铁器",
+      "其他金属器"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "category",
+        "label": "铁器、其他金属器",
+        "surface": "铁器",
+        "decision": "confirm_exact",
+        "reason": "27 个同名概念，内容是真实的铁器考古与检测知识。v1 因解析器 limit=10 漏看而误拒。",
+        "evidence": "铁器 -dated_by-> 穆斯堡尔谱测年法; -made_of-> 铸铁; -excavated_at-> 楚墓; -requires_condition-> 100~250 千伏"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.category.铜器",
+    "facet": "category",
+    "label": "铜器",
+    "artifact_uses": 44,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "铜器",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "铜器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:11-04:00",
+        "concept_ids": [
+          "33c0cfc1-91dc-5af0-93e5-f4e038428dee",
+          "eedbc7fd-4e6a-598e-9237-60a411211edb",
+          "f8102393-4ab7-56fb-8661-4acbb614a37f"
+        ],
+        "primary_concept_id": "33c0cfc1-91dc-5af0-93e5-f4e038428dee",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 3,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "青铜器",
+        "is_whole_label": false,
+        "match_relation": "narrower",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "青铜器",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:12-04:00",
+        "concept_ids": [
+          "00b522a6-bb4b-5a8c-904d-d0fd15840f13",
+          "2a811474-ee26-523b-866d-af9d2c2a44a2",
+          "30ec214b-1056-55a5-bf29-d770406185a4",
+          "56a62e1c-0dbe-5590-8693-d3b061cce4df",
+          "89073f27-2878-549c-803b-71164e5c8f17",
+          "968b9f69-4f3e-5003-a8e9-5e7519344492",
+          "a3db6986-47d3-513e-b828-cc691380bfd9",
+          "a43c40d8-a08d-593f-99db-03e5fd4dcb8d",
+          "beabb4b2-6433-5f4c-b1c7-98d45532a3f3",
+          "fa6526e5-ef81-53cd-a2e2-613cf3c11ecb"
+        ],
+        "primary_concept_id": "00b522a6-bb4b-5a8c-904d-d0fd15840f13",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 10,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "青铜器是铜器真子类，且簇更大(22)、事实更丰富。",
+          "evidence": "青铜器 -instance_of-> 记录有文字的载体; 龟甲兽骨 -precedes-> 青铜器",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "铜器"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "category",
+        "label": "铜器",
+        "surface": "铜器",
+        "decision": "confirm_exact",
+        "reason": "6 个同名概念，真实器物类概念。",
+        "evidence": "concept/search('铜器') 精确同名 6 个"
+      },
+      {
+        "facet": "category",
+        "label": "铜器",
+        "decision": "align",
+        "relation": "narrower",
+        "target_kind": "concept",
+        "target_name": "青铜器",
+        "reason": "青铜器是铜器真子类，且簇更大(22)、事实更丰富。",
+        "evidence": "青铜器 -instance_of-> 记录有文字的载体; 龟甲兽骨 -precedes-> 青铜器"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.category.陶器",
+    "facet": "category",
+    "label": "陶器",
+    "artifact_uses": 40,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "陶器",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "陶器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:13-04:00",
+        "concept_ids": [
+          "20c74cc0-3f53-53b6-8192-83398d490071",
+          "264aa8fe-4f2f-5001-9461-0aa00fae936b",
+          "2eab0956-1153-5fbd-b1c2-5bb5107f735d",
+          "53af8ac7-f618-5329-9117-9700c478dece",
+          "6e09c6ca-7ab2-5560-a020-aa2fb716d081",
+          "70dedc30-d4f7-53e2-a20f-8a36ab4c8491",
+          "78d30baf-3332-5e2e-8cda-b40239ebe966",
+          "922802a0-e44b-59a5-89dd-299e62b29de9",
+          "9a7cc356-dc76-5a97-9e35-597860c4c4ed",
+          "a1960233-2d73-5692-b1a3-a7f08aca9b9a",
+          "a3b4cdd2-db09-52ab-8e85-1ec41e7c7d30",
+          "b7db5e5b-0905-5413-9976-1cc6bc32727b",
+          "c4691b63-49cb-558c-a9cb-df914d07ef1f",
+          "ee8e6994-fd39-5467-b27f-c29d7c06c7ac"
+        ],
+        "primary_concept_id": "20c74cc0-3f53-53b6-8192-83398d490071",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 14,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "陶器"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.category.陶瓷器",
+    "facet": "category",
+    "label": "陶瓷器",
+    "artifact_uses": 1,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "陶瓷器",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "陶瓷器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:14-04:00",
+        "concept_ids": [
+          "201303db-5f77-5874-ba01-c18f4f06117e",
+          "26d3bcd4-510f-573b-8452-cfc192b103c4",
+          "71d3377d-8b85-5cd8-99c9-a39f08993525",
+          "93c8cc79-7934-5e7f-b958-222c50240079",
+          "a304375e-ffc3-5eb7-8328-8b1bac558c46",
+          "a9afcfdd-667a-59c3-8f9c-ba3c1cf2178f",
+          "aacba03a-ec5d-5363-879a-9dfb896d63f8",
+          "be0d1d44-f01b-5352-94a7-2362c874c28a",
+          "d427cd50-ffe5-5ba6-a005-2fd4fc25f2f5",
+          "fba607f1-2a9a-5fb6-a4cc-d2d52407edb2"
+        ],
+        "primary_concept_id": "201303db-5f77-5874-ba01-c18f4f06117e",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 10,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "陶瓷器"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.category.雕塑、造像",
+    "facet": "category",
+    "label": "雕塑、造像",
+    "artifact_uses": 22,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "雕塑",
+        "is_whole_label": false,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "雕塑",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:17-04:00",
+        "concept_ids": [
+          "3e6e2e72-227d-5438-9357-1f3546d2bdb6",
+          "b7b4ce34-d4ca-5ee0-9c73-6c4ad0705fe5",
+          "ce2e2158-4ec1-59a8-86cb-9faf4aac5140",
+          "d46de2df-893f-55a7-98fa-1f86ef73c439"
+        ],
+        "primary_concept_id": "3e6e2e72-227d-5438-9357-1f3546d2bdb6",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 4,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "造像",
+        "is_whole_label": false,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "造像",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:18-04:00",
+        "concept_ids": [
+          "36b2990e-465a-5951-b246-f5a124659b18",
+          "84bf510d-7ba4-5602-a948-8e6341325d94",
+          "e991cd8b-ed12-576d-a92a-d39075db8c10",
+          "edf52451-bd23-58f8-98e5-1a080729db7f",
+          "f222dbc9-496c-5b59-a7af-48f1441bdad7"
+        ],
+        "primary_concept_id": "36b2990e-465a-5951-b246-f5a124659b18",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 5,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "雕塑、造像",
+      "雕塑",
+      "造像"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "category",
+        "label": "雕塑、造像",
+        "surface": "雕塑",
+        "decision": "confirm_exact",
+        "reason": "5 个同名概念中约半数是可用的雕塑史论述，另半数为现代艺术(第三国际纪念碑)。作为精确同名锚点保留，但簇内混杂已记录，推理时需注意。",
+        "evidence": "雕塑 -has_feature-> 写实 / 越来越脱离建筑结构而走向独立; 另: 雕塑 -produced_by-> 第三国际纪念碑模型（1919）"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.category.青铜器",
+    "facet": "category",
+    "label": "青铜器",
+    "artifact_uses": 2,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "青铜器",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "青铜器",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:19-04:00",
+        "concept_ids": [
+          "00b522a6-bb4b-5a8c-904d-d0fd15840f13",
+          "2a811474-ee26-523b-866d-af9d2c2a44a2",
+          "30ec214b-1056-55a5-bf29-d770406185a4",
+          "56a62e1c-0dbe-5590-8693-d3b061cce4df",
+          "89073f27-2878-549c-803b-71164e5c8f17",
+          "968b9f69-4f3e-5003-a8e9-5e7519344492",
+          "a3db6986-47d3-513e-b828-cc691380bfd9",
+          "a43c40d8-a08d-593f-99db-03e5fd4dcb8d",
+          "beabb4b2-6433-5f4c-b1c7-98d45532a3f3",
+          "fa6526e5-ef81-53cd-a2e2-613cf3c11ecb"
+        ],
+        "primary_concept_id": "00b522a6-bb4b-5a8c-904d-d0fd15840f13",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 10,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "青铜器"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.completeness.严重残缺(含缺失部件)",
+    "facet": "completeness",
+    "label": "严重残缺(含缺失部件)",
+    "artifact_uses": 5,
+    "status": "not_applicable",
+    "reason": "完残程度是藏品管理词汇，远端同名页面为通用词噪声（'完整' → 较完整的国体）",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.completeness.基本完整",
+    "facet": "completeness",
+    "label": "基本完整",
+    "artifact_uses": 121,
+    "status": "not_applicable",
+    "reason": "完残程度是藏品管理词汇，远端同名页面为通用词噪声（'完整' → 较完整的国体）",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.completeness.完整",
+    "facet": "completeness",
+    "label": "完整",
+    "artifact_uses": 62,
+    "status": "not_applicable",
+    "reason": "完残程度是藏品管理词汇，远端同名页面为通用词噪声（'完整' → 较完整的国体）",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.completeness.残缺",
+    "facet": "completeness",
+    "label": "残缺",
+    "artifact_uses": 282,
+    "status": "not_applicable",
+    "reason": "完残程度是藏品管理词汇，远端同名页面为通用词噪声（'完整' → 较完整的国体）",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.grade.一级",
+    "facet": "grade",
+    "label": "一级",
+    "artifact_uses": 15,
+    "status": "not_applicable",
+    "reason": "文物级别是藏品管理词汇（一级/二级/三级/一般/未定级），不是考古概念",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.grade.一般",
+    "facet": "grade",
+    "label": "一般",
+    "artifact_uses": 140,
+    "status": "not_applicable",
+    "reason": "文物级别是藏品管理词汇（一级/二级/三级/一般/未定级），不是考古概念",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.grade.三级",
+    "facet": "grade",
+    "label": "三级",
+    "artifact_uses": 199,
+    "status": "not_applicable",
+    "reason": "文物级别是藏品管理词汇（一级/二级/三级/一般/未定级），不是考古概念",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.grade.二级",
+    "facet": "grade",
+    "label": "二级",
+    "artifact_uses": 71,
+    "status": "not_applicable",
+    "reason": "文物级别是藏品管理词汇（一级/二级/三级/一般/未定级），不是考古概念",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.grade.未定级",
+    "facet": "grade",
+    "label": "未定级",
+    "artifact_uses": 46,
+    "status": "not_applicable",
+    "reason": "文物级别是藏品管理词汇（一级/二级/三级/一般/未定级），不是考古概念",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.material.其他无机质",
+    "facet": "material",
+    "label": "其他无机质",
+    "artifact_uses": 1,
+    "status": "not_applicable",
+    "reason": "登记簿兜底值，不指称任何概念，永久不对齐。",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [
+      "其他无机质"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "material",
+        "label": "其他无机质",
+        "decision": "not_applicable",
+        "reason": "登记簿兜底值，不指称任何概念，永久不对齐。",
+        "evidence": "1 件文物"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.material.其他金属",
+    "facet": "material",
+    "label": "其他金属",
+    "artifact_uses": 5,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "金属",
+        "is_whole_label": false,
+        "match_relation": "broader",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "金属",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:23-04:00",
+        "concept_ids": [
+          "049a24eb-9ad0-57bf-b603-7feab7b9d492",
+          "33f8e819-5b94-5d49-b00d-0d344b027075",
+          "383664a6-826f-5a36-90f0-bc5d9f97a80d",
+          "823d90ec-bb2a-586d-aeaf-9c75a2e19f9e"
+        ],
+        "primary_concept_id": "049a24eb-9ad0-57bf-b603-7feab7b9d492",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 4,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "登记簿兜底值，『金属』正是其语义上界。",
+          "evidence": "金属 -defined_as-> 凡金之属皆从金",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "其他金属"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "material",
+        "label": "其他金属",
+        "decision": "align",
+        "relation": "broader",
+        "target_kind": "concept",
+        "target_name": "金属",
+        "reason": "登记簿兜底值，『金属』正是其语义上界。",
+        "evidence": "金属 -defined_as-> 凡金之属皆从金"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.material.宝玉石",
+    "facet": "material",
+    "label": "宝玉石",
+    "artifact_uses": 230,
+    "status": "leave_unaligned",
+    "reason": "远端确实没有——limit=200 的子串搜索返回 0 条，非解析器漏看。对齐到『玉石器』(器物类)是类型错误。该 229 件已通过类别『玉石器、宝石』获得远端通路。",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [
+      "宝玉石"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "material",
+        "label": "宝玉石",
+        "decision": "leave_unaligned",
+        "reason": "远端确实没有——limit=200 的子串搜索返回 0 条，非解析器漏看。对齐到『玉石器』(器物类)是类型错误。该 229 件已通过类别『玉石器、宝石』获得远端通路。",
+        "evidence": "concept/search('宝玉石', limit=200) = 0 条"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.material.瓷",
+    "facet": "material",
+    "label": "瓷",
+    "artifact_uses": 39,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "陶瓷器",
+        "is_whole_label": false,
+        "match_relation": "broader",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "陶瓷器",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:25-04:00",
+        "concept_ids": [
+          "201303db-5f77-5874-ba01-c18f4f06117e",
+          "26d3bcd4-510f-573b-8452-cfc192b103c4",
+          "71d3377d-8b85-5cd8-99c9-a39f08993525",
+          "93c8cc79-7934-5e7f-b958-222c50240079",
+          "a304375e-ffc3-5eb7-8328-8b1bac558c46",
+          "a9afcfdd-667a-59c3-8f9c-ba3c1cf2178f",
+          "aacba03a-ec5d-5363-879a-9dfb896d63f8",
+          "be0d1d44-f01b-5352-94a7-2362c874c28a",
+          "d427cd50-ffe5-5ba6-a005-2fd4fc25f2f5",
+          "fba607f1-2a9a-5fb6-a4cc-d2d52407edb2"
+        ],
+        "primary_concept_id": "201303db-5f77-5874-ba01-c18f4f06117e",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 10,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "给材质『瓷』一条可 join 的上位概念通路。",
+          "evidence": "陶瓷器 -characterized_by-> Si/Al/Ca/Mg/K/Na",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [
+      {
+        "matched_surface": "瓷",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "wiki_page",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "瓷",
+        "remote_wiki_slug": "瓷",
+        "resolved_at": "2026-08-31T16:55:25-04:00",
+        "promoted_by_review": true,
+        "review_reason": "已复核：内容可信，作为文档锚点保留（wiki 页无类型化边，不参与图 join）"
+      }
+    ],
+    "attempted": [
+      "瓷"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "material",
+        "label": "瓷",
+        "surface": "瓷",
+        "decision": "promote_wiki",
+        "reason": "远端无同名概念(已用 limit=200 确认)，但该 wiki 页是真实陶瓷材料学，保留为文档锚点。",
+        "evidence": "wiki:瓷 = Features 白里泛青/白里泛黄; Consists Of 玻璃态物质/莫来石晶体/残余二氧化硅; Part Of Al₂O₃"
+      },
+      {
+        "facet": "material",
+        "label": "瓷",
+        "decision": "align",
+        "relation": "broader",
+        "target_kind": "concept",
+        "target_name": "陶瓷器",
+        "reason": "给材质『瓷』一条可 join 的上位概念通路。",
+        "evidence": "陶瓷器 -characterized_by-> Si/Al/Ca/Mg/K/Na"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.material.石",
+    "facet": "material",
+    "label": "石",
+    "artifact_uses": 4,
+    "status": "unaligned",
+    "reason": "",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [
+      "石"
+    ],
+    "rejected_exact": [
+      {
+        "matched_surface": "石",
+        "cluster_size": 2,
+        "veto": "homograph",
+        "reason": "同形词：2 个同名概念一个是容量单位『石』(十斗)，一个是『自然物的形体』，均非石材质。该类文物已通过类别『石器』获得远端通路。",
+        "evidence": "石 -defined_as-> 容量單位 / 十斗; 石 -located_at-> 壽陽; 石 -instance_of-> 自然物的形体; 石 -related_to-> 塔什干",
+        "reviewer": "claude-opus-5"
+      }
+    ],
+    "decisions": [
+      {
+        "facet": "material",
+        "label": "石",
+        "surface": "石",
+        "decision": "reject_exact",
+        "reason": "同形词：2 个同名概念一个是容量单位『石』(十斗)，一个是『自然物的形体』，均非石材质。该类文物已通过类别『石器』获得远端通路。",
+        "evidence": "石 -defined_as-> 容量單位 / 十斗; 石 -located_at-> 壽陽; 石 -instance_of-> 自然物的形体; 石 -related_to-> 塔什干"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.material.砖瓦",
+    "facet": "material",
+    "label": "砖瓦",
+    "artifact_uses": 48,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "砖瓦",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "砖瓦",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:27-04:00",
+        "concept_ids": [
+          "0a77051c-3ddc-5e61-b3f3-8c011c1d6f1f",
+          "0bda82a8-019b-5abb-be49-b8651166a3b6",
+          "144014eb-479f-5f1e-b520-23b6c2d434b1",
+          "6f4f8607-fe41-56d5-9338-b033230f4d3a",
+          "9e71df31-d8f5-5112-88da-7ca7d8024356",
+          "a7d102c2-fb36-512e-bac6-9caa2c5c8a9b",
+          "d73756c1-a3dc-5e31-9668-eebebb545cb7",
+          "e315f8bd-00c1-5405-ac43-c35e2633b134",
+          "ff72b7e0-f0e3-5452-b2dc-3988e6cba1bb"
+        ],
+        "primary_concept_id": "0a77051c-3ddc-5e61-b3f3-8c011c1d6f1f",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 9,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "砖瓦"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.material.金",
+    "facet": "material",
+    "label": "金",
+    "artifact_uses": 13,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "金属",
+        "is_whole_label": false,
+        "match_relation": "broader",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "金属",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:28-04:00",
+        "concept_ids": [
+          "049a24eb-9ad0-57bf-b603-7feab7b9d492",
+          "33f8e819-5b94-5d49-b00d-0d344b027075",
+          "383664a6-826f-5a36-90f0-bc5d9f97a80d",
+          "823d90ec-bb2a-586d-aeaf-9c75a2e19f9e"
+        ],
+        "primary_concept_id": "049a24eb-9ad0-57bf-b603-7feab7b9d492",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 4,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "精确同名不可用，改走可靠上位概念。",
+          "evidence": "金属 -defined_as-> 凡金之属皆从金; 战国时期古币 -consists_of-> 金属",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "金"
+    ],
+    "rejected_exact": [
+      {
+        "matched_surface": "金",
+        "cluster_size": 2,
+        "veto": "homograph",
+        "reason": "同形词：4 个同名概念全部不是金属材质——分别指金朝、以及『文/武』『钟镈』语境。簇 union 会把女真族、1234 年等金朝事实挂到金器上。",
+        "evidence": "金 -occurred_at-> 1234 年 / 公元 1115 年; 金 -produced_by_culture-> 女真族; 金 -located_in-> 北方; 金 -uses_method-> 武; 金 -defined_as-> 钟镈",
+        "reviewer": "claude-opus-5"
+      }
+    ],
+    "decisions": [
+      {
+        "facet": "material",
+        "label": "金",
+        "surface": "金",
+        "decision": "reject_exact",
+        "reason": "同形词：4 个同名概念全部不是金属材质——分别指金朝、以及『文/武』『钟镈』语境。簇 union 会把女真族、1234 年等金朝事实挂到金器上。",
+        "evidence": "金 -occurred_at-> 1234 年 / 公元 1115 年; 金 -produced_by_culture-> 女真族; 金 -located_in-> 北方; 金 -uses_method-> 武; 金 -defined_as-> 钟镈"
+      },
+      {
+        "facet": "material",
+        "label": "金",
+        "decision": "align",
+        "relation": "broader",
+        "target_kind": "concept",
+        "target_name": "金属",
+        "reason": "精确同名不可用，改走可靠上位概念。",
+        "evidence": "金属 -defined_as-> 凡金之属皆从金; 战国时期古币 -consists_of-> 金属"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.material.铁",
+    "facet": "material",
+    "label": "铁",
+    "artifact_uses": 22,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "铁",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "铁",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:30-04:00",
+        "concept_ids": [
+          "6eb6c1e3-3509-5cb2-80f3-a76972399b07",
+          "a1bdff48-d9a2-5393-8c29-1a808626b075"
+        ],
+        "primary_concept_id": "6eb6c1e3-3509-5cb2-80f3-a76972399b07",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 2,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "铁"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "material",
+        "label": "铁",
+        "surface": "铁",
+        "decision": "confirm_exact",
+        "reason": "5 个同名概念是真实的铁材质知识。",
+        "evidence": "铁 -produced_by-> 铁矿石; 铁 -characterized_by-> 熔点为 1537℃; 铁 -located_in-> 赫梯地区; 铁质钉子 -made_of-> 铁"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.material.铜",
+    "facet": "material",
+    "label": "铜",
+    "artifact_uses": 50,
+    "status": "candidate_only",
+    "reason": "",
+    "anchors": [],
+    "candidates": [
+      {
+        "matched_surface": "铜",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "wiki_page",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "铜",
+        "remote_wiki_slug": "铜",
+        "resolved_at": "2026-08-31T16:55:31-04:00",
+        "promoted_by_review": false,
+        "review_reason": "wiki-only 命中：远端无同名 ontology 概念，该层页面已证实包含噪声，未经复核不得作为锚点参与推理"
+      }
+    ],
+    "attempted": [
+      "铜"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "material",
+        "label": "铜",
+        "surface": "铜",
+        "decision": "confirm_exact",
+        "exclude_concept_ids": [
+          "b319e504-0000-0000-0000-000000000000"
+        ],
+        "exclude_note": "簇内 b319e504 是抽取错误(甜饼 -consists_of-> 铜)，按成员排除；id 前缀匹配。",
+        "reason": "4 个同名概念中多数可用。",
+        "evidence": "铜斧 -made_of-> 铜; 福田书海 -made_of-> 铜; 铜 -has_property-> 绿色/红色"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.material.铜合金",
+    "facet": "material",
+    "label": "铜合金",
+    "artifact_uses": 2,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "铜合金",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "铜合金",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:32-04:00",
+        "concept_ids": [
+          "caad798d-5581-5435-bec1-c2c680344ca1"
+        ],
+        "primary_concept_id": "caad798d-5581-5435-bec1-c2c680344ca1",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 1,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "铜合金"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.material.陶",
+    "facet": "material",
+    "label": "陶",
+    "artifact_uses": 59,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "陶",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "陶",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:34-04:00",
+        "concept_ids": [
+          "249736d9-8022-577d-ba76-477dba61ccb2",
+          "47b96ae1-d867-5c5d-8134-770d517aff78"
+        ],
+        "primary_concept_id": "249736d9-8022-577d-ba76-477dba61ccb2",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 2,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "陶"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.东周",
+    "facet": "period",
+    "label": "东周",
+    "artifact_uses": 4,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "东周",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "东周",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:35-04:00",
+        "concept_ids": [
+          "08b4131e-7a26-53c2-8adf-104e57159055",
+          "0a3f3cfa-a226-50c3-9bdd-89e74c1324f4",
+          "13d5c5ab-0bc8-5293-a60d-ed13065778c9",
+          "2f7f5d82-788b-51f3-8871-39e1a6e2c892",
+          "4310ca23-bf1f-5dec-b4c2-19afa52fddfd",
+          "43be679c-f2d5-5431-ac98-95fa82e6f52b",
+          "51374d18-98db-5126-a971-3affe1d62c13",
+          "534d5d7a-629a-54a7-9dae-76023a6bfeb2",
+          "6b43678f-5f37-5a9b-a534-9665eac8f274",
+          "6e0d6ab7-211f-5619-b9af-be902424a836",
+          "711d8a14-b749-5d56-b301-0c3621095b44",
+          "78e523a9-3f73-563f-9f87-41dd4a0904ba",
+          "8150a0ef-3d86-5607-abde-0629afc1a7ae",
+          "91bea9fa-8440-5aa2-990f-9dfafde1a393",
+          "a8bdb838-d469-59dd-868f-6f2f4a54b50a",
+          "db62edf4-2645-5e73-b485-44b102a6fa7b"
+        ],
+        "primary_concept_id": "08b4131e-7a26-53c2-8adf-104e57159055",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 16,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "东周"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.东汉",
+    "facet": "period",
+    "label": "东汉",
+    "artifact_uses": 6,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "东汉",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "东汉",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:36-04:00",
+        "concept_ids": [
+          "0bd20d4c-b404-5bb1-accc-6e908b17c63e",
+          "1898a137-9439-52bf-96d1-27cc44ccfb22",
+          "19613502-1161-50b1-93fa-e262b4b60a37",
+          "2cc7682d-e341-58e0-a89a-f2207c0e77e6",
+          "a6f7a15d-093a-50bc-80d4-489e899cfa74",
+          "e93be890-c7e9-5f74-9dbf-9970b1236c0d",
+          "eddcc618-fcf1-5c80-8d66-5ae7e76511e0"
+        ],
+        "primary_concept_id": "0bd20d4c-b404-5bb1-accc-6e908b17c63e",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 7,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "东汉"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.东魏",
+    "facet": "period",
+    "label": "东魏",
+    "artifact_uses": 1,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "东魏",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "东魏",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:37-04:00",
+        "concept_ids": [
+          "136a4a7a-b19f-59b7-aa8b-534dbc137c82",
+          "a1fe2928-a57f-5900-a148-95e31091e0c2",
+          "b76c3d89-034c-5e87-a42a-9617d24247bc",
+          "d77de04c-3c6f-521a-8403-d9ea45741aca",
+          "e35b11e3-2500-503f-b590-8f08a8e4881d",
+          "fc561a18-b483-5eed-8e51-23d2318ec3d4"
+        ],
+        "primary_concept_id": "136a4a7a-b19f-59b7-aa8b-534dbc137c82",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 6,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "东魏"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.元",
+    "facet": "period",
+    "label": "元",
+    "artifact_uses": 1,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "元代",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "元代",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:40-04:00",
+        "concept_ids": [
+          "037a7d00-75f2-5ee2-b324-37a3f8c64fb9",
+          "1f546768-9294-5144-9da2-1818f63184f3",
+          "345c689d-77ec-54ad-a4df-220fdf23a46d",
+          "3cca1976-9f1c-5e4e-8508-6e9f7f375096",
+          "4df53a86-8f2c-5688-b058-be3183131d1c",
+          "c3ade7d0-d707-5bfd-9e87-0d3191a085d6",
+          "c5989c1e-4982-5b86-aa34-11f3d8e5d1d6",
+          "cfa5d613-602f-565a-a6f1-ecff6f5e9133",
+          "e928d584-650e-541c-b56c-d58599ae9b39"
+        ],
+        "primary_concept_id": "037a7d00-75f2-5ee2-b324-37a3f8c64fb9",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 9,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "元代(6 个)有真实的技术史事实。",
+          "evidence": "元代 -influenced_by-> 唐宋时期的科学技术; -characterized_by-> 斗拱尺度渐小",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "元"
+    ],
+    "rejected_exact": [
+      {
+        "matched_surface": "元",
+        "cluster_size": 2,
+        "veto": "homograph",
+        "reason": "唯一同名概念是经纬度坐标，与元朝无关。",
+        "evidence": "元 -has_feature-> 86°10′; -has_feature-> 127°44′ W",
+        "reviewer": "claude-opus-5"
+      }
+    ],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "元",
+        "surface": "元",
+        "decision": "reject_exact",
+        "reason": "唯一同名概念是经纬度坐标，与元朝无关。",
+        "evidence": "元 -has_feature-> 86°10′; -has_feature-> 127°44′ W"
+      },
+      {
+        "facet": "period",
+        "label": "元",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "元代",
+        "reason": "元代(6 个)有真实的技术史事实。",
+        "evidence": "元代 -influenced_by-> 唐宋时期的科学技术; -characterized_by-> 斗拱尺度渐小"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.北魏",
+    "facet": "period",
+    "label": "北魏",
+    "artifact_uses": 8,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "北魏",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "北魏",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:41-04:00",
+        "concept_ids": [
+          "20a735e2-f984-5a29-b0b9-39a08344ba2a",
+          "435f3286-57a4-5c73-a769-dd1e81241ad3",
+          "73510d5f-0a07-5c13-a064-8ebf9da528a9",
+          "802eae0b-ccd3-5562-8106-c6cff3a989a9",
+          "81ea59e0-3bf4-5d42-a98f-40d1ce1cd930",
+          "88203466-b1eb-594e-b105-98a1cf0da83e",
+          "a2e193e2-d468-5814-86f9-2d847388b584",
+          "f4a809b6-3d13-568b-bd54-e1745e5b6f0d"
+        ],
+        "primary_concept_id": "20a735e2-f984-5a29-b0b9-39a08344ba2a",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 8,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "北魏"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.南宋",
+    "facet": "period",
+    "label": "南宋",
+    "artifact_uses": 5,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "南宋",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "南宋",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:42-04:00",
+        "concept_ids": [
+          "07cec1fc-3854-56b7-bd4c-d35dec66985a",
+          "17d041ba-7a87-50d4-b484-446e327bc854",
+          "1aee44aa-6ff6-57b9-a163-69ea6ad25bd4",
+          "65a29362-3ac6-5d2c-bae1-a074e62994cb",
+          "66c80d1e-1e50-5a1e-b919-34046d2d794f",
+          "9636087d-6f89-5243-b602-a3bc77a05b15",
+          "a5aac10a-d9d4-5508-9ef6-40fbb5bc4d9e",
+          "b8e9afab-1a83-5345-9c50-a4ce3f159162",
+          "c6a5c85a-01e0-5614-9e2a-fb5c42d90d3e",
+          "ec5a9dec-8814-5269-b463-57b515946a7b"
+        ],
+        "primary_concept_id": "07cec1fc-3854-56b7-bd4c-d35dec66985a",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 10,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "南宋"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.唐",
+    "facet": "period",
+    "label": "唐",
+    "artifact_uses": 58,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "唐朝",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "唐朝",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:44-04:00",
+        "concept_ids": [
+          "2b558e86-0396-52f7-9ada-75af86de813d",
+          "78731daf-c7f9-579a-91a7-7038c44f5d24",
+          "8cc58433-5123-503e-942a-31c8474d264e",
+          "a9e66877-547d-5a97-80cd-662229a21a10",
+          "ada437fa-78a1-54f3-9c50-2a07376d6ae2",
+          "ae3846d9-d352-5a03-9e8b-fa743f0ca8a3",
+          "b7684e29-80f7-582d-a519-c8dfee0a35bc",
+          "d1f3703e-2f6c-5ef1-b161-d72acc009716",
+          "d305c522-a4bb-5753-89ea-a8d02bc054e4",
+          "de403d18-e6e6-55cd-ad28-0dc0aba83020",
+          "e182a61a-1629-5148-8f19-9afcff3b3910",
+          "e2771e46-5960-5696-a985-20d778f652f2",
+          "e94966f7-8a8e-508f-9590-05d1c07dc2ef",
+          "f2ba8ff2-5e60-59b0-8985-b6616a47478f",
+          "f4b0701d-39fb-50d2-8488-9f3ff993ad76",
+          "f873d10f-25d6-5a2d-97d1-d7515aa2220f",
+          "fe05413f-a582-52cc-8872-44837a245aed"
+        ],
+        "primary_concept_id": "2b558e86-0396-52f7-9ada-75af86de813d",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 17,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "唐朝(15 个同名) 才是政权本身，带行政建制事实。",
+          "evidence": "唐朝 -consists_of-> 十道; -consists_of-> 十五道",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "唐"
+    ],
+    "rejected_exact": [
+      {
+        "matched_surface": "唐",
+        "cluster_size": 2,
+        "veto": "homograph",
+        "reason": "同形词泛滥：5 个同名概念分别是先周古国唐、爵邑、河北唐县、以及一条气候数据，没有一个是唐王朝。",
+        "evidence": "唐 -changed_into-> 晋; -defined_as-> 所封之爵邑; -located_in-> 河北唐县; -has_property-> 10.2 °C",
+        "reviewer": "claude-opus-5"
+      }
+    ],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "唐",
+        "surface": "唐",
+        "decision": "reject_exact",
+        "reason": "同形词泛滥：5 个同名概念分别是先周古国唐、爵邑、河北唐县、以及一条气候数据，没有一个是唐王朝。",
+        "evidence": "唐 -changed_into-> 晋; -defined_as-> 所封之爵邑; -located_in-> 河北唐县; -has_property-> 10.2 °C"
+      },
+      {
+        "facet": "period",
+        "label": "唐",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "唐朝",
+        "reason": "唐朝(15 个同名) 才是政权本身，带行政建制事实。",
+        "evidence": "唐朝 -consists_of-> 十道; -consists_of-> 十五道"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.商",
+    "facet": "period",
+    "label": "商",
+    "artifact_uses": 22,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "商",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "商",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:45-04:00",
+        "concept_ids": [
+          "11c1c17a-3f4a-522d-8c5c-1a71fef61bbe",
+          "3ead3346-3e1a-5f76-a417-8e3534af1f4b"
+        ],
+        "primary_concept_id": "11c1c17a-3f4a-522d-8c5c-1a71fef61bbe",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 2,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "商代",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "商代",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:46-04:00",
+        "concept_ids": [
+          "0c872f3a-b009-54eb-a812-0a39cefb2dc4",
+          "65fa1f91-d91d-549f-a2b8-d81dd27e40c8",
+          "6cb4cf22-99c2-571d-a5bf-943584ba738a",
+          "9cd36656-c71b-5b6e-922e-252470cbefca",
+          "a1a6fd15-9a7b-5d51-94ff-9af76e14e7cd",
+          "bbcf38c6-0159-5adc-a4b9-34dae7013cf2",
+          "c7e6cb45-52dc-54ea-b643-4cdf686c8227",
+          "cdebf130-265a-595f-8d0a-33f40eff8084",
+          "d8a6fd0d-879a-5e97-a8d3-8ccf78da8153",
+          "f8245103-37f6-52f6-b87c-5a6a96b3e063"
+        ],
+        "primary_concept_id": "0c872f3a-b009-54eb-a812-0a39cefb2dc4",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 10,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "登记簿的短写法『商』在远端无精确同名概念（0 个），改用通行长写法『商代』。",
+          "evidence": "concept/search('商') = 0 个；商代 20 个（另有『殷商 -precedes-> 西周』可选）",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "商"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "商",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "商代",
+        "reason": "登记簿的短写法『商』在远端无精确同名概念（0 个），改用通行长写法『商代』。",
+        "evidence": "concept/search('商') = 0 个；商代 20 个（另有『殷商 -precedes-> 西周』可选）"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.宋",
+    "facet": "period",
+    "label": "宋",
+    "artifact_uses": 40,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "宋代",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "宋代",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:48-04:00",
+        "concept_ids": [
+          "104c4eca-09fd-5ca4-8752-0bcc17e19b52",
+          "45c17ca8-f5dc-5232-8db1-1b837db3a16a",
+          "55a961b7-c56b-5652-929e-73a5bf909ad8",
+          "630c1cce-b1f1-5923-b5ec-b5860eb92b02",
+          "891b6aec-7ab7-56f4-91c0-f14b8b1e1d7b",
+          "b4b0db27-ba46-5cba-b7d2-6e850f116d00",
+          "bd76279b-1208-525e-af66-1c3091a42d66",
+          "c7a4ffbe-a382-5577-bb7a-dcf7800c0510",
+          "d997cda6-5bbd-56de-9b39-ca5600446ebe"
+        ],
+        "primary_concept_id": "104c4eca-09fd-5ca4-8752-0bcc17e19b52",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 9,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "改用长写法。宋代簇 12 个，虽然字典序首个无事实，簇内其余成员有内容。",
+          "evidence": "concept/search('宋代') 精确同名 12 个",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "宋"
+    ],
+    "rejected_exact": [
+      {
+        "matched_surface": "宋",
+        "cluster_size": 2,
+        "veto": "homograph",
+        "reason": "2 个同名概念都是古文字/氏族语境的『宋』（《侯马》《玺文》著录、instance_of 氏、子姓），不是宋朝。",
+        "evidence": "宋 -instance_of-> 氏; -has_property-> 子姓; -located_in-> 《侯马》359【5】",
+        "reviewer": "claude-opus-5"
+      }
+    ],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "宋",
+        "surface": "宋",
+        "decision": "reject_exact",
+        "reason": "2 个同名概念都是古文字/氏族语境的『宋』（《侯马》《玺文》著录、instance_of 氏、子姓），不是宋朝。",
+        "evidence": "宋 -instance_of-> 氏; -has_property-> 子姓; -located_in-> 《侯马》359【5】"
+      },
+      {
+        "facet": "period",
+        "label": "宋",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "宋代",
+        "reason": "改用长写法。宋代簇 12 个，虽然字典序首个无事实，簇内其余成员有内容。",
+        "evidence": "concept/search('宋代') 精确同名 12 个"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.战国",
+    "facet": "period",
+    "label": "战国",
+    "artifact_uses": 54,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "战国",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "战国",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:50-04:00",
+        "concept_ids": [
+          "317686ba-049a-5b89-a989-28fdd169cd0e",
+          "38d41236-f1d3-5ea9-956c-ab7276ee5396",
+          "57cdbf20-2691-546e-aeac-7540780059f2",
+          "72a84c78-ae5e-5847-94c3-de0d2cf3676c",
+          "9c9d9c1d-3817-5384-8af2-6b292989e9ec",
+          "a87725a8-15ac-5dad-b834-e011405e07ee",
+          "a8871dba-2c6e-58b0-adac-3356055a4f5e",
+          "b0feb408-a0a1-5eeb-b938-6b53da1e5ddb",
+          "cb99fc37-a669-5e1c-8e6e-9318e5c19dac",
+          "f35fc690-76d9-5f83-bff9-8e9b81d406d1"
+        ],
+        "primary_concept_id": "317686ba-049a-5b89-a989-28fdd169cd0e",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 10,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "战国时期",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "战国时期",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:50-04:00",
+        "concept_ids": [
+          "03448cba-c947-58c5-af16-66b4d13e2408",
+          "1d0bfdf0-f77c-536c-823f-21e7aa354d58",
+          "1d6247d9-c2df-50da-bb27-37436b2f0c6f",
+          "21b43bbd-1a66-502a-9ff4-c44ce9b08261",
+          "28625457-9965-561a-8d1d-5df684bda59a",
+          "2bb4c6bd-9b7c-5285-a98b-16f8b1d48c1d",
+          "2c7d18f8-850c-5deb-8064-2d42e4200659",
+          "2da8b709-d419-5410-8cdb-d91936e48515",
+          "3c1ecd5b-45dc-50a7-8eb4-18b8d217623d",
+          "3ffc664b-e07f-573d-bfd9-a49fcd4fe85b",
+          "5a65e7b8-4175-5516-9c95-e27e5af847ee",
+          "5b1abc32-70cc-58e0-9298-d3f5d5be8c5b",
+          "6241e4e8-c6df-5ea3-a8a3-9bc21ccaea02",
+          "66a8996c-7fc5-5e1d-974d-63ba05145614",
+          "6d94f143-6863-5379-a5b3-b7058f9946f6",
+          "6e5e414c-957c-5572-a52d-399855c58382",
+          "6fae6099-d2cd-5862-bf21-35667ba9fe3a",
+          "73926524-bc01-57bf-bf89-938312f83409",
+          "780b5f2b-3e37-569d-81ed-1f4aa432bb65",
+          "815b3e07-5b2d-55ef-9566-1a1700288453",
+          "815cf44d-453f-534f-bd40-38e538e941b4",
+          "829c276e-001a-5fbd-be8f-223bfcb74331",
+          "9a3cd962-2024-5143-a22b-c857e467a423",
+          "9e0c7cd2-d09a-5dae-a04b-acf5decf167a",
+          "9ef2c915-6242-53c1-95f0-3f03b1d03b76",
+          "a3777b36-3d3f-5a3c-ac91-be06c0b2b4c8",
+          "a39a615d-8daf-512f-9236-70422f9b959d",
+          "b764261c-3500-5d08-852b-77203708d24c",
+          "c258a3e5-164b-507f-b06c-1fb1e1b075fe",
+          "c6854c77-653c-533b-a739-c8c306de821f",
+          "e1a70ac6-c849-5c2b-80cc-b9d259afa1ee",
+          "e5d47f82-86aa-52f0-84fa-40aaf9659538",
+          "e7a364d0-88af-5868-90c2-991a6b950cbe",
+          "ef05cdc0-eb54-5fc9-a2b0-36055808e86d",
+          "f01ddfb5-8ba5-56ff-a15e-c0dda4850627",
+          "fb285dd7-eff3-57c5-b4e7-6f821b23138a"
+        ],
+        "primary_concept_id": "03448cba-c947-58c5-af16-66b4d13e2408",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 36,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "战国时期(32 个)覆盖更广。",
+          "evidence": "concept/search('战国时期') 精确同名 32 个",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "战国"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "战国",
+        "surface": "战国",
+        "decision": "confirm_exact",
+        "reason": "57cdbf20 有『instance_of 藏品制作时代』『related_to 铁器』，是可用的分期概念；其余多为书名/断代目标，簇 union 无害。",
+        "evidence": "战国 -instance_of-> 藏品制作时代; -related_to-> 铁器"
+      },
+      {
+        "facet": "period",
+        "label": "战国",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "战国时期",
+        "reason": "战国时期(32 个)覆盖更广。",
+        "evidence": "concept/search('战国时期') 精确同名 32 个"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.新石器",
+    "facet": "period",
+    "label": "新石器",
+    "artifact_uses": 1,
+    "status": "aligned_by_components",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "新石器时代",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "新石器时代",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:52-04:00",
+        "concept_ids": [
+          "21cfee4e-e7e3-5883-b818-37e3be6b4201",
+          "2e494661-37d8-5d50-800b-a9f621ed5a07",
+          "36535227-311d-50a8-a424-ae91691daf28",
+          "82974bf8-25e7-528f-a8ea-5c54e4c21e88",
+          "91f6247a-6dd5-5d96-a65e-01de06291213",
+          "9955925b-2a01-5d9f-9ea4-12e42fba5d19",
+          "b75d4c57-fff6-5851-a029-7d1a9bfdf1ae",
+          "bf04fb73-1e4b-5db4-994a-c112849b8e89",
+          "d5c1d9e7-720f-5b5a-9981-13dceb169ce4",
+          "e700b1f6-4c5d-5624-96fa-e9c470b57ee5",
+          "f271b804-c5e4-59ca-8be9-56f964fecc4b",
+          "f7718fa3-5e8b-5e44-8307-3da873eaa90c",
+          "f772ccbd-52bd-57c7-8860-fcfb270c5129"
+        ],
+        "primary_concept_id": "21cfee4e-e7e3-5883-b818-37e3be6b4201",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 13,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "登记簿的短写法『新石器』在远端无精确同名概念（0 个），改用通行长写法『新石器时代』。",
+          "evidence": "concept/search('新石器') = 0 个；新石器时代 15 个",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [
+      {
+        "matched_surface": "新石器",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "wiki_page",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "新石器",
+        "remote_wiki_slug": "新石器",
+        "resolved_at": "2026-08-31T16:55:51-04:00",
+        "promoted_by_review": false,
+        "review_reason": "wiki-only 命中：远端无同名 ontology 概念，该层页面已证实包含噪声，未经复核不得作为锚点参与推理"
+      }
+    ],
+    "attempted": [
+      "新石器"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "新石器",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "新石器时代",
+        "reason": "登记簿的短写法『新石器』在远端无精确同名概念（0 个），改用通行长写法『新石器时代』。",
+        "evidence": "concept/search('新石器') = 0 个；新石器时代 15 个"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.新罗",
+    "facet": "period",
+    "label": "新罗",
+    "artifact_uses": 18,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "新罗",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "新罗",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:53-04:00",
+        "concept_ids": [
+          "066ac1ac-32f2-5714-af12-bcc1ab2f46a1",
+          "3032f3e7-5bf8-57ce-9ef6-d20df54dd07a",
+          "5663aa8f-414d-5664-83fa-40921765b4a2",
+          "77640c34-c152-5bd8-ab95-7c2b346b2c5f",
+          "8196948c-189f-5798-bb9f-ee894ba27b2a",
+          "ccd883a8-dcda-50ff-ab3e-dfa47df1fab8",
+          "f50667d4-2599-5350-82e2-817d803d5b2d",
+          "fecac9f1-2dc1-57ca-b96f-8ba2949e59b4"
+        ],
+        "primary_concept_id": "066ac1ac-32f2-5714-af12-bcc1ab2f46a1",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 8,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "新罗"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "新罗",
+        "surface": "新罗",
+        "decision": "confirm_exact",
+        "reason": "3 个同名概念全部是新罗政权，且事实直接就是跨文化关系，写介绍最有用。",
+        "evidence": "新罗 -influenced_by-> 唐代; -influenced_by-> 唐音乐; -uses_method-> 中国章服之制; -introduced_to-> 倭"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.明",
+    "facet": "period",
+    "label": "明",
+    "artifact_uses": 17,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "明",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "明",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:55-04:00",
+        "concept_ids": [
+          "225e37b9-d27a-508e-9a4a-12f5579ae196",
+          "cba4a95a-a4de-5cc5-a3b8-d2f0135b1cc3"
+        ],
+        "primary_concept_id": "225e37b9-d27a-508e-9a4a-12f5579ae196",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 2,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "明朝",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "明朝",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:55-04:00",
+        "concept_ids": [
+          "06dd47e0-4ff3-5c24-a7c6-2cb83c1a9a7d",
+          "3053caca-03b5-571a-8b59-179095997c59",
+          "52b1295f-b9e0-51ae-8ddc-ef2b306edec6",
+          "b23fff4c-4467-5528-8786-e96e92aebd16",
+          "b65ae5d3-05ec-5144-988e-56c750ed621d",
+          "b98028e6-e478-58b2-9771-f58d8fa88f49",
+          "bc306d72-267d-56fb-86b6-1234e009d25a",
+          "cb616c59-263f-5398-bdbd-dd2dc61187a4",
+          "cf73ff28-37e2-5c5a-9947-5ed2f74cf537",
+          "ea814166-88bd-5f34-9a1b-e1f1cfde3a70",
+          "eb207631-66b5-5191-87f9-e85370e08ef0"
+        ],
+        "primary_concept_id": "06dd47e0-4ff3-5c24-a7c6-2cb83c1a9a7d",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 11,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "登记簿的短写法『明』在远端无精确同名概念（0 个），改用通行长写法『明朝』。",
+          "evidence": "明朝 -requires_condition-> 西洋火器",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "明"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "明",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "明朝",
+        "reason": "登记簿的短写法『明』在远端无精确同名概念（0 个），改用通行长写法『明朝』。",
+        "evidence": "明朝 -requires_condition-> 西洋火器"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.汉",
+    "facet": "period",
+    "label": "汉",
+    "artifact_uses": 5,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "汉",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "汉",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:57-04:00",
+        "concept_ids": [
+          "9f8abc65-c73f-54e1-a82e-eaaa85593be4",
+          "c1143526-019c-5dcc-94b6-3933578ee764"
+        ],
+        "primary_concept_id": "9f8abc65-c73f-54e1-a82e-eaaa85593be4",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 2,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "汉代",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "汉代",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:57-04:00",
+        "concept_ids": [
+          "00f08162-ca21-5a96-babb-ebb2e01d7c9f",
+          "043bb591-9de9-5e86-b059-a57b95203262",
+          "4d22c0e6-5709-5ab5-9e8b-6f3f4edf2930",
+          "7f8294fd-bcb8-5135-aa2b-6ea662265e33",
+          "8648753d-bdef-5a46-b1dd-f272fab73777",
+          "9cb25644-769c-5dea-8868-482671d55bb8",
+          "ec745546-0e97-5fda-870b-ed5e1123911b"
+        ],
+        "primary_concept_id": "00f08162-ca21-5a96-babb-ebb2e01d7c9f",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 7,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "登记簿的短写法『汉』在远端无精确同名概念（0 个），改用通行长写法『汉代』。",
+          "evidence": "汉代 -influenced_by-> 楚人旧典; -influenced_by-> 秦文化和楚文化; -located_at-> 太一祭坛",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "汉"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "汉",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "汉代",
+        "reason": "登记簿的短写法『汉』在远端无精确同名概念（0 个），改用通行长写法『汉代』。",
+        "evidence": "汉代 -influenced_by-> 楚人旧典; -influenced_by-> 秦文化和楚文化; -located_at-> 太一祭坛"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.清",
+    "facet": "period",
+    "label": "清",
+    "artifact_uses": 37,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "清",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "清",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:55:59-04:00",
+        "concept_ids": [
+          "22119dcb-0a02-52cd-bade-692bb686a9d5",
+          "8954c6cd-76aa-5459-973d-f5e19f4997d2"
+        ],
+        "primary_concept_id": "22119dcb-0a02-52cd-bade-692bb686a9d5",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 2,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      },
+      {
+        "matched_surface": "清代",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "清代",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:55:59-04:00",
+        "concept_ids": [
+          "1ed054f6-4318-54a1-aa3f-6dd9db9a2dab",
+          "362295d4-251d-5b71-9ab6-5d8a8ce77952",
+          "3cd448cb-87e0-5be4-96f8-f4b35b91e11e",
+          "5a2a00c9-c042-59fa-aafe-2bd2047802bd",
+          "9d21d053-5d2d-521e-a366-78fdd368056b",
+          "e5e9d880-2ebe-5ee4-aee5-2f85f29d42f3",
+          "e7993594-cc41-5c5b-bbf9-310856283daf"
+        ],
+        "primary_concept_id": "1ed054f6-4318-54a1-aa3f-6dd9db9a2dab",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 7,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "登记簿的短写法『清』在远端无精确同名概念（0 个），改用通行长写法『清代』。",
+          "evidence": "清代 -is_a-> 古代校勘学的形成时期; -has_feature-> 考据学获得极大发展",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "清"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "清",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "清代",
+        "reason": "登记簿的短写法『清』在远端无精确同名概念（0 个），改用通行长写法『清代』。",
+        "evidence": "清代 -is_a-> 古代校勘学的形成时期; -has_feature-> 考据学获得极大发展"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.渤海",
+    "facet": "period",
+    "label": "渤海",
+    "artifact_uses": 25,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "渤海",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "渤海",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:56:00-04:00",
+        "concept_ids": [
+          "3f88ffe8-4135-5130-89fe-8f0137d27ba9",
+          "6f529f9a-c6e8-5abb-aa4e-ca9ec97c86f6",
+          "c02a6a6e-d957-52a2-b8ad-b96245bc3a83",
+          "ca405227-96f7-522c-9a62-346e4f040337",
+          "dbd5736d-a28b-5e86-86de-80c5c33006aa"
+        ],
+        "primary_concept_id": "3f88ffe8-4135-5130-89fe-8f0137d27ba9",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 5,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "excluded_concept_ids": [
+          "2ee48828-6624-5716-b42f-b664e7f45c98",
+          "88ddb850-e762-5e02-8e2d-c128d49d0e53",
+          "ab0e4780-444a-58e2-b283-bebc061b5702"
+        ],
+        "exclusion_note": "88ddb850 是渤海（海）——『渤海海面封冻 associated_with 渤海』；2ee48828 是渤海郡（-part_of-> 辽国，濟水/展子虔 located_in）；ab0e4780 无任何事实。三者若并入，渤海湾海冰与辽代政区的知识会挂到渤海国文物上。"
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "渤海"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "渤海",
+        "surface": "渤海",
+        "decision": "confirm_exact",
+        "exclude_concept_ids": [
+          "88ddb850-0000-0000-0000-000000000000",
+          "2ee48828-0000-0000-0000-000000000000",
+          "ab0e4780-0000-0000-0000-000000000000"
+        ],
+        "exclude_note": "88ddb850 是渤海（海）——『渤海海面封冻 associated_with 渤海』；2ee48828 是渤海郡（-part_of-> 辽国，濟水/展子虔 located_in）；ab0e4780 无任何事实。三者若并入，渤海湾海冰与辽代政区的知识会挂到渤海国文物上。",
+        "reason": "3f88ffe8 正是渤海国本身，事实恰好是展品介绍需要的国家形态与文化背景；ca405227 的『肃慎系 consists_of 渤海』也是族属知识。",
+        "evidence": "渤海 -instance_of-> 地方国家政权; -influenced_by-> 唐王朝先进制度和文化; -influenced_by-> 唐; 肃慎系 -consists_of-> 渤海"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.约11世纪末至12世纪初",
+    "facet": "period",
+    "label": "约11世纪末至12世纪初",
+    "artifact_uses": 1,
+    "status": "unaligned",
+    "reason": "",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [
+      "约11世纪末至12世纪初"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.约公元前13世纪",
+    "facet": "period",
+    "label": "约公元前13世纪",
+    "artifact_uses": 1,
+    "status": "unaligned",
+    "reason": "",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [
+      "约公元前13世纪"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.约公元前2世纪",
+    "facet": "period",
+    "label": "约公元前2世纪",
+    "artifact_uses": 1,
+    "status": "unaligned",
+    "reason": "",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [
+      "约公元前2世纪"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.约开元十一年",
+    "facet": "period",
+    "label": "约开元十一年",
+    "artifact_uses": 1,
+    "status": "unaligned",
+    "reason": "",
+    "anchors": [],
+    "candidates": [],
+    "attempted": [
+      "约开元十一年"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.西周",
+    "facet": "period",
+    "label": "西周",
+    "artifact_uses": 7,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "西周",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "西周",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:56:07-04:00",
+        "concept_ids": [
+          "3c8d54ab-cb7f-5821-8267-c778980eab4c",
+          "3fd4562b-9455-5a1e-95ba-7cbc98d24499",
+          "514df1c3-046f-5c56-9fa3-f8ebfb8e3e0c",
+          "5a944715-5fdc-5841-969f-3184057ceb5d",
+          "5abdd047-f9a1-5de4-8645-259f543937f3",
+          "6278f439-9825-5947-bf2a-f35d0889775e",
+          "73e9ce0b-655b-59c2-991b-f3d8856c5691"
+        ],
+        "primary_concept_id": "3c8d54ab-cb7f-5821-8267-c778980eab4c",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 7,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "西周"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.西汉",
+    "facet": "period",
+    "label": "西汉",
+    "artifact_uses": 15,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "西汉",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "西汉",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:56:09-04:00",
+        "concept_ids": [
+          "4bc59483-2c57-5c00-a8b2-4151f7d85854",
+          "5034798d-3273-50e4-b311-ec7c88749496",
+          "528e5cb6-1bbf-585d-a91a-11cb6ccc0f31",
+          "609de4f1-06e0-5820-a25e-de0d638234fd",
+          "665349c4-d3d0-5094-865f-f4dc2dd8ec43",
+          "81dd6828-e7c6-5bb4-8654-223eee52d674",
+          "d559d6aa-d514-591d-9c89-986a702019dc"
+        ],
+        "primary_concept_id": "4bc59483-2c57-5c00-a8b2-4151f7d85854",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 7,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "西汉"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.辽",
+    "facet": "period",
+    "label": "辽",
+    "artifact_uses": 2,
+    "status": "candidate_only",
+    "reason": "",
+    "anchors": [],
+    "candidates": [
+      {
+        "matched_surface": "辽",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "wiki_page",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "辽",
+        "remote_wiki_slug": "辽",
+        "resolved_at": "2026-08-31T16:56:10-04:00",
+        "promoted_by_review": false,
+        "review_reason": "wiki-only 命中：远端无同名 ontology 概念，该层页面已证实包含噪声，未经复核不得作为锚点参与推理"
+      }
+    ],
+    "attempted": [
+      "辽"
+    ],
+    "rejected_exact": [],
+    "decisions": []
+  },
+  {
+    "entity_id": "wwybsj.term.period.金",
+    "facet": "period",
+    "label": "金",
+    "artifact_uses": 13,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "金",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "金",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:56:10-04:00",
+        "concept_ids": [
+          "8ccf5cbe-e340-551b-a64b-64e4e9acd520",
+          "ebf0570a-d2f2-5706-a7c4-d6aadb869956"
+        ],
+        "primary_concept_id": "8ccf5cbe-e340-551b-a64b-64e4e9acd520",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 2,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": true,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "excluded_concept_ids": [],
+        "exclusion_note": "82afe35a 是古文字著录（《郭店》《玺文》），非金朝。"
+      },
+      {
+        "matched_surface": "金朝",
+        "is_whole_label": false,
+        "match_relation": "close",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "金朝",
+        "basis": "reviewed_mapping",
+        "resolved_at": "2026-08-31T16:56:11-04:00",
+        "concept_ids": [
+          "01cfc2aa-186e-5625-90a1-b9fb9c2b29f0",
+          "2c12ef65-6680-5e0f-9f88-35a845038caf",
+          "4028556b-58b6-5e6b-b2a2-90b0af6b59ca",
+          "4b7f0d35-d96a-520c-a70b-565994de97c2",
+          "4c3991a9-4460-549c-8b41-3ebe7d052690",
+          "71a19a6c-4b5f-5485-ae50-e4f32c79fcc2",
+          "786350ff-b3d1-5e81-af31-bebe3a207916",
+          "8f30773d-b928-54ea-9883-95ec6bfb9a66",
+          "9108a41f-b3e2-5261-bb51-7363dffd2225",
+          "988f1a41-7635-5bfa-bb34-655afa0631e4",
+          "9bc007e2-82af-5142-9b1b-04843a41aa9f",
+          "a5ed28fe-8dca-5aef-9347-9376b0728b33",
+          "ab07f69f-b2e7-5df7-ae1f-eda365f2808c",
+          "f4f54b61-63a3-5fe5-a83c-e6c351700126",
+          "fa4e1c75-d6a5-5f66-ad15-dfad880ca8a1"
+        ],
+        "primary_concept_id": "01cfc2aa-186e-5625-90a1-b9fb9c2b29f0",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 15,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200,
+        "review": {
+          "reason": "补一条更明确的政权锚点。",
+          "evidence": "concept/search('金朝') 精确同名 15 个",
+          "reviewer": "claude-opus-5",
+          "review_status": "machine_reviewed_pending_curator",
+          "reviewed_at": "2026-08-18"
+        }
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "金"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "金",
+        "surface": "金",
+        "decision": "confirm_exact",
+        "exclude_concept_ids": [
+          "82afe35a-0000-0000-0000-000000000000"
+        ],
+        "exclude_note": "82afe35a 是古文字著录（《郭店》《玺文》），非金朝。",
+        "reason": "注意：同一个词面『金』在 material facet 被否决（那些概念指金朝，不是金属），在 period facet 反而正确——同形词否决是分 facet 的。8122b56a 的乣军/刑期是金代制度内容。",
+        "evidence": "金 -consists_of-> 诸乣和乣军; -has_feature-> 徒五年"
+      },
+      {
+        "facet": "period",
+        "label": "金",
+        "decision": "align",
+        "relation": "close",
+        "target_kind": "concept",
+        "target_name": "金朝",
+        "reason": "补一条更明确的政权锚点。",
+        "evidence": "concept/search('金朝') 精确同名 15 个"
+      }
+    ]
+  },
+  {
+    "entity_id": "wwybsj.term.period.高句丽",
+    "facet": "period",
+    "label": "高句丽",
+    "artifact_uses": 39,
+    "status": "aligned",
+    "reason": "",
+    "anchors": [
+      {
+        "matched_surface": "高句丽",
+        "is_whole_label": true,
+        "match_relation": "exact",
+        "match_kind": "concept_cluster",
+        "remote_domain": "archeology",
+        "remote_gateway": "http://10.124.48.91:8989",
+        "remote_canonical_name": "高句丽",
+        "basis": "remote_exact_concept_name_match",
+        "resolved_at": "2026-08-31T16:56:12-04:00",
+        "concept_ids": [
+          "00e33184-25e1-5811-8421-86a99e686388",
+          "5a0a8632-5c8b-58a6-9a73-53727c7df552",
+          "5b5eccc8-97cd-5549-885a-8aa3a7d0c303",
+          "a0f30c8f-2991-5386-8407-eac8700d28f7",
+          "b95b93cf-64c3-5440-94a3-a1546caa9d25",
+          "d3ac695e-7e25-5dc4-a2aa-db0c6831000f"
+        ],
+        "primary_concept_id": "00e33184-25e1-5811-8421-86a99e686388",
+        "primary_selection_rule": "lexicographic_min",
+        "cluster_size": 6,
+        "concept_types": [
+          "entity"
+        ],
+        "search_result_truncated": false,
+        "ids_search_did_not_return": [],
+        "cluster_completeness": "unknown_search_is_not_stable",
+        "search_limit_used": 200
+      }
+    ],
+    "candidates": [],
+    "attempted": [
+      "高句丽"
+    ],
+    "rejected_exact": [],
+    "decisions": [
+      {
+        "facet": "period",
+        "label": "高句丽",
+        "surface": "高句丽",
+        "decision": "confirm_exact",
+        "reason": "3 个同名概念全部是高句丽政权/族属本身，质量好。登记簿的 OCR 异体字『高勾丽』已在 L0 归并到此词项。",
+        "evidence": "高句丽 -is_a-> 东北古民族一支; -related_to-> 历代中原王朝; -related_to-> 辽北三燕; -introduced_to-> 儒教"
+      }
+    ]
+  }
+]

@@ -1,0 +1,385 @@
+{
+  "东周": {
+    "aliases": [],
+    "canonical_name": "东周",
+    "concept_id": "08b4131e-7a26-53c2-8adf-104e57159055",
+    "concept_type": "entity",
+    "created_at": "2026-08-23T18:03:42.566904+00:00",
+    "updated_at": "2026-08-24T04:59:13.398556+00:00",
+    "xref_kind": "concept"
+  },
+  "东汉": {
+    "aliases": [],
+    "canonical_name": "东汉",
+    "concept_id": "a6f7a15d-093a-50bc-80d4-489e899cfa74",
+    "concept_type": "entity",
+    "created_at": "2026-07-27T19:41:44.642121+00:00",
+    "updated_at": "2026-08-25T05:07:39.642870+00:00",
+    "xref_kind": "concept"
+  },
+  "东魏": {
+    "aliases": [],
+    "canonical_name": "东魏",
+    "concept_id": "b76c3d89-034c-5e87-a42a-9617d24247bc",
+    "concept_type": "entity",
+    "created_at": "2026-08-13T03:35:35.678699+00:00",
+    "updated_at": "2026-08-20T16:17:34.219336+00:00",
+    "xref_kind": "concept"
+  },
+  "元": {
+    "aliases": [],
+    "canonical_name": "元",
+    "concept_id": "feae1522-92ae-55de-8af4-a96a9eb9bb2d",
+    "concept_type": "entity",
+    "created_at": "2026-08-25T05:06:45.980330+00:00",
+    "updated_at": "2026-08-25T05:06:45.980330+00:00",
+    "xref_kind": "concept"
+  },
+  "北魏": {
+    "aliases": [],
+    "canonical_name": "北魏",
+    "concept_id": "f4a809b6-3d13-568b-bd54-e1745e5b6f0d",
+    "concept_type": "entity",
+    "created_at": "2026-08-10T15:22:01.010482+00:00",
+    "updated_at": "2026-08-25T05:07:02.192491+00:00",
+    "xref_kind": "concept"
+  },
+  "南宋": {
+    "aliases": [],
+    "canonical_name": "南宋",
+    "concept_id": "17d041ba-7a87-50d4-b484-446e327bc854",
+    "concept_type": "entity",
+    "created_at": "2026-08-14T13:39:33.804683+00:00",
+    "updated_at": "2026-08-24T03:42:58.066554+00:00",
+    "xref_kind": "concept"
+  },
+  "唐": {
+    "aliases": [],
+    "canonical_name": "唐",
+    "concept_id": "297a0746-e1dd-571f-9549-613a9425cd92",
+    "concept_type": "entity",
+    "created_at": "2026-08-25T05:06:46.009920+00:00",
+    "updated_at": "2026-08-25T05:06:46.009920+00:00",
+    "xref_kind": "concept"
+  },
+  "商": {
+    "aliases": [],
+    "canonical_name": "商",
+    "concept_id": "3ead3346-3e1a-5f76-a417-8e3534af1f4b",
+    "concept_type": "entity",
+    "created_at": "2026-07-31T12:09:03.850075+00:00",
+    "updated_at": "2026-08-25T05:06:49.731044+00:00",
+    "xref_kind": "concept"
+  },
+  "宋": {
+    "aliases": [],
+    "canonical_name": "宋",
+    "concept_id": "08a5d874-95d8-54a6-ad62-df8a2c254597",
+    "concept_type": "entity",
+    "created_at": "2026-08-25T05:06:44.388248+00:00",
+    "updated_at": "2026-08-25T05:06:44.388248+00:00",
+    "xref_kind": "concept"
+  },
+  "宝石": {
+    "aliases": [],
+    "canonical_name": "宝石",
+    "concept_id": "3f98aafa-52e9-5444-8c05-59e4c461e704",
+    "concept_type": "entity",
+    "created_at": "2026-08-23T03:07:41.859338+00:00",
+    "updated_at": "2026-08-23T03:07:41.859338+00:00",
+    "xref_kind": "concept"
+  },
+  "战国": {
+    "aliases": [],
+    "canonical_name": "战国",
+    "concept_id": "317686ba-049a-5b89-a989-28fdd169cd0e",
+    "concept_type": "entity",
+    "created_at": "2026-08-24T05:49:14.092172+00:00",
+    "updated_at": "2026-08-24T22:12:43.379327+00:00",
+    "xref_kind": "concept"
+  },
+  "新石器": {
+    "aliases": [],
+    "canonical_name": "新石器",
+    "concept_id": "3193558f-80b1-4b43-b687-b7eec5ea70b2",
+    "concept_type": "entity",
+    "slug": "新石器",
+    "xref_kind": "wiki_page"
+  },
+  "新罗": {
+    "aliases": [],
+    "canonical_name": "新罗",
+    "concept_id": "066ac1ac-32f2-5714-af12-bcc1ab2f46a1",
+    "concept_type": "entity",
+    "created_at": "2026-08-21T06:52:38.254034+00:00",
+    "updated_at": "2026-08-21T06:52:38.254034+00:00",
+    "xref_kind": "concept"
+  },
+  "明": {
+    "aliases": [],
+    "canonical_name": "明",
+    "concept_id": "225e37b9-d27a-508e-9a4a-12f5579ae196",
+    "concept_type": "entity",
+    "created_at": "2026-08-10T15:19:24.209558+00:00",
+    "updated_at": "2026-08-25T05:06:56.444067+00:00",
+    "xref_kind": "concept"
+  },
+  "汉": {
+    "aliases": [],
+    "canonical_name": "汉",
+    "concept_id": "c1143526-019c-5dcc-94b6-3933578ee764",
+    "concept_type": "entity",
+    "created_at": "2026-07-28T10:13:04.002213+00:00",
+    "updated_at": "2026-08-24T15:55:30.115931+00:00",
+    "xref_kind": "concept"
+  },
+  "清": {
+    "aliases": [],
+    "canonical_name": "清",
+    "concept_id": "8954c6cd-76aa-5459-973d-f5e19f4997d2",
+    "concept_type": "entity",
+    "created_at": "2026-07-27T19:16:06.764097+00:00",
+    "updated_at": "2026-08-25T05:07:23.296211+00:00",
+    "xref_kind": "concept"
+  },
+  "渤海": {
+    "aliases": [],
+    "canonical_name": "渤海",
+    "concept_id": "dbd5736d-a28b-5e86-86de-80c5c33006aa",
+    "concept_type": "entity",
+    "created_at": "2026-08-24T14:52:31.192701+00:00",
+    "updated_at": "2026-08-24T14:52:31.192701+00:00",
+    "xref_kind": "concept"
+  },
+  "漆器": {
+    "aliases": [],
+    "canonical_name": "漆器",
+    "concept_id": "dfeed0ac-59d5-5803-b8d2-0c5f229dec5c",
+    "concept_type": "entity",
+    "created_at": "2026-08-22T16:18:54.413299+00:00",
+    "updated_at": "2026-08-22T16:18:54.413299+00:00",
+    "xref_kind": "concept"
+  },
+  "玉石器": {
+    "aliases": [],
+    "canonical_name": "玉石器",
+    "concept_id": "d5f4ab95-8595-5fd8-97b3-157df7dfb086",
+    "concept_type": "entity",
+    "created_at": "2026-08-18T10:27:16.207540+00:00",
+    "updated_at": "2026-08-18T10:27:16.207540+00:00",
+    "xref_kind": "concept"
+  },
+  "瓷": {
+    "aliases": [],
+    "canonical_name": "瓷",
+    "concept_id": "ca2b26d0-146d-4a36-a6ca-c2cd550eb25e",
+    "concept_type": "entity",
+    "slug": "瓷",
+    "xref_kind": "wiki_page"
+  },
+  "瓷器": {
+    "aliases": [],
+    "canonical_name": "瓷器",
+    "concept_id": "54e69ae5-e62d-5b28-ad12-ff139e7de07e",
+    "concept_type": "entity",
+    "created_at": "2026-08-05T06:36:23.644040+00:00",
+    "updated_at": "2026-08-25T05:07:40.477801+00:00",
+    "xref_kind": "concept"
+  },
+  "石": {
+    "aliases": [],
+    "canonical_name": "石",
+    "concept_id": "85f8f0de-188c-55bb-9d22-0c3e4ac7d80f",
+    "concept_type": "entity",
+    "created_at": "2026-08-10T15:21:07.393871+00:00",
+    "updated_at": "2026-08-25T05:07:01.159219+00:00",
+    "xref_kind": "concept"
+  },
+  "石刻": {
+    "aliases": [],
+    "canonical_name": "石刻",
+    "concept_id": "7dbd6300-1132-5103-9a8c-11bfe77267c2",
+    "concept_type": "entity",
+    "created_at": "2026-07-28T07:41:02.376009+00:00",
+    "updated_at": "2026-08-13T10:16:33.093310+00:00",
+    "xref_kind": "concept"
+  },
+  "石器": {
+    "aliases": [],
+    "canonical_name": "石器",
+    "concept_id": "61e1e22a-0869-5c24-a249-a896ec65ad7a",
+    "concept_type": "entity",
+    "created_at": "2026-08-23T23:23:45.756249+00:00",
+    "updated_at": "2026-08-23T23:23:45.756249+00:00",
+    "xref_kind": "concept"
+  },
+  "砖瓦": {
+    "aliases": [],
+    "canonical_name": "砖瓦",
+    "concept_id": "e315f8bd-00c1-5405-ac43-c35e2633b134",
+    "concept_type": "entity",
+    "created_at": "2026-08-23T03:07:43.610623+00:00",
+    "updated_at": "2026-08-23T03:07:43.610623+00:00",
+    "xref_kind": "concept"
+  },
+  "西周": {
+    "aliases": [],
+    "canonical_name": "西周",
+    "concept_id": "6278f439-9825-5947-bf2a-f35d0889775e",
+    "concept_type": "entity",
+    "created_at": "2026-08-10T15:21:03.160816+00:00",
+    "updated_at": "2026-08-25T05:07:00.960362+00:00",
+    "xref_kind": "concept"
+  },
+  "西汉": {
+    "aliases": [],
+    "canonical_name": "西汉",
+    "concept_id": "4bc59483-2c57-5c00-a8b2-4151f7d85854",
+    "concept_type": "entity",
+    "created_at": "2026-08-24T02:35:38.663227+00:00",
+    "updated_at": "2026-08-24T02:35:38.663227+00:00",
+    "xref_kind": "concept"
+  },
+  "辽": {
+    "aliases": [],
+    "canonical_name": "辽",
+    "concept_id": "6d4d47fe-fa5c-4c23-b4b9-f941d328c146",
+    "concept_type": "entity",
+    "slug": "辽",
+    "xref_kind": "wiki_page"
+  },
+  "造像": {
+    "aliases": [],
+    "canonical_name": "造像",
+    "concept_id": "f222dbc9-496c-5b59-a7af-48f1441bdad7",
+    "concept_type": "entity",
+    "created_at": "2026-08-20T16:17:34.168294+00:00",
+    "updated_at": "2026-08-20T16:17:34.168294+00:00",
+    "xref_kind": "concept"
+  },
+  "金": {
+    "aliases": [],
+    "canonical_name": "金",
+    "concept_id": "8ccf5cbe-e340-551b-a64b-64e4e9acd520",
+    "concept_type": "entity",
+    "created_at": "2026-08-25T05:06:59.308707+00:00",
+    "updated_at": "2026-08-25T05:06:59.308707+00:00",
+    "xref_kind": "concept"
+  },
+  "金银器": {
+    "aliases": [],
+    "canonical_name": "金银器",
+    "concept_id": "1ebe8e64-4fd1-578a-b79c-ed1271e48907",
+    "concept_type": "entity",
+    "created_at": "2026-08-19T06:44:50.357205+00:00",
+    "updated_at": "2026-08-19T06:44:50.357205+00:00",
+    "xref_kind": "concept"
+  },
+  "钱币": {
+    "aliases": [],
+    "canonical_name": "钱币",
+    "concept_id": "5a5163c4-55e7-5f3d-9b52-ff6164d85c2f",
+    "concept_type": "entity",
+    "created_at": "2026-08-18T10:27:16.212463+00:00",
+    "updated_at": "2026-08-18T10:27:16.212463+00:00",
+    "xref_kind": "concept"
+  },
+  "铁": {
+    "aliases": [],
+    "canonical_name": "铁",
+    "concept_id": "a1bdff48-d9a2-5393-8c29-1a808626b075",
+    "concept_type": "entity",
+    "created_at": "2026-07-26T06:15:13.169491+00:00",
+    "updated_at": "2026-08-23T02:33:59.872385+00:00",
+    "xref_kind": "concept"
+  },
+  "铁器": {
+    "aliases": [],
+    "canonical_name": "铁器",
+    "concept_id": "c6a1ff7b-9af0-5179-99d9-41242a9d9480",
+    "concept_type": "entity",
+    "created_at": "2026-07-28T09:13:10.513836+00:00",
+    "updated_at": "2026-08-24T04:45:53.085444+00:00",
+    "xref_kind": "concept"
+  },
+  "铜": {
+    "aliases": [],
+    "canonical_name": "铜",
+    "concept_id": "605b0ff2-7bb5-4c8f-88ff-3b23bcea4af3",
+    "concept_type": "entity",
+    "slug": "铜",
+    "xref_kind": "wiki_page"
+  },
+  "铜合金": {
+    "aliases": [],
+    "canonical_name": "铜合金",
+    "concept_id": "caad798d-5581-5435-bec1-c2c680344ca1",
+    "concept_type": "entity",
+    "created_at": "2026-07-28T03:45:18.559982+00:00",
+    "updated_at": "2026-07-28T03:50:45.318449+00:00",
+    "xref_kind": "concept"
+  },
+  "铜器": {
+    "aliases": [],
+    "canonical_name": "铜器",
+    "concept_id": "f8102393-4ab7-56fb-8661-4acbb614a37f",
+    "concept_type": "entity",
+    "created_at": "2026-08-21T11:42:28.156806+00:00",
+    "updated_at": "2026-08-21T11:42:28.156806+00:00",
+    "xref_kind": "concept"
+  },
+  "陶": {
+    "aliases": [],
+    "canonical_name": "陶",
+    "concept_id": "249736d9-8022-577d-ba76-477dba61ccb2",
+    "concept_type": "entity",
+    "created_at": "2026-08-10T15:37:46.755828+00:00",
+    "updated_at": "2026-08-25T05:07:25.413095+00:00",
+    "xref_kind": "concept"
+  },
+  "陶器": {
+    "aliases": [],
+    "canonical_name": "陶器",
+    "concept_id": "70dedc30-d4f7-53e2-a20f-8a36ab4c8491",
+    "concept_type": "entity",
+    "created_at": "2026-08-25T05:07:25.421747+00:00",
+    "updated_at": "2026-08-25T05:07:25.421747+00:00",
+    "xref_kind": "concept"
+  },
+  "陶瓷器": {
+    "aliases": [],
+    "canonical_name": "陶瓷器",
+    "concept_id": "aacba03a-ec5d-5363-879a-9dfb896d63f8",
+    "concept_type": "entity",
+    "created_at": "2026-08-14T15:49:15.397812+00:00",
+    "updated_at": "2026-08-14T15:49:15.397812+00:00",
+    "xref_kind": "concept"
+  },
+  "雕塑": {
+    "aliases": [],
+    "canonical_name": "雕塑",
+    "concept_id": "ce2e2158-4ec1-59a8-86cb-9faf4aac5140",
+    "concept_type": "entity",
+    "created_at": "2026-08-21T02:37:38.897998+00:00",
+    "updated_at": "2026-08-21T02:37:38.897998+00:00",
+    "xref_kind": "concept"
+  },
+  "青铜器": {
+    "aliases": [],
+    "canonical_name": "青铜器",
+    "concept_id": "2a811474-ee26-523b-866d-af9d2c2a44a2",
+    "concept_type": "entity",
+    "created_at": "2026-08-21T11:42:38.992340+00:00",
+    "updated_at": "2026-08-24T11:53:34.158794+00:00",
+    "xref_kind": "concept"
+  },
+  "高句丽": {
+    "aliases": [],
+    "canonical_name": "高句丽",
+    "concept_id": "00e33184-25e1-5811-8421-86a99e686388",
+    "concept_type": "entity",
+    "created_at": "2026-08-21T07:40:10.921948+00:00",
+    "updated_at": "2026-08-21T07:40:10.921948+00:00",
+    "xref_kind": "concept"
+  }
+}

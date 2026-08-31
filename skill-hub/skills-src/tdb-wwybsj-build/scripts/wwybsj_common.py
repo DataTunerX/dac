@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 wwybsj_common.py — Shared helpers for building the `wwybsj` TDB domain
-from the museum artifact registry (a2a/agents/wwybsj/wwybsj.json).
+from the museum artifact registry.
 
 Nothing here talks to the LLM. It only:
   - loads / normalizes artifact records
@@ -55,8 +55,18 @@ STREAM_ID = "wwybsj.artifacts"           # provenance stream for registry record
 # the "Gateway reads" section below; if something cannot be expressed against
 # the v2 API, it does not belong in this skill.
 
-DATA_JSON = Path("/Users/ningwu/eis/a2a/agents/wwybsj/wwybsj.json")
-OUT_DIR = Path("/Users/ningwu/eis/a2a/agents/wwybsj/out")
+SKILL_DIR = Path(__file__).resolve().parent.parent
+
+
+def default_data_json() -> Path:
+    configured = os.environ.get("WWYBSJ_DATA_JSON")
+    if configured:
+        return Path(configured)
+    return SKILL_DIR / "data" / "wwybsj.json"
+
+
+DATA_JSON = default_data_json()
+OUT_DIR = Path(os.environ.get("WWYBSJ_OUT_DIR", str(SKILL_DIR / "out")))
 
 # Incremental intake overlay.
 #
@@ -113,8 +123,8 @@ FIELDS: dict[str, str] = {
     "ww_mtime":        "修改时间",
 }
 
-# Chinese -> English probes, used to reach the (largely English) wiki/ontology
-# layers of archeology_expert. Only high-signal terms; unknown terms are simply
+# Chinese -> English probes, used to reach remote wiki/ontology surfaces when
+# useful. Only high-signal terms; unknown terms are simply
 # probed in Chinese.
 ZH_EN_PROBES: dict[str, list[str]] = {
     "陶器":             ["pottery", "ceramics"],
@@ -650,6 +660,12 @@ def load_new_items(path: Path | None = None) -> list[dict]:
 
 def load_records(path: Path = DATA_JSON, include_new: bool = True) -> list[dict]:
     """Base registry, with the intake overlay merged in (overlay wins by id)."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Base registry JSON not found: {path}. Set WWYBSJ_DATA_JSON to the "
+            "registry snapshot path, or install the bundled data/wwybsj.json "
+            "next to this skill."
+        )
     with open(path, encoding="utf-8") as f:
         records = json.load(f)
     if not include_new:
@@ -989,5 +1005,3 @@ def _resolve_source_concept(label: str) -> dict | None:
             "aliases": [],
         }
     return None
-
-

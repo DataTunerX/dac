@@ -1,0 +1,2047 @@
+[
+  {
+    "registry_no": "0480",
+    "record_id": 470,
+    "entities": [
+      {
+        "entity_id": "wwybsj.artifact.0480",
+        "entity_kind": "item",
+        "semantic_role": "individual",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "西汉长信宫灯",
+          "registry_no": "0480",
+          "record_id": 470
+        }
+      },
+      {
+        "entity_id": "wwybsj.ref.registry",
+        "entity_kind": "property",
+        "semantic_role": "annotation_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "登记记录出处"
+        },
+        "property_datatype": "json"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_registry_no",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_registry_no"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.qualifier.epistemic_mode",
+        "entity_kind": "property",
+        "semantic_role": "annotation_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "epistemic_mode"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.qualifier.basis",
+        "entity_kind": "property",
+        "semantic_role": "annotation_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "basis"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.qualifier.registry_field",
+        "entity_kind": "property",
+        "semantic_role": "annotation_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "registry_field"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_registry_scheme",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_registry_scheme"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_name",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_name"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_original_name",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_original_name"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_material_form",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_material_form"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_material_class",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_material_class"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_mass_range",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_mass_range"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_completeness_note",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_completeness_note"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_conservation_state",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_conservation_state"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_period_scheme",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_period_scheme"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.registered_at",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "registered_at"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.term.category.青铜器",
+        "entity_kind": "item",
+        "semantic_role": "concept",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "青铜器",
+          "facet": "category",
+          "registry_field": "ww_leibie",
+          "alignment": "unaligned"
+        }
+      },
+      {
+        "entity_id": "wwybsj.predicate.instantiates",
+        "entity_kind": "property",
+        "semantic_role": "object_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "instantiates"
+        },
+        "property_datatype": "entity"
+      },
+      {
+        "entity_id": "wwybsj.term.grade.一级",
+        "entity_kind": "item",
+        "semantic_role": "concept",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "一级",
+          "facet": "grade",
+          "registry_field": "ww_jibie",
+          "alignment": "unaligned"
+        }
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_grade",
+        "entity_kind": "property",
+        "semantic_role": "object_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_grade"
+        },
+        "property_datatype": "entity"
+      },
+      {
+        "entity_id": "wwybsj.term.acquisition.1968年河北满城中山靖王刘胜妻窦绾墓出土",
+        "entity_kind": "item",
+        "semantic_role": "concept",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "1968年河北满城中山靖王刘胜妻窦绾墓出土",
+          "facet": "acquisition",
+          "registry_field": "ww_laiyuan",
+          "alignment": "unaligned"
+        }
+      },
+      {
+        "entity_id": "wwybsj.predicate.acquired_by",
+        "entity_kind": "property",
+        "semantic_role": "object_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "acquired_by"
+        },
+        "property_datatype": "entity"
+      },
+      {
+        "entity_id": "wwybsj.term.completeness.完整",
+        "entity_kind": "item",
+        "semantic_role": "concept",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "完整",
+          "facet": "completeness",
+          "registry_field": "ww_wancan_cd",
+          "alignment": "unaligned"
+        }
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_completeness",
+        "entity_kind": "property",
+        "semantic_role": "object_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_completeness"
+        },
+        "property_datatype": "entity"
+      },
+      {
+        "entity_id": "wwybsj.term.material.铜合金",
+        "entity_kind": "item",
+        "semantic_role": "concept",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "铜合金",
+          "facet": "material",
+          "registry_field": "ww_zhidi_c",
+          "alignment": "unaligned"
+        }
+      },
+      {
+        "entity_id": "wwybsj.predicate.made_of",
+        "entity_kind": "property",
+        "semantic_role": "object_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "made_of"
+        },
+        "property_datatype": "entity"
+      },
+      {
+        "entity_id": "wwybsj.predicate.dated_to",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "dated_to"
+        },
+        "property_datatype": "json"
+      },
+      {
+        "entity_id": "wwybsj.qualifier.parse_status",
+        "entity_kind": "property",
+        "semantic_role": "annotation_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "parse_status"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.term.period.约公元前2世纪",
+        "entity_kind": "item",
+        "semantic_role": "concept",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "约公元前2世纪",
+          "facet": "period",
+          "registry_field": "ww_niandai_jt",
+          "alignment": "unaligned"
+        }
+      },
+      {
+        "entity_id": "wwybsj.predicate.in_period",
+        "entity_kind": "property",
+        "semantic_role": "object_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "in_period"
+        },
+        "property_datatype": "entity"
+      },
+      {
+        "entity_id": "wwybsj.qualifier.label_normalization",
+        "entity_kind": "property",
+        "semantic_role": "annotation_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "label_normalization"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.qualifier.registry_era_label",
+        "entity_kind": "property",
+        "semantic_role": "annotation_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "registry_era_label"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_mass",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_mass"
+        },
+        "property_datatype": "json"
+      },
+      {
+        "entity_id": "wwybsj.qualifier.unit_source",
+        "entity_kind": "property",
+        "semantic_role": "annotation_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "unit_source"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_dimension",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_dimension"
+        },
+        "property_datatype": "json"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_quantity",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_quantity"
+        },
+        "property_datatype": "json"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_dimension_note",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_dimension_note"
+        },
+        "property_datatype": "string"
+      },
+      {
+        "entity_id": "wwybsj.predicate.has_data_quality_flag",
+        "entity_kind": "property",
+        "semantic_role": "datatype_property",
+        "namespace": "wwybsj",
+        "status": "active",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "label": "has_data_quality_flag"
+        },
+        "property_datatype": "json"
+      }
+    ],
+    "statements": [
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_no",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_registry_no",
+        "value_type": "string",
+        "value_json": {
+          "text": "480"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_registry_no",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_bianhao",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_scheme",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_registry_scheme",
+        "value_type": "string",
+        "value_json": {
+          "text": "藏品总登记号"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_registry_scheme",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_bh_leixing",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_name",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_name",
+        "value_type": "string",
+        "value_json": {
+          "text": "西汉长信宫灯"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_name",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_mingchen",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_original_name",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_original_name",
+        "value_type": "string",
+        "value_json": {
+          "text": "长信宫灯"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_original_name",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_yuanming",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_form",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_material_form",
+        "value_type": "string",
+        "value_json": {
+          "text": "单一质地"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_material_form",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_zhidi_a",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_class",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_material_class",
+        "value_type": "string",
+        "value_json": {
+          "text": "无机质"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_material_class",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_zhidi_b",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass_range",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_mass_range",
+        "value_type": "string",
+        "value_json": {
+          "text": "1-50 kg"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_mass_range",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_zhiliang_fw",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness_note",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_completeness_note",
+        "value_type": "string",
+        "value_json": {
+          "text": "器物整体完整，由头部、身躯、右臂、灯座、灯盘和灯罩等部分分铸组装"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_completeness_note",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_wancan_zk",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_conservation_state",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_conservation_state",
+        "value_type": "string",
+        "value_json": {
+          "text": "状态稳定，不需修复"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_conservation_state",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_baocun_zt",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_period_scheme",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_period_scheme",
+        "value_type": "string",
+        "value_json": {
+          "text": "中国历史学年代"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_period_scheme",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_niandai_a",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/registered_at",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.registered_at",
+        "value_type": "string",
+        "value_json": {
+          "text": "2026-08-31 16:23:00"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/registered_at",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_ctime",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/instantiates",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.instantiates",
+        "value_type": "entity",
+        "value_json": {},
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/instantiates",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_leibie",
+          "subject_label": "西汉长信宫灯",
+          "object_label": "青铜器"
+        },
+        "value_entity_id": "wwybsj.term.category.青铜器"
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_grade",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_grade",
+        "value_type": "entity",
+        "value_json": {},
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_grade",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_jibie",
+          "subject_label": "西汉长信宫灯",
+          "object_label": "一级"
+        },
+        "value_entity_id": "wwybsj.term.grade.一级"
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/acquired_by",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.acquired_by",
+        "value_type": "entity",
+        "value_json": {},
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/acquired_by",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_laiyuan",
+          "subject_label": "西汉长信宫灯",
+          "object_label": "1968年河北满城中山靖王刘胜妻窦绾墓出土"
+        },
+        "value_entity_id": "wwybsj.term.acquisition.1968年河北满城中山靖王刘胜妻窦绾墓出土"
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_completeness",
+        "value_type": "entity",
+        "value_json": {},
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_completeness",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_wancan_cd",
+          "subject_label": "西汉长信宫灯",
+          "object_label": "完整"
+        },
+        "value_entity_id": "wwybsj.term.completeness.完整"
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/made_of/铜合金",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.made_of",
+        "value_type": "entity",
+        "value_json": {},
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/made_of/铜合金",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_zhidi_c",
+          "subject_label": "西汉长信宫灯",
+          "object_label": "铜合金"
+        },
+        "value_entity_id": "wwybsj.term.material.铜合金"
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/dated_to",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.dated_to",
+        "value_type": "json",
+        "value_json": {
+          "era_label": "约公元前2世纪",
+          "start_year": null,
+          "end_year": null,
+          "calendar": "CE",
+          "parse_status": "label_only",
+          "registry_literal": "约公元前2世纪"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/dated_to",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_niandai_jt",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/in_period",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.in_period",
+        "value_type": "entity",
+        "value_json": {},
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/in_period",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_niandai_jt",
+          "subject_label": "西汉长信宫灯",
+          "object_label": "约公元前2世纪"
+        },
+        "value_entity_id": "wwybsj.term.period.约公元前2世纪"
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_mass",
+        "value_type": "json",
+        "value_json": {
+          "value": 15.85,
+          "unit": "kg",
+          "unit_source": "registry_column",
+          "registry_literal": "15.850",
+          "normalized_g": 15850.0
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_mass",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_zhiliang_jt",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension/height",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_dimension",
+        "value_type": "json",
+        "value_json": {
+          "dimension": "height",
+          "label_zh": "高",
+          "value": 48.0,
+          "unit": null,
+          "unit_source": "unspecified",
+          "registry_field": "ww_gao",
+          "registry_literal": "48.00"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_dimension/height",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_gao",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_quantity",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_quantity",
+        "value_type": "json",
+        "value_json": {
+          "count": 1,
+          "registry_literal": "1"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_quantity",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_shuliang",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension_note",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_dimension_note",
+        "value_type": "string",
+        "value_json": {
+          "text": "通高48厘米，宫女高44.5厘米"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_dimension_note",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "ww_chicun",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/dimension_unit_unspecified",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_data_quality_flag",
+        "value_type": "json",
+        "value_json": {
+          "code": "dimension_unit_unspecified",
+          "note": "长/宽/高 列没有单位来源，跨藏品数值比较前必须显式确定单位"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_data_quality_flag/dimension_unit_unspecified",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "(derived)",
+          "subject_label": "西汉长信宫灯"
+        }
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/period_label_without_years",
+        "subject_id": "wwybsj.artifact.0480",
+        "property_id": "wwybsj.predicate.has_data_quality_flag",
+        "value_type": "json",
+        "value_json": {
+          "code": "period_label_without_years",
+          "note": "年代仅有标签 '约公元前2世纪'，无年份区间，无法参与区间推理"
+        },
+        "status": "accepted",
+        "confidence": 1.0,
+        "created_by": "wwybsj_l0_v2",
+        "metadata_json": {
+          "domain": "wwybsj",
+          "layer": "L0",
+          "statement_key": "wwybsj/L0/0480/has_data_quality_flag/period_label_without_years",
+          "record_id": 470,
+          "registry_no": "0480",
+          "registry_field": "(derived)",
+          "subject_label": "西汉长信宫灯"
+        }
+      }
+    ],
+    "qualifiers": [
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_no",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_no",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_no",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_bianhao"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_scheme",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_scheme",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_scheme",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_bh_leixing"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_name",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_name",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_name",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_mingchen"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_original_name",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_original_name",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_original_name",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_yuanming"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_form",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_form",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_form",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_zhidi_a"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_class",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_class",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_class",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_zhidi_b"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass_range",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass_range",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass_range",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_zhiliang_fw"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness_note",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness_note",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness_note",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_wancan_zk"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_conservation_state",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_conservation_state",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_conservation_state",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_baocun_zt"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_period_scheme",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_period_scheme",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_period_scheme",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_niandai_a"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/registered_at",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/registered_at",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/registered_at",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_ctime"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/instantiates",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/instantiates",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/instantiates",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_leibie"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_grade",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_grade",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_grade",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_jibie"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/acquired_by",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/acquired_by",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/acquired_by",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_laiyuan"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_wancan_cd"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/made_of/铜合金",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/made_of/铜合金",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/made_of/铜合金",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_zhidi_c"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/dated_to",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/dated_to",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/dated_to",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_niandai_jt"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/dated_to",
+        "property_id": "wwybsj.qualifier.parse_status",
+        "value_type": "string",
+        "value_json": {
+          "text": "label_only"
+        },
+        "ordinal": 3
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/in_period",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/in_period",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/in_period",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_niandai_jt"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/in_period",
+        "property_id": "wwybsj.qualifier.label_normalization",
+        "value_type": "string",
+        "value_json": {
+          "text": "canonical"
+        },
+        "ordinal": 3
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/in_period",
+        "property_id": "wwybsj.qualifier.registry_era_label",
+        "value_type": "string",
+        "value_json": {
+          "text": "约公元前2世纪"
+        },
+        "ordinal": 4
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_zhiliang_jt"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass",
+        "property_id": "wwybsj.qualifier.unit_source",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry_column"
+        },
+        "ordinal": 3
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension/height",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension/height",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension/height",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_gao"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension/height",
+        "property_id": "wwybsj.qualifier.unit_source",
+        "value_type": "string",
+        "value_json": {
+          "text": "unspecified"
+        },
+        "ordinal": 3
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_quantity",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_quantity",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_quantity",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_shuliang"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension_note",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension_note",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension_note",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "ww_chicun"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension_note",
+        "property_id": "wwybsj.qualifier.parse_status",
+        "value_type": "string",
+        "value_json": {
+          "text": "unparsed_free_text"
+        },
+        "ordinal": 3
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/dimension_unit_unspecified",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/dimension_unit_unspecified",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry_completeness_check"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/dimension_unit_unspecified",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "(derived)"
+        },
+        "ordinal": 2
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/period_label_without_years",
+        "property_id": "wwybsj.qualifier.epistemic_mode",
+        "value_type": "string",
+        "value_json": {
+          "text": "observed"
+        },
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/period_label_without_years",
+        "property_id": "wwybsj.qualifier.basis",
+        "value_type": "string",
+        "value_json": {
+          "text": "registry_completeness_check"
+        },
+        "ordinal": 1
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/period_label_without_years",
+        "property_id": "wwybsj.qualifier.registry_field",
+        "value_type": "string",
+        "value_json": {
+          "text": "(derived)"
+        },
+        "ordinal": 2
+      }
+    ],
+    "references": [
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_no",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_bianhao"
+        },
+        "source_span": "ww_bianhao=480",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_registry_scheme",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_bh_leixing"
+        },
+        "source_span": "ww_bh_leixing=藏品总登记号",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_name",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_mingchen"
+        },
+        "source_span": "ww_mingchen=西汉长信宫灯",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_original_name",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_yuanming"
+        },
+        "source_span": "ww_yuanming=长信宫灯",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_form",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_zhidi_a"
+        },
+        "source_span": "ww_zhidi_a=单一质地",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_material_class",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_zhidi_b"
+        },
+        "source_span": "ww_zhidi_b=无机质",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass_range",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_zhiliang_fw"
+        },
+        "source_span": "ww_zhiliang_fw=1-50 kg",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness_note",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_wancan_zk"
+        },
+        "source_span": "ww_wancan_zk=器物整体完整，由头部、身躯、右臂、灯座、灯盘和灯罩等部分分铸组装",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_conservation_state",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_baocun_zt"
+        },
+        "source_span": "ww_baocun_zt=状态稳定，不需修复",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_period_scheme",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_niandai_a"
+        },
+        "source_span": "ww_niandai_a=中国历史学年代",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/registered_at",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_ctime"
+        },
+        "source_span": "ww_ctime=2026-08-31 16:23:00",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/instantiates",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_leibie"
+        },
+        "source_span": "ww_leibie=青铜器",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_grade",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_jibie"
+        },
+        "source_span": "ww_jibie=一级",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/acquired_by",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_laiyuan"
+        },
+        "source_span": "ww_laiyuan=1968年河北满城中山靖王刘胜妻窦绾墓出土",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_completeness",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_wancan_cd"
+        },
+        "source_span": "ww_wancan_cd=完整",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/made_of/铜合金",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_zhidi_c"
+        },
+        "source_span": "ww_zhidi_c=铜合金",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/dated_to",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_niandai_jt"
+        },
+        "source_span": "ww_niandai_jt=约公元前2世纪",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/in_period",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_niandai_jt"
+        },
+        "source_span": "ww_niandai_jt=约公元前2世纪",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_mass",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_zhiliang_jt"
+        },
+        "source_span": "ww_zhiliang_jt=15.850",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension/height",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_gao"
+        },
+        "source_span": "ww_gao=48.00",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_quantity",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_shuliang"
+        },
+        "source_span": "ww_shuliang=1",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_dimension_note",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "ww_chicun"
+        },
+        "source_span": "ww_chicun=通高48厘米，宫女高44.5厘米",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/dimension_unit_unspecified",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "(derived)"
+        },
+        "source_span": "(derived)=∅",
+        "ordinal": 0
+      },
+      {
+        "statement_key": "wwybsj/L0/0480/has_data_quality_flag/period_label_without_years",
+        "property_id": "wwybsj.ref.registry",
+        "value_type": "json",
+        "value_json": {
+          "gateway": "local",
+          "domain": "wwybsj",
+          "stream_id": "wwybsj.artifacts",
+          "event_id": "53a0534f-89ae-4f8d-af56-1c4165fb16db",
+          "registry_field": "(derived)"
+        },
+        "source_span": "(derived)=∅",
+        "ordinal": 0
+      }
+    ],
+    "flags": [
+      "dimension_unit_unspecified",
+      "period_label_without_years"
+    ]
+  }
+]

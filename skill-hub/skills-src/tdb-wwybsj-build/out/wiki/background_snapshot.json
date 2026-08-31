@@ -1,0 +1,2440 @@
+{
+ "wwybsj.term.period.约公元前2世纪": {
+  "concept_ids": [],
+  "facts": []
+ },
+ "_labels": {
+  "34b3a365-f757-5397-ae61-222ae6d666ad": "国名或地名",
+  "958430d2-e735-5463-b496-32e60b6dd5fc": "文化的多元生发阶段",
+  "b9c6ffac-8b39-50f0-b0b6-576aff22fe4f": "春秋和战国时代",
+  "d47159b9-d99f-582c-92df-7cfd95ababea": "稍有反复",
+  "73dd9b5a-396a-5be3-a418-48f163c447d6": "战国",
+  "9836c620-cf73-5e97-a549-f62e8d103112": "国名或地名",
+  "0a0d4448-c40b-569c-9353-a9b6830ce6b3": "文化的多元生发阶段",
+  "15ef4890-5ee4-56e2-aa38-fc109c42303a": "春秋中期",
+  "8fa42b45-c490-5d46-a77c-6e25ad254512": "晋系文字",
+  "cd5ad724-64ae-5d0e-bccf-60d74a4f3e79": "《战国策》",
+  "16e11b86-ed2c-5f45-950e-816fcdcaf475": "《战国策》",
+  "f1cc164c-f6b8-59d9-8522-7289ea3feae5": "春秋和战国时期",
+  "0bd4c469-196d-575c-a5df-9d4a59b57ceb": "周代",
+  "fde59e23-a9fb-5d0f-adb1-0032d71666ab": "周平王元年（公元前770年）迁都到洛邑",
+  "8b0a9097-75fa-538f-92e3-689ac28058bc": "封建制",
+  "a10a32f4-1c9c-5ae5-bc4a-5793bd874bd1": "举孝廉",
+  "57d51a24-bfdd-57e6-ae52-595fc62f790a": "洛阳",
+  "42144577-6315-5d4e-9bb5-c5e4e1ed0558": "洛阳",
+  "8c3ea470-69d7-509e-8824-10af8e3765d6": "火德",
+  "34173a3b-51e4-57a6-a866-73b0bec81f1c": "俭约节义、儒风醇厚",
+  "2b186219-ee12-52be-8e2b-c2b0aca9fc1d": "风化之美",
+  "73c8c8bc-8a44-5de3-b60f-52e07d3b9540": "文明",
+  "314271b2-61b7-55fa-ab66-9914d8cda17f": "居延",
+  "2f69cff0-2540-5caf-a0d9-3defefe9472a": "邺",
+  "5dfe450c-ab92-5bfa-a5f0-c92939d25fb1": "邺",
+  "44a4957e-6386-52c2-ad4e-812d8b1c123f": "洛阳",
+  "4161b80c-a744-5e46-ad0a-2d92112df080": "唐宋时期的科学技术",
+  "81ba8f56-eba0-5ca4-861a-1c59ab6db366": "斗拱尺度渐小",
+  "26cdc3b9-e262-5745-b7a7-5bb21a2f6ed7": "剑川石窟现存后代纪年明确的游人题记42条",
+  "5849c4a7-28eb-558e-8ba9-6ffa91be2699": "纸币——钞",
+  "0fee0886-53a3-5c47-aefd-b15edc01ed1e": "“官自具船、给本，选人人蕃贸易诸货”的办法",
+  "87aa4cea-d737-5b2c-aa45-ba2b1d0ae023": "军镇",
+  "f0f78d29-6259-570f-a6d4-f403147f62a5": "敦煌",
+  "d2a5ead6-06b8-5aed-87c9-47d6a724aecd": "初复佛法",
+  "861cc4a3-9571-5ea2-808c-580fe39d875d": "平城",
+  "be0e3ce6-3906-5d4f-89e5-0a0962165a71": "盛乐",
+  "65f00b17-3563-5e82-9b94-f721d4116f72": "平城",
+  "dc65d642-0621-5933-9f8c-6225451d3c6d": "平城",
+  "525093c3-4638-5df2-b5e3-b15d23d24121": "前尺、中尺、後尺三種規制",
+  "37189e4c-693a-551d-a6bb-ebb48a6a3547": "偏安江左",
+  "5942de13-39ec-5064-97ac-36230511272b": "将信将疑",
+  "0f0e54ae-ba42-575d-bea7-56d50d7a29a9": "差雇兼用",
+  "a91def06-659d-5fe3-aebe-4be1da321b4a": "雕版印刷流行之后书籍数量的激增",
+  "05bfa1d8-24bb-50f2-95eb-70ed6dc5d9f9": "虚衔",
+  "c7d4b180-0771-5412-9d7a-b1a57cadc693": "真正支援",
+  "1c1a04ea-bae3-5e1d-9c41-f543f34e9454": "105°50′ W",
+  "099b55f5-9018-52ac-992c-e0fb3831ffa1": "86°49′",
+  "061dec5b-26dc-5939-87c2-48ed69c3dcb4": "临安",
+  "cabdd6bc-16d6-576f-b6b6-487eb81c3eec": "南京",
+  "74df2fdb-dfce-584f-91ff-1ad2ac018e3b": "十五道",
+  "82f23b7d-ca04-535a-a354-12d671054eb4": "十道",
+  "e456f0b4-bf55-50af-81f8-35dbafee704d": "日本海",
+  "e6358677-d733-574e-8806-ab98cca30834": "中亚阿姆河、锡尔河流域",
+  "d10bc84a-23c7-5fb7-927e-a33e368a0e82": "西伯利亚南部",
+  "2edfb3cd-3731-5754-9c9a-e234c8dcd693": "中印半岛",
+  "47013a6e-8b69-50eb-afa9-1a44665c6c33": "百官公卿习诵《道德经》",
+  "39aa361c-9ac8-5d20-8a83-342d57ee1482": "日本海",
+  "b2039275-91ef-5996-8f77-510ae2900249": "贞观之治",
+  "020c1cfe-7799-512b-b43b-e3a453cb5827": "武周政权",
+  "5cff7c1c-f248-573b-af47-05fe04723eb7": "开元盛世",
+  "5f3ac000-5e23-515c-b175-2bdaad05674e": "分疆以辨之",
+  "0cda1575-e2a0-5b62-997a-dd93acc2ed74": "置吏以康之",
+  "cc49ef52-bfd0-5d1d-bcf7-0827255b148d": "五代的更迭",
+  "cc3c4b25-f9df-5894-89fe-4fa7796d8982": "初唐",
+  "67efce1a-0f82-5957-bada-2d9e337d9337": "中唐",
+  "5c5135e3-a816-5990-98ea-63244a7cc883": "晚唐",
+  "ffa43973-804f-5283-b2ca-e891e2e6c4c8": "五代的更迭",
+  "51202c58-80b6-5140-91eb-dfb29fed2de1": "忽汗州",
+  "f6425198-943f-5ac7-96f6-52a39a8940ad": "青州",
+  "c3a01db7-01d9-59b9-923e-d0dfbc406702": "晚唐",
+  "f5c0651a-acb9-5c1a-83bc-916d235f8b2b": "中唐",
+  "25564b6e-4809-5b23-926f-ee54ae956caf": "初唐",
+  "fbc4a874-0985-5ca1-b5ae-a6f91709395e": "考试取士",
+  "a438656c-00f7-5d77-be22-e80fe74c4770": "均田制",
+  "6f012c65-d332-5bc2-beed-7d427a660b81": "租、庸、调法",
+  "164e1e24-7ab7-5e06-b62d-2c278d164075": "印度教规",
+  "cc2bd304-f74d-56e4-8269-e857b7fe8997": "置吏以康之",
+  "c18e3518-f4db-5b4c-88ce-edb585cdeccc": "分疆以辨之",
+  "608f9e27-418d-5d7d-a103-eedc247ad027": "对修行合格的僧侣于20岁时授予具足戒",
+  "40606944-5be1-5005-865a-d8881920e130": "对20岁以前的修行者酌情授予五戒、八戒或十戒",
+  "5d620fe7-bd05-535a-87b0-d0df512164f4": "日本海",
+  "95941a4d-8c2b-5bf4-8d38-72f58e59b27e": "孔子为先圣",
+  "7935ccf4-b5a0-512d-8c68-834f2a8ad744": "中印半岛",
+  "4f983eff-6c0c-5973-9b4e-712b56632a4e": "西伯利亚南部",
+  "5817c7a0-6090-5657-a22e-45b321e68364": "中亚阿姆河、锡尔河流域",
+  "1944b317-33bc-5d6d-b021-fb6efe9218e7": "河南",
+  "bf7c00c9-caf8-52d0-8053-41d19b70747b": "第一级音",
+  "678c7251-3772-55a0-ad46-b852e9f336d4": "五声音阶",
+  "3e7cd731-ae4f-5604-9699-b4b06a119227": "《郭店》唐 26",
+  "9d236afc-bfba-5455-81be-76a5b01c5752": "占卜师与专司刻辞的卜官的分工",
+  "f703e36d-0b84-5cad-9e09-a015fe5ff236": "二里岗文化和殷墟文化",
+  "a5a268f3-83d8-5298-b38c-4211c131b0a6": "尊神重鬼的文化风尚",
+  "6cfed3ea-dd64-50e0-ae55-68eb0f97bfd8": "分封",
+  "aaac6f17-8c54-5786-9004-de225e2051f1": "商代非常流行的现象",
+  "b5cf9330-bc1a-5211-b88b-1ac0b61bcea9": "全国26座钱监有铁钱9监",
+  "887e68a9-1789-5da5-a02f-33ed135b1d19": "历史上铸造铁钱种类最多、数量最大的时期",
+  "74a5e483-5f8d-5ceb-b244-83c485412020": "岁铸铁钱889224贯",
+  "41194930-c766-5f8e-8e60-4ec60176ec4d": "我国金石学突出发展",
+  "caabdea2-4d6d-504c-bf4d-d7aebddce7d3": "其他一些著名的校勘家",
+  "bcb0ca9b-8a54-5344-af7f-2bcd7a390b5e": "会要一体",
+  "cd3299a1-4ff9-5e0f-9009-9a1bd1ee7d21": "重要的时期",
+  "480d3ca6-a1cf-5255-9079-6e9ffad03dd3": "皮纸",
+  "40dfae66-5536-59dc-b4dd-beca686c8aa0": "麻纸",
+  "4bbfd907-d0ad-57c7-91f1-651eaf31c4d5": "棉花尚未传入长江流域、纤维类作物仍以桑、麻为核心的时代",
+  "0036f931-d54b-5e18-b457-b27677ce0749": "古代石刻和铜器铭文的搜集、著录和研究",
+  "3a0ec6e3-352c-5093-8046-9cd05c86d3ec": "优容士大夫的政策",
+  "04d8eabf-ccee-5e7d-bd3e-5da43f61e047": "工商业的繁荣",
+  "6a36ed32-0325-5702-a331-9e31847a6fea": "封建社会发展的最高阶段",
+  "6bbf1e07-e735-5101-a8dc-d5480fdb675a": "空前绝后",
+  "88e6d66b-cab5-5b4a-9e0b-df61f4f52653": "物质文明",
+  "7d247142-4cb3-5cb8-bc1f-f5fde5599ee6": "精神文明",
+  "7941beb1-b8fe-5c9f-b023-3d3a25114de2": "春秋战国",
+  "c5bbee29-b355-5a9e-9dfb-766a91035281": "游侠周游天下",
+  "793dc8be-dd3d-5498-9405-3890afaa1c78": "百家争鸣",
+  "8bc9e07a-58ec-54aa-842a-d3d157b96d34": "成套的仿铜陶礼器随葬",
+  "dab85524-8350-5ef5-a224-91d1dda2dff3": "两年三熟种植制度的出现",
+  "58efc253-2630-5512-8b39-db28f296c3cf": "藏品制作时代",
+  "463076a6-094c-566a-be03-abd90a3d5fb5": "古史演变的关键期",
+  "79303acb-7820-565e-86cf-6d5adf8acda1": "历史著作较为发展",
+  "79e63f31-a30f-5b9f-a997-49a437072936": "历史著作较为发展",
+  "46baf68b-4f01-5ac2-9174-b5221d1d174b": "其文",
+  "1cf5a08f-dc85-5617-81b4-6599ad376ad0": "战国七雄",
+  "250675a0-90d3-54ca-b28b-9573043aed21": "战国战争特点",
+  "bbf12d61-ae93-5ada-b4a5-8554c53d641e": "百家争鸣",
+  "2234dcb1-87f9-5003-9ee1-76fc0ba573bc": "淬火和回火工艺",
+  "15b424f3-4797-514b-84a8-ec602077a00d": "器物的匀薄，规矩和纹饰的精致，清晰",
+  "e0e379fd-a866-54ee-a46d-8a0f0744789e": "游侠周游天下",
+  "890b6729-d372-5350-8bc0-662ad06157fc": "带钩",
+  "cdaaf471-19d7-5dcd-9fda-2306692f05fe": "战国战争特点",
+  "bbb9dd08-9fe7-5fdc-97d4-c6762e9bcf30": "战国七雄",
+  "d055e865-8d4d-54d3-afa6-8d3ec8ee1b17": "古史演变的关键期",
+  "c34cba39-2700-5b63-bcfa-ebe430afb15a": "东南亚半岛地区",
+  "179f4de5-f2f3-5722-aec2-3069c30a845a": "孕育等级",
+  "e09535cf-7c30-5378-bf6e-a419c8e98eec": "青铜时代",
+  "f66b614a-8e33-50fb-9857-a0e9ab193940": "铜石并用时代",
+  "cd3e50ad-73e6-5b30-9d2c-ad43c205dbb8": "石器时代",
+  "c778289a-8757-55d0-a219-6b422f6b7a9d": "木骨泥墙",
+  "787483b6-d964-56b2-93cd-de1327fd28bf": "人类野蛮时代",
+  "75da4bb6-713f-55c6-9157-1ec7823ba066": "对人类而言最好的却绝非完美的时期",
+  "436d906d-d231-5ad9-b54f-176e78b8ced1": "磨制石器、制陶和纺织",
+  "e43ba016-9158-5b2f-bdbd-09721cdc0a60": "母权氏族公社的全盛期",
+  "c50bb020-d80b-5688-93b7-0d2de4370513": "表示臣服",
+  "e977b4f9-c1bb-55cf-bdbe-907329638ce9": "请求册封",
+  "ff26feb3-1763-503c-8fef-7b0a8b9df3cc": "遣使聘问",
+  "adea39fa-4db4-5d97-a28d-4c303e1ece51": "倭",
+  "69d8d93a-82a6-53de-b4a7-a59330e87988": "中国章服之制",
+  "d0140d4c-63c1-547a-ab07-fad8d14c102b": "唐音乐",
+  "20ddd519-c300-50ae-b18c-c94f9b45256e": "唐代",
+  "fbc6c539-40f7-5f7e-8c5c-9269984052dd": "倭",
+  "0afea61e-d36f-5691-9283-46ca894fa826": "中国章服之制",
+  "3f03f429-96a4-5215-8a53-9a2c7ea09f59": "唐音乐",
+  "27ba3414-49d0-594e-b2a2-2f3034f192c2": "留唐学生",
+  "3339e3cd-6ead-5ec7-9904-59971fc81965": "国学",
+  "fb2267d3-2845-5ec0-9ba7-6e37aec3fff0": "中国文化",
+  "501e70fb-7d8c-5622-bc57-2b0d92b7880f": "内省",
+  "6b7ef796-e7a0-50ee-8253-19767d983f6c": "元气大伤",
+  "dfc8ff38-a79a-52a8-b105-bbb44a741e76": "明顯，顯著",
+  "c466c38b-462a-5a1f-aa3a-f0e8abba2854": "明顯，顯著；使動用法，使……明，意謂宏揚、發揚光大",
+  "a0cc1925-d0de-5859-9f14-e90b6d5dda3c": "強",
+  "bd9b8992-25ea-5e5d-a022-f57e6389cae1": "顯揚",
+  "cb79fe48-698d-5ad2-8efd-9f01fff9e6ec": "使動用法",
+  "3d44950e-2618-5879-ac14-175c00fe1040": "各类志书二千八百余种",
+  "31bdf46d-27fa-52b6-b59f-136929a3f400": "修撰地方志风气极盛",
+  "4f5cfcfa-bfa3-5124-9474-1c11f711f17a": "从进攻转为防御",
+  "795b53be-bea3-51a7-993b-fa4dc52bffbe": "赐赉有加",
+  "64f44fd6-8ec3-5c06-a89b-359df3226cec": "并赐《列女传》百册",
+  "0fd5d5dd-c8b2-564e-b158-d01bd76aca81": "军队十万余人",
+  "2e38740a-b97d-5ce3-8134-aadf49bf90ba": "军事力量占着明显的优势",
+  "89d838e1-df9e-5ec9-8ea2-9930070c3ae9": "后金",
+  "bd858623-e753-599d-9a23-80edc5986331": "八镇大军十三万",
+  "debab680-1061-5897-9f25-e13bd4e0a401": "附属卜人",
+  "58b26335-d42f-5c05-b141-235feb8497b0": "唇音",
+  "714491c1-e11a-5940-82d8-1b6bf77e0840": "日月映照",
+  "2c9de6ec-3eb3-5eb7-8eb2-4bc8c9930b77": "日月映照",
+  "c8c5f6c0-94f1-5dbc-bb36-c0675f294e0a": "会意字",
+  "fb0e7339-0df4-5ef7-a0cf-0865911f0e71": "日月交辉之意",
+  "15cd3b0c-18c9-509b-b895-5f5701bea925": "白",
+  "1ef6b159-a8a8-588b-83bb-63230a3ee24c": "五经、四书、《春秋会通》《大学衍义》等",
+  "5c40dcbf-70ef-5f19-8314-d6d57df21891": "派李秉、赵辅统率五万军队进攻建州",
+  "0859f986-b2ad-5d14-87c9-b5542cf4235d": "楚人旧典",
+  "1f622062-e589-5462-ad86-737c05910486": "太一祭坛（“泰畤”）",
+  "16c70d61-9767-5099-8a1b-c3a0d6f22426": "秦文化和楚文化",
+  "866f5929-2564-51d6-9eb7-7057480018e7": "秦代创立的大一统帝国文化模式",
+  "a0d3fbd8-dead-5b08-821d-9d2614e42e85": "养蚕方法",
+  "396ee04f-86da-55e5-90fd-b793a3cfe70b": "郊祀东皇太一",
+  "5f4d2bf0-70dc-515f-aa69-739d9aa892d7": "粟与稷两个物名的使用场合有明确界限",
+  "9aeb349e-cf98-5566-a078-54c3d3a9069e": "西南丝绸之路",
+  "64584c33-955e-5418-b7c6-d1e30b4c550e": "海上丝绸之路",
+  "9398e774-f189-5df7-80a9-605ad01d60ec": "清洁、清爽",
+  "254cdf3c-19ed-5a9a-8a7a-285eb5e003ec": "汉",
+  "397f712b-c924-5147-ae10-23d43d245556": "中国考古学研究",
+  "5c205467-dbec-5e44-a5c0-d599726a0b8c": "唐王朝先进制度和文化",
+  "6adcc380-eb7b-5911-8803-e1fd7617d261": "唐",
+  "7414dbf8-da48-56e0-b5f7-809838eaa74b": "地方国家政权",
+  "d34361a7-3245-5c0c-a6d5-d674a2f2d680": "京师太学",
+  "e0243df3-3ad6-57d3-8d23-2a030ebdd6f8": "肃慎系",
+  "d3f4f7f1-37b5-5285-a9d4-9b1d44723f69": "殷商的文化官守传统",
+  "c77a8924-4ba1-52aa-94b6-c9ee9f23284b": "学在官府",
+  "4d31a90b-88c1-5148-85f4-038acb0502e5": "尊天敬德",
+  "a28cd043-b4f6-589e-8855-5eaff708da0c": "窃曲纹",
+  "2af3f213-88ae-5104-8fdc-657dd1c7ce4f": "重环纹",
+  "08f7c9d1-d091-5b0c-85dd-bffd73ef8604": "周代",
+  "a8bdb838-d469-59dd-868f-6f2f4a54b50a": "东周",
+  "c2a6fcbc-e0c2-59d6-8969-b3861d89ee8e": "宗法分封制",
+  "0112f942-33d2-5a52-9a23-a6dbf60995a2": "少数铁器",
+  "be4b2eea-613f-5549-aa9b-a4ffb29b7345": "鎬京",
+  "52be79d4-e5ea-5ec7-a603-888441f8b749": "殷商",
+  "94bd6145-27c1-5a8d-a5c9-02994d1a8a29": "王城",
+  "6c00f72c-a7c9-5622-8385-f398beab351b": "73°22′",
+  "fa86a2c6-2c18-5804-95a4-087eaca11ee5": "70°53′ W",
+  "6206fe66-3c7f-5e12-a748-5c937ca14fe9": "铜、泥合范和铜范铸造",
+  "469e7a3d-266c-519f-81e9-7f04f72d14cd": "中国伪书发展第一个高峰",
+  "b5aa929d-6b42-587c-8388-f6d776efc8a8": "农都尉",
+  "e26901e1-5cc7-58e7-9946-1ccc2428b950": "宜禾都尉",
+  "81c41916-6ddc-5947-9796-e7209dceaff7": "分疆守土",
+  "5a657f53-5f22-5ff1-9587-b0d784959513": "上京路、东京路的大地盘和相当多兵力",
+  "17954390-071c-5391-b19c-5d6473de1360": "穿壕筑障",
+  "6abdcd06-a1da-5c37-ac86-a371a086eb5a": "边防线南移",
+  "576a95d6-73b0-58d7-9824-6b3f628d2d19": "民族压迫",
+  "257f2be2-7e7a-59d0-b142-dad2c9cf9c7c": "防制更为严密",
+  "815270e2-613a-5d0f-883e-62a7bdbbf183": "削弱抵抗蒙古的力量",
+  "9ae46606-926f-5c5d-bb10-314cd94f283d": "徒然损伤国力",
+  "38de59bd-7168-5d82-81d6-5d4cef764501": "金屬；指銅、鐵等",
+  "5b10bf0d-836f-5ef8-8774-a61c6ba0bb4f": "金、銀、銅、鐵等各種金屬的統稱",
+  "bfebb028-de94-5667-aa39-15d9316b5fd8": "秦以一鎰（二十兩）為一金",
+  "8a9734fa-5f87-5593-88bb-64ffe7bab5ff": "金朝的鼎盛与衰亡",
+  "946a2361-6d7e-56ed-81bd-7f7aba94d738": "从宗室共治到皇权独尊",
+  "55e70573-eb39-5212-b63b-bf7fce566707": "金朝建立与疆域的奠定",
+  "67085343-6ea1-5f45-a15f-aa351e27b6d4": "拘刷民田为官田",
+  "6223a8f1-5c5e-540f-979f-8228f60f3e66": "占民田为牧地、草场",
+  "89fd9d46-eb28-57bf-a054-215fa6f9312e": "人才",
+  "3cf3fb79-7ab3-5f8e-8756-ac1019ac9a78": "钟镈",
+  "866c0c67-61dd-5419-8c6d-a72f106f82ab": "铜",
+  "14e0e361-dbd5-542a-91b9-92388e662cf5": "武",
+  "fe64e1d4-edc9-5659-a4e3-fa48a2012698": "唐宋之间",
+  "0e2272b0-9d79-5832-93fb-dcdc75720235": "五行说",
+  "1abf74ee-58a9-5b94-a829-0acbd15a1839": "八音",
+  "a4528c4d-174f-506a-a217-60b922545d18": "淮河和大散关以北地区",
+  "492803d5-aefa-5d19-900a-f1497e3744cd": "金朝的鼎盛与衰亡",
+  "aad9bf5b-1dce-513c-baf2-a10e3715ccc2": "金朝建立与疆域的奠定",
+  "d852f1ad-7c31-59bf-8a2e-03d37bebfa31": "从宗室共治到皇权独尊",
+  "081287dd-046e-56e1-b494-9581c08ff3cb": "百济",
+  "9b692836-4aae-5d99-a1c6-34eda85cd3b7": "儒教",
+  "5472cd50-2617-5fe7-b70b-0b4b987202c6": "北朝建筑文化",
+  "175ad46b-6f31-58b4-b368-6ed658b364a8": "东北古民族一支",
+  "e7ae7ab5-25f1-5440-9a83-7ec66b5b3c41": "儒教"
+ },
+ "wwybsj.term.period.东周": {
+  "concept_ids": [
+   "08b4131e-7a26-53c2-8adf-104e57159055",
+   "0a3f3cfa-a226-50c3-9bdd-89e74c1324f4",
+   "13d5c5ab-0bc8-5293-a60d-ed13065778c9",
+   "2f7f5d82-788b-51f3-8871-39e1a6e2c892",
+   "4310ca23-bf1f-5dec-b4c2-19afa52fddfd",
+   "43be679c-f2d5-5431-ac98-95fa82e6f52b",
+   "51374d18-98db-5126-a971-3affe1d62c13",
+   "534d5d7a-629a-54a7-9dae-76023a6bfeb2",
+   "6b43678f-5f37-5a9b-a534-9665eac8f274",
+   "6e0d6ab7-211f-5619-b9af-be902424a836",
+   "711d8a14-b749-5d56-b301-0c3621095b44",
+   "78e523a9-3f73-563f-9f87-41dd4a0904ba",
+   "8150a0ef-3d86-5607-abde-0629afc1a7ae",
+   "91bea9fa-8440-5aa2-990f-9dfafde1a393",
+   "a8bdb838-d469-59dd-868f-6f2f4a54b50a",
+   "db62edf4-2645-5e73-b485-44b102a6fa7b"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "周平王元年（公元前770年）迁都到洛邑",
+    "other_concept_id": "fde59e23-a9fb-5d0f-adb1-0032d71666ab",
+    "source_concept_id": "a8bdb838-d469-59dd-868f-6f2f4a54b50a"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "国名或地名",
+    "other_concept_id": "34b3a365-f757-5397-ae61-222ae6d666ad",
+    "source_concept_id": "0a3f3cfa-a226-50c3-9bdd-89e74c1324f4"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "战国",
+    "other_concept_id": "73dd9b5a-396a-5be3-a418-48f163c447d6",
+    "source_concept_id": "43be679c-f2d5-5431-ac98-95fa82e6f52b"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "文化的多元生发阶段",
+    "other_concept_id": "958430d2-e735-5463-b496-32e60b6dd5fc",
+    "source_concept_id": "13d5c5ab-0bc8-5293-a60d-ed13065778c9"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "春秋和战国时期",
+    "other_concept_id": "f1cc164c-f6b8-59d9-8522-7289ea3feae5",
+    "source_concept_id": "91bea9fa-8440-5aa2-990f-9dfafde1a393"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "稍有反复",
+    "other_concept_id": "d47159b9-d99f-582c-92df-7cfd95ababea",
+    "source_concept_id": "4310ca23-bf1f-5dec-b4c2-19afa52fddfd"
+   },
+   {
+    "direction": "out",
+    "predicate": "precedes",
+    "label_zh": "早于",
+    "other": "春秋中期",
+    "other_concept_id": "15ef4890-5ee4-56e2-aa38-fc109c42303a",
+    "source_concept_id": "6b43678f-5f37-5a9b-a534-9665eac8f274"
+   },
+   {
+    "direction": "out",
+    "predicate": "precedes",
+    "label_zh": "早于",
+    "other": "春秋和战国时代",
+    "other_concept_id": "b9c6ffac-8b39-50f0-b0b6-576aff22fe4f",
+    "source_concept_id": "2f7f5d82-788b-51f3-8871-39e1a6e2c892"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "《战国策》",
+    "other_concept_id": "cd5ad724-64ae-5d0e-bccf-60d74a4f3e79",
+    "source_concept_id": "711d8a14-b749-5d56-b301-0c3621095b44"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "周代",
+    "other_concept_id": "0bd4c469-196d-575c-a5df-9d4a59b57ceb",
+    "source_concept_id": "91bea9fa-8440-5aa2-990f-9dfafde1a393"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "晋系文字",
+    "other_concept_id": "8fa42b45-c490-5d46-a77c-6e25ad254512",
+    "source_concept_id": "6e0d6ab7-211f-5619-b9af-be902424a836"
+   },
+   {
+    "direction": "in",
+    "predicate": "precedes",
+    "label_zh": "晚于",
+    "other": "封建制",
+    "other_concept_id": "8b0a9097-75fa-538f-92e3-689ac28058bc",
+    "source_concept_id": "db62edf4-2645-5e73-b485-44b102a6fa7b"
+   }
+  ]
+ },
+ "wwybsj.term.period.东汉": {
+  "concept_ids": [
+   "0bd20d4c-b404-5bb1-accc-6e908b17c63e",
+   "1898a137-9439-52bf-96d1-27cc44ccfb22",
+   "19613502-1161-50b1-93fa-e262b4b60a37",
+   "2cc7682d-e341-58e0-a89a-f2207c0e77e6",
+   "a6f7a15d-093a-50bc-80d4-489e899cfa74",
+   "e93be890-c7e9-5f74-9dbf-9970b1236c0d",
+   "eddcc618-fcf1-5c80-8d66-5ae7e76511e0"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "举孝廉",
+    "other_concept_id": "a10a32f4-1c9c-5ae5-bc4a-5793bd874bd1",
+    "source_concept_id": "0bd20d4c-b404-5bb1-accc-6e908b17c63e"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "俭约节义、儒风醇厚",
+    "other_concept_id": "34173a3b-51e4-57a6-a866-73b0bec81f1c",
+    "source_concept_id": "a6f7a15d-093a-50bc-80d4-489e899cfa74"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "火德",
+    "other_concept_id": "8c3ea470-69d7-509e-8824-10af8e3765d6",
+    "source_concept_id": "a6f7a15d-093a-50bc-80d4-489e899cfa74"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "风化之美",
+    "other_concept_id": "2b186219-ee12-52be-8e2b-c2b0aca9fc1d",
+    "source_concept_id": "a6f7a15d-093a-50bc-80d4-489e899cfa74"
+   },
+   {
+    "direction": "out",
+    "predicate": "instance_of",
+    "label_zh": "属于",
+    "other": "文明",
+    "other_concept_id": "73c8c8bc-8a44-5de3-b60f-52e07d3b9540",
+    "source_concept_id": "e93be890-c7e9-5f74-9dbf-9970b1236c0d"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "洛阳",
+    "other_concept_id": "42144577-6315-5d4e-9bb5-c5e4e1ed0558",
+    "source_concept_id": "a6f7a15d-093a-50bc-80d4-489e899cfa74"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "居延",
+    "other_concept_id": "314271b2-61b7-55fa-ab66-9914d8cda17f",
+    "source_concept_id": "e93be890-c7e9-5f74-9dbf-9970b1236c0d"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "洛阳",
+    "other_concept_id": "57d51a24-bfdd-57e6-ae52-595fc62f790a",
+    "source_concept_id": "1898a137-9439-52bf-96d1-27cc44ccfb22"
+   }
+  ]
+ },
+ "wwybsj.term.period.东魏": {
+  "concept_ids": [
+   "136a4a7a-b19f-59b7-aa8b-534dbc137c82",
+   "a1fe2928-a57f-5900-a148-95e31091e0c2",
+   "b76c3d89-034c-5e87-a42a-9617d24247bc",
+   "d77de04c-3c6f-521a-8403-d9ea45741aca",
+   "e35b11e3-2500-503f-b590-8f08a8e4881d",
+   "fc561a18-b483-5eed-8e51-23d2318ec3d4"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "洛阳",
+    "other_concept_id": "44a4957e-6386-52c2-ad4e-812d8b1c123f",
+    "source_concept_id": "fc561a18-b483-5eed-8e51-23d2318ec3d4"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "邺",
+    "other_concept_id": "2f69cff0-2540-5caf-a0d9-3defefe9472a",
+    "source_concept_id": "a1fe2928-a57f-5900-a148-95e31091e0c2"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "邺",
+    "other_concept_id": "5dfe450c-ab92-5bfa-a5f0-c92939d25fb1",
+    "source_concept_id": "a1fe2928-a57f-5900-a148-95e31091e0c2"
+   }
+  ]
+ },
+ "wwybsj.term.period.元": {
+  "concept_ids": [
+   "037a7d00-75f2-5ee2-b324-37a3f8c64fb9",
+   "1f546768-9294-5144-9da2-1818f63184f3",
+   "345c689d-77ec-54ad-a4df-220fdf23a46d",
+   "3cca1976-9f1c-5e4e-8508-6e9f7f375096",
+   "4df53a86-8f2c-5688-b058-be3183131d1c",
+   "c3ade7d0-d707-5bfd-9e87-0d3191a085d6",
+   "c5989c1e-4982-5b86-aa34-11f3d8e5d1d6",
+   "cfa5d613-602f-565a-a6f1-ecff6f5e9133",
+   "e928d584-650e-541c-b56c-d58599ae9b39"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "斗拱尺度渐小",
+    "other_concept_id": "81ba8f56-eba0-5ca4-861a-1c59ab6db366",
+    "source_concept_id": "037a7d00-75f2-5ee2-b324-37a3f8c64fb9"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "剑川石窟现存后代纪年明确的游人题记42条",
+    "other_concept_id": "26cdc3b9-e262-5745-b7a7-5bb21a2f6ed7",
+    "source_concept_id": "1f546768-9294-5144-9da2-1818f63184f3"
+   },
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "唐宋时期的科学技术",
+    "other_concept_id": "4161b80c-a744-5e46-ad0a-2d92112df080",
+    "source_concept_id": "037a7d00-75f2-5ee2-b324-37a3f8c64fb9"
+   },
+   {
+    "direction": "out",
+    "predicate": "introduced_to",
+    "label_zh": "传播至",
+    "other": "“官自具船、给本，选人人蕃贸易诸货”的办法",
+    "other_concept_id": "0fee0886-53a3-5c47-aefd-b15edc01ed1e",
+    "source_concept_id": "345c689d-77ec-54ad-a4df-220fdf23a46d"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "纸币——钞",
+    "other_concept_id": "5849c4a7-28eb-558e-8ba9-6ffa91be2699",
+    "source_concept_id": "345c689d-77ec-54ad-a4df-220fdf23a46d"
+   }
+  ]
+ },
+ "wwybsj.term.period.北魏": {
+  "concept_ids": [
+   "20a735e2-f984-5a29-b0b9-39a08344ba2a",
+   "435f3286-57a4-5c73-a769-dd1e81241ad3",
+   "73510d5f-0a07-5c13-a064-8ebf9da528a9",
+   "802eae0b-ccd3-5562-8106-c6cff3a989a9",
+   "81ea59e0-3bf4-5d42-a98f-40d1ce1cd930",
+   "88203466-b1eb-594e-b105-98a1cf0da83e",
+   "a2e193e2-d468-5814-86f9-2d847388b584",
+   "f4a809b6-3d13-568b-bd54-e1745e5b6f0d"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "初复佛法",
+    "other_concept_id": "d2a5ead6-06b8-5aed-87c9-47d6a724aecd",
+    "source_concept_id": "73510d5f-0a07-5c13-a064-8ebf9da528a9"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "前尺、中尺、後尺三種規制",
+    "other_concept_id": "525093c3-4638-5df2-b5e3-b15d23d24121",
+    "source_concept_id": "f4a809b6-3d13-568b-bd54-e1745e5b6f0d"
+   },
+   {
+    "direction": "out",
+    "predicate": "introduced_to",
+    "label_zh": "传播至",
+    "other": "敦煌",
+    "other_concept_id": "f0f78d29-6259-570f-a6d4-f403147f62a5",
+    "source_concept_id": "435f3286-57a4-5c73-a769-dd1e81241ad3"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "军镇",
+    "other_concept_id": "87aa4cea-d737-5b2c-aa45-ba2b1d0ae023",
+    "source_concept_id": "435f3286-57a4-5c73-a769-dd1e81241ad3"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "平城",
+    "other_concept_id": "65f00b17-3563-5e82-9b94-f721d4116f72",
+    "source_concept_id": "88203466-b1eb-594e-b105-98a1cf0da83e"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "盛乐",
+    "other_concept_id": "be0e3ce6-3906-5d4f-89e5-0a0962165a71",
+    "source_concept_id": "88203466-b1eb-594e-b105-98a1cf0da83e"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "平城",
+    "other_concept_id": "861cc4a3-9571-5ea2-808c-580fe39d875d",
+    "source_concept_id": "81ea59e0-3bf4-5d42-a98f-40d1ce1cd930"
+   }
+  ]
+ },
+ "wwybsj.term.period.南宋": {
+  "concept_ids": [
+   "07cec1fc-3854-56b7-bd4c-d35dec66985a",
+   "17d041ba-7a87-50d4-b484-446e327bc854",
+   "1aee44aa-6ff6-57b9-a163-69ea6ad25bd4",
+   "65a29362-3ac6-5d2c-bae1-a074e62994cb",
+   "66c80d1e-1e50-5a1e-b919-34046d2d794f",
+   "9636087d-6f89-5243-b602-a3bc77a05b15",
+   "a5aac10a-d9d4-5508-9ef6-40fbb5bc4d9e",
+   "b8e9afab-1a83-5345-9c50-a4ce3f159162",
+   "c6a5c85a-01e0-5614-9e2a-fb5c42d90d3e",
+   "ec5a9dec-8814-5269-b463-57b515946a7b"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "偏安江左",
+    "other_concept_id": "37189e4c-693a-551d-a6bb-ebb48a6a3547",
+    "source_concept_id": "07cec1fc-3854-56b7-bd4c-d35dec66985a"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "将信将疑",
+    "other_concept_id": "5942de13-39ec-5064-97ac-36230511272b",
+    "source_concept_id": "65a29362-3ac6-5d2c-bae1-a074e62994cb"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "虚衔",
+    "other_concept_id": "05bfa1d8-24bb-50f2-95eb-70ed6dc5d9f9",
+    "source_concept_id": "b8e9afab-1a83-5345-9c50-a4ce3f159162"
+   },
+   {
+    "direction": "out",
+    "predicate": "distinguished_from",
+    "label_zh": "区别于",
+    "other": "真正支援",
+    "other_concept_id": "c7d4b180-0771-5412-9d7a-b1a57cadc693",
+    "source_concept_id": "b8e9afab-1a83-5345-9c50-a4ce3f159162"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "105°50′ W",
+    "other_concept_id": "1c1a04ea-bae3-5e1d-9c41-f543f34e9454",
+    "source_concept_id": "c6a5c85a-01e0-5614-9e2a-fb5c42d90d3e"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "86°49′",
+    "other_concept_id": "099b55f5-9018-52ac-992c-e0fb3831ffa1",
+    "source_concept_id": "c6a5c85a-01e0-5614-9e2a-fb5c42d90d3e"
+   },
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "雕版印刷流行之后书籍数量的激增",
+    "other_concept_id": "a91def06-659d-5fe3-aebe-4be1da321b4a",
+    "source_concept_id": "66c80d1e-1e50-5a1e-b919-34046d2d794f"
+   },
+   {
+    "direction": "out",
+    "predicate": "introduced_to",
+    "label_zh": "传播至",
+    "other": "差雇兼用",
+    "other_concept_id": "0f0e54ae-ba42-575d-bea7-56d50d7a29a9",
+    "source_concept_id": "66c80d1e-1e50-5a1e-b919-34046d2d794f"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "临安",
+    "other_concept_id": "061dec5b-26dc-5939-87c2-48ed69c3dcb4",
+    "source_concept_id": "c6a5c85a-01e0-5614-9e2a-fb5c42d90d3e"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "南京",
+    "other_concept_id": "cabdd6bc-16d6-576f-b6b6-487eb81c3eec",
+    "source_concept_id": "ec5a9dec-8814-5269-b463-57b515946a7b"
+   }
+  ]
+ },
+ "wwybsj.term.period.唐": {
+  "concept_ids": [
+   "2b558e86-0396-52f7-9ada-75af86de813d",
+   "78731daf-c7f9-579a-91a7-7038c44f5d24",
+   "8cc58433-5123-503e-942a-31c8474d264e",
+   "a9e66877-547d-5a97-80cd-662229a21a10",
+   "ada437fa-78a1-54f3-9c50-2a07376d6ae2",
+   "ae3846d9-d352-5a03-9e8b-fa743f0ca8a3",
+   "b7684e29-80f7-582d-a519-c8dfee0a35bc",
+   "d1f3703e-2f6c-5ef1-b161-d72acc009716",
+   "d305c522-a4bb-5753-89ea-a8d02bc054e4",
+   "de403d18-e6e6-55cd-ad28-0dc0aba83020",
+   "e182a61a-1629-5148-8f19-9afcff3b3910",
+   "e2771e46-5960-5696-a985-20d778f652f2",
+   "e94966f7-8a8e-508f-9590-05d1c07dc2ef",
+   "f2ba8ff2-5e60-59b0-8985-b6616a47478f",
+   "f4b0701d-39fb-50d2-8488-9f3ff993ad76",
+   "f873d10f-25d6-5a2d-97d1-d7515aa2220f",
+   "fe05413f-a582-52cc-8872-44837a245aed"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "分疆以辨之",
+    "other_concept_id": "5f3ac000-5e23-515c-b175-2bdaad05674e",
+    "source_concept_id": "ada437fa-78a1-54f3-9c50-2a07376d6ae2"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "均田制",
+    "other_concept_id": "a438656c-00f7-5d77-be22-e80fe74c4770",
+    "source_concept_id": "e2771e46-5960-5696-a985-20d778f652f2"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "对20岁以前的修行者酌情授予五戒、八戒或十戒",
+    "other_concept_id": "40606944-5be1-5005-865a-d8881920e130",
+    "source_concept_id": "f4b0701d-39fb-50d2-8488-9f3ff993ad76"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "对修行合格的僧侣于20岁时授予具足戒",
+    "other_concept_id": "608f9e27-418d-5d7d-a103-eedc247ad027",
+    "source_concept_id": "f4b0701d-39fb-50d2-8488-9f3ff993ad76"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "百官公卿习诵《道德经》",
+    "other_concept_id": "47013a6e-8b69-50eb-afa9-1a44665c6c33",
+    "source_concept_id": "8cc58433-5123-503e-942a-31c8474d264e"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "租、庸、调法",
+    "other_concept_id": "6f012c65-d332-5bc2-beed-7d427a660b81",
+    "source_concept_id": "e2771e46-5960-5696-a985-20d778f652f2"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "置吏以康之",
+    "other_concept_id": "0cda1575-e2a0-5b62-997a-dd93acc2ed74",
+    "source_concept_id": "ada437fa-78a1-54f3-9c50-2a07376d6ae2"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "中唐",
+    "other_concept_id": "67efce1a-0f82-5957-bada-2d9e337d9337",
+    "source_concept_id": "d1f3703e-2f6c-5ef1-b161-d72acc009716"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "初唐",
+    "other_concept_id": "cc3c4b25-f9df-5894-89fe-4fa7796d8982",
+    "source_concept_id": "d1f3703e-2f6c-5ef1-b161-d72acc009716"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "十五道",
+    "other_concept_id": "74df2fdb-dfce-584f-91ff-1ad2ac018e3b",
+    "source_concept_id": "78731daf-c7f9-579a-91a7-7038c44f5d24"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "十道",
+    "other_concept_id": "82f23b7d-ca04-535a-a354-12d671054eb4",
+    "source_concept_id": "78731daf-c7f9-579a-91a7-7038c44f5d24"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "开元盛世",
+    "other_concept_id": "5cff7c1c-f248-573b-af47-05fe04723eb7",
+    "source_concept_id": "ada437fa-78a1-54f3-9c50-2a07376d6ae2"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "晚唐",
+    "other_concept_id": "5c5135e3-a816-5990-98ea-63244a7cc883",
+    "source_concept_id": "d1f3703e-2f6c-5ef1-b161-d72acc009716"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "武周政权",
+    "other_concept_id": "020c1cfe-7799-512b-b43b-e3a453cb5827",
+    "source_concept_id": "ada437fa-78a1-54f3-9c50-2a07376d6ae2"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "贞观之治",
+    "other_concept_id": "b2039275-91ef-5996-8f77-510ae2900249",
+    "source_concept_id": "ada437fa-78a1-54f3-9c50-2a07376d6ae2"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "印度教规",
+    "other_concept_id": "164e1e24-7ab7-5e06-b62d-2c278d164075",
+    "source_concept_id": "e94966f7-8a8e-508f-9590-05d1c07dc2ef"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "孔子为先圣",
+    "other_concept_id": "95941a4d-8c2b-5bf4-8d38-72f58e59b27e",
+    "source_concept_id": "fe05413f-a582-52cc-8872-44837a245aed"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "忽汗州",
+    "other_concept_id": "51202c58-80b6-5140-91eb-dfb29fed2de1",
+    "source_concept_id": "de403d18-e6e6-55cd-ad28-0dc0aba83020"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "中亚阿姆河、锡尔河流域",
+    "other_concept_id": "e6358677-d733-574e-8806-ab98cca30834",
+    "source_concept_id": "8cc58433-5123-503e-942a-31c8474d264e"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "中印半岛",
+    "other_concept_id": "2edfb3cd-3731-5754-9c9a-e234c8dcd693",
+    "source_concept_id": "8cc58433-5123-503e-942a-31c8474d264e"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "日本海",
+    "other_concept_id": "e456f0b4-bf55-50af-81f8-35dbafee704d",
+    "source_concept_id": "8cc58433-5123-503e-942a-31c8474d264e"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "西伯利亚南部",
+    "other_concept_id": "d10bc84a-23c7-5fb7-927e-a33e368a0e82",
+    "source_concept_id": "8cc58433-5123-503e-942a-31c8474d264e"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "青州",
+    "other_concept_id": "f6425198-943f-5ac7-96f6-52a39a8940ad",
+    "source_concept_id": "de403d18-e6e6-55cd-ad28-0dc0aba83020"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "中亚阿姆河、锡尔河流域",
+    "other_concept_id": "5817c7a0-6090-5657-a22e-45b321e68364",
+    "source_concept_id": "fe05413f-a582-52cc-8872-44837a245aed"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "中印半岛",
+    "other_concept_id": "7935ccf4-b5a0-512d-8c68-834f2a8ad744",
+    "source_concept_id": "fe05413f-a582-52cc-8872-44837a245aed"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "日本海",
+    "other_concept_id": "39aa361c-9ac8-5d20-8a83-342d57ee1482",
+    "source_concept_id": "8cc58433-5123-503e-942a-31c8474d264e"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "西伯利亚南部",
+    "other_concept_id": "4f983eff-6c0c-5973-9b4e-712b56632a4e",
+    "source_concept_id": "fe05413f-a582-52cc-8872-44837a245aed"
+   },
+   {
+    "direction": "out",
+    "predicate": "precedes",
+    "label_zh": "早于",
+    "other": "五代的更迭",
+    "other_concept_id": "cc49ef52-bfd0-5d1d-bcf7-0827255b148d",
+    "source_concept_id": "b7684e29-80f7-582d-a519-c8dfee0a35bc"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "考试取士",
+    "other_concept_id": "fbc4a874-0985-5ca1-b5ae-a6f91709395e",
+    "source_concept_id": "e2771e46-5960-5696-a985-20d778f652f2"
+   }
+  ]
+ },
+ "wwybsj.term.period.商": {
+  "concept_ids": [
+   "0c872f3a-b009-54eb-a812-0a39cefb2dc4",
+   "11c1c17a-3f4a-522d-8c5c-1a71fef61bbe",
+   "3ead3346-3e1a-5f76-a417-8e3534af1f4b",
+   "65fa1f91-d91d-549f-a2b8-d81dd27e40c8",
+   "6cb4cf22-99c2-571d-a5bf-943584ba738a",
+   "9cd36656-c71b-5b6e-922e-252470cbefca",
+   "a1a6fd15-9a7b-5d51-94ff-9af76e14e7cd",
+   "bbcf38c6-0159-5adc-a4b9-34dae7013cf2",
+   "c7e6cb45-52dc-54ea-b643-4cdf686c8227",
+   "cdebf130-265a-595f-8d0a-33f40eff8084",
+   "d8a6fd0d-879a-5e97-a8d3-8ccf78da8153",
+   "f8245103-37f6-52f6-b87c-5a6a96b3e063"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "《郭店》唐 26",
+    "other_concept_id": "3e7cd731-ae4f-5604-9699-b4b06a119227",
+    "source_concept_id": "3ead3346-3e1a-5f76-a417-8e3534af1f4b"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "分封",
+    "other_concept_id": "6cfed3ea-dd64-50e0-ae55-68eb0f97bfd8",
+    "source_concept_id": "9cd36656-c71b-5b6e-922e-252470cbefca"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "尊神重鬼的文化风尚",
+    "other_concept_id": "a5a268f3-83d8-5298-b38c-4211c131b0a6",
+    "source_concept_id": "9cd36656-c71b-5b6e-922e-252470cbefca"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "二里岗文化和殷墟文化",
+    "other_concept_id": "f703e36d-0b84-5cad-9e09-a015fe5ff236",
+    "source_concept_id": "6cb4cf22-99c2-571d-a5bf-943584ba738a"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "商代非常流行的现象",
+    "other_concept_id": "aaac6f17-8c54-5786-9004-de225e2051f1",
+    "source_concept_id": "f8245103-37f6-52f6-b87c-5a6a96b3e063"
+   },
+   {
+    "direction": "out",
+    "predicate": "is_a",
+    "label_zh": "属于",
+    "other": "第一级音",
+    "other_concept_id": "bf7c00c9-caf8-52d0-8053-41d19b70747b",
+    "source_concept_id": "11c1c17a-3f4a-522d-8c5c-1a71fef61bbe"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "河南",
+    "other_concept_id": "1944b317-33bc-5d6d-b021-fb6efe9218e7",
+    "source_concept_id": "11c1c17a-3f4a-522d-8c5c-1a71fef61bbe"
+   },
+   {
+    "direction": "out",
+    "predicate": "precedes",
+    "label_zh": "早于",
+    "other": "占卜师与专司刻辞的卜官的分工",
+    "other_concept_id": "9d236afc-bfba-5455-81be-76a5b01c5752",
+    "source_concept_id": "65fa1f91-d91d-549f-a2b8-d81dd27e40c8"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "五声音阶",
+    "other_concept_id": "678c7251-3772-55a0-ad46-b852e9f336d4",
+    "source_concept_id": "11c1c17a-3f4a-522d-8c5c-1a71fef61bbe"
+   }
+  ]
+ },
+ "wwybsj.term.period.宋": {
+  "concept_ids": [
+   "104c4eca-09fd-5ca4-8752-0bcc17e19b52",
+   "45c17ca8-f5dc-5232-8db1-1b837db3a16a",
+   "55a961b7-c56b-5652-929e-73a5bf909ad8",
+   "630c1cce-b1f1-5923-b5ec-b5860eb92b02",
+   "891b6aec-7ab7-56f4-91c0-f14b8b1e1d7b",
+   "b4b0db27-ba46-5cba-b7d2-6e850f116d00",
+   "bd76279b-1208-525e-af66-1c3091a42d66",
+   "c7a4ffbe-a382-5577-bb7a-dcf7800c0510",
+   "d997cda6-5bbd-56de-9b39-ca5600446ebe"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "历史上铸造铁钱种类最多、数量最大的时期",
+    "other_concept_id": "887e68a9-1789-5da5-a02f-33ed135b1d19",
+    "source_concept_id": "45c17ca8-f5dc-5232-8db1-1b837db3a16a"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "古代石刻和铜器铭文的搜集、著录和研究",
+    "other_concept_id": "0036f931-d54b-5e18-b457-b27677ce0749",
+    "source_concept_id": "d997cda6-5bbd-56de-9b39-ca5600446ebe"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "封建社会发展的最高阶段",
+    "other_concept_id": "6a36ed32-0325-5702-a331-9e31847a6fea",
+    "source_concept_id": "d997cda6-5bbd-56de-9b39-ca5600446ebe"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "岁铸铁钱889224贯",
+    "other_concept_id": "74a5e483-5f8d-5ceb-b244-83c485412020",
+    "source_concept_id": "45c17ca8-f5dc-5232-8db1-1b837db3a16a"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "工商业的繁荣",
+    "other_concept_id": "04d8eabf-ccee-5e7d-bd3e-5da43f61e047",
+    "source_concept_id": "d997cda6-5bbd-56de-9b39-ca5600446ebe"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "我国金石学突出发展",
+    "other_concept_id": "41194930-c766-5f8e-8e60-4ec60176ec4d",
+    "source_concept_id": "55a961b7-c56b-5652-929e-73a5bf909ad8"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "物质文明",
+    "other_concept_id": "88e6d66b-cab5-5b4a-9e0b-df61f4f52653",
+    "source_concept_id": "d997cda6-5bbd-56de-9b39-ca5600446ebe"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "空前绝后",
+    "other_concept_id": "6bbf1e07-e735-5101-a8dc-d5480fdb675a",
+    "source_concept_id": "d997cda6-5bbd-56de-9b39-ca5600446ebe"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "精神文明",
+    "other_concept_id": "7d247142-4cb3-5cb8-bc1f-f5fde5599ee6",
+    "source_concept_id": "d997cda6-5bbd-56de-9b39-ca5600446ebe"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "棉花尚未传入长江流域、纤维类作物仍以桑、麻为核心的时代",
+    "other_concept_id": "4bbfd907-d0ad-57c7-91f1-651eaf31c4d5",
+    "source_concept_id": "c7a4ffbe-a382-5577-bb7a-dcf7800c0510"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "全国26座钱监有铁钱9监",
+    "other_concept_id": "b5cf9330-bc1a-5211-b88b-1ac0b61bcea9",
+    "source_concept_id": "45c17ca8-f5dc-5232-8db1-1b837db3a16a"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "其他一些著名的校勘家",
+    "other_concept_id": "caabdea2-4d6d-504c-bf4d-d7aebddce7d3",
+    "source_concept_id": "55a961b7-c56b-5652-929e-73a5bf909ad8"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "重要的时期",
+    "other_concept_id": "cd3299a1-4ff9-5e0f-9009-9a1bd1ee7d21",
+    "source_concept_id": "b4b0db27-ba46-5cba-b7d2-6e850f116d00"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "优容士大夫的政策",
+    "other_concept_id": "3a0ec6e3-352c-5093-8046-9cd05c86d3ec",
+    "source_concept_id": "d997cda6-5bbd-56de-9b39-ca5600446ebe"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "皮纸",
+    "other_concept_id": "480d3ca6-a1cf-5255-9079-6e9ffad03dd3",
+    "source_concept_id": "bd76279b-1208-525e-af66-1c3091a42d66"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "麻纸",
+    "other_concept_id": "40dfae66-5536-59dc-b4dd-beca686c8aa0",
+    "source_concept_id": "bd76279b-1208-525e-af66-1c3091a42d66"
+   },
+   {
+    "direction": "in",
+    "predicate": "precedes",
+    "label_zh": "晚于",
+    "other": "会要一体",
+    "other_concept_id": "bcb0ca9b-8a54-5344-af7f-2bcd7a390b5e",
+    "source_concept_id": "55a961b7-c56b-5652-929e-73a5bf909ad8"
+   }
+  ]
+ },
+ "wwybsj.term.period.战国": {
+  "concept_ids": [
+   "03448cba-c947-58c5-af16-66b4d13e2408",
+   "1d0bfdf0-f77c-536c-823f-21e7aa354d58",
+   "1d6247d9-c2df-50da-bb27-37436b2f0c6f",
+   "21b43bbd-1a66-502a-9ff4-c44ce9b08261",
+   "28625457-9965-561a-8d1d-5df684bda59a",
+   "2bb4c6bd-9b7c-5285-a98b-16f8b1d48c1d",
+   "2c7d18f8-850c-5deb-8064-2d42e4200659",
+   "2da8b709-d419-5410-8cdb-d91936e48515",
+   "317686ba-049a-5b89-a989-28fdd169cd0e",
+   "38d41236-f1d3-5ea9-956c-ab7276ee5396",
+   "3c1ecd5b-45dc-50a7-8eb4-18b8d217623d",
+   "3ffc664b-e07f-573d-bfd9-a49fcd4fe85b",
+   "57cdbf20-2691-546e-aeac-7540780059f2",
+   "5a65e7b8-4175-5516-9c95-e27e5af847ee",
+   "5b1abc32-70cc-58e0-9298-d3f5d5be8c5b",
+   "6241e4e8-c6df-5ea3-a8a3-9bc21ccaea02",
+   "66a8996c-7fc5-5e1d-974d-63ba05145614",
+   "6d94f143-6863-5379-a5b3-b7058f9946f6",
+   "6e5e414c-957c-5572-a52d-399855c58382",
+   "6fae6099-d2cd-5862-bf21-35667ba9fe3a",
+   "72a84c78-ae5e-5847-94c3-de0d2cf3676c",
+   "73926524-bc01-57bf-bf89-938312f83409",
+   "780b5f2b-3e37-569d-81ed-1f4aa432bb65",
+   "815b3e07-5b2d-55ef-9566-1a1700288453",
+   "815cf44d-453f-534f-bd40-38e538e941b4",
+   "829c276e-001a-5fbd-be8f-223bfcb74331",
+   "9a3cd962-2024-5143-a22b-c857e467a423",
+   "9c9d9c1d-3817-5384-8af2-6b292989e9ec",
+   "9e0c7cd2-d09a-5dae-a04b-acf5decf167a",
+   "9ef2c915-6242-53c1-95f0-3f03b1d03b76",
+   "a3777b36-3d3f-5a3c-ac91-be06c0b2b4c8",
+   "a39a615d-8daf-512f-9236-70422f9b959d",
+   "a87725a8-15ac-5dad-b834-e011405e07ee",
+   "a8871dba-2c6e-58b0-adac-3356055a4f5e",
+   "b0feb408-a0a1-5eeb-b938-6b53da1e5ddb",
+   "b764261c-3500-5d08-852b-77203708d24c",
+   "c258a3e5-164b-507f-b06c-1fb1e1b075fe",
+   "c6854c77-653c-533b-a739-c8c306de821f",
+   "cb99fc37-a669-5e1c-8e6e-9318e5c19dac",
+   "e1a70ac6-c849-5c2b-80cc-b9d259afa1ee",
+   "e5d47f82-86aa-52f0-84fa-40aaf9659538",
+   "e7a364d0-88af-5868-90c2-991a6b950cbe",
+   "ef05cdc0-eb54-5fc9-a2b0-36055808e86d",
+   "f01ddfb5-8ba5-56ff-a15e-c0dda4850627",
+   "f35fc690-76d9-5f83-bff9-8e9b81d406d1",
+   "fb285dd7-eff3-57c5-b4e7-6f821b23138a"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "历史著作较为发展",
+    "other_concept_id": "79303acb-7820-565e-86cf-6d5adf8acda1",
+    "source_concept_id": "6d94f143-6863-5379-a5b3-b7058f9946f6"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "古史演变的关键期",
+    "other_concept_id": "d055e865-8d4d-54d3-afa6-8d3ec8ee1b17",
+    "source_concept_id": "fb285dd7-eff3-57c5-b4e7-6f821b23138a"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "器物的匀薄，规矩和纹饰的精致，清晰",
+    "other_concept_id": "15b424f3-4797-514b-84a8-ec602077a00d",
+    "source_concept_id": "73926524-bc01-57bf-bf89-938312f83409"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "战国七雄",
+    "other_concept_id": "1cf5a08f-dc85-5617-81b4-6599ad376ad0",
+    "source_concept_id": "73926524-bc01-57bf-bf89-938312f83409"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "战国战争特点",
+    "other_concept_id": "250675a0-90d3-54ca-b28b-9573043aed21",
+    "source_concept_id": "73926524-bc01-57bf-bf89-938312f83409"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "游侠周游天下",
+    "other_concept_id": "c5bbee29-b355-5a9e-9dfb-766a91035281",
+    "source_concept_id": "2bb4c6bd-9b7c-5285-a98b-16f8b1d48c1d"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "百家争鸣",
+    "other_concept_id": "793dc8be-dd3d-5498-9405-3890afaa1c78",
+    "source_concept_id": "2da8b709-d419-5410-8cdb-d91936e48515"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "古史演变的关键期",
+    "other_concept_id": "463076a6-094c-566a-be03-abd90a3d5fb5",
+    "source_concept_id": "5b1abc32-70cc-58e0-9298-d3f5d5be8c5b"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "其文",
+    "other_concept_id": "46baf68b-4f01-5ac2-9174-b5221d1d174b",
+    "source_concept_id": "72a84c78-ae5e-5847-94c3-de0d2cf3676c"
+   },
+   {
+    "direction": "out",
+    "predicate": "instance_of",
+    "label_zh": "属于",
+    "other": "藏品制作时代",
+    "other_concept_id": "58efc253-2630-5512-8b39-db28f296c3cf",
+    "source_concept_id": "57cdbf20-2691-546e-aeac-7540780059f2"
+   },
+   {
+    "direction": "out",
+    "predicate": "precedes",
+    "label_zh": "早于",
+    "other": "两年三熟种植制度的出现",
+    "other_concept_id": "dab85524-8350-5ef5-a224-91d1dda2dff3",
+    "source_concept_id": "3ffc664b-e07f-573d-bfd9-a49fcd4fe85b"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "成套的仿铜陶礼器随葬",
+    "other_concept_id": "8bc9e07a-58ec-54aa-842a-d3d157b96d34",
+    "source_concept_id": "3c1ecd5b-45dc-50a7-8eb4-18b8d217623d"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "淬火和回火工艺",
+    "other_concept_id": "2234dcb1-87f9-5003-9ee1-76fc0ba573bc",
+    "source_concept_id": "73926524-bc01-57bf-bf89-938312f83409"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "春秋战国",
+    "other_concept_id": "7941beb1-b8fe-5c9f-b023-3d3a25114de2",
+    "source_concept_id": "21b43bbd-1a66-502a-9ff4-c44ce9b08261"
+   },
+   {
+    "direction": "in",
+    "predicate": "precedes",
+    "label_zh": "晚于",
+    "other": "带钩",
+    "other_concept_id": "890b6729-d372-5350-8bc0-662ad06157fc",
+    "source_concept_id": "a3777b36-3d3f-5a3c-ac91-be06c0b2b4c8"
+   }
+  ]
+ },
+ "wwybsj.term.period.新石器": {
+  "concept_ids": [
+   "21cfee4e-e7e3-5883-b818-37e3be6b4201",
+   "2e494661-37d8-5d50-800b-a9f621ed5a07",
+   "36535227-311d-50a8-a424-ae91691daf28",
+   "82974bf8-25e7-528f-a8ea-5c54e4c21e88",
+   "91f6247a-6dd5-5d96-a65e-01de06291213",
+   "9955925b-2a01-5d9f-9ea4-12e42fba5d19",
+   "b75d4c57-fff6-5851-a029-7d1a9bfdf1ae",
+   "bf04fb73-1e4b-5db4-994a-c112849b8e89",
+   "d5c1d9e7-720f-5b5a-9981-13dceb169ce4",
+   "e700b1f6-4c5d-5624-96fa-e9c470b57ee5",
+   "f271b804-c5e4-59ca-8be9-56f964fecc4b",
+   "f7718fa3-5e8b-5e44-8307-3da873eaa90c",
+   "f772ccbd-52bd-57c7-8860-fcfb270c5129"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "孕育等级",
+    "other_concept_id": "179f4de5-f2f3-5722-aec2-3069c30a845a",
+    "source_concept_id": "2e494661-37d8-5d50-800b-a9f621ed5a07"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "母权氏族公社的全盛期",
+    "other_concept_id": "e43ba016-9158-5b2f-bdbd-09721cdc0a60",
+    "source_concept_id": "f7718fa3-5e8b-5e44-8307-3da873eaa90c"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "磨制石器、制陶和纺织",
+    "other_concept_id": "436d906d-d231-5ad9-b54f-176e78b8ced1",
+    "source_concept_id": "f271b804-c5e4-59ca-8be9-56f964fecc4b"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "对人类而言最好的却绝非完美的时期",
+    "other_concept_id": "75da4bb6-713f-55c6-9157-1ec7823ba066",
+    "source_concept_id": "e700b1f6-4c5d-5624-96fa-e9c470b57ee5"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "木骨泥墙",
+    "other_concept_id": "c778289a-8757-55d0-a219-6b422f6b7a9d",
+    "source_concept_id": "bf04fb73-1e4b-5db4-994a-c112849b8e89"
+   },
+   {
+    "direction": "out",
+    "predicate": "instance_of",
+    "label_zh": "属于",
+    "other": "藏品制作时代",
+    "other_concept_id": "58efc253-2630-5512-8b39-db28f296c3cf",
+    "source_concept_id": "91f6247a-6dd5-5d96-a65e-01de06291213"
+   },
+   {
+    "direction": "out",
+    "predicate": "is_a",
+    "label_zh": "属于",
+    "other": "人类野蛮时代",
+    "other_concept_id": "787483b6-d964-56b2-93cd-de1327fd28bf",
+    "source_concept_id": "d5c1d9e7-720f-5b5a-9981-13dceb169ce4"
+   },
+   {
+    "direction": "out",
+    "predicate": "precedes",
+    "label_zh": "早于",
+    "other": "铜石并用时代",
+    "other_concept_id": "f66b614a-8e33-50fb-9857-a0e9ab193940",
+    "source_concept_id": "91f6247a-6dd5-5d96-a65e-01de06291213"
+   },
+   {
+    "direction": "out",
+    "predicate": "precedes",
+    "label_zh": "早于",
+    "other": "青铜时代",
+    "other_concept_id": "e09535cf-7c30-5378-bf6e-a419c8e98eec",
+    "source_concept_id": "91f6247a-6dd5-5d96-a65e-01de06291213"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "石器时代",
+    "other_concept_id": "cd3e50ad-73e6-5b30-9d2c-ad43c205dbb8",
+    "source_concept_id": "91f6247a-6dd5-5d96-a65e-01de06291213"
+   },
+   {
+    "direction": "in",
+    "predicate": "precedes",
+    "label_zh": "晚于",
+    "other": "东南亚半岛地区",
+    "other_concept_id": "c34cba39-2700-5b63-bcfa-ebe430afb15a",
+    "source_concept_id": "21cfee4e-e7e3-5883-b818-37e3be6b4201"
+   }
+  ]
+ },
+ "wwybsj.term.period.新罗": {
+  "concept_ids": [
+   "066ac1ac-32f2-5714-af12-bcc1ab2f46a1",
+   "3032f3e7-5bf8-57ce-9ef6-d20df54dd07a",
+   "5663aa8f-414d-5664-83fa-40921765b4a2",
+   "77640c34-c152-5bd8-ab95-7c2b346b2c5f",
+   "8196948c-189f-5798-bb9f-ee894ba27b2a",
+   "ccd883a8-dcda-50ff-ab3e-dfa47df1fab8",
+   "f50667d4-2599-5350-82e2-817d803d5b2d",
+   "fecac9f1-2dc1-57ca-b96f-8ba2949e59b4"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "表示臣服",
+    "other_concept_id": "c50bb020-d80b-5688-93b7-0d2de4370513",
+    "source_concept_id": "77640c34-c152-5bd8-ab95-7c2b346b2c5f"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "请求册封",
+    "other_concept_id": "e977b4f9-c1bb-55cf-bdbe-907329638ce9",
+    "source_concept_id": "77640c34-c152-5bd8-ab95-7c2b346b2c5f"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "遣使聘问",
+    "other_concept_id": "ff26feb3-1763-503c-8fef-7b0a8b9df3cc",
+    "source_concept_id": "77640c34-c152-5bd8-ab95-7c2b346b2c5f"
+   },
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "中国文化",
+    "other_concept_id": "fb2267d3-2845-5ec0-9ba7-6e37aec3fff0",
+    "source_concept_id": "fecac9f1-2dc1-57ca-b96f-8ba2949e59b4"
+   },
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "唐代",
+    "other_concept_id": "20ddd519-c300-50ae-b18c-c94f9b45256e",
+    "source_concept_id": "fecac9f1-2dc1-57ca-b96f-8ba2949e59b4"
+   },
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "唐音乐",
+    "other_concept_id": "d0140d4c-63c1-547a-ab07-fad8d14c102b",
+    "source_concept_id": "f50667d4-2599-5350-82e2-817d803d5b2d"
+   },
+   {
+    "direction": "out",
+    "predicate": "introduced_to",
+    "label_zh": "传播至",
+    "other": "倭",
+    "other_concept_id": "adea39fa-4db4-5d97-a28d-4c303e1ece51",
+    "source_concept_id": "ccd883a8-dcda-50ff-ab3e-dfa47df1fab8"
+   },
+   {
+    "direction": "out",
+    "predicate": "introduced_to",
+    "label_zh": "传播至",
+    "other": "内省",
+    "other_concept_id": "501e70fb-7d8c-5622-bc57-2b0d92b7880f",
+    "source_concept_id": "fecac9f1-2dc1-57ca-b96f-8ba2949e59b4"
+   },
+   {
+    "direction": "out",
+    "predicate": "introduced_to",
+    "label_zh": "传播至",
+    "other": "国学",
+    "other_concept_id": "3339e3cd-6ead-5ec7-9904-59971fc81965",
+    "source_concept_id": "fecac9f1-2dc1-57ca-b96f-8ba2949e59b4"
+   },
+   {
+    "direction": "out",
+    "predicate": "introduced_to",
+    "label_zh": "传播至",
+    "other": "留唐学生",
+    "other_concept_id": "27ba3414-49d0-594e-b2a2-2f3034f192c2",
+    "source_concept_id": "fecac9f1-2dc1-57ca-b96f-8ba2949e59b4"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "中国章服之制",
+    "other_concept_id": "69d8d93a-82a6-53de-b4a7-a59330e87988",
+    "source_concept_id": "f50667d4-2599-5350-82e2-817d803d5b2d"
+   }
+  ]
+ },
+ "wwybsj.term.period.明": {
+  "concept_ids": [
+   "06dd47e0-4ff3-5c24-a7c6-2cb83c1a9a7d",
+   "225e37b9-d27a-508e-9a4a-12f5579ae196",
+   "3053caca-03b5-571a-8b59-179095997c59",
+   "52b1295f-b9e0-51ae-8ddc-ef2b306edec6",
+   "b23fff4c-4467-5528-8786-e96e92aebd16",
+   "b65ae5d3-05ec-5144-988e-56c750ed621d",
+   "b98028e6-e478-58b2-9771-f58d8fa88f49",
+   "bc306d72-267d-56fb-86b6-1234e009d25a",
+   "cb616c59-263f-5398-bdbd-dd2dc61187a4",
+   "cba4a95a-a4de-5cc5-a3b8-d2f0135b1cc3",
+   "cf73ff28-37e2-5c5a-9947-5ed2f74cf537",
+   "ea814166-88bd-5f34-9a1b-e1f1cfde3a70",
+   "eb207631-66b5-5191-87f9-e85370e08ef0"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "从进攻转为防御",
+    "other_concept_id": "4f5cfcfa-bfa3-5124-9474-1c11f711f17a",
+    "source_concept_id": "b23fff4c-4467-5528-8786-e96e92aebd16"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "会意字",
+    "other_concept_id": "c8c5f6c0-94f1-5dbc-bb36-c0675f294e0a",
+    "source_concept_id": "cba4a95a-a4de-5cc5-a3b8-d2f0135b1cc3"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "修撰地方志风气极盛",
+    "other_concept_id": "31bdf46d-27fa-52b6-b59f-136929a3f400",
+    "source_concept_id": "3053caca-03b5-571a-8b59-179095997c59"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "元气大伤",
+    "other_concept_id": "6b7ef796-e7a0-50ee-8253-19767d983f6c",
+    "source_concept_id": "06dd47e0-4ff3-5c24-a7c6-2cb83c1a9a7d"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "军事力量占着明显的优势",
+    "other_concept_id": "2e38740a-b97d-5ce3-8134-aadf49bf90ba",
+    "source_concept_id": "bc306d72-267d-56fb-86b6-1234e009d25a"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "军队十万余人",
+    "other_concept_id": "0fd5d5dd-c8b2-564e-b158-d01bd76aca81",
+    "source_concept_id": "bc306d72-267d-56fb-86b6-1234e009d25a"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "并赐《列女传》百册",
+    "other_concept_id": "64f44fd6-8ec3-5c06-a89b-359df3226cec",
+    "source_concept_id": "b65ae5d3-05ec-5144-988e-56c750ed621d"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "日月交辉之意",
+    "other_concept_id": "fb0e7339-0df4-5ef7-a0cf-0865911f0e71",
+    "source_concept_id": "cba4a95a-a4de-5cc5-a3b8-d2f0135b1cc3"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "赐赉有加",
+    "other_concept_id": "795b53be-bea3-51a7-993b-fa4dc52bffbe",
+    "source_concept_id": "b65ae5d3-05ec-5144-988e-56c750ed621d"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "五经、四书、《春秋会通》《大学衍义》等",
+    "other_concept_id": "1ef6b159-a8a8-588b-83bb-63230a3ee24c",
+    "source_concept_id": "cf73ff28-37e2-5c5a-9947-5ed2f74cf537"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "八镇大军十三万",
+    "other_concept_id": "bd858623-e753-599d-9a23-80edc5986331",
+    "source_concept_id": "cb616c59-263f-5398-bdbd-dd2dc61187a4"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "強",
+    "other_concept_id": "a0cc1925-d0de-5859-9f14-e90b6d5dda3c",
+    "source_concept_id": "225e37b9-d27a-508e-9a4a-12f5579ae196"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "日月映照",
+    "other_concept_id": "714491c1-e11a-5940-82d8-1b6bf77e0840",
+    "source_concept_id": "cba4a95a-a4de-5cc5-a3b8-d2f0135b1cc3"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "明顯，顯著",
+    "other_concept_id": "dfc8ff38-a79a-52a8-b105-bbb44a741e76",
+    "source_concept_id": "225e37b9-d27a-508e-9a4a-12f5579ae196"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "明顯，顯著；使動用法，使……明，意謂宏揚、發揚光大",
+    "other_concept_id": "c466c38b-462a-5a1f-aa3a-f0e8abba2854",
+    "source_concept_id": "225e37b9-d27a-508e-9a4a-12f5579ae196"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "顯揚",
+    "other_concept_id": "bd9b8992-25ea-5e5d-a022-f57e6389cae1",
+    "source_concept_id": "225e37b9-d27a-508e-9a4a-12f5579ae196"
+   },
+   {
+    "direction": "out",
+    "predicate": "distinguished_from",
+    "label_zh": "区别于",
+    "other": "后金",
+    "other_concept_id": "89d838e1-df9e-5ec9-8ea2-9930070c3ae9",
+    "source_concept_id": "bc306d72-267d-56fb-86b6-1234e009d25a"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "白",
+    "other_concept_id": "15cd3b0c-18c9-509b-b895-5f5701bea925",
+    "source_concept_id": "cba4a95a-a4de-5cc5-a3b8-d2f0135b1cc3"
+   },
+   {
+    "direction": "out",
+    "predicate": "instance_of",
+    "label_zh": "属于",
+    "other": "唇音",
+    "other_concept_id": "58b26335-d42f-5c05-b141-235feb8497b0",
+    "source_concept_id": "cba4a95a-a4de-5cc5-a3b8-d2f0135b1cc3"
+   },
+   {
+    "direction": "out",
+    "predicate": "instance_of",
+    "label_zh": "属于",
+    "other": "附属卜人",
+    "other_concept_id": "debab680-1061-5897-9f25-e13bd4e0a401",
+    "source_concept_id": "cba4a95a-a4de-5cc5-a3b8-d2f0135b1cc3"
+   },
+   {
+    "direction": "out",
+    "predicate": "produced_by_culture",
+    "label_zh": "由…创造",
+    "other": "各类志书二千八百余种",
+    "other_concept_id": "3d44950e-2618-5879-ac14-175c00fe1040",
+    "source_concept_id": "3053caca-03b5-571a-8b59-179095997c59"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "使動用法",
+    "other_concept_id": "cb79fe48-698d-5ad2-8efd-9f01fff9e6ec",
+    "source_concept_id": "225e37b9-d27a-508e-9a4a-12f5579ae196"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "派李秉、赵辅统率五万军队进攻建州",
+    "other_concept_id": "5c40dcbf-70ef-5f19-8314-d6d57df21891",
+    "source_concept_id": "eb207631-66b5-5191-87f9-e85370e08ef0"
+   }
+  ]
+ },
+ "wwybsj.term.period.汉": {
+  "concept_ids": [
+   "00f08162-ca21-5a96-babb-ebb2e01d7c9f",
+   "043bb591-9de9-5e86-b059-a57b95203262",
+   "4d22c0e6-5709-5ab5-9e8b-6f3f4edf2930",
+   "7f8294fd-bcb8-5135-aa2b-6ea662265e33",
+   "8648753d-bdef-5a46-b1dd-f272fab73777",
+   "9cb25644-769c-5dea-8868-482671d55bb8",
+   "9f8abc65-c73f-54e1-a82e-eaaa85593be4",
+   "c1143526-019c-5dcc-94b6-3933578ee764",
+   "ec745546-0e97-5fda-870b-ed5e1123911b"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "海上丝绸之路",
+    "other_concept_id": "64584c33-955e-5418-b7c6-d1e30b4c550e",
+    "source_concept_id": "9cb25644-769c-5dea-8868-482671d55bb8"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "西南丝绸之路",
+    "other_concept_id": "9aeb349e-cf98-5566-a078-54c3d3a9069e",
+    "source_concept_id": "9cb25644-769c-5dea-8868-482671d55bb8"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "粟与稷两个物名的使用场合有明确界限",
+    "other_concept_id": "5f4d2bf0-70dc-515f-aa69-739d9aa892d7",
+    "source_concept_id": "8648753d-bdef-5a46-b1dd-f272fab73777"
+   },
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "楚人旧典",
+    "other_concept_id": "0859f986-b2ad-5d14-87c9-b5542cf4235d",
+    "source_concept_id": "4d22c0e6-5709-5ab5-9e8b-6f3f4edf2930"
+   },
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "秦文化和楚文化",
+    "other_concept_id": "16c70d61-9767-5099-8a1b-c3a0d6f22426",
+    "source_concept_id": "4d22c0e6-5709-5ab5-9e8b-6f3f4edf2930"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "太一祭坛（“泰畤”）",
+    "other_concept_id": "1f622062-e589-5462-ad86-737c05910486",
+    "source_concept_id": "4d22c0e6-5709-5ab5-9e8b-6f3f4edf2930"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "养蚕方法",
+    "other_concept_id": "a0d3fbd8-dead-5b08-821d-9d2614e42e85",
+    "source_concept_id": "4d22c0e6-5709-5ab5-9e8b-6f3f4edf2930"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "秦代创立的大一统帝国文化模式",
+    "other_concept_id": "866f5929-2564-51d6-9eb7-7057480018e7",
+    "source_concept_id": "4d22c0e6-5709-5ab5-9e8b-6f3f4edf2930"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "郊祀东皇太一",
+    "other_concept_id": "396ee04f-86da-55e5-90fd-b793a3cfe70b",
+    "source_concept_id": "4d22c0e6-5709-5ab5-9e8b-6f3f4edf2930"
+   }
+  ]
+ },
+ "wwybsj.term.period.清": {
+  "concept_ids": [
+   "1ed054f6-4318-54a1-aa3f-6dd9db9a2dab",
+   "22119dcb-0a02-52cd-bade-692bb686a9d5",
+   "362295d4-251d-5b71-9ab6-5d8a8ce77952",
+   "3cd448cb-87e0-5be4-96f8-f4b35b91e11e",
+   "5a2a00c9-c042-59fa-aafe-2bd2047802bd",
+   "8954c6cd-76aa-5459-973d-f5e19f4997d2",
+   "9d21d053-5d2d-521e-a366-78fdd368056b",
+   "e5e9d880-2ebe-5ee4-aee5-2f85f29d42f3",
+   "e7993594-cc41-5c5b-bbf9-310856283daf"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "清洁、清爽",
+    "other_concept_id": "9398e774-f189-5df7-80a9-605ad01d60ec",
+    "source_concept_id": "22119dcb-0a02-52cd-bade-692bb686a9d5"
+   },
+   {
+    "direction": "out",
+    "predicate": "distinguished_from",
+    "label_zh": "区别于",
+    "other": "中国考古学研究",
+    "other_concept_id": "397f712b-c924-5147-ae10-23d43d245556",
+    "source_concept_id": "e5e9d880-2ebe-5ee4-aee5-2f85f29d42f3"
+   },
+   {
+    "direction": "out",
+    "predicate": "precedes",
+    "label_zh": "早于",
+    "other": "汉",
+    "other_concept_id": "254cdf3c-19ed-5a9a-8a7a-285eb5e003ec",
+    "source_concept_id": "362295d4-251d-5b71-9ab6-5d8a8ce77952"
+   }
+  ]
+ },
+ "wwybsj.term.period.渤海": {
+  "concept_ids": [
+   "3f88ffe8-4135-5130-89fe-8f0137d27ba9",
+   "6f529f9a-c6e8-5abb-aa4e-ca9ec97c86f6",
+   "c02a6a6e-d957-52a2-b8ad-b96245bc3a83",
+   "ca405227-96f7-522c-9a62-346e4f040337",
+   "dbd5736d-a28b-5e86-86de-80c5c33006aa"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "唐",
+    "other_concept_id": "6adcc380-eb7b-5911-8803-e1fd7617d261",
+    "source_concept_id": "3f88ffe8-4135-5130-89fe-8f0137d27ba9"
+   },
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "唐王朝先进制度和文化",
+    "other_concept_id": "5c205467-dbec-5e44-a5c0-d599726a0b8c",
+    "source_concept_id": "3f88ffe8-4135-5130-89fe-8f0137d27ba9"
+   },
+   {
+    "direction": "out",
+    "predicate": "instance_of",
+    "label_zh": "属于",
+    "other": "地方国家政权",
+    "other_concept_id": "7414dbf8-da48-56e0-b5f7-809838eaa74b",
+    "source_concept_id": "3f88ffe8-4135-5130-89fe-8f0137d27ba9"
+   },
+   {
+    "direction": "out",
+    "predicate": "introduced_to",
+    "label_zh": "传播至",
+    "other": "京师太学",
+    "other_concept_id": "d34361a7-3245-5c0c-a6d5-d674a2f2d680",
+    "source_concept_id": "c02a6a6e-d957-52a2-b8ad-b96245bc3a83"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "肃慎系",
+    "other_concept_id": "e0243df3-3ad6-57d3-8d23-2a030ebdd6f8",
+    "source_concept_id": "ca405227-96f7-522c-9a62-346e4f040337"
+   }
+  ]
+ },
+ "wwybsj.term.period.约11世纪末至12世纪初": {
+  "concept_ids": [],
+  "facts": []
+ },
+ "wwybsj.term.period.约公元前13世纪": {
+  "concept_ids": [],
+  "facts": []
+ },
+ "wwybsj.term.period.约开元十一年": {
+  "concept_ids": [],
+  "facts": []
+ },
+ "wwybsj.term.period.西周": {
+  "concept_ids": [
+   "3c8d54ab-cb7f-5821-8267-c778980eab4c",
+   "3fd4562b-9455-5a1e-95ba-7cbc98d24499",
+   "514df1c3-046f-5c56-9fa3-f8ebfb8e3e0c",
+   "5a944715-5fdc-5841-969f-3184057ceb5d",
+   "5abdd047-f9a1-5de4-8645-259f543937f3",
+   "6278f439-9825-5947-bf2a-f35d0889775e",
+   "73e9ce0b-655b-59c2-991b-f3d8856c5691"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "学在官府",
+    "other_concept_id": "c77a8924-4ba1-52aa-94b6-c9ee9f23284b",
+    "source_concept_id": "3c8d54ab-cb7f-5821-8267-c778980eab4c"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "尊天敬德",
+    "other_concept_id": "4d31a90b-88c1-5148-85f4-038acb0502e5",
+    "source_concept_id": "3c8d54ab-cb7f-5821-8267-c778980eab4c"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "窃曲纹",
+    "other_concept_id": "a28cd043-b4f6-589e-8855-5eaff708da0c",
+    "source_concept_id": "3c8d54ab-cb7f-5821-8267-c778980eab4c"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "重环纹",
+    "other_concept_id": "2af3f213-88ae-5104-8fdc-657dd1c7ce4f",
+    "source_concept_id": "3c8d54ab-cb7f-5821-8267-c778980eab4c"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "宗法分封制",
+    "other_concept_id": "c2a6fcbc-e0c2-59d6-8969-b3861d89ee8e",
+    "source_concept_id": "5abdd047-f9a1-5de4-8645-259f543937f3"
+   },
+   {
+    "direction": "out",
+    "predicate": "distinguished_from",
+    "label_zh": "区别于",
+    "other": "东周",
+    "other_concept_id": "a8bdb838-d469-59dd-868f-6f2f4a54b50a",
+    "source_concept_id": "5abdd047-f9a1-5de4-8645-259f543937f3"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "少数铁器",
+    "other_concept_id": "0112f942-33d2-5a52-9a23-a6dbf60995a2",
+    "source_concept_id": "5abdd047-f9a1-5de4-8645-259f543937f3"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "殷商的文化官守传统",
+    "other_concept_id": "d3f4f7f1-37b5-5285-a9d4-9b1d44723f69",
+    "source_concept_id": "3c8d54ab-cb7f-5821-8267-c778980eab4c"
+   },
+   {
+    "direction": "out",
+    "predicate": "instance_of",
+    "label_zh": "属于",
+    "other": "藏品制作时代",
+    "other_concept_id": "58efc253-2630-5512-8b39-db28f296c3cf",
+    "source_concept_id": "5abdd047-f9a1-5de4-8645-259f543937f3"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_at",
+    "label_zh": "地域",
+    "other": "王城",
+    "other_concept_id": "94bd6145-27c1-5a8d-a5c9-02994d1a8a29",
+    "source_concept_id": "6278f439-9825-5947-bf2a-f35d0889775e"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "鎬京",
+    "other_concept_id": "be4b2eea-613f-5549-aa9b-a4ffb29b7345",
+    "source_concept_id": "5abdd047-f9a1-5de4-8645-259f543937f3"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "周代",
+    "other_concept_id": "08f7c9d1-d091-5b0c-85dd-bffd73ef8604",
+    "source_concept_id": "3c8d54ab-cb7f-5821-8267-c778980eab4c"
+   },
+   {
+    "direction": "in",
+    "predicate": "precedes",
+    "label_zh": "晚于",
+    "other": "殷商",
+    "other_concept_id": "52be79d4-e5ea-5ec7-a603-888441f8b749",
+    "source_concept_id": "5abdd047-f9a1-5de4-8645-259f543937f3"
+   }
+  ]
+ },
+ "wwybsj.term.period.西汉": {
+  "concept_ids": [
+   "4bc59483-2c57-5c00-a8b2-4151f7d85854",
+   "5034798d-3273-50e4-b311-ec7c88749496",
+   "528e5cb6-1bbf-585d-a91a-11cb6ccc0f31",
+   "609de4f1-06e0-5820-a25e-de0d638234fd",
+   "665349c4-d3d0-5094-865f-f4dc2dd8ec43",
+   "81dd6828-e7c6-5bb4-8654-223eee52d674",
+   "d559d6aa-d514-591d-9c89-986a702019dc"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "中国伪书发展第一个高峰",
+    "other_concept_id": "469e7a3d-266c-519f-81e9-7f04f72d14cd",
+    "source_concept_id": "609de4f1-06e0-5820-a25e-de0d638234fd"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "70°53′ W",
+    "other_concept_id": "fa86a2c6-2c18-5804-95a4-087eaca11ee5",
+    "source_concept_id": "5034798d-3273-50e4-b311-ec7c88749496"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "73°22′",
+    "other_concept_id": "6c00f72c-a7c9-5622-8385-f398beab351b",
+    "source_concept_id": "5034798d-3273-50e4-b311-ec7c88749496"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "农都尉",
+    "other_concept_id": "b5aa929d-6b42-587c-8388-f6d776efc8a8",
+    "source_concept_id": "665349c4-d3d0-5094-865f-f4dc2dd8ec43"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "宜禾都尉",
+    "other_concept_id": "e26901e1-5cc7-58e7-9946-1ccc2428b950",
+    "source_concept_id": "665349c4-d3d0-5094-865f-f4dc2dd8ec43"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "铜、泥合范和铜范铸造",
+    "other_concept_id": "6206fe66-3c7f-5e12-a748-5c937ca14fe9",
+    "source_concept_id": "5034798d-3273-50e4-b311-ec7c88749496"
+   }
+  ]
+ },
+ "wwybsj.term.period.辽": {
+  "concept_ids": [],
+  "facts": []
+ },
+ "wwybsj.term.period.金": {
+  "concept_ids": [
+   "01cfc2aa-186e-5625-90a1-b9fb9c2b29f0",
+   "2c12ef65-6680-5e0f-9f88-35a845038caf",
+   "4028556b-58b6-5e6b-b2a2-90b0af6b59ca",
+   "4b7f0d35-d96a-520c-a70b-565994de97c2",
+   "4c3991a9-4460-549c-8b41-3ebe7d052690",
+   "71a19a6c-4b5f-5485-ae50-e4f32c79fcc2",
+   "786350ff-b3d1-5e81-af31-bebe3a207916",
+   "8ccf5cbe-e340-551b-a64b-64e4e9acd520",
+   "8f30773d-b928-54ea-9883-95ec6bfb9a66",
+   "9108a41f-b3e2-5261-bb51-7363dffd2225",
+   "988f1a41-7635-5bfa-bb34-655afa0631e4",
+   "9bc007e2-82af-5142-9b1b-04843a41aa9f",
+   "a5ed28fe-8dca-5aef-9347-9376b0728b33",
+   "ab07f69f-b2e7-5df7-ae1f-eda365f2808c",
+   "ebf0570a-d2f2-5706-a7c4-d6aadb869956",
+   "f4f54b61-63a3-5fe5-a83c-e6c351700126",
+   "fa4e1c75-d6a5-5f66-ad15-dfad880ca8a1"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "上京路、东京路的大地盘和相当多兵力",
+    "other_concept_id": "5a657f53-5f22-5ff1-9587-b0d784959513",
+    "source_concept_id": "2c12ef65-6680-5e0f-9f88-35a845038caf"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "分疆守土",
+    "other_concept_id": "81c41916-6ddc-5947-9796-e7209dceaff7",
+    "source_concept_id": "01cfc2aa-186e-5625-90a1-b9fb9c2b29f0"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "削弱抵抗蒙古的力量",
+    "other_concept_id": "815270e2-613a-5d0f-883e-62a7bdbbf183",
+    "source_concept_id": "786350ff-b3d1-5e81-af31-bebe3a207916"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "占民田为牧地、草场",
+    "other_concept_id": "6223a8f1-5c5e-540f-979f-8228f60f3e66",
+    "source_concept_id": "a5ed28fe-8dca-5aef-9347-9376b0728b33"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "徒然损伤国力",
+    "other_concept_id": "9ae46606-926f-5c5d-bb10-314cd94f283d",
+    "source_concept_id": "786350ff-b3d1-5e81-af31-bebe3a207916"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "拘刷民田为官田",
+    "other_concept_id": "67085343-6ea1-5f45-a15f-aa351e27b6d4",
+    "source_concept_id": "a5ed28fe-8dca-5aef-9347-9376b0728b33"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "民族压迫",
+    "other_concept_id": "576a95d6-73b0-58d7-9824-6b3f628d2d19",
+    "source_concept_id": "4b7f0d35-d96a-520c-a70b-565994de97c2"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "穿壕筑障",
+    "other_concept_id": "17954390-071c-5391-b19c-5d6473de1360",
+    "source_concept_id": "4028556b-58b6-5e6b-b2a2-90b0af6b59ca"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "边防线南移",
+    "other_concept_id": "6abdcd06-a1da-5c37-ac86-a371a086eb5a",
+    "source_concept_id": "4028556b-58b6-5e6b-b2a2-90b0af6b59ca"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "防制更为严密",
+    "other_concept_id": "257f2be2-7e7a-59d0-b142-dad2c9cf9c7c",
+    "source_concept_id": "4b7f0d35-d96a-520c-a70b-565994de97c2"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "从宗室共治到皇权独尊",
+    "other_concept_id": "946a2361-6d7e-56ed-81bd-7f7aba94d738",
+    "source_concept_id": "988f1a41-7635-5bfa-bb34-655afa0631e4"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "金朝建立与疆域的奠定",
+    "other_concept_id": "55e70573-eb39-5212-b63b-bf7fce566707",
+    "source_concept_id": "988f1a41-7635-5bfa-bb34-655afa0631e4"
+   },
+   {
+    "direction": "out",
+    "predicate": "consists_of",
+    "label_zh": "包含",
+    "other": "金朝的鼎盛与衰亡",
+    "other_concept_id": "8a9734fa-5f87-5593-88bb-64ffe7bab5ff",
+    "source_concept_id": "988f1a41-7635-5bfa-bb34-655afa0631e4"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "秦以一鎰（二十兩）為一金",
+    "other_concept_id": "bfebb028-de94-5667-aa39-15d9316b5fd8",
+    "source_concept_id": "8ccf5cbe-e340-551b-a64b-64e4e9acd520"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "金、銀、銅、鐵等各種金屬的統稱",
+    "other_concept_id": "5b10bf0d-836f-5ef8-8774-a61c6ba0bb4f",
+    "source_concept_id": "8ccf5cbe-e340-551b-a64b-64e4e9acd520"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "金屬；指銅、鐵等",
+    "other_concept_id": "38de59bd-7168-5d82-81d6-5d4cef764501",
+    "source_concept_id": "8ccf5cbe-e340-551b-a64b-64e4e9acd520"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "钟镈",
+    "other_concept_id": "3cf3fb79-7ab3-5f8e-8756-ac1019ac9a78",
+    "source_concept_id": "ebf0570a-d2f2-5706-a7c4-d6aadb869956"
+   },
+   {
+    "direction": "out",
+    "predicate": "defined_as",
+    "label_zh": "定义为",
+    "other": "铜",
+    "other_concept_id": "866c0c67-61dd-5419-8c6d-a72f106f82ab",
+    "source_concept_id": "ebf0570a-d2f2-5706-a7c4-d6aadb869956"
+   },
+   {
+    "direction": "out",
+    "predicate": "has_feature",
+    "label_zh": "特征",
+    "other": "人才",
+    "other_concept_id": "89fd9d46-eb28-57bf-a054-215fa6f9312e",
+    "source_concept_id": "ab07f69f-b2e7-5df7-ae1f-eda365f2808c"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "唐宋之间",
+    "other_concept_id": "fe64e1d4-edc9-5659-a4e3-fa48a2012698",
+    "source_concept_id": "ebf0570a-d2f2-5706-a7c4-d6aadb869956"
+   },
+   {
+    "direction": "out",
+    "predicate": "located_in",
+    "label_zh": "地域",
+    "other": "淮河和大散关以北地区",
+    "other_concept_id": "a4528c4d-174f-506a-a217-60b922545d18",
+    "source_concept_id": "f4f54b61-63a3-5fe5-a83c-e6c351700126"
+   },
+   {
+    "direction": "out",
+    "predicate": "uses_method",
+    "label_zh": "采用",
+    "other": "武",
+    "other_concept_id": "14e0e361-dbd5-542a-91b9-92388e662cf5",
+    "source_concept_id": "ebf0570a-d2f2-5706-a7c4-d6aadb869956"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "五行说",
+    "other_concept_id": "0e2272b0-9d79-5832-93fb-dcdc75720235",
+    "source_concept_id": "ebf0570a-d2f2-5706-a7c4-d6aadb869956"
+   },
+   {
+    "direction": "in",
+    "predicate": "consists_of",
+    "label_zh": "隶属于",
+    "other": "八音",
+    "other_concept_id": "1abf74ee-58a9-5b94-a829-0acbd15a1839",
+    "source_concept_id": "ebf0570a-d2f2-5706-a7c4-d6aadb869956"
+   }
+  ]
+ },
+ "wwybsj.term.period.高句丽": {
+  "concept_ids": [
+   "00e33184-25e1-5811-8421-86a99e686388",
+   "5a0a8632-5c8b-58a6-9a73-53727c7df552",
+   "5b5eccc8-97cd-5549-885a-8aa3a7d0c303",
+   "a0f30c8f-2991-5386-8407-eac8700d28f7",
+   "b95b93cf-64c3-5440-94a3-a1546caa9d25",
+   "d3ac695e-7e25-5dc4-a2aa-db0c6831000f"
+  ],
+  "facts": [
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "表示臣服",
+    "other_concept_id": "c50bb020-d80b-5688-93b7-0d2de4370513",
+    "source_concept_id": "d3ac695e-7e25-5dc4-a2aa-db0c6831000f"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "请求册封",
+    "other_concept_id": "e977b4f9-c1bb-55cf-bdbe-907329638ce9",
+    "source_concept_id": "d3ac695e-7e25-5dc4-a2aa-db0c6831000f"
+   },
+   {
+    "direction": "out",
+    "predicate": "characterized_by",
+    "label_zh": "特征",
+    "other": "遣使聘问",
+    "other_concept_id": "ff26feb3-1763-503c-8fef-7b0a8b9df3cc",
+    "source_concept_id": "d3ac695e-7e25-5dc4-a2aa-db0c6831000f"
+   },
+   {
+    "direction": "out",
+    "predicate": "distinguished_from",
+    "label_zh": "区别于",
+    "other": "百济",
+    "other_concept_id": "081287dd-046e-56e1-b494-9581c08ff3cb",
+    "source_concept_id": "00e33184-25e1-5811-8421-86a99e686388"
+   },
+   {
+    "direction": "out",
+    "predicate": "influenced_by",
+    "label_zh": "受影响于",
+    "other": "北朝建筑文化",
+    "other_concept_id": "5472cd50-2617-5fe7-b70b-0b4b987202c6",
+    "source_concept_id": "5b5eccc8-97cd-5549-885a-8aa3a7d0c303"
+   },
+   {
+    "direction": "out",
+    "predicate": "introduced_to",
+    "label_zh": "传播至",
+    "other": "儒教",
+    "other_concept_id": "9b692836-4aae-5d99-a1c6-34eda85cd3b7",
+    "source_concept_id": "5a0a8632-5c8b-58a6-9a73-53727c7df552"
+   },
+   {
+    "direction": "out",
+    "predicate": "is_a",
+    "label_zh": "属于",
+    "other": "东北古民族一支",
+    "other_concept_id": "175ad46b-6f31-58b4-b368-6ed658b364a8",
+    "source_concept_id": "a0f30c8f-2991-5386-8407-eac8700d28f7"
+   }
+  ]
+ }
+}

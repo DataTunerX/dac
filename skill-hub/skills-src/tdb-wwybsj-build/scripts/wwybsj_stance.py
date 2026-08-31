@@ -44,6 +44,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from wwybsj_common import (  # noqa: E402
     OUT_DIR, TARGET_DOMAIN, call_summary, list_statements, post,
+    statement_references,
 )
 
 INTERVALS_PATH = Path(__file__).resolve().parent.parent / "period_intervals.json"
@@ -172,8 +173,20 @@ def load_targets() -> list[dict]:
                  for r in list_statements(property_id=f"{P}in_period")}
     return [{"statement_id": c["statement_id"], "statement_key": c["statement_key"],
              "subject_id": c["subject_id"], "value": c["value_json"],
-             "period": period_of.get(c["subject_id"], "")}
+             "period": period_of.get(c["subject_id"], ""),
+             "references": statement_references(c["statement_id"])}
             for c in list_statements(property_id=f"{P}dating_corroboration")]
+
+
+def reference_for_upsert(statement_key: str, ref: dict) -> dict:
+    return {
+        "statement_key": statement_key,
+        "property_id": ref["property_id"],
+        "value_type": "json",
+        "value_json": ref.get("value") or {},
+        "source_span": ref.get("source_span") or "",
+        "ordinal": ref.get("ordinal", 0),
+    }
 
 
 def main() -> int:
@@ -223,7 +236,7 @@ def main() -> int:
         return 0
 
     # Rewrite value_json.stance in place; keep the LLM's verdict for audit.
-    statements, qualifiers = [], []
+    statements, qualifiers, references = [], [], []
     for c in changed:
         v = dict(c["value"])
         v["stance"] = c["stance"]
@@ -251,6 +264,8 @@ def main() -> int:
                                "value_type": "string" if is_text else "json",
                                "value_json": {"text": val} if is_text else val,
                                "ordinal": o})
+        references.extend(reference_for_upsert(c["statement_key"], ref)
+                          for ref in c.get("references", []))
     ent = [{"entity_id": f"{Q}stance_basis", "entity_kind": "property",
             "semantic_role": "annotation_property", "property_datatype": "string",
             "namespace": TARGET_DOMAIN, "status": "active",
@@ -262,7 +277,9 @@ def main() -> int:
                  "qualifiers": [q for q in qualifiers
                                 if q["statement_key"] in
                                 {s["statement_key"] for s in statements[st:st + 60]}],
-                 "references": []}
+                 "references": [r for r in references
+                                if r["statement_key"] in
+                                {s["statement_key"] for s in statements[st:st + 60]}]}
         r = post("/ontology/semantic/upsert-batch", batch)
         print(f"  {'✓' if 'error' not in r else '✗ ' + r['error'][:80]} "
               f"{len(batch['statements'])} 条")

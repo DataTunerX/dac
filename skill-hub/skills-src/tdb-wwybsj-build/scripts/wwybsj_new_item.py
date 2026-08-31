@@ -3,10 +3,12 @@
 wwybsj_new_item.py — Step 0: take in ONE OR MORE NEW artifact records and run
 them through the same build pipeline the 465 base records went through.
 
-The base dump (a2a/agents/wwybsj/wwybsj.json) is frozen — it is the registry
-export, not a working file. New records go into the intake overlay
-(out/wwybsj_new_items.json); wwybsj_common.load_records() merges base + overlay,
-so ingest / L0 / L1 / research / wiki pick them up with no further change.
+The base dump is frozen — it is the registry export, not a working file.
+By default it is loaded from this skill's data/wwybsj.json, or from
+WWYBSJ_DATA_JSON when set. New records go into the intake overlay
+(out/wwybsj_new_items.json, or WWYBSJ_NEW_ITEMS); wwybsj_common.load_records()
+merges base + overlay, so ingest / L0 / L1 / research / wiki pick them up with
+no further change.
 
 What this script adds on top of "just edit the JSON":
   - accepts friendly Chinese keys (名称/类别/质地/年代/…) as well as raw columns

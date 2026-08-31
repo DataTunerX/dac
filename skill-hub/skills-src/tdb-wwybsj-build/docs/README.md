@@ -31,6 +31,15 @@ wwybsj_common.py   共享辅助
 
 操作手册在 `../SKILL.md`。
 
+运行时细节按需放在 `../references/`：
+
+- `architecture.md` —— 层级职责、不变量、epistemic mode、L1 对齐原则
+- `build-workflows.md` —— 新文物、全量重建、验收命令
+- `gateway-api.md` —— SOURCE/TARGET 网关、端点、枚举值
+- `research-heuristics.md` —— 检索、噪声、超时、简繁匹配策略
+- `known-failures.md` —— 只保留会导致数据污染或误判的历史失败
+- `reporting.md` —— 对用户报告时必须包含和避免的内容
+
 ## 一句话状态
 
 ```
