@@ -1,0 +1,331 @@
+{
+  "schema_version": "wwybsj_alignment_review.v3",
+  "reviewed_at": "2026-08-18",
+  "reviewer": "claude-opus-5",
+  "review_status": "machine_reviewed_pending_curator",
+  "note": "Verdicts on L1 alignment. v2 supersedes v1: v1 rejected 铁器/石刻/瓷器/铜器/雕塑 on the premise that no remote concept existed. That premise was WRONG — the resolver queried concept/search with limit=10 on a SUBSTRING search, so the exactly-named concepts (铁器 has 27) never surfaced and every such term fell through to its junk wiki page. Resolver fixed; verdicts redone against the real concept clusters. `relation` is SKOS-style: exact | close | broader | narrower. `reject_exact` kills a same-name alignment on sense grounds (homograph). `exclude_concept_ids` drops individual junk members from an otherwise good cluster. v3 增加 period facet：本馆核心的东北亚三政权（渤海/高句丽/新罗）在远端有优质概念，可直接对齐；而中原朝代的【单字/短写法】在远端是系统性垃圾——『唐』的同名概念是先周古国唐(changed_into 晋)、爵邑(defined_as 所封之爵邑)、河北唐县、以及一条带 10.2°C 的气候数据；『元』那一个是经纬度(127°44′ W)；『宋』两个都是古文字里的氏族。改用长写法(唐朝/清代/汉代/元代/明朝/商代/新石器时代)作 close 映射，实测事实质量高得多。",
+  "decisions": [
+    {
+      "facet": "category",
+      "label": "铁器、其他金属器",
+      "surface": "铁器",
+      "decision": "confirm_exact",
+      "reason": "27 个同名概念，内容是真实的铁器考古与检测知识。v1 因解析器 limit=10 漏看而误拒。",
+      "evidence": "铁器 -dated_by-> 穆斯堡尔谱测年法; -made_of-> 铸铁; -excavated_at-> 楚墓; -requires_condition-> 100~250 千伏"
+    },
+    {
+      "facet": "category",
+      "label": "石器、石刻、砖瓦",
+      "surface": "石刻",
+      "decision": "confirm_exact",
+      "reason": "17 个同名概念，所指正是石刻器物本身。v1 只看到 wiki 页(Burin 石凿)和『石刻文献』类概念而误拒。",
+      "evidence": "石刻 -has_property-> 历史、艺术、科学价值; 石刻 -consists_of-> 马/牛/羊; 不可移动文物 -consists_of-> 石刻"
+    },
+    {
+      "facet": "category",
+      "label": "瓷器",
+      "surface": "瓷器",
+      "decision": "confirm_exact",
+      "reason": "13 个同名概念，含保护修复与产地知识。v1 误判为『远端无干净瓷器概念』。",
+      "evidence": "瓷器 -uses_method-> 瓷器粘补; 景德鎮 -produced_by-> 瓷器; 瓷器 -excavated_at-> 辽宁绥中三道岗海域"
+    },
+    {
+      "facet": "category",
+      "label": "瓷器",
+      "decision": "align",
+      "relation": "broader",
+      "target_kind": "concept",
+      "target_name": "陶瓷器",
+      "reason": "保留上位通路：陶瓷器簇带成分分析事实，精确锚点没有。",
+      "evidence": "陶瓷器 -characterized_by-> Si/Al/Ca/Mg/K/Na"
+    },
+    {
+      "facet": "category",
+      "label": "铜器",
+      "surface": "铜器",
+      "decision": "confirm_exact",
+      "reason": "6 个同名概念，真实器物类概念。",
+      "evidence": "concept/search('铜器') 精确同名 6 个"
+    },
+    {
+      "facet": "category",
+      "label": "铜器",
+      "decision": "align",
+      "relation": "narrower",
+      "target_kind": "concept",
+      "target_name": "青铜器",
+      "reason": "青铜器是铜器真子类，且簇更大(22)、事实更丰富。",
+      "evidence": "青铜器 -instance_of-> 记录有文字的载体; 龟甲兽骨 -precedes-> 青铜器"
+    },
+    {
+      "facet": "category",
+      "label": "雕塑、造像",
+      "surface": "雕塑",
+      "decision": "confirm_exact",
+      "reason": "5 个同名概念中约半数是可用的雕塑史论述，另半数为现代艺术(第三国际纪念碑)。作为精确同名锚点保留，但簇内混杂已记录，推理时需注意。",
+      "evidence": "雕塑 -has_feature-> 写实 / 越来越脱离建筑结构而走向独立; 另: 雕塑 -produced_by-> 第三国际纪念碑模型（1919）"
+    },
+    {
+      "facet": "material",
+      "label": "铜",
+      "surface": "铜",
+      "decision": "confirm_exact",
+      "exclude_concept_ids": [
+        "b319e504-0000-0000-0000-000000000000"
+      ],
+      "exclude_note": "簇内 b319e504 是抽取错误(甜饼 -consists_of-> 铜)，按成员排除；id 前缀匹配。",
+      "reason": "4 个同名概念中多数可用。",
+      "evidence": "铜斧 -made_of-> 铜; 福田书海 -made_of-> 铜; 铜 -has_property-> 绿色/红色"
+    },
+    {
+      "facet": "material",
+      "label": "铁",
+      "surface": "铁",
+      "decision": "confirm_exact",
+      "reason": "5 个同名概念是真实的铁材质知识。",
+      "evidence": "铁 -produced_by-> 铁矿石; 铁 -characterized_by-> 熔点为 1537℃; 铁 -located_in-> 赫梯地区; 铁质钉子 -made_of-> 铁"
+    },
+    {
+      "facet": "material",
+      "label": "金",
+      "surface": "金",
+      "decision": "reject_exact",
+      "reason": "同形词：4 个同名概念全部不是金属材质——分别指金朝、以及『文/武』『钟镈』语境。簇 union 会把女真族、1234 年等金朝事实挂到金器上。",
+      "evidence": "金 -occurred_at-> 1234 年 / 公元 1115 年; 金 -produced_by_culture-> 女真族; 金 -located_in-> 北方; 金 -uses_method-> 武; 金 -defined_as-> 钟镈"
+    },
+    {
+      "facet": "material",
+      "label": "金",
+      "decision": "align",
+      "relation": "broader",
+      "target_kind": "concept",
+      "target_name": "金属",
+      "reason": "精确同名不可用，改走可靠上位概念。",
+      "evidence": "金属 -defined_as-> 凡金之属皆从金; 战国时期古币 -consists_of-> 金属"
+    },
+    {
+      "facet": "material",
+      "label": "石",
+      "surface": "石",
+      "decision": "reject_exact",
+      "reason": "同形词：2 个同名概念一个是容量单位『石』(十斗)，一个是『自然物的形体』，均非石材质。该类文物已通过类别『石器』获得远端通路。",
+      "evidence": "石 -defined_as-> 容量單位 / 十斗; 石 -located_at-> 壽陽; 石 -instance_of-> 自然物的形体; 石 -related_to-> 塔什干"
+    },
+    {
+      "facet": "material",
+      "label": "瓷",
+      "surface": "瓷",
+      "decision": "promote_wiki",
+      "reason": "远端无同名概念(已用 limit=200 确认)，但该 wiki 页是真实陶瓷材料学，保留为文档锚点。",
+      "evidence": "wiki:瓷 = Features 白里泛青/白里泛黄; Consists Of 玻璃态物质/莫来石晶体/残余二氧化硅; Part Of Al₂O₃"
+    },
+    {
+      "facet": "material",
+      "label": "瓷",
+      "decision": "align",
+      "relation": "broader",
+      "target_kind": "concept",
+      "target_name": "陶瓷器",
+      "reason": "给材质『瓷』一条可 join 的上位概念通路。",
+      "evidence": "陶瓷器 -characterized_by-> Si/Al/Ca/Mg/K/Na"
+    },
+    {
+      "facet": "material",
+      "label": "其他金属",
+      "decision": "align",
+      "relation": "broader",
+      "target_kind": "concept",
+      "target_name": "金属",
+      "reason": "登记簿兜底值，『金属』正是其语义上界。",
+      "evidence": "金属 -defined_as-> 凡金之属皆从金"
+    },
+    {
+      "facet": "material",
+      "label": "其他无机质",
+      "decision": "not_applicable",
+      "reason": "登记簿兜底值，不指称任何概念，永久不对齐。",
+      "evidence": "1 件文物"
+    },
+    {
+      "facet": "material",
+      "label": "宝玉石",
+      "decision": "leave_unaligned",
+      "reason": "远端确实没有——limit=200 的子串搜索返回 0 条，非解析器漏看。对齐到『玉石器』(器物类)是类型错误。该 229 件已通过类别『玉石器、宝石』获得远端通路。",
+      "evidence": "concept/search('宝玉石', limit=200) = 0 条"
+    },
+    {
+      "facet": "period",
+      "label": "渤海",
+      "surface": "渤海",
+      "decision": "confirm_exact",
+      "exclude_concept_ids": [
+        "88ddb850-0000-0000-0000-000000000000",
+        "2ee48828-0000-0000-0000-000000000000",
+        "ab0e4780-0000-0000-0000-000000000000"
+      ],
+      "exclude_note": "88ddb850 是渤海（海）——『渤海海面封冻 associated_with 渤海』；2ee48828 是渤海郡（-part_of-> 辽国，濟水/展子虔 located_in）；ab0e4780 无任何事实。三者若并入，渤海湾海冰与辽代政区的知识会挂到渤海国文物上。",
+      "reason": "3f88ffe8 正是渤海国本身，事实恰好是展品介绍需要的国家形态与文化背景；ca405227 的『肃慎系 consists_of 渤海』也是族属知识。",
+      "evidence": "渤海 -instance_of-> 地方国家政权; -influenced_by-> 唐王朝先进制度和文化; -influenced_by-> 唐; 肃慎系 -consists_of-> 渤海"
+    },
+    {
+      "facet": "period",
+      "label": "高句丽",
+      "surface": "高句丽",
+      "decision": "confirm_exact",
+      "reason": "3 个同名概念全部是高句丽政权/族属本身，质量好。登记簿的 OCR 异体字『高勾丽』已在 L0 归并到此词项。",
+      "evidence": "高句丽 -is_a-> 东北古民族一支; -related_to-> 历代中原王朝; -related_to-> 辽北三燕; -introduced_to-> 儒教"
+    },
+    {
+      "facet": "period",
+      "label": "新罗",
+      "surface": "新罗",
+      "decision": "confirm_exact",
+      "reason": "3 个同名概念全部是新罗政权，且事实直接就是跨文化关系，写介绍最有用。",
+      "evidence": "新罗 -influenced_by-> 唐代; -influenced_by-> 唐音乐; -uses_method-> 中国章服之制; -introduced_to-> 倭"
+    },
+    {
+      "facet": "period",
+      "label": "唐",
+      "surface": "唐",
+      "decision": "reject_exact",
+      "reason": "同形词泛滥：5 个同名概念分别是先周古国唐、爵邑、河北唐县、以及一条气候数据，没有一个是唐王朝。",
+      "evidence": "唐 -changed_into-> 晋; -defined_as-> 所封之爵邑; -located_in-> 河北唐县; -has_property-> 10.2 °C"
+    },
+    {
+      "facet": "period",
+      "label": "唐",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "唐朝",
+      "reason": "唐朝(15 个同名) 才是政权本身，带行政建制事实。",
+      "evidence": "唐朝 -consists_of-> 十道; -consists_of-> 十五道"
+    },
+    {
+      "facet": "period",
+      "label": "宋",
+      "surface": "宋",
+      "decision": "reject_exact",
+      "reason": "2 个同名概念都是古文字/氏族语境的『宋』（《侯马》《玺文》著录、instance_of 氏、子姓），不是宋朝。",
+      "evidence": "宋 -instance_of-> 氏; -has_property-> 子姓; -located_in-> 《侯马》359【5】"
+    },
+    {
+      "facet": "period",
+      "label": "宋",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "宋代",
+      "reason": "改用长写法。宋代簇 12 个，虽然字典序首个无事实，簇内其余成员有内容。",
+      "evidence": "concept/search('宋代') 精确同名 12 个"
+    },
+    {
+      "facet": "period",
+      "label": "元",
+      "surface": "元",
+      "decision": "reject_exact",
+      "reason": "唯一同名概念是经纬度坐标，与元朝无关。",
+      "evidence": "元 -has_feature-> 86°10′; -has_feature-> 127°44′ W"
+    },
+    {
+      "facet": "period",
+      "label": "元",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "元代",
+      "reason": "元代(6 个)有真实的技术史事实。",
+      "evidence": "元代 -influenced_by-> 唐宋时期的科学技术; -characterized_by-> 斗拱尺度渐小"
+    },
+    {
+      "facet": "period",
+      "label": "金",
+      "surface": "金",
+      "decision": "confirm_exact",
+      "exclude_concept_ids": [
+        "82afe35a-0000-0000-0000-000000000000"
+      ],
+      "exclude_note": "82afe35a 是古文字著录（《郭店》《玺文》），非金朝。",
+      "reason": "注意：同一个词面『金』在 material facet 被否决（那些概念指金朝，不是金属），在 period facet 反而正确——同形词否决是分 facet 的。8122b56a 的乣军/刑期是金代制度内容。",
+      "evidence": "金 -consists_of-> 诸乣和乣军; -has_feature-> 徒五年"
+    },
+    {
+      "facet": "period",
+      "label": "金",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "金朝",
+      "reason": "补一条更明确的政权锚点。",
+      "evidence": "concept/search('金朝') 精确同名 15 个"
+    },
+    {
+      "facet": "period",
+      "label": "战国",
+      "surface": "战国",
+      "decision": "confirm_exact",
+      "reason": "57cdbf20 有『instance_of 藏品制作时代』『related_to 铁器』，是可用的分期概念；其余多为书名/断代目标，簇 union 无害。",
+      "evidence": "战国 -instance_of-> 藏品制作时代; -related_to-> 铁器"
+    },
+    {
+      "facet": "period",
+      "label": "战国",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "战国时期",
+      "reason": "战国时期(32 个)覆盖更广。",
+      "evidence": "concept/search('战国时期') 精确同名 32 个"
+    },
+    {
+      "facet": "period",
+      "label": "清",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "清代",
+      "reason": "登记簿的短写法『清』在远端无精确同名概念（0 个），改用通行长写法『清代』。",
+      "evidence": "清代 -is_a-> 古代校勘学的形成时期; -has_feature-> 考据学获得极大发展"
+    },
+    {
+      "facet": "period",
+      "label": "明",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "明朝",
+      "reason": "登记簿的短写法『明』在远端无精确同名概念（0 个），改用通行长写法『明朝』。",
+      "evidence": "明朝 -requires_condition-> 西洋火器"
+    },
+    {
+      "facet": "period",
+      "label": "汉",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "汉代",
+      "reason": "登记簿的短写法『汉』在远端无精确同名概念（0 个），改用通行长写法『汉代』。",
+      "evidence": "汉代 -influenced_by-> 楚人旧典; -influenced_by-> 秦文化和楚文化; -located_at-> 太一祭坛"
+    },
+    {
+      "facet": "period",
+      "label": "商",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "商代",
+      "reason": "登记簿的短写法『商』在远端无精确同名概念（0 个），改用通行长写法『商代』。",
+      "evidence": "concept/search('商') = 0 个；商代 20 个（另有『殷商 -precedes-> 西周』可选）"
+    },
+    {
+      "facet": "period",
+      "label": "新石器",
+      "decision": "align",
+      "relation": "close",
+      "target_kind": "concept",
+      "target_name": "新石器时代",
+      "reason": "登记簿的短写法『新石器』在远端无精确同名概念（0 个），改用通行长写法『新石器时代』。",
+      "evidence": "concept/search('新石器') = 0 个；新石器时代 15 个"
+    }
+  ]
+}

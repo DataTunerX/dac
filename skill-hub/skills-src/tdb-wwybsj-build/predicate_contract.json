@@ -1,0 +1,790 @@
+{
+  "schema_version": "wwybsj_predicate_contract.v1",
+  "updated_at": "2026-08-14",
+  "note": "Source of truth for every wwybsj predicate's contract. `ontology_relation_type` can only express a SUBSET of this (it has no is_functional column, and its dst_type_id assumes an entity-valued object), and nothing in the database enforces it on semantic_statement — there are no triggers, and upsert-batch does not consult the relation-type table. Enforcement is wwybsj_predicates.py --validate, which reads this file. Registration mirrors what the table can hold, for a canonical queryable contract. L2 的槽位只以本馆文物为主体：主体是通用概念的断言属于 archeology 域，从远端原文抽出来存本地只是换条路径的复制。",
+  "subject_kinds": {
+    "artifact": {
+      "id_prefix": "wwybsj.artifact.",
+      "object_type": "collection_artifact"
+    },
+    "term": {
+      "id_prefix": "wwybsj.term.",
+      "object_type": null
+    }
+  },
+  "object_types": {
+    "category": "artifact_type",
+    "material": "material",
+    "grade": "administrative_status",
+    "completeness": "condition",
+    "acquisition": "collection_acquisition",
+    "period": "period"
+  },
+  "layers": {
+    "L0": {
+      "allowed_epistemic_modes": [
+        "observed"
+      ],
+      "required_reference": "wwybsj.ref.registry"
+    },
+    "L1": {
+      "allowed_epistemic_modes": [
+        "inferred",
+        "hypothesized"
+      ],
+      "required_reference": null
+    },
+    "L2": {
+      "allowed_epistemic_modes": [
+        "attributed",
+        "hypothesized",
+        "inferred"
+      ],
+      "required_reference": "wwybsj.ref.remote_passage"
+    },
+    "L3": {
+      "allowed_epistemic_modes": [
+        "hypothesized"
+      ],
+      "required_reference": ""
+    }
+  },
+  "predicates": [
+    {
+      "name": "has_registry_no",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "inverse_functional": true,
+      "registry_field": "ww_bianhao",
+      "display_name": "藏品总登记号",
+      "description": "对外的唯一键。record_id 只是 JSON 行号，两者绝不可混（record_id=12 对应 ww_bianhao=0008）。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false,
+      "not_registrable_reason": "字面值谓词；relation_type 的 dst_type_id 假定对象是实体"
+    },
+    {
+      "name": "has_registry_scheme",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_bh_leixing",
+      "display_name": "编号体系",
+      "description": "全库唯一取值「藏品总登记号」。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_name",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_mingchen",
+      "display_name": "文物名称",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_original_name",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_yuanming",
+      "display_name": "文物原名",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "instantiates",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "entity",
+      "object_facet": "category",
+      "functional": true,
+      "registry_field": "ww_leibie",
+      "display_name": "属于类别",
+      "description": "指向 wwybsj.term.category.*。10 个受控取值，其中 4 个是登记簿的联合桶（玉石器、宝石 等）——联合桶不拆，成分对齐在 L1 处理。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": true
+    },
+    {
+      "name": "made_of",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "entity",
+      "object_facet": "material",
+      "functional": false,
+      "registry_field": "ww_zhidi_c",
+      "display_name": "质地",
+      "description": "指向 wwybsj.term.material.*。非 functional：ww_zhidi_c 的『铜,金』是两个材质，拆成两条。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": true
+    },
+    {
+      "name": "has_material_form",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_zhidi_a",
+      "display_name": "质地组合方式",
+      "description": "单一质地 / 复合或组合质地。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_material_class",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_zhidi_b",
+      "display_name": "质地大类",
+      "description": "无机质 / 无机复合或组合。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "dated_to",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "json",
+      "functional": true,
+      "registry_field": "ww_niandai_jt|ww_niandai_d|ww_niandai_c|ww_niandai_b",
+      "display_name": "断代",
+      "description": "typed 区间。只在字面明确写出年份时才产出年份；label_only 时 start_year 保持 null——给『宋』编一个区间会造出后续区间推理会当真的假事实。",
+      "required_value_keys": [
+        "era_label",
+        "calendar",
+        "parse_status",
+        "registry_literal"
+      ],
+      "value_enums": {
+        "parse_status": [
+          "range_parsed",
+          "label_only"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field",
+        "parse_status"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_period_scheme",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_niandai_a",
+      "display_name": "断代体系",
+      "description": "中国历史学年代 / 其他。这是体系名，不是年代，不要当年代用。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "in_period",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "entity",
+      "object_facet": "period",
+      "functional": true,
+      "registry_field": "ww_niandai_jt|ww_niandai_d|ww_niandai_c|ww_niandai_b",
+      "display_name": "所属时期",
+      "description": "指向 wwybsj.term.period.*。dated_to 是 typed 区间（用于推理），in_period 是可被 L1 锚定的词项（用于解引用远端的政权/文化背景）——JSON 值挂不住锚点，必须是实体。标签按 period_normalization.json 归并（唐代→唐、高勾丽→高句丽），但 dated_to 的 registry_literal 原样保留。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field",
+        "label_normalization"
+      ],
+      "registrable": true
+    },
+    {
+      "name": "has_mass",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "json",
+      "functional": true,
+      "registry_field": "ww_zhiliang_jt",
+      "display_name": "质量",
+      "description": "normalized_g 只在单位显式存在于 ww_zhiliang_dw 列时产出——这是它可以安全用于跨件比较的前提。",
+      "required_value_keys": [
+        "value",
+        "unit",
+        "unit_source",
+        "registry_literal"
+      ],
+      "value_enums": {
+        "unit_source": [
+          "registry_column",
+          "missing"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field",
+        "unit_source"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_mass_range",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_zhiliang_fw",
+      "display_name": "质量区间",
+      "description": "登记簿自带的粗分级桶（0.01-1 kg 等）。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_dimension",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "json",
+      "functional": false,
+      "registry_field": "ww_chang|ww_kuan|ww_gao",
+      "display_name": "尺寸",
+      "description": "非 functional：长/宽/高 各一条。unit 恒为 null——登记 schema 与 DDL 注释均未声明单位，消费者必须显式确定单位，不得假设厘米。",
+      "required_value_keys": [
+        "dimension",
+        "value",
+        "unit",
+        "unit_source",
+        "registry_field",
+        "registry_literal"
+      ],
+      "value_enums": {
+        "dimension": [
+          "length",
+          "width",
+          "height"
+        ],
+        "unit_source": [
+          "unspecified"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field",
+        "unit_source"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_dimension_note",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_chicun",
+      "display_name": "尺寸原文",
+      "description": "自由文本原文照存，故意不解析。465 条里只有 13 条写了单位；猜单位就是『柱础护圈高 2.1 米』的由来。解析留给独立的 inferred 步骤。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field",
+        "parse_status"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_quantity",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "json",
+      "functional": true,
+      "registry_field": "ww_shuliang",
+      "display_name": "数量",
+      "required_value_keys": [
+        "count",
+        "registry_literal"
+      ],
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_completeness",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "entity",
+      "object_facet": "completeness",
+      "functional": true,
+      "registry_field": "ww_wancan_cd",
+      "display_name": "完残程度",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": true
+    },
+    {
+      "name": "has_completeness_note",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_wancan_zk",
+      "display_name": "完残状况",
+      "description": "自由描述（残三块 等）。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_conservation_state",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_baocun_zt",
+      "display_name": "保存状态",
+      "description": "自由描述。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_grade",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "entity",
+      "object_facet": "grade",
+      "functional": true,
+      "registry_field": "ww_jibie",
+      "display_name": "文物级别",
+      "description": "一级/二级/三级/一般/未定级。藏品管理词汇，L1 不对齐。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": true
+    },
+    {
+      "name": "acquired_by",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "entity",
+      "object_facet": "acquisition",
+      "functional": true,
+      "registry_field": "ww_laiyuan",
+      "display_name": "入藏途径",
+      "description": "发掘/征集购买/旧藏/采集/拨交/接受捐赠/移交。入藏途径不是器物属性，L1 不对齐。",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": true
+    },
+    {
+      "name": "registered_at",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "registry_field": "ww_ctime",
+      "display_name": "入库时间",
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "registry_field"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "has_data_quality_flag",
+      "layer": "L0",
+      "subject_kind": "artifact",
+      "value_type": "json",
+      "functional": false,
+      "registry_field": "(derived)",
+      "display_name": "数据质量标记",
+      "description": "可查询的 statement，不是日志。消费者要能一次查询问出『哪些藏品可以做尺寸数值推理』。",
+      "required_value_keys": [
+        "code",
+        "note"
+      ],
+      "value_enums": {
+        "code": [
+          "dimension_only_in_free_text",
+          "period_label_without_years",
+          "dimension_unit_unspecified",
+          "mass_unit_missing",
+          "period_label_spans_multiple_polities"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "aligned_to",
+      "layer": "L1",
+      "subject_kind": "term",
+      "value_type": "json",
+      "functional": false,
+      "display_name": "对齐到远端概念簇",
+      "description": "值是远端同名概念的整簇，不是单个 id。取『第一个精确匹配』会静默丢掉大部分可达知识，且 concept/search 顺序不保证、连复现都做不到。实体消解是远端自己的债——推理时 union concept_ids 全簇。",
+      "required_value_keys": [
+        "matched_surface",
+        "match_relation",
+        "match_kind",
+        "concept_ids",
+        "primary_concept_id",
+        "cluster_size",
+        "cluster_completeness"
+      ],
+      "value_enums": {
+        "match_relation": [
+          "exact",
+          "close",
+          "broader",
+          "narrower"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "match_kind",
+        "match_relation",
+        "review_status",
+        "resolved_at"
+      ],
+      "required_reference": "wwybsj.ref.remote_concept",
+      "registrable": false,
+      "not_registrable_reason": "对象是远端 id 簇（json），不是本库实体；relation_type 无法表达"
+    },
+    {
+      "name": "alignment_candidate",
+      "layer": "L1",
+      "subject_kind": "term",
+      "value_type": "json",
+      "functional": false,
+      "display_name": "待复核对齐候选",
+      "description": "wiki-only 命中。远端 wiki 页已证实含噪声（完整 → 较完整的国体（the Shan state）；一般 → 艺术的和知识的活动）。epistemic_mode 必须是 hypothesized，不得参与推理。",
+      "required_value_keys": [
+        "matched_surface",
+        "match_kind",
+        "remote_wiki_slug"
+      ],
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "match_kind",
+        "review_status",
+        "resolved_at"
+      ],
+      "required_epistemic_mode": "hypothesized",
+      "registrable": false
+    },
+    {
+      "name": "alignment_rejected",
+      "layer": "L1",
+      "subject_kind": "term",
+      "value_type": "json",
+      "functional": false,
+      "display_name": "对齐否决记录",
+      "description": "同形词否决。金 的 4 个同名概念全是金朝，石 的 2 个是容量单位『十斗』——照着对齐会让金器 -produced_by_culture-> 女真族。否决必须可查询，不能只是日志。",
+      "required_value_keys": [
+        "matched_surface",
+        "veto",
+        "reason",
+        "evidence"
+      ],
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "review_status",
+        "resolved_at"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "alignment_status",
+      "layer": "L1",
+      "subject_kind": "term",
+      "value_type": "json",
+      "functional": true,
+      "display_name": "对齐状态",
+      "description": "每个词项一条，汇总对齐结果与尝试过的词面。",
+      "required_value_keys": [
+        "status",
+        "attempted_surfaces",
+        "anchor_count",
+        "candidate_count",
+        "artifact_uses",
+        "facet",
+        "label"
+      ],
+      "value_enums": {
+        "status": [
+          "aligned",
+          "aligned_by_components",
+          "aligned_by_mapping",
+          "candidate_only",
+          "unaligned",
+          "leave_unaligned",
+          "not_applicable"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "resolved_at"
+      ],
+      "registrable": false
+    },
+    {
+      "name": "typological_parallel",
+      "layer": "L2",
+      "subject_kind": "artifact",
+      "value_type": "json",
+      "functional": false,
+      "symmetric": true,
+      "defeasible": true,
+      "display_name": "可比同类器/语境",
+      "description": "本件文物可与远端语料中的某个对象或语境相比较。证据是远端原文段落，且检索是按 (类别|材质|年代) 键做的——evidence_scope 记录了它是类级证据而非针对该个体的直接证据。 evidence_scope 区分证据是讲这类形制的(form_level)还是只是同类背景(class_level)；功能性槽位只接受 form_level。",
+      "required_value_keys": [
+        "slot",
+        "object_surface",
+        "evidence_scope",
+        "cited_event_ids"
+      ],
+      "value_enums": {
+        "slot": [
+          "typological_parallel"
+        ],
+        "evidence_scope": [
+          "form_head_level",
+          "form_level",
+          "class_level"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "defeasible",
+        "slot",
+        "review_status",
+        "retrieval_run"
+      ],
+      "required_epistemic_mode": "attributed",
+      "required_reference": "wwybsj.ref.remote_passage",
+      "registrable": false,
+      "not_registrable_reason": "对象是原文中的表述（json），不是本库实体"
+    },
+    {
+      "name": "dating_corroboration",
+      "layer": "L2",
+      "subject_kind": "artifact",
+      "value_type": "json",
+      "functional": false,
+      "defeasible": true,
+      "display_name": "断代旁证",
+      "description": "远端原文中支持或质疑登记断代的证据。**stance 是计算值，不是 LLM 判断**——LLM 给出 123/123 全 supports、零 questions，一个从不说『不』的判据等于没有判据。现由 period_intervals.json（从登记簿自身推导的时期区间）与引用表述中解析出的年份做区间比对得出，无法判定时为 undetermined（104 条引用根本没写年份）。原 LLM 判断保留在 value_json.llm_stance 供审计。",
+      "required_value_keys": [
+        "slot",
+        "object_surface",
+        "stance",
+        "evidence_scope",
+        "cited_event_ids"
+      ],
+      "value_enums": {
+        "slot": [
+          "dating_corroboration"
+        ],
+        "stance": [
+          "supports",
+          "questions",
+          "partial_overlap",
+          "undetermined"
+        ],
+        "evidence_scope": [
+          "form_head_level",
+          "form_level",
+          "class_level"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "defeasible",
+        "slot",
+        "review_status",
+        "retrieval_run"
+      ],
+      "required_epistemic_mode": "attributed",
+      "required_reference": "wwybsj.ref.remote_passage",
+      "registrable": false
+    },
+    {
+      "name": "probable_original_context",
+      "layer": "L2",
+      "subject_kind": "artifact",
+      "value_type": "json",
+      "functional": false,
+      "defeasible": true,
+      "display_name": "可能的原始语境",
+      "description": "该类器物的功能/使用语境。原文陈述的是类别层面，套到这一个体上是类→个体的一步推断，因此 epistemic_mode 必须是 hypothesized，默认不参与推理。 evidence_scope 区分证据是讲这类形制的(form_level)还是只是同类背景(class_level)；功能性槽位只接受 form_level。",
+      "required_value_keys": [
+        "slot",
+        "object_surface",
+        "evidence_scope",
+        "cited_event_ids"
+      ],
+      "value_enums": {
+        "slot": [
+          "probable_original_context"
+        ],
+        "evidence_scope": [
+          "form_head_level",
+          "form_level",
+          "class_level"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "defeasible",
+        "slot",
+        "review_status",
+        "retrieval_run"
+      ],
+      "required_epistemic_mode": "hypothesized",
+      "required_reference": "wwybsj.ref.remote_passage",
+      "registrable": false
+    },
+    {
+      "name": "has_research_gap",
+      "layer": "L2",
+      "subject_kind": "artifact",
+      "value_type": "json",
+      "functional": false,
+      "display_name": "研究缺口",
+      "description": "某个槽位没有足够的远端证据。缺口必须可查询——『查不到』和『还没查』必须能区分开。 reason 区分三种缺口：LLM 自认证据不足 / 检索无切题候选 / 被闸门拒绝（gate 字段记是哪一道）——三者含义完全不同，混为一谈会掩盖『证据讲错了东西』这一类。",
+      "required_value_keys": [
+        "slot",
+        "reason",
+        "candidates_offered"
+      ],
+      "value_enums": {
+        "slot": [
+          "typological_parallel",
+          "dating_corroboration",
+          "probable_original_context"
+        ],
+        "reason": [
+          "insufficient_evidence",
+          "no_on_topic_candidates",
+          "rejected_by_gate"
+        ]
+      },
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "slot",
+        "retrieval_run"
+      ],
+      "required_epistemic_mode": "inferred",
+      "required_reference": "",
+      "registrable": false
+    },
+    {
+      "name": "has_exhibit_prose",
+      "layer": "L3",
+      "subject_kind": "artifact",
+      "value_type": "string",
+      "functional": true,
+      "display_name": "展品介绍描述段",
+      "description": "展品介绍里那段人类可读的描述文字。它无法从断言推导出来（是生成的），所以必须作为数据存下来——否则 wiki 页每次渲染都会变，投影层『页面是断言的纯函数』这条就破了。注意它是【文本投影产物，不是语义断言】：谓词是 has_exhibit_prose、值是文本块、标 extraction_text=false，因此不会在本地制造一份可查询的远端知识副本；机器可读的形式仍然只在远端。derived_from 列出它转述的本地 statement_id，可逐条回溯，也便于策展人整段替换成人工撰写版本。",
+      "required_value_keys": [
+        "text",
+        "derived_from",
+        "char_count",
+        "prose_version"
+      ],
+      "required_qualifiers": [
+        "epistemic_mode",
+        "basis",
+        "extraction_text",
+        "reviewed",
+        "prose_version"
+      ],
+      "required_epistemic_mode": "hypothesized",
+      "required_reference": "",
+      "registrable": false,
+      "not_registrable_reason": "字面值谓词，且是投影产物而非本体关系"
+    }
+  ],
+  "forbidden_predicates": {
+    "related_to": "无类型约束的 catch-all。旧 profile 里它的 subject_types/object_types 几乎是全集，等于让类型检查失效。不要加回来。",
+    "influenced_by(on artifact)": "主体错位。『受唐代技术影响』是关于工艺传统/器物类别的断言，不是关于某一个体的。正确做法是文物 --instantiates--> 类别，类别的 influenced_by 留在远端域。"
+  }
+}

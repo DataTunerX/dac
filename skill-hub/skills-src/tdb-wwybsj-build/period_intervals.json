@@ -1,0 +1,133 @@
+{
+  "schema_version": "wwybsj_period_intervals.v1",
+  "note": "时期→年份区间，从登记簿自身已有 range_parsed 的记录推导（inferred）。优先采用标签本身即规范形的记录——年号跨度不是朝代跨度（唐天宝年间742–756 被归并进唐，但唐的跨度是 618–907）。多个不同区间取并集并标记 conflict，不做静默归一。",
+  "derived_by": "wwybsj_stance_v1",
+  "periods": {
+    "辽": {
+      "start_year": 907,
+      "end_year": 1125,
+      "observations": 2,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "907~1125"
+      ],
+      "conflict": false
+    },
+    "北魏": {
+      "start_year": 386,
+      "end_year": 534,
+      "observations": 8,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "386~534"
+      ],
+      "conflict": false
+    },
+    "战国": {
+      "start_year": -475,
+      "end_year": -221,
+      "observations": 29,
+      "used_only_canonical_labels": false,
+      "variants": [
+        "-475~-221"
+      ],
+      "conflict": false
+    },
+    "东汉": {
+      "start_year": 25,
+      "end_year": 220,
+      "observations": 2,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "25~220"
+      ],
+      "conflict": false
+    },
+    "东周": {
+      "start_year": -770,
+      "end_year": -256,
+      "observations": 4,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "-770~-258",
+        "-770~-257",
+        "-770~-256"
+      ],
+      "conflict": true,
+      "conflict_note": "登记簿对该时期给出多个不同区间，已取并集为跨度并如实标记冲突，不做静默归一"
+    },
+    "西周": {
+      "start_year": -1046,
+      "end_year": -771,
+      "observations": 4,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "-1046~-771"
+      ],
+      "conflict": false
+    },
+    "东魏": {
+      "start_year": 534,
+      "end_year": 550,
+      "observations": 1,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "534~550"
+      ],
+      "conflict": false
+    },
+    "西汉": {
+      "start_year": -206,
+      "end_year": 25,
+      "observations": 7,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "-206~25"
+      ],
+      "conflict": false
+    },
+    "唐": {
+      "start_year": 618,
+      "end_year": 907,
+      "observations": 2,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "618~907"
+      ],
+      "conflict": false,
+      "excluded_from_merged_labels": [
+        "742~756"
+      ]
+    },
+    "高句丽": {
+      "start_year": -37,
+      "end_year": 668,
+      "observations": 5,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "-37~668"
+      ],
+      "conflict": false
+    },
+    "新罗": {
+      "start_year": 618,
+      "end_year": 906,
+      "observations": 18,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "618~906"
+      ],
+      "conflict": false
+    },
+    "渤海": {
+      "start_year": 698,
+      "end_year": 926,
+      "observations": 7,
+      "used_only_canonical_labels": true,
+      "variants": [
+        "698~926"
+      ],
+      "conflict": false
+    }
+  }
+}

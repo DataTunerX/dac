@@ -1,0 +1,29 @@
+{
+  "schema_version": "wwybsj_period_normalization.v1",
+  "updated_at": "2026-08-18",
+  "reviewer": "claude-opus-5",
+  "review_status": "machine_reviewed_pending_curator",
+  "note": "登记簿的年代标签有 31 种写法，同一政权被拆成多个标签，任何按文化聚合的分析都会算错。这里只归并【确定同指】的写法：去『代』后缀、修 OCR 异体字、年号归入朝代。绝不归并真正不同的分期——西汉/东汉、西周/东周、北魏/东魏 各有不同年份区间，合并会丢掉真实信息。归并只影响 in_period 这个可锚定的词项；dated_to 里的 registry_literal 与年份区间原样保留，登记簿的原始表述不被覆盖。",
+  "rules": [
+    {"from": "唐代", "to": "唐", "reason": "『代』后缀，同指"},
+    {"from": "晚唐", "to": "唐", "reason": "唐的晚期分段；精确表述保留在 dated_to.registry_literal"},
+    {"from": "唐天宝年间", "to": "唐", "reason": "年号归入朝代；742-756 的区间保留在 dated_to"},
+    {"from": "宋代", "to": "宋", "reason": "『代』后缀，同指"},
+    {"from": "战国时代", "to": "战国", "reason": "『时代』后缀，同指"},
+    {"from": "商代", "to": "商", "reason": "『代』后缀，同指"},
+    {"from": "明代", "to": "明", "reason": "『代』后缀，同指"},
+    {"from": "明崇桢", "to": "明", "reason": "年号归入朝代（原文『崇桢』应为崇祯，登记簿错字，不改原文只做归并）"},
+    {"from": "金代", "to": "金", "reason": "『代』后缀，同指金朝"},
+    {"from": "元代", "to": "元", "reason": "『代』后缀，同指"},
+    {"from": "高勾丽", "to": "高句丽", "reason": "OCR/录入异体字，同指高句丽政权"}
+  ],
+  "keep_separate": [
+    {"labels": ["西汉", "东汉", "汉"], "reason": "西汉(前206~25)与东汉(25~220)年份区间不同，是真实的分期差异；『汉』为未细分，三者各自成词项"},
+    {"labels": ["西周", "东周"], "reason": "年份区间不同（前1046~前771 / 前770~前256）"},
+    {"labels": ["北魏", "东魏"], "reason": "年份区间不同（386~534 / 534~550）"},
+    {"labels": ["宋", "南宋"], "reason": "南宋是独立的历史阶段，有自身的政权与文化认同，不并入宋"}
+  ],
+  "ambiguous_no_term": [
+    {"label": "宋-元", "reason": "跨两个朝代，无法归入单一政权。不建词项，改发数据质量标记 period_label_spans_multiple_polities，由策展人裁定。"}
+  ]
+}

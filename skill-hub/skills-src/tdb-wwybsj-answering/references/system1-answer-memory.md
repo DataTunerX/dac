@@ -167,7 +167,7 @@ Good evidence refs:
     "url": "tdb-local-file:///Users/ningwu/eis/.codex/skills/tdb-wwybsj-answering/wwybsj.json#registry_snapshot_465_records"
   },
   {
-    "url": "tdb-http://localhost:8080/v2/wiki/search?domain=wwybsj&q=唐代海兽葡萄纹铜镜"
+    "url": "tdb-http://10.124.48.91:8997/v2/wiki/search?domain=wwybsj&q=唐代海兽葡萄纹铜镜"
   },
   {
     "url": "tdb-http://10.124.48.91:8989/v2/wiki/search?domain=archeology&q=瓦当%20莲花纹"

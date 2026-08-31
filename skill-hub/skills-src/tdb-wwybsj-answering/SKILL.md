@@ -33,7 +33,7 @@ Core rule:
 
 Use local and remote gateways with different evidence roles:
 
-- local collection gateway: `http://10.124.48.91:8997`
+- collection gateway (the `wwybsj` collection TDB, referred to below as the local gateway): `http://10.124.48.91:8997`
   - authoritative for `domain=wwybsj`
   - use for local wiki pages, collection registry projections, local semantic statements, and item-level facts
   - use `wwybsj_business_terms` in the local term-mapping registry for
@@ -57,34 +57,35 @@ Use local and remote gateways with different evidence roles:
   - use only as supporting context for chronology, style, iconography,
     religion, society, environment, theory, or transmitted-text comparison
 
-Do not query `domain=wwybsj` on any remote lab gateway and treat an empty result as evidence that the local collection lacks the item. If the question is about a `wwybsj` collection object, start at `10.124.48.91:8997`.
+Do not query `domain=wwybsj` on any remote lab gateway (ports `8989`-`8995`) and treat an empty result as evidence that the local collection lacks the item. `domain=wwybsj` lives only on port `8997`, even though that gateway shares host `10.124.48.91` with the lab gateways. If the question is about a `wwybsj` collection object, start at `10.124.48.91:8997`.
 
-### The collection gateway starts empty (critical)
+### The collection gateway may be empty (critical)
 
 `10.124.48.91:8997` is an isolated TDB that was re-initialized with the current
-schema and **its knowledge tables start empty**. Content arrives only as DAC
+schema, and **its knowledge tables start empty**. Content arrives only as DAC
 Data Management → **TDB 入库** (`/tdb-pipeline`) runs ingest into target
 `wwybsj`, which writes to this same gateway.
 
-This changes what an empty result means, and getting it wrong produces confidently
-wrong answers:
+That changes what an empty result means, and getting it wrong produces
+confidently wrong answers:
 
 > An item missing from the local wiki or statements means **not yet ingested**,
 > **not** absent from the collection. Collection membership is decided by
-> `wwybsj.json`, the full registry snapshot beside this `SKILL.md` — which stays
-> valid regardless of what the gateway holds.
+> `wwybsj.json`, the full registry snapshot beside this `SKILL.md`, which stays
+> valid regardless of what the gateway currently holds.
 
 So while the gateway is sparse:
 
 - check `wwybsj.json` before saying an item is not in the collection
 - say plainly that local wiki/statement evidence is absent and that the answer
   rests on the registry snapshot
-- do not fall back to a remote lab gateway for `domain=wwybsj` to fill the gap —
-  those are different databases and would answer about different material
+- do not fall back to a lab gateway for `domain=wwybsj` to fill the gap, for the
+  reason given above: that domain exists only on `8997`
 - a registry-only answer is a legitimate answer; label it as registry-only
 
-Check current scope live rather than assuming: `GET /v2/wiki/pages?domain=wwybsj&limit=1`
-tells you whether anything has been ingested yet.
+Check scope live rather than assuming, with
+`GET /v2/wiki/pages?domain=wwybsj&limit=1`: a `total` of 0 means nothing has been
+ingested yet.
 
 Before a broad interpretive or debugging answer, check health for the intended
 remote gateway when practical: `GET /v2/health` or `GET /health`. If a remote
@@ -632,7 +633,7 @@ Report rules:
 - If a business ontology rule shaped the lookup or normalization audit, cite the
   applied `wwybsj_business_terms` raw term / canonical term / semantic slot.
 - When reporting local wiki retrieval, name the gateway if relevant:
-  `local 10.124.48.91:8997`, not any remote lab gateway.
+  `local 10.124.48.91:8997` (port `8997`), not any remote lab gateway.
 - Name whether `7号` means local `ww_bianhao=7` or internal `id=7` when the two
   differ.
 - Default rule for plain user-facing phrases such as `3号展品`, `7号藏品`,
@@ -794,7 +795,7 @@ Watch for these mistakes:
 If the answer is thin, say which layer failed:
 
 - `wwybsj wiki empty`
-- `wwybsj wiki checked on wrong gateway; retry local 10.124.48.91:8997`
+- `wwybsj wiki checked on wrong gateway; retry local 10.124.48.91:8997` (port `8997`, not `8989`-`8995`)
 - `wwybsj.json checked / not checked for full local registry fallback`
 - `wwybsj statements sparse`
 - `wwybsj search unavailable or errored`
