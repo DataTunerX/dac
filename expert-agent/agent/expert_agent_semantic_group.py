@@ -47,6 +47,21 @@ from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 from .tool_call_utils import invoke_llm_with_tool
 
+def truncate_progress_detail(text: str, limit: int = 4000) -> str:
+    """Truncate a structured progress detail while keeping its line breaks.
+
+    Distinct from _truncate_progress_message, which flattens newlines because it
+    builds the one-line summary shown in the log header. The detail fields carry
+    the planner's actual reasoning and plan, so collapsing them to a single line
+    made them unreadable in the UI even before the length limit clipped them.
+    """
+    raw = (text or "").strip()
+    if len(raw) <= limit:
+        return raw
+    return raw[: limit - 3] + "..."
+
+
+
 try:
     # json_repair is a tolerant JSON parser designed specifically for LLM output.
     # It handles common failure modes such as unescaped inner double quotes,
@@ -624,8 +639,8 @@ class ExpertAgent(BaseAgent):
             "query_preview": qp,
             "phase_count": total,
             "execution_order": phase_order,
-            "dependency_summary": self._truncate_progress_message(dep_summary, 450),
-            "plan_outline": self._truncate_progress_message(plan_outline, 900),
+            "dependency_summary": truncate_progress_detail(dep_summary, 2000),
+            "plan_outline": truncate_progress_detail(plan_outline, 4000),
             "phase_order_hint": self._truncate_progress_message(phase_order_hint, 280),
         }
 

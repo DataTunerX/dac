@@ -43,10 +43,10 @@ executionEngine:
   agentImages:
     orchestratorAgent:
       repository: "orchestrator-agent"
-      tag: "12-amd64"
+      tag: "13-amd64"
     expertAgent:
       repository: "expert-agent"
-      tag: "12-amd64"
+      tag: "13-amd64"
     codeAgent:
       repository: "code-agent"
       tag: "12-amd64"

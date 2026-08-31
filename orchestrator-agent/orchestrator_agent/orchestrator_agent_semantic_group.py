@@ -62,6 +62,21 @@ from .orchestrator_agent_semantic_domain import SUMMARY_FRAME_PREFIX
 from langchain_core.tools import tool, StructuredTool
 from .tool_call_utils import invoke_llm_with_tool
 
+def truncate_progress_detail(text: str, limit: int = 4000) -> str:
+    """Truncate a structured progress detail while keeping its line breaks.
+
+    Distinct from _truncate_progress_message, which flattens newlines because it
+    builds the one-line summary shown in the log header. The detail fields carry
+    the planner's actual reasoning and plan, so collapsing them to a single line
+    made them unreadable in the UI even before the length limit clipped them.
+    """
+    raw = (text or "").strip()
+    if len(raw) <= limit:
+        return raw
+    return raw[: limit - 3] + "..."
+
+
+
 try:
     from skill_sdk.skill.runner import SkillRunner  # noqa: F401  (used when local skills enabled)
 except ImportError:  # pragma: no cover - skill_sdk is an optional runtime dep
@@ -210,11 +225,13 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "is_delegated",
         "hop",
         "chain_depth",
+        "sg_label",
     },
     "collab_discovered_sgs": {
         "own_expert_count",
         "collab_sg_count",
         "collab_sg_names",
+        "pool_source",
     },
     "collab_plan_ready": {
         "total_tasks",
@@ -230,6 +247,7 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "task_id",
         "plan_index",
         "desc_preview",
+        "own_task_index",
     },
     "collab_own_task_done": {
         "task_id",
@@ -240,6 +258,8 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
     },
     "collab_own_all_done": {
         "completed_count",
+        "delegation_executed",
+        "own_executed",
     },
     "collab_pre_delegating": {
         "target_sg",
@@ -278,6 +298,9 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "needs_help",
         "target_sgs",
         "reason_preview",
+        "detection_source",
+        "skipped_owners",
+        "structured_unfulfilled_needs",
     },
     "collab_mid_detect_none": {},
     "collab_mid_plan_ready": {
@@ -3334,7 +3357,7 @@ class OrchestratorAgent(BaseAgent):
         tasks = list(getattr(task_list, "tasks", None) or [])
         n = len(tasks)
         thought_raw = (getattr(task_list, "thought_process", None) or "").strip()
-        planner_thought = cls._truncate_progress_message(thought_raw, 480) if thought_raw else ""
+        planner_thought = truncate_progress_detail(thought_raw, 4000) if thought_raw else ""
         orig_from_plan = (getattr(task_list, "original_query", None) or "").strip()
         query_source = (user_query or "").strip() or orig_from_plan
         query_preview = cls._truncate_progress_message(query_source, 220)
