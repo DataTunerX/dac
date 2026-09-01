@@ -36,6 +36,10 @@ spec:
               value: {{ .Values.bizRoutingAgent.config.registryCollection | quote }}
             - name: max_retries
               value: {{ .Values.bizRoutingAgent.config.maxRetries | quote }}
+            # simple: pick the single best agent and forward the query as-is.
+            # broadcast: also allow multi-root task planning across several agents.
+            - name: ROUTING_MODE
+              value: {{ .Values.bizRoutingAgent.config.routingMode | quote }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
           args:
             {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizRoutingAgent.config.redisDb) | nindent 12 }}

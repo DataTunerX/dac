@@ -292,3 +292,27 @@ func TestGenerateSkillAgentEnvs_EmptyPolicyLeavesWatchAllUnset(t *testing.T) {
 		}
 	}
 }
+
+// The skill-agent subprocess timeout defaults to 30s, which is too short for
+// skills that shell out. The operator passes the deployment's configured value.
+func TestGenerateSkillAgentEnvs_SkillCmdTimeout(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Name = "build"
+	dac.Namespace = "default"
+
+	m := map[string]string{}
+	for _, e := range h.generateSkillAgentEnvs(dac, "dac-build", `[]`, &DACConfig{SkillCmdTimeoutSeconds: "300"}, nil) {
+		m[e.Name] = e.Value
+	}
+	if m["LOCAL_SKILL_CMD_TIMEOUT_SEC"] != "300" {
+		t.Fatalf("LOCAL_SKILL_CMD_TIMEOUT_SEC=%q, want 300", m["LOCAL_SKILL_CMD_TIMEOUT_SEC"])
+	}
+
+	// Unset in config: leave it to the agent's own default rather than pinning 0.
+	for _, e := range h.generateSkillAgentEnvs(dac, "dac-build", `[]`, &DACConfig{}, nil) {
+		if e.Name == "LOCAL_SKILL_CMD_TIMEOUT_SEC" {
+			t.Fatalf("expected the env to stay unset, got %q", e.Value)
+		}
+	}
+}

@@ -598,6 +598,10 @@ executionEngine:
   #    When a DataAgentContainer CR is created, the operator uses these images
   #    for the orchestrator-agent, expert-agent, code-agent, doc-agent,
   #    dac-data-services, data-sinkers-job and data-sinkers-status containers.
+  # -- Subprocess timeout in seconds for a single skill run (skill-agent
+  # LOCAL_SKILL_CMD_TIMEOUT_SEC). The agent default of 30s is too short for
+  # skills that shell out, e.g. wwybsj-build.
+  skillCmdTimeoutSeconds: "300"
   agentImages:
     orchestratorAgent:
       # -- Repository name under global.imageRegistry
@@ -779,6 +783,9 @@ bizRoutingAgent:
     redisDb: "2"
     # -- Agent card collection to search for orchestrators
     registryCollection: "biz_orchestrator_agent_cards"
+    # -- Routing strategy: "simple" selects one best agent; "broadcast" additionally
+    # allows multi-root planning to split a query across several agents.
+    routingMode: "broadcast"
     # -- Max retries for LLM routing calls
     maxRetries: "1"
   service:

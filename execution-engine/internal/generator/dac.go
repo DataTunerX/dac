@@ -56,6 +56,10 @@ type DACConfig struct {
 	ImagePullPolicy              corev1.PullPolicy
 	// SkillAgentImage is used by dacType=skill single-container Deployments.
 	SkillAgentImage string
+	// SkillCmdTimeoutSeconds bounds a single skill subprocess. The skill-agent
+	// default is 30s, which is too short for skills that shell out to do real
+	// work (wwybsj-build runs registry writes and gateway verification).
+	SkillCmdTimeoutSeconds string
 }
 
 func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) error {
@@ -506,6 +510,7 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 		DDSyncObserverImage:          configMap.Data["dd-sync-observer-image"],
 		ImagePullPolicy:              corev1.PullPolicy(configMap.Data["image-pull-policy"]),
 		SkillAgentImage:              configMap.Data["skill-agent-image"],
+		SkillCmdTimeoutSeconds:       configMap.Data["skill-cmd-timeout-sec"],
 	}, nil
 }
 
@@ -1655,6 +1660,9 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 	}
 	if dac.Spec.ExpertAgentMaxSteps != "" {
 		envs = append(envs, corev1.EnvVar{Name: "LOCAL_SKILL_MAX_STEPS", Value: dac.Spec.ExpertAgentMaxSteps})
+	}
+	if dacConfig != nil && dacConfig.SkillCmdTimeoutSeconds != "" {
+		envs = append(envs, corev1.EnvVar{Name: "LOCAL_SKILL_CMD_TIMEOUT_SEC", Value: dacConfig.SkillCmdTimeoutSeconds})
 	}
 	if dacConfig != nil {
 		envs = appendTDBBaseURLEnv(envs, dacConfig)
