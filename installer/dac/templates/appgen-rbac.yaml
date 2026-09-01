@@ -1,0 +1,38 @@
+{{- if .Values.appgen.enabled }}
+{{/*
+AppGen publishes a skill to skill-hub and then creates the DataAgentContainer
+that loads it. The first needs no permission; the second does, and skill-agent
+pods run with the namespace default ServiceAccount.
+
+Scope is deliberately narrow: one namespace, one resource, no delete. Anything
+holding the appgen skill can create agents, so keep appgen.agentNamespace
+pointed at the namespace where generated agents belong.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "appgen") }}
+  namespace: {{ .Values.appgen.agentNamespace }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "appgen") | nindent 4 }}
+rules:
+  - apiGroups: ["dac.dac.io"]
+    resources: ["dataagentcontainers"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "dac.componentName" (dict "context" . "name" "appgen") }}
+  namespace: {{ .Values.appgen.agentNamespace }}
+  labels:
+    {{- include "dac.componentLabels" (dict "context" . "name" "appgen") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "dac.componentName" (dict "context" . "name" "appgen") }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.appgen.serviceAccountName }}
+    namespace: {{ .Values.appgen.agentNamespace }}
+{{- end }}

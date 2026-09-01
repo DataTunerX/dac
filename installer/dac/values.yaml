@@ -299,6 +299,20 @@ neo4j:
 # ---------------------------------------------------------------------------
 # dac-apiserver - Go HTTP API server with JWT auth and Casbin RBAC
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# AppGen: the skill that generates other skills and their agents
+# ---------------------------------------------------------------------------
+appgen:
+  # -- Grant the skill-agent ServiceAccount permission to create
+  # DataAgentContainers. Required for AppGen's create_agent step; publishing a
+  # skill needs no permission. Disable to allow skill generation only.
+  enabled: true
+  # -- Namespace generated agents are created in
+  agentNamespace: default
+  # -- ServiceAccount skill-agent pods run as in that namespace
+  serviceAccountName: default
+
+
 apiserver:
   # -- Enable apiserver deployment
   enabled: true
