@@ -90,7 +90,7 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "requirements",
         "tasks",
     },
-    "root_selected": {"mode", "route_paths"},
+    "root_selected": {"mode", "route_paths", "selected_root", "best_path", "root_plans", "root_count"},
     "route_plan_with_capability_check": {
         "mode",
         "strategy",
@@ -102,6 +102,7 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "task_agents",
         "tasks",
         "root_plans",
+        "route_path_details",
     },
     "root_forward_started": {"route_paths", "strategy", "strategy_human"},
     "multi_root_level_started": {"task_ids", "task_count"},
@@ -2321,9 +2322,29 @@ class RoutingAgent(BaseAgent):
             if (not resp.can_handle) and resp.can_contribute and resp.confidence >= MULTI_ROOT_CONFIDENCE_THRESHOLD
         ]
 
+        def _root_candidate_summary() -> list[dict]:
+            """Every agent the capability broadcast reached, with its verdict.
+
+            This is the routing decision's evidence: without it the log says
+            which root was picked but never what it was picked over.
+            """
+            summary = []
+            for _card, _resp in capable_agents:
+                summary.append({
+                    "root": _card.name,
+                    "confidence": round(float(getattr(_resp, "confidence", 0.0) or 0.0), 2),
+                    "can_handle": bool(getattr(_resp, "can_handle", False)),
+                    "can_contribute": bool(getattr(_resp, "can_contribute", False)),
+                    "reason": str(getattr(_resp, "reason", "") or "")[:300],
+                })
+            summary.sort(key=lambda e: e["confidence"], reverse=True)
+            return summary
+
         def _execution_meta(_resp) -> dict:
             return {
                 "execution_strategy": "single",
+                "root_candidates": _root_candidate_summary(),
+                "candidate_count": len(capable_agents),
                 PROPAGATED_HISTORY_KEY: history_payload,
             }
 
@@ -2547,6 +2568,24 @@ class RoutingAgent(BaseAgent):
             PROPAGATED_HISTORY_KEY: history_payload,
             ROUTING_AGENT_POOL_KEY: _build_routing_agent_pool_from_capable(capable_agents),
             ROUTING_SELECTED_ROOT_KEY: selected_card.name,
+            # Evidence for the routing decision: every agent the broadcast
+            # reached and how it answered, so the log shows what the selected
+            # root was chosen over rather than just naming the winner.
+            "root_candidates": sorted(
+                [
+                    {
+                        "root": _c.name,
+                        "confidence": round(float(getattr(_r, "confidence", 0.0) or 0.0), 2),
+                        "can_handle": bool(getattr(_r, "can_handle", False)),
+                        "can_contribute": bool(getattr(_r, "can_contribute", False)),
+                        "reason": str(getattr(_r, "reason", "") or "")[:300],
+                    }
+                    for _c, _r in capable_agents
+                ],
+                key=lambda e: e["confidence"],
+                reverse=True,
+            ),
+            "candidate_count": len(capable_agents),
         }
 
         path_str = (
@@ -3612,7 +3651,14 @@ class RoutingAgentExecutor(AgentExecutor):
                     event="root_selected",
                     message=f"Routing selected root={step.agent} via path {selected_path} (best capability match)",
                     status="done",
-                    extra={"mode": "single_root", "route_paths": len(route_paths or [])},
+                    extra={
+                        "mode": "single_root",
+                        "route_paths": len(route_paths or []),
+                        "selected_root": step.agent,
+                        "best_path": selected_path,
+                        "root_plans": (execution_meta or {}).get("root_candidates") or [],
+                        "root_count": (execution_meta or {}).get("candidate_count", 0),
+                    },
                 )
 
             # Multi-root path: dispatch sub-tasks, aggregate, and return
@@ -3781,6 +3827,9 @@ class RoutingAgentExecutor(AgentExecutor):
                         "selected_root": step.agent,
                         "route_paths": len(rps),
                         "best_path": best_path,
+                        "root_plans": (execution_meta or {}).get("root_candidates") or [],
+                        "root_count": (execution_meta or {}).get("candidate_count", 0),
+                        "route_path_details": rps[:5],
                     },
                 )
                 await self._emit_progress(

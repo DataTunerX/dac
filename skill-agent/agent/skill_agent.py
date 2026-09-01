@@ -464,9 +464,83 @@ class SkillAgent(BaseAgent):
 
         elapsed_ms = int((_time.perf_counter() - t0) * 1000)
         status_code, reason_code = _map_skill_runner_status(result.get("status"))
+
         final_answer = str(result.get("final_answer") or "").strip()
         skill_name_used = str(result.get("skill") or "")
         attempts = result.get("attempts") or []
+
+        # The skill runner's own selection reasoning. Without this the log shows
+        # which skill ran but never why it was chosen, or what it beat.
+        #
+        # Two selection paths exist: skill_search (used when the skill count
+        # exceeds the batch size) reports candidates and a score, while the
+        # planner-LLM path records its reasoning per attempt instead. Emit
+        # whichever ran, so the trace never silently goes missing.
+        skill_search = result.get("skill_search")
+        planner_dump = result.get("planner")
+        if not isinstance(skill_search, dict) and (planner_dump or attempts):
+            attempt_detail = []
+            planner_reason = ""
+            for a in attempts[:10]:
+                if not isinstance(a, dict):
+                    continue
+                pd = a.get("planner")
+                reason = ""
+                if isinstance(pd, dict):
+                    reason = str(pd.get("reason") or "")
+                    planner_reason = planner_reason or reason
+                attempt_detail.append({
+                    "attempt": a.get("attempt"),
+                    "status": a.get("status"),
+                    "skill": (pd or {}).get("skill") if isinstance(pd, dict) else None,
+                    "reason": reason[:300],
+                })
+            if not planner_reason and isinstance(planner_dump, dict):
+                planner_reason = str(planner_dump.get("reason") or "")
+            await self.emit_progress(
+                "sd_skill_selected",
+                message=(
+                    f"planner selected skill {skill_name_used or '(none)'} "
+                    f"after {len(attempts)} attempt(s)"
+                ),
+                status="done" if status_code == "complete" else "fail",
+                task_id=self.current_task_id,
+                extra={
+                    "selection_path": "planner_llm",
+                    "selected_skill": skill_name_used,
+                    "selection_reason": planner_reason,
+                    "candidate_count": len(attempts),
+                    "attempt_detail": attempt_detail,
+                },
+            )
+        if isinstance(skill_search, dict):
+            candidates = skill_search.get("candidates") or []
+            candidate_summary = []
+            for cand in candidates[:10]:
+                if isinstance(cand, dict):
+                    candidate_summary.append({
+                        "skill": cand.get("name") or cand.get("skill") or "",
+                        "score": cand.get("score"),
+                    })
+                else:
+                    candidate_summary.append({"skill": str(cand), "score": None})
+            await self.emit_progress(
+                "sd_skill_selected",
+                message=(
+                    f"selected skill {skill_search.get('selected_skill') or '(none)'} "
+                    f"from {len(candidates)} candidate(s)"
+                ),
+                status="done" if skill_search.get("found") else "fail",
+                task_id=self.current_task_id,
+                extra={
+                    "selection_path": "skill_search",
+                    "selected_skill": skill_search.get("selected_skill") or "",
+                    "selection_score": skill_search.get("score"),
+                    "selection_reason": str(skill_search.get("reason") or ""),
+                    "candidate_count": len(candidates),
+                    "skill_candidates": candidate_summary,
+                },
+            )
 
         try:
             _result_dump = json.dumps(result, ensure_ascii=False, indent=2, default=str)
@@ -515,8 +589,13 @@ class SkillAgent(BaseAgent):
                 "skill_name": skill_name_used,
                 "skill_status": str(result.get("status") or ""),
                 "skill_attempts": len(attempts),
+                "attempt_statuses": [
+                    str(a.get("status") or "") for a in attempts if isinstance(a, dict)
+                ][:10],
                 "reason_code": reason_code,
                 "elapsed_ms": elapsed_ms,
+                "answer_chars": len(final_answer),
+                "answer_preview": answer_preview,
             },
         )
 

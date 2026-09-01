@@ -81,6 +81,12 @@ const PRIMARY_FIELDS: readonly string[] = [
   "downstream_agents",
   "execution_order",
   "context_from",
+  "selection_reason",
+  "skill_candidates",
+  "root_plans",
+  "route_path_details",
+  "answer_preview",
+  "attempt_detail",
 ]
 
 /** Readable labels; anything unlisted falls back to its raw key. */
@@ -121,6 +127,24 @@ const FIELD_LABELS: Record<string, string> = {
   mode: "模式",
   strategy: "策略",
   route_paths: "路由路径数",
+  selected_skill: "选中技能",
+  selection_reason: "选择理由",
+  selection_score: "匹配分数",
+  candidate_count: "候选数量",
+  skill_candidates: "候选技能",
+  skill_name: "技能",
+  skill_status: "技能状态",
+  skill_attempts: "尝试次数",
+  attempt_statuses: "各次尝试状态",
+  skill_query: "技能查询",
+  reason_code: "原因码",
+  elapsed_ms: "耗时(ms)",
+  answer_preview: "回答预览",
+  root_plans: "候选根节点",
+  root_count: "候选数",
+  route_path_details: "路由路径明细",
+  selection_path: "选择方式",
+  attempt_detail: "选择过程",
 }
 
 export interface ProgressDetail {

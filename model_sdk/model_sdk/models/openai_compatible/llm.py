@@ -48,6 +48,31 @@ def _rejects_custom_temperature(model: str) -> bool:
     return any(p in name for p in _TEMPERATURE_UNSUPPORTED_SUBSTRINGS + extra)
 
 
+
+# Models whose server-side default reasoning_effort is rejected when function
+# tools are bound on /v1/chat/completions:
+#   "Function tools with reasoning_effort are not supported for <model> in
+#    /v1/chat/completions. To use function tools, use /v1/responses or set
+#    reasoning_effort to 'none'."
+# The parameter is never set by DAC -- the provider applies it by default -- so
+# it has to be pinned to "none" explicitly whenever tools are bound. Without it
+# every tool-using call 400s, which silently fails the routing capability check
+# and makes every agent report that it cannot handle the query.
+_REASONING_EFFORT_TOOL_CONFLICT_SUBSTRINGS = ("gpt-5.6",)
+
+
+def _tools_conflict_with_reasoning_effort(model: str) -> bool:
+    name = (model or "").strip().lower()
+    if not name:
+        return False
+    extra = tuple(
+        p.strip().lower()
+        for p in (os.getenv("REASONING_EFFORT_TOOL_CONFLICT_MODELS") or "").split(",")
+        if p.strip()
+    )
+    return any(p in name for p in _REASONING_EFFORT_TOOL_CONFLICT_SUBSTRINGS + extra)
+
+
 def _strip_unsupported_temperature(kwargs: Dict[str, Any], model: str) -> None:
     """Drop ``temperature`` for models that only accept the default value."""
     if "temperature" in kwargs and _rejects_custom_temperature(model):
@@ -115,6 +140,16 @@ class OpenAICompatibleLLM(BaseLLM):
         **kwargs: Any,
     ) -> Runnable[LanguageModelInput, AIMessage]:
         """Delegate tool binding to the underlying ChatOpenAI client."""
+        if (
+            _tools_conflict_with_reasoning_effort(self.model)
+            and "reasoning_effort" not in kwargs
+        ):
+            kwargs["reasoning_effort"] = "none"
+            logger.info(
+                "Pinned reasoning_effort='none' for model %s: function tools are "
+                "rejected on /v1/chat/completions with any other value",
+                self.model,
+            )
         return self._openai_client.bind_tools(
             tools, tool_choice=tool_choice, **kwargs
         )
