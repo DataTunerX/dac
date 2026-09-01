@@ -317,10 +317,9 @@ func TestGenerateSkillAgentEnvs_SkillCmdTimeout(t *testing.T) {
 	}
 }
 
-// Skills that shell out read TDB_LLM_*; the agent's LLM only reaches the
-// container as CLI args, which a subprocess does not inherit. Without these a
-// skill falls back to whatever its shipped config names.
-func TestGenerateSkillAgentEnvs_ExportsAgentLLMForSkillSubprocesses(t *testing.T) {
+// Only the credential is exported. Provider, base URL and model belong to the
+// skill's own shipped config; exporting them would decide its LLM from outside.
+func TestGenerateSkillAgentEnvs_ExportsOnlyTheAPIKey(t *testing.T) {
 	h := &DataAgentContainerGenerator{}
 	dac := &dacv1alpha1.DataAgentContainer{}
 	dac.Name = "build"
@@ -335,14 +334,12 @@ func TestGenerateSkillAgentEnvs_ExportsAgentLLMForSkillSubprocesses(t *testing.T
 	}) {
 		m[e.Name] = e.Value
 	}
-	for k, want := range map[string]string{
-		"TDB_LLM_PROVIDER": "openai_compatible",
-		"TDB_LLM_BASE_URL": "https://api.openai.com/v1",
-		"TDB_LLM_MODEL":    "gpt-5.6-luna",
-		"TDB_LLM_API_KEY":  "sk-test",
-	} {
-		if m[k] != want {
-			t.Fatalf("%s=%q, want %q", k, m[k], want)
+	if m["TDB_LLM_API_KEY"] != "sk-test" {
+		t.Fatalf("TDB_LLM_API_KEY=%q, want sk-test", m["TDB_LLM_API_KEY"])
+	}
+	for _, k := range []string{"TDB_LLM_PROVIDER", "TDB_LLM_BASE_URL", "TDB_LLM_MODEL"} {
+		if _, ok := m[k]; ok {
+			t.Fatalf("%s must not be exported: it would override the skill's own config", k)
 		}
 	}
 }

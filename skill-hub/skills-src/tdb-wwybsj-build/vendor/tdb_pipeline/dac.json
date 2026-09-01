@@ -1,9 +1,9 @@
 {
   "llm": {
     "provider": "openai_compatible",
-    "model": "google/gemma-4-31B-it",
+    "model": "gpt-5.6-luna",
     "apiKey": "",
-    "baseUrl": "http://10.124.48.200:8000/v1",
+    "baseUrl": "https://api.openai.com/v1",
     "timeoutSeconds": 300,
     "maxRetries": 3,
     "temperature": "auto",
