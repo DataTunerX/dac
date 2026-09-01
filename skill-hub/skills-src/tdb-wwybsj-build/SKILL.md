@@ -58,6 +58,11 @@ Read only the reference needed for the current task:
 | Output directory | `out/` | `WWYBSJ_OUT_DIR` |
 | New-item overlay | `out/wwybsj_new_items.json` | `WWYBSJ_NEW_ITEMS` |
 
+L2 and L3 use the vendored LLM helper under
+`vendor/tdb_pipeline/llm_config_common.py` plus
+`vendor/tdb_pipeline/dac.json`. They must not require an external
+`/Users/ningwu/eis/tdb/pipeline` checkout to import `llm_config_common`.
+
 The bundled base snapshot has 465 flat registry records and 34 fields. `id` is
 the JSON row id; `ww_bianhao` is the collection registry number and is the
 artifact identity.
@@ -150,5 +155,6 @@ For local skill maintenance, also run:
 
 ```bash
 python3 scripts/test_wwybsj_common_paths.py
+python3 scripts/test_wwybsj_vendored_llm.py
 python3 scripts/test_wwybsj_l3_gate.py
 ```

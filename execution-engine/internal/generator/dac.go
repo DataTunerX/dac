@@ -1664,6 +1664,27 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 	if dacConfig != nil && dacConfig.SkillCmdTimeoutSeconds != "" {
 		envs = append(envs, corev1.EnvVar{Name: "LOCAL_SKILL_CMD_TIMEOUT_SEC", Value: dacConfig.SkillCmdTimeoutSeconds})
 	}
+	// Skills that shell out resolve their own LLM from TDB_LLM_* (see the
+	// vendored tdb_pipeline llm_config_common). The agent's LLM reaches the
+	// container as CLI args, which a subprocess does not inherit, so a skill
+	// would silently fall back to whatever its shipped config names -- for
+	// wwybsj-build that is the lab vLLM, not the agent's model. Export the same
+	// config so a skill runs on the LLM its agent is configured with, and no
+	// credential has to be baked into the published skill package.
+	if llmConfig != nil {
+		if llmConfig.Provider != "" {
+			envs = append(envs, corev1.EnvVar{Name: "TDB_LLM_PROVIDER", Value: llmConfig.Provider})
+		}
+		if llmConfig.BaseURL != "" {
+			envs = append(envs, corev1.EnvVar{Name: "TDB_LLM_BASE_URL", Value: llmConfig.BaseURL})
+		}
+		if llmConfig.Model != "" {
+			envs = append(envs, corev1.EnvVar{Name: "TDB_LLM_MODEL", Value: llmConfig.Model})
+		}
+		if llmConfig.APIKey != "" {
+			envs = append(envs, corev1.EnvVar{Name: "TDB_LLM_API_KEY", Value: llmConfig.APIKey})
+		}
+	}
 	if dacConfig != nil {
 		envs = appendTDBBaseURLEnv(envs, dacConfig)
 		envs = append(envs,

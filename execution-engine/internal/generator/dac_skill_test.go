@@ -316,3 +316,46 @@ func TestGenerateSkillAgentEnvs_SkillCmdTimeout(t *testing.T) {
 		}
 	}
 }
+
+// Skills that shell out read TDB_LLM_*; the agent's LLM only reaches the
+// container as CLI args, which a subprocess does not inherit. Without these a
+// skill falls back to whatever its shipped config names.
+func TestGenerateSkillAgentEnvs_ExportsAgentLLMForSkillSubprocesses(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Name = "build"
+	dac.Namespace = "default"
+
+	m := map[string]string{}
+	for _, e := range h.generateSkillAgentEnvs(dac, "dac-build", `[]`, nil, &LLMConfig{
+		Provider: "openai_compatible",
+		BaseURL:  "https://api.openai.com/v1",
+		Model:    "gpt-5.6-luna",
+		APIKey:   "sk-test",
+	}) {
+		m[e.Name] = e.Value
+	}
+	for k, want := range map[string]string{
+		"TDB_LLM_PROVIDER": "openai_compatible",
+		"TDB_LLM_BASE_URL": "https://api.openai.com/v1",
+		"TDB_LLM_MODEL":    "gpt-5.6-luna",
+		"TDB_LLM_API_KEY":  "sk-test",
+	} {
+		if m[k] != want {
+			t.Fatalf("%s=%q, want %q", k, m[k], want)
+		}
+	}
+}
+
+func TestGenerateSkillAgentEnvs_NoLLMConfigLeavesTDBLLMUnset(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Name = "bare"
+	dac.Namespace = "default"
+
+	for _, e := range h.generateSkillAgentEnvs(dac, "dac-bare", `[]`, nil, nil) {
+		if len(e.Name) > 8 && e.Name[:8] == "TDB_LLM_" {
+			t.Fatalf("expected no TDB_LLM_* env, got %s", e.Name)
+		}
+	}
+}

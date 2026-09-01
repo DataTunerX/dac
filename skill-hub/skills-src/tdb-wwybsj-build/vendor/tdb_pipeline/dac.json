@@ -1,0 +1,21 @@
+{
+  "llm": {
+    "provider": "openai_compatible",
+    "model": "google/gemma-4-31B-it",
+    "apiKey": "",
+    "baseUrl": "http://10.124.48.200:8000/v1",
+    "timeoutSeconds": 300,
+    "maxRetries": 3,
+    "temperature": 0.0,
+    "tokenParameter": "auto",
+    "maxParallelChunks": 16,
+    "maxParallelDirectRelations": 4,
+    "directRelationBatchSize": 1,
+    "gemmaocr_workers": 32,
+    "extractionSplitChars": 1500,
+    "tdbConceptHints": true,
+    "twoStageExtraction": true,
+    "entityFollowup": true,
+    "highRecall": true
+  }
+}

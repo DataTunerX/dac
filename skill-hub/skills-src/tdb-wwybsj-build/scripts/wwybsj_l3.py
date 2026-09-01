@@ -51,8 +51,8 @@ from wwybsj_common import (  # noqa: E402
     llm_chat, post, subject_statements,
 )
 
-EIS_ROOT = Path("/Users/ningwu/eis")
-PIPELINE_DIR = EIS_ROOT / "tdb/pipeline"
+SKILL_DIR = Path(__file__).resolve().parent.parent
+PIPELINE_DIR = SKILL_DIR / "vendor" / "tdb_pipeline"
 DAC_JSON = PIPELINE_DIR / "dac.json"
 L3_OUT_DIR = OUT_DIR / "l3"
 

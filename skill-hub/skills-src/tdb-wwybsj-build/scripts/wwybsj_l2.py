@@ -74,8 +74,8 @@ from wwybsj_common import (  # noqa: E402
 )
 from wwybsj_research import MIN_RAG_SCORE, is_noise, relevance  # noqa: E402
 
-EIS_ROOT = Path("/Users/ningwu/eis")
-PIPELINE_DIR = EIS_ROOT / "tdb/pipeline"
+SKILL_DIR = Path(__file__).resolve().parent.parent
+PIPELINE_DIR = SKILL_DIR / "vendor" / "tdb_pipeline"
 DAC_JSON = PIPELINE_DIR / "dac.json"
 
 EXTRACTOR = "wwybsj_l2_v1"
