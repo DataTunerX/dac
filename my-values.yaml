@@ -70,7 +70,7 @@ executionEngine:
     # models 400 on every call, including the capability check.
     skillAgent:
       repository: "skill-agent"
-      tag: "18-amd64"
+      tag: "19-amd64"
   llmConfigs:
     - name: "llm-default"
       provider: "openai_compatible"
@@ -99,7 +99,7 @@ bizOrchestratorRegistry:
 bizRoutingAgent:
   image:
     repository: "routing-agent"
-    tag: "15-amd64"
+    tag: "16-amd64"
 
 bizChartAgent:
   image:
@@ -114,7 +114,7 @@ bizSkillAgent:
     skillSyncWatchAll: "false"
   image:
     repository: "skill-agent"
-    tag: "18-amd64"
+    tag: "19-amd64"
 
 skillHub:
   image:
