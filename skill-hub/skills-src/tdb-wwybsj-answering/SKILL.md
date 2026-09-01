@@ -23,6 +23,17 @@ Core rule:
 - treat `wwybsj` as the primary domain for collection truth
 - treat `archeology` as the secondary domain for interpretation and context
 - use additional remote lab domains only when they fit the question's evidence need
+- System 1 answer artifacts are the only allowed fast path. If System 1 does
+  not safely serve the answer, the agent must collect both local `wwybsj` TDB
+  evidence and remote TDB lab evidence before answering any `wwybsj` collection
+  question.
+- Do not answer with `本地 wwybsj TDB：本次未调用`, `local TDB not queried`,
+  `仅使用 wwybsj.json`, or any equivalent report unless a valid System 1 artifact
+  was served under the System 1 rules. Without System 1, local `wwybsj` TDB
+  collection is a hard gate.
+- Do not answer with `远端 TDB lab：本次未调用`, `remote not queried`, or any
+  equivalent report unless a valid System 1 artifact was served under the
+  System 1 rules. Without System 1, remote TDB collection is a hard gate.
 - do not silently merge the two into one layer of certainty
 - a local registry fact is stronger than a remote comparison
 - business ontology can interpret a field or query phrase, but it is not item
@@ -58,34 +69,6 @@ Use local and remote gateways with different evidence roles:
     religion, society, environment, theory, or transmitted-text comparison
 
 Do not query `domain=wwybsj` on any remote lab gateway (ports `8989`-`8995`) and treat an empty result as evidence that the local collection lacks the item. `domain=wwybsj` lives only on port `8997`, even though that gateway shares host `10.124.48.91` with the lab gateways. If the question is about a `wwybsj` collection object, start at `10.124.48.91:8997`.
-
-### The collection gateway may be empty (critical)
-
-`10.124.48.91:8997` is an isolated TDB that was re-initialized with the current
-schema, and **its knowledge tables start empty**. Content arrives only as DAC
-Data Management → **TDB 入库** (`/tdb-pipeline`) runs ingest into target
-`wwybsj`, which writes to this same gateway.
-
-That changes what an empty result means, and getting it wrong produces
-confidently wrong answers:
-
-> An item missing from the local wiki or statements means **not yet ingested**,
-> **not** absent from the collection. Collection membership is decided by
-> `wwybsj.json`, the full registry snapshot beside this `SKILL.md`, which stays
-> valid regardless of what the gateway currently holds.
-
-So while the gateway is sparse:
-
-- check `wwybsj.json` before saying an item is not in the collection
-- say plainly that local wiki/statement evidence is absent and that the answer
-  rests on the registry snapshot
-- do not fall back to a lab gateway for `domain=wwybsj` to fill the gap, for the
-  reason given above: that domain exists only on `8997`
-- a registry-only answer is a legitimate answer; label it as registry-only
-
-Check scope live rather than assuming, with
-`GET /v2/wiki/pages?domain=wwybsj&limit=1`: a `total` of 0 means nothing has been
-ingested yet.
 
 Before a broad interpretive or debugging answer, check health for the intended
 remote gateway when practical: `GET /v2/health` or `GET /health`. If a remote
@@ -207,6 +190,23 @@ Use TDB System 1 answer artifacts before the full retrieval workflow whenever
 the question can be fingerprinted. System 1 is a fast path over previously
 grounded answers, not a new evidence source.
 
+System 1 exception:
+
+- If an active System 1 artifact safely serves the current question under the
+  validation rules in `references/system1-answer-memory.md`, the agent may
+  answer without making fresh remote TDB lab calls.
+- The answer must explicitly say System 1 was used and include its evidence
+  boundary.
+- If System 1 misses, is stale, lacks provenance, fails validation, or is not
+  safe for the requested interpretation, the agent must run System 2 and collect
+  local `wwybsj` TDB evidence plus remote TDB lab evidence before answering.
+- A local wiki page, local registry row, or local `wwybsj.json` match is not a
+  substitute for System 1 and does not waive the remote TDB requirement.
+- A local `wwybsj.json` match is also not a substitute for calling the local
+  `wwybsj` TDB gateway. Use the file only after an actual local gateway query
+  when a full scan, raw field check, disambiguation, or gateway-gap fallback is
+  needed.
+
 Read `references/system1-answer-memory.md` before using, recording, or importing
 System 1 artifacts. It defines the `question_fingerprint`, entity ids, recall
 rules, validation rules, existing Q&A ingest rules, and
@@ -225,26 +225,45 @@ Mandatory execution rule:
    before item retrieval when the question mentions field names, lookup
    phrases, counting/statistical fields, `period.raw_value`, `dynasty`, or
    normalization inconsistency.
-5. Query local `wwybsj` item/wiki/statement evidence first.
-6. Check the local full registry file when a full scan, disambiguation, or gateway fallback is needed.
-7. Query remote `archeology` second. Add remote auxiliary lab domains only when
-   the question needs their evidence. For interpretive, comparative,
+5. Query local `wwybsj` TDB item/wiki/statement evidence first. This is
+   mandatory for every System 2 answer. At minimum, call the local gateway
+   (`10.124.48.91:8997`) and inspect one appropriate `wwybsj` layer such as
+   wiki search/page/evidence, ontology concept/statements, term mapping, or
+   `domain=wwybsj` search.
+6. Check the local full registry file when a full scan, disambiguation, raw
+   field verification, or gateway fallback is needed. `wwybsj.json` supplements
+   local TDB evidence; it does not waive step 5.
+7. Query remote `archeology` second. This is mandatory for every System 2
+   answer, including apparently simple single-item answers. At minimum, collect
+   one remote TDB lab signal from an appropriate `archeology` layer
+   (`wiki`, `ontology`, or `chunk/source search`) and report the layer used. For
+   interpretive, comparative,
    typological, functional, cultural-background, religious, artistic,
    environmental, or lineage claims, use the remote evidence ladder: wiki,
    ontology/statements/provenance, then chunks/source search. Do not stop after
    one layer unless the user explicitly asks for a quick answer or the gateway
    layer is unavailable.
-8. Pull provenance / evidence for any structured claim you want to rely on.
-9. Actively look for counter-evidence when the answer would make a strong
+8. Add remote auxiliary lab domains when the question needs their evidence. For
+   cultural meaning, exhibition interpretation, style, iconography, ritual,
+   social context, chronology, environment, or text comparison, collect from at
+   least one fitting auxiliary remote domain in addition to `archeology` when
+   available.
+9. Pull provenance / evidence for any structured claim you want to rely on.
+10. Actively look for counter-evidence when the answer would make a strong
    causal, origin, exclusivity, typological-lineage, or status claim.
-10. Use search hits to expand thin answers.
-11. Compose the answer.
-12. Record a System 1 answer artifact after successful, reusable System 2 answers.
-13. Use inline numeric citations and a final `References` section in every
+11. Use search hits to expand thin answers.
+12. Compose the answer only after either System 1 safely served the answer or
+    both local `wwybsj` TDB evidence and remote TDB evidence have been collected
+    and inspected.
+13. Record a System 1 answer artifact after successful, reusable System 2 answers.
+14. Use inline numeric citations and a final `References` section in every
     user-facing answer unless the user explicitly asks for answer-only prose.
-14. Include an evidence report unless the user explicitly asks for answer-only prose.
+15. Include an evidence report unless the user explicitly asks for answer-only prose.
 
 The evidence report is part of the answer process, not optional debugging output.
+If System 2 reaches the answer-writing step without collected local `wwybsj` TDB
+evidence or collected remote TDB evidence, stop and report the blocker instead
+of answering the substance of the question.
 
 ## Citation Discipline
 
@@ -345,6 +364,34 @@ field rules before choosing JSON fields:
 
 ### Step 2: Query local `wwybsj` first
 
+Local `wwybsj` TDB collection is mandatory for System 2:
+
+- If System 1 did not safely serve the answer, do not answer until the local
+  collection gateway (`http://10.124.48.91:8997`, `domain=wwybsj`) has been
+  queried and its result inspected.
+- Use the local gateway as the authoritative collection TDB surface for item
+  existence, wiki pages, collection registry projections, semantic statements,
+  term mappings, and local `domain=wwybsj` search.
+- For single-item questions, make at least one concrete local TDB lookup using
+  the resolved registry number or item name. Prefer wiki search/page first; when
+  a page exists, fetch the page and page evidence. If the wiki layer is empty,
+  try ontology concept/statement or local `domain=wwybsj` search before falling
+  back to `wwybsj.json`.
+- For collection-slice, counting, normalization, or audit questions, query the
+  local business term registry or local ontology/search layer that matches the
+  requested field or slice before relying on the offline registry snapshot.
+- `wwybsj.json` may be used for full scans, raw-field verification,
+  disambiguation, or when the gateway is sparse, but only after an actual local
+  TDB query. It is not enough to say the local file was checked.
+- If the local `wwybsj` gateway is unreachable and System 1 did not safely serve
+  the answer, stop and say the answer is blocked by unavailable local
+  `wwybsj` TDB evidence. Do not substitute local-only file evidence or general
+  knowledge for the missing TDB call unless the user explicitly asks for an
+  offline, non-TDB fallback.
+- An answer that says `本地 wwybsj TDB：本次未调用`, `local TDB not queried`, or
+  `仅使用 wwybsj.json` is invalid unless it is explicitly serving a valid
+  System 1 artifact.
+
 Try in parallel when possible:
 
 - `GET http://10.124.48.91:8997/v2/wiki/search?domain=wwybsj&q=...`
@@ -379,6 +426,25 @@ If local `wwybsj` is thin, record that explicitly. Do not pretend the local doma
 
 ### Step 3: Query remote TDB lab context second
 
+Remote TDB collection is mandatory for System 2:
+
+- If System 1 did not safely serve the answer, do not answer until at least the
+  remote `archeology` gateway has been queried and its result inspected.
+- For cultural meaning, interpretation, comparison, typology, function,
+  chronology, style, iconography, ritual, social, environmental, or lineage
+  questions, collect the full remote evidence ladder from `archeology` whenever
+  the gateway is reachable: `wiki`, `ontology/statements`, and `chunk/source
+  search`.
+- If one `archeology` layer is empty, retry with shorter anchors or adjacent
+  terms; empty results still count as a queried layer only after
+  `resolved_stream_ids` or the equivalent domain binding has been checked.
+- If the remote `archeology` gateway is unreachable, try the most relevant
+  auxiliary remote lab gateway. If no remote TDB lab gateway can be reached,
+  stop and say that the answer is blocked by unavailable remote TDB evidence.
+  Do not substitute general knowledge or local-only evidence.
+- For cultural-meaning questions, an answer that says `远端 TDB lab：本次未调用`
+  is invalid unless it is explicitly serving a valid System 1 artifact.
+
 Use remote `archeology` for:
 
 - terminology normalization
@@ -386,7 +452,7 @@ Use remote `archeology` for:
 - cultural and historical background
 - source text explaining likely function, form, or context
 
-Use remote auxiliary lab domains only when the local collection question needs
+Use remote auxiliary lab domains when the local collection question needs
 their discipline-specific evidence:
 
 - `history`: dynasty, polity, chronology, political geography, historical
@@ -629,11 +695,22 @@ Report rules:
 
 - Never hide an empty local result if the answer relies on the registry or remote
   background instead.
+- Never write `本地 wwybsj TDB：本次未调用`, `local TDB not queried`,
+  `only wwybsj.json checked`, or an equivalent evidence report for a System 2
+  answer. The only acceptable cases are: `System 1 served validated artifact
+  <id>` or `blocked: local wwybsj TDB unavailable`.
+- Never write `远端 TDB lab：本次未调用`, `remote not queried`, or an equivalent
+  evidence report for a System 2 answer. The only acceptable cases are:
+  `System 1 served validated artifact <id>` or `blocked: remote TDB unavailable`.
 - If local wiki and `wwybsj.json` disagree, report both and prefer the registry file for raw registration fields while treating wiki prose as a derived projection.
 - If a business ontology rule shaped the lookup or normalization audit, cite the
   applied `wwybsj_business_terms` raw term / canonical term / semantic slot.
 - When reporting local wiki retrieval, name the gateway if relevant:
   `local 10.124.48.91:8997` (port `8997`), not any remote lab gateway.
+- Report the local `wwybsj` TDB layer actually queried: wiki, page evidence,
+  ontology, statements, term mapping, or local search. If `wwybsj.json` was also
+  used, label it as `offline registry snapshot`, not as a replacement for local
+  TDB.
 - Name whether `7号` means local `ww_bianhao=7` or internal `id=7` when the two
   differ.
 - Default rule for plain user-facing phrases such as `3号展品`, `7号藏品`,
@@ -648,8 +725,17 @@ Report rules:
   over vague phrases like `TDB says`.
 - If a remote source only supports general background, label it `background only`.
 - Report each queried remote lab domain as `wiki`, `ontology`, and `chunk`
-  layers. If a layer or auxiliary domain was not queried, say why; if it
-  returned no usable support, say `empty`, `not usable`, or `unavailable`.
+  layers. For System 2 cultural, interpretive, comparative, typological,
+  functional, stylistic, ritual, social, chronological, environmental, or
+  lineage questions, all three `archeology` layers must be queried or marked
+  `unavailable` after an actual attempted call. Do not mark a layer `not
+  queried` as an acceptable final state.
+- Auxiliary domains may be omitted only when their disciplinary role is not
+  relevant after local anchors are known, or when System 1 served the answer.
+  For cultural-meaning questions, prefer querying at least one fitting
+  auxiliary domain (`art_history`, `history`, `anthropology_sociology`,
+  `geo_environment`, `literature_humanities`, or `philosophy_theory`) and report
+  the result.
 - When a remote claim enters reasoning, name the domain and layer that supports
   it. Example: `art_history chunk supplies source text; archeology ontology
   suggests the comparable class`.
