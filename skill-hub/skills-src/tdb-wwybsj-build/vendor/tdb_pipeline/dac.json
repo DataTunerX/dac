@@ -6,7 +6,7 @@
     "baseUrl": "http://10.124.48.200:8000/v1",
     "timeoutSeconds": 300,
     "maxRetries": 3,
-    "temperature": 0.0,
+    "temperature": "auto",
     "tokenParameter": "auto",
     "maxParallelChunks": 16,
     "maxParallelDirectRelations": 4,
