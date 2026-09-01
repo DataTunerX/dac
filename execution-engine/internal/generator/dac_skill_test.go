@@ -256,3 +256,39 @@ func TestAppendEnableThinkingEnvNilConfig(t *testing.T) {
 		t.Fatalf("expected no envs for nil llmConfig, got %v", envs)
 	}
 }
+
+// A skill agent bound to an explicit skillPolicy must not also subscribe to the
+// whole Skill Hub namespace: watch-all made every agent load every tdb-* skill
+// and then claim those domains in its capability check.
+func TestGenerateSkillAgentEnvs_ExplicitPolicyDisablesWatchAll(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Name = "geo"
+	dac.Namespace = "default"
+	dac.Spec.SkillPolicy.Skills = []dacv1alpha1.SkillRef{
+		{Namespace: "default", Name: "tdb-geo-environment-qa", Version: "1.0.0"},
+	}
+
+	m := map[string]string{}
+	for _, e := range h.generateSkillAgentEnvs(dac, "dac-geo", `[]`, nil, nil) {
+		m[e.Name] = e.Value
+	}
+	if m["SKILL_SYNC_WATCH_ALL"] != "false" {
+		t.Fatalf("expected watch-all disabled for an explicit policy, got %q", m["SKILL_SYNC_WATCH_ALL"])
+	}
+}
+
+// With no policy the agent has no skills of its own, so leave the default alone
+// rather than pinning it to a value that would give the agent nothing at all.
+func TestGenerateSkillAgentEnvs_EmptyPolicyLeavesWatchAllUnset(t *testing.T) {
+	h := &DataAgentContainerGenerator{}
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Name = "bare"
+	dac.Namespace = "default"
+
+	for _, e := range h.generateSkillAgentEnvs(dac, "dac-bare", `[]`, nil, nil) {
+		if e.Name == "SKILL_SYNC_WATCH_ALL" {
+			t.Fatalf("expected SKILL_SYNC_WATCH_ALL to stay unset, got %q", e.Value)
+		}
+	}
+}

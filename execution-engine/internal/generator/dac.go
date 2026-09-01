@@ -1639,6 +1639,20 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 		{Name: "SKILL_DOWNLOAD_OVERWRITE", Value: "true"},
 		{Name: "SKILL_DOWNLOAD_CONCURRENCY", Value: "8"},
 	}
+	// A skillPolicy is an explicit set, exactly like the local attachments
+	// handled in configureLocalSkillAttachments. The sync thread defaults
+	// SKILL_SYNC_WATCH_ALL to true, which subscribes to the whole Skill Hub
+	// namespace and pulls every package regardless of SKILLS -- so an agent
+	// bound to one skill still loaded every tdb-* skill and then claimed those
+	// domains in its capability check, making every agent look equally capable
+	// and collapsing routing to whichever answered first.
+	//
+	// Only pin it when the policy actually names skills: with an empty policy
+	// the agent has nothing of its own, and disabling the watch would leave it
+	// with no skills at all.
+	if len(dac.Spec.SkillPolicy.Skills) > 0 {
+		envs = append(envs, corev1.EnvVar{Name: "SKILL_SYNC_WATCH_ALL", Value: "false"})
+	}
 	if dac.Spec.ExpertAgentMaxSteps != "" {
 		envs = append(envs, corev1.EnvVar{Name: "LOCAL_SKILL_MAX_STEPS", Value: dac.Spec.ExpertAgentMaxSteps})
 	}

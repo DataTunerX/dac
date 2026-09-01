@@ -39,7 +39,7 @@ dataServices:
 executionEngine:
   image:
     repository: "execution-engine"
-    tag: "13-amd64"
+    tag: "14-amd64"
   agentImages:
     orchestratorAgent:
       repository: "orchestrator-agent"
