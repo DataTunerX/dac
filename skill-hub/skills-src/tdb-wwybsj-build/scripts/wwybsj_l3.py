@@ -126,8 +126,10 @@ def load_material(registry_no: str) -> dict[str, Any]:
 def import_llm():
     sys.path.insert(0, str(PIPELINE_DIR))
     from llm_config_common import (  # type: ignore
-        apply_chat_completion_token_limit, load_llm_config, redacted_llm_config)
-    return load_llm_config, apply_chat_completion_token_limit, redacted_llm_config
+        apply_chat_completion_token_limit, load_llm_config, redacted_llm_config,
+        resolve_chat_temperature)
+    return (load_llm_config, apply_chat_completion_token_limit, redacted_llm_config,
+            resolve_chat_temperature)
 
 
 def _parse(content: str) -> dict | None:
@@ -154,7 +156,7 @@ def _parse(content: str) -> dict | None:
 
 
 def write_prose(mat: dict, cfg: dict, max_tokens: int, retry_hint: str = "") -> dict:
-    _, apply_limit, _ = import_llm()
+    _, apply_limit, _, resolve_temperature = import_llm()
     forbid = []
     fact_text = " ".join(f["事实"] for f in mat["facts"])
     if "probable_original_context" in mat["gaps"]:
@@ -192,12 +194,17 @@ def write_prose(mat: dict, cfg: dict, max_tokens: int, retry_hint: str = "") -> 
         **({"上一次的问题": retry_hint} if retry_hint else {}),
         "输出格式": {"text": "<描述文字>", "used_facts": ["<所依据的事实原文，逐条列出>"]},
     }
-    payload = {"model": cfg.get("model"), "temperature": float(cfg.get("temperature", 0.0)),
+    payload = {"model": cfg.get("model"),
                "messages": [
                    {"role": "system", "content":
                     "你是博物馆陈列文案撰稿人。你只依据给定素材写作，从不添加素材之外的信息，"
                     "素材没有的就不写。"},
                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}]}
+    # None means "leave the parameter out": gpt-5.6 rejects any explicit
+    # temperature, while the lab vLLM still wants the configured value.
+    temperature = resolve_temperature(cfg)
+    if temperature is not None:
+        payload["temperature"] = temperature
     payload = apply_limit(payload, cfg, max_tokens)
     out = _parse(llm_chat(cfg, payload))
     if out is None or not str(out.get("text") or "").strip():
@@ -389,7 +396,7 @@ def main() -> int:
         nos = nos[:args.limit]
 
     # P5 — resolve the LLM before anything else; no LLM means no prose.
-    load_cfg, _, redacted = import_llm()
+    load_cfg, _, redacted, _ = import_llm()
     cfg = load_cfg(DAC_JSON)
     print(f"文物 {len(nos)} 件 · LLM {json.dumps(redacted(cfg), ensure_ascii=False)[:90]}")
 

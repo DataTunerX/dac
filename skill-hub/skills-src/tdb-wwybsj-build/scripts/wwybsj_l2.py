@@ -446,8 +446,10 @@ def retrieval_run_id(cache_entry: dict) -> str:
 def import_llm():
     sys.path.insert(0, str(PIPELINE_DIR))
     from llm_config_common import (  # type: ignore
-        apply_chat_completion_token_limit, load_llm_config, redacted_llm_config)
-    return load_llm_config, apply_chat_completion_token_limit, redacted_llm_config
+        apply_chat_completion_token_limit, load_llm_config, redacted_llm_config,
+        resolve_chat_temperature)
+    return (load_llm_config, apply_chat_completion_token_limit, redacted_llm_config,
+            resolve_chat_temperature)
 
 
 def _parse_json(content: str) -> dict | None:
@@ -477,7 +479,7 @@ def _parse_json(content: str) -> dict | None:
 def fill_slots(artifact: dict, candidates: list[dict], cfg: dict,
                max_tokens: int) -> dict[str, Any]:
     """Ask the LLM to fill every slot from a CLOSED candidate list."""
-    _, apply_token_limit, _ = import_llm()
+    _, apply_token_limit, _, resolve_temperature = import_llm()
 
     prompt = {
         "任务": "为一件馆藏文物填写研究槽位。只能从给定候选段落中选择依据。",
@@ -522,7 +524,6 @@ def fill_slots(artifact: dict, candidates: list[dict], cfg: dict,
     }
     payload = {
         "model": cfg.get("model"),
-        "temperature": float(cfg.get("temperature", 0.0)),
         "messages": [
             {"role": "system",
              "content": "你是严谨的博物馆研究员。你只依据给定原文作答，从不编造证据，"
@@ -530,6 +531,11 @@ def fill_slots(artifact: dict, candidates: list[dict], cfg: dict,
             {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
         ],
     }
+    # None means "leave the parameter out": gpt-5.6 rejects any explicit
+    # temperature, while the lab vLLM still wants the configured value.
+    temperature = resolve_temperature(cfg)
+    if temperature is not None:
+        payload["temperature"] = temperature
     payload = apply_token_limit(payload, cfg, max_tokens)
     content = llm_chat(cfg, payload)
     parsed = _parse_json(content)
@@ -853,7 +859,7 @@ def main() -> int:
         return 0
 
     # G6 — no LLM, no writing. Resolve the config before doing anything else.
-    load_llm_config, _, redacted = import_llm()
+    load_llm_config, _, redacted, _ = import_llm()
     cfg = load_llm_config(DAC_JSON)
     print(f"LLM: {json.dumps(redacted(cfg), ensure_ascii=False)[:120]}")
 
