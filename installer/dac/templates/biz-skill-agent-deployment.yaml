@@ -73,6 +73,7 @@ spec:
             - name: SKILL_SYNC_WATCH_ALL
               value: {{ .Values.bizSkillAgent.config.skillSyncWatchAll | quote }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
+            {{- include "dac.enableThinkingEnv" . | nindent 12 }}
           args:
             {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizSkillAgent.config.redisDb) | nindent 12 }}
             {{- include "dac.llmArgs" . | nindent 12 }}

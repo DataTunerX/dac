@@ -41,6 +41,7 @@ spec:
             - name: ROUTING_MODE
               value: {{ .Values.bizRoutingAgent.config.routingMode | quote }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
+            {{- include "dac.enableThinkingEnv" . | nindent 12 }}
           args:
             {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizRoutingAgent.config.redisDb) | nindent 12 }}
             {{- include "dac.llmArgs" . | nindent 12 }}

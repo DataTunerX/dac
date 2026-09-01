@@ -43,6 +43,7 @@ spec:
             - name: REGISTER_AGENT
               value: {{ .Values.bizChartAgent.config.registerAgent | quote }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
+            {{- include "dac.enableThinkingEnv" . | nindent 12 }}
           args:
             {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizChartAgent.config.redisDb) | nindent 12 }}
             {{- include "dac.llmArgs" . | nindent 12 }}

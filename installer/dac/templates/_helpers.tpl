@@ -302,6 +302,21 @@ Usage: {{ include "dac.llmArgs" . }}
 {{- end }}
 
 {{/*
+Disable the enable_thinking extra_body param for endpoints that reject it.
+Agents default it on (ENABLE_THINKING_PARAM unset means true), and official
+OpenAI answers 400 "Unknown parameter: 'enable_thinking'" on every request.
+Mirrors rejectsEnableThinking in the execution-engine generator, which does the
+same for operator-created agents.
+Usage: {{- include "dac.enableThinkingEnv" . | nindent 12 }}
+*/}}
+{{- define "dac.enableThinkingEnv" -}}
+{{- if contains "api.openai.com" (.Values.global.llm.baseUrl | default "") }}
+- name: ENABLE_THINKING_PARAM
+  value: "false"
+{{- end }}
+{{- end }}
+
+{{/*
 Optional Langfuse env vars for LLM tracing (inject under container env:)
 Usage: {{- include "dac.langfuseEnv" . | nindent 12 }}
 */}}
