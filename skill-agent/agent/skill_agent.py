@@ -4345,10 +4345,9 @@ class SkillAgentExecutor(AgentExecutor):
             )
         else:
             await self.add_history(query, final_answer)
-
-        # add memory — fire-and-forget so a slow/failing upstream never
-        # blocks the stream close or surfaces an exception to the caller.
-        self.schedule_add_memory(query, final_answer)
+            # add memory — fire-and-forget so a slow/failing upstream never
+            # blocks the stream close or surfaces an exception to the caller.
+            self.schedule_add_memory(query, final_answer)
 
         await updater.complete(
             message=new_agent_text_message("", context_id=task.context_id)

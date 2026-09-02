@@ -487,8 +487,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
             )
         else:
             await self.add_history(query, final_answer)
-
-        self.schedule_add_memory(query, final_answer)
+            self.schedule_add_memory(query, final_answer)
 
         await updater.complete(
             message=new_agent_text_message("", context_id=task.context_id)
