@@ -30,6 +30,7 @@ Design principles
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -126,9 +127,29 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
             await self.handle_pre_make_plan(context, event_queue, query)
             return
 
+        # ── Debug: print full metadata on execute entry (after fast-paths) ──
+        logger.info(
+            "[ExecuteEntry] metadata dump | agent_id=%s skip_history_write=%s "
+            "collaboration_delegation=%s delegator_name=%s hop_remaining=%s "
+            "delegation_chain=%s history_owner_agent_id=%s run_id=%s "
+            "user_id=%s full_metadata=%s",
+            self.agent_id,
+            metadata.get("skip_history_write"),
+            metadata.get("collaboration_delegation"),
+            metadata.get("delegator_name"),
+            metadata.get("hop_remaining"),
+            metadata.get("delegation_chain"),
+            metadata.get("history_owner_agent_id"),
+            metadata.get("run_id"),
+            metadata.get("user_id"),
+            json.dumps(metadata, ensure_ascii=False, default=str),
+        )
+        # ─────────────────────────────────────────────────────────────────
+
         user_id = str(metadata.get("user_id", ""))
         run_id = str(metadata.get("run_id", ""))
         trace_id = str(metadata.get("trace_id", ""))
+        skip_history_write = bool(metadata.get("skip_history_write", False))
         self._progress_context = {
             "run_id": run_id,
             "user_id": user_id,
@@ -474,15 +495,10 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
         )
 
         md = self.metadata if isinstance(self.metadata, dict) else {}
-        owner_agent_id = md.get("history_owner_agent_id")
-        is_not_owner = bool(owner_agent_id) and owner_agent_id != self.agent_id
-        if md.get("skip_history_write") or is_not_owner:
-            skip_reason = (
-                "skip_history_write" if md.get("skip_history_write") else "not_owner"
-            )
+        if skip_history_write:
             logger.info(
-                "[HistoryFlow] skill-agent-turn history-skip reason=%s run_id=%s",
-                skip_reason,
+                "[HistoryFlow] skill-agent-turn history-skip skip_history_write=%s run_id=%s",
+                skip_history_write,
                 md.get("run_id", ""),
             )
         else:

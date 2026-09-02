@@ -5178,6 +5178,7 @@ class OrchestratorAgent(BaseAgent):
         user_id = self.metadata.get('user_id', '')
         run_id = self.metadata.get('run_id', '')
         trace_id = self.metadata.get('trace_id', '')
+        skip_history_write = bool(self.metadata.get("skip_history_write", False))
 
         answer = None
 
@@ -5207,15 +5208,12 @@ class OrchestratorAgent(BaseAgent):
 
         # add history
         if self.enable_history == "enable":
-            owner_agent_id = (self.metadata or {}).get("history_owner_agent_id")
-            is_not_owner = bool(owner_agent_id) and owner_agent_id != self.agent_id
-            if (self.metadata or {}).get("skip_history_write") or is_not_owner:
+            if skip_history_write:
                 skip_reason = "skip_history_write" if (self.metadata or {}).get("skip_history_write") else "not_owner"
                 logger.info(
-                    "[HistoryFlow] orchestrator-history-skip reason=%s skip_history_write=%s owner=%s self=%s run_id=%s",
+                    "[HistoryFlow] orchestrator-history-skip reason=%s skip_history_write=%s self=%s run_id=%s",
                     skip_reason,
                     (self.metadata or {}).get("skip_history_write"),
-                    owner_agent_id,
                     self.agent_id,
                     (self.metadata or {}).get("run_id", ""),
                 )
