@@ -5222,10 +5222,9 @@ class OrchestratorAgent(BaseAgent):
             else:
                 think_str = "".join(think)
                 await self.add_history(query, final_answer, think_str)
-
-        # add memory — fire-and-forget so a slow/failing upstream never
-        # blocks the stream close or surfaces an exception to the caller.
-        self.schedule_add_memory(query, final_answer)
+                # add memory — fire-and-forget so a slow/failing upstream never
+                # blocks the stream close or surfaces an exception to the caller.
+                self.schedule_add_memory(query, final_answer)
 
 
 class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):

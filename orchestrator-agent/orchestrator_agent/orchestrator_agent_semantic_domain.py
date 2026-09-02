@@ -515,15 +515,18 @@ class DependencyJudgeResult(BaseModel):
 
 
 class MemberCapabilityJudgeResult(BaseModel):
-    """Tool-call schema for SD member capability LLM judgment."""
+    """Tool-call schema for SD member capability LLM judgment.
+
+    Critical fields (domain_match, can_handle, can_contribute, confidence, reason)
+    are required (no default) so the LLM's function-call JSON schema includes them
+    in the "required" array, prompting the LLM to always provide them.
+    """
 
     model_config = {"extra": "ignore"}
     domain_match: bool = Field(
-        default=False,
         description="Whether the user query is about this semantic domain's subject matter",
     )
     can_handle: bool = Field(
-        default=False,
         description=(
             "Whether this agent covers the query's primary entity / primary "
             "responsibility from its own inventory (cross-domain attributes may "
@@ -531,18 +534,15 @@ class MemberCapabilityJudgeResult(BaseModel):
         ),
     )
     can_contribute: bool = Field(
-        default=False,
         description=(
             "Whether this agent can supply non-primary or partial evidence "
             "(join keys, related fields) when it is not the primary owner"
         ),
     )
     confidence: float = Field(
-        default=0.0,
         description="Confidence in [0, 1] for the capability judgment",
     )
     reason: str = Field(
-        default="",
         description="Short explanation of the judgment in the user's language",
     )
     matched_evidence: List[str] = Field(
@@ -4026,10 +4026,9 @@ class OrchestratorAgent(BaseAgent):
             else:
                 think_str = "".join(think)
                 await self.add_history(query, final_answer, think_str)
-
-        # add memory — fire-and-forget so a slow/failing upstream never
-        # blocks the stream close or surfaces an exception to the caller.
-        self.schedule_add_memory(query, final_answer)
+                # add memory — fire-and-forget so a slow/failing upstream never
+                # blocks the stream close or surfaces an exception to the caller.
+                self.schedule_add_memory(query, final_answer)
 
 
 MEMBER_CAPABILITY_CHECK_MESSAGE_TYPE = "member_capability_check"
@@ -4496,7 +4495,9 @@ def _normalize_member_capability_judgment(
     descriptor_type: str,
 ) -> Dict[str, Any]:
     domain_match = bool(judged.get("domain_match", False))
-    can_handle = bool(judged.get("can_handle", False))
+    # If LLM returned domain_match but omitted can_handle (e.g. truncated response),
+    # default to domain_match. An explicit can_handle=False is still respected.
+    can_handle = bool(judged.get("can_handle", domain_match))
     can_contribute = bool(judged.get("can_contribute", False)) or can_handle
     # Schema consistency only: outside the domain cannot handle or contribute.
     # Do not rewrite can_handle based on missing_requirements (primary-entity semantics).
