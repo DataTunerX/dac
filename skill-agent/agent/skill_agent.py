@@ -347,6 +347,49 @@ def _log_history_turns(turns: list[dict], source: str, max_content_len: int = 60
     logger.info("\n".join(lines))
 
 
+def _log_add_history(
+    agent_id: str,
+    user_id: str,
+    run_id: str,
+    skip_history_write: str,
+    is_delegated: str,
+    delegator: str,
+    query: str,
+    answer: str,
+    max_content_len: int = 800,
+) -> None:
+    """Log formatted add-history detail at INFO level for debugging/tracing.
+
+    Mirrors the visual style of ``_log_history_turns`` so operators can
+    quickly compare which history entries are being written vs. read.
+    """
+    query_display = query[:max_content_len]
+    if len(query) > max_content_len:
+        query_display += f"...（截断，共 {len(query)} 字符）"
+    answer_display = answer[:max_content_len]
+    if len(answer) > max_content_len:
+        answer_display += f"...（截断，共 {len(answer)} 字符）"
+
+    lines = [
+        "",
+        "=" * 60,
+        "  AddHistory 写入明细",
+        "=" * 60,
+        f"  agent_id          : {agent_id}",
+        f"  user_id           : {user_id}",
+        f"  run_id            : {run_id}",
+        f"  skip_history_write: {skip_history_write}",
+        f"  is_delegated      : {is_delegated}",
+        f"  delegator         : {delegator}",
+        "  ── 请求 (query) ──",
+        f"  {query_display}",
+        "  ── 回答 (answer) ──",
+        f"  {answer_display}",
+        "=" * 60,
+    ]
+    logger.info("\n".join(lines))
+
+
 # ---------------------------------------------------------------------------
 # JSON repair for LLM output
 # ---------------------------------------------------------------------------
@@ -3600,12 +3643,27 @@ class SkillAgentExecutor(AgentExecutor):
         final_answer_str = str(final_answer or "").strip()
         if not final_answer_str:
             return
+
+        # ── Detailed add-history trace log ──────────────────────────────
+        md = self.metadata if isinstance(self.metadata, dict) else {}
+        _log_add_history(
+            agent_id=self.agent_id,
+            user_id=str(md.get("user_id", "")),
+            run_id=str(md.get("run_id", "")),
+            skip_history_write=str(md.get("skip_history_write", "")),
+            is_delegated=str(md.get("collaboration_delegation", "")),
+            delegator=str(md.get("delegator_name", "")),
+            query=str(query or ""),
+            answer=final_answer_str,
+        )
+        # ─────────────────────────────────────────────────────────────────
+
         logger.info(
             "[HistoryFlow] skill-agent add_history user_id=%s agent_id=%s run_id=%s "
             "query_chars=%d answer_chars=%d",
-            self.metadata.get("user_id", ""),
+            md.get("user_id", ""),
             self.agent_id,
-            self.metadata.get("run_id", ""),
+            md.get("run_id", ""),
             len(str(query or "")),
             len(final_answer_str),
         )
@@ -4855,12 +4913,7 @@ class SkillAgentExecutor(AgentExecutor):
             detection_source = detection.get("source") or "llm_detection"
             target_label = ", ".join(target_sgs)
             reason_part = f"原因：{_short(reason_text, 300)}" if reason_text.strip() else ""
-            if target_label:
-                message_parts = [
-                    f"检测到数据缺口：需要 {target_label} 补充数据。"
-                ]
-            else:
-                message_parts = ["检测到数据缺口。"]
+            message_parts = ["检测到数据缺口：需要补充数据。"]
             if reason_part:
                 message_parts.append(reason_part)
             await self._emit_progress(
