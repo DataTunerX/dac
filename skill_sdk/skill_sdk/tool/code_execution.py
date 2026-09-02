@@ -691,11 +691,11 @@ class CodeExecution(object):
         )
         self.max_retries: int = max(0, int(max_retries))
         # 防"原地踏步"：连续两次失败签名或生成代码完全一致 → 提前退出重试。
-        # 可通过 CODE_EXEC_NO_PROGRESS_ABORT=false 关闭（仅调试场景）。
+        # 默认关闭——让 LLM 自主决策是否继续重试；可通过 CODE_EXEC_NO_PROGRESS_ABORT=true 开启。
         self.no_progress_abort: bool = (
             bool(no_progress_abort)
             if no_progress_abort is not None
-            else os.getenv("CODE_EXEC_NO_PROGRESS_ABORT", "true").strip().lower()
+            else os.getenv("CODE_EXEC_NO_PROGRESS_ABORT", "false").strip().lower()
             not in ("false", "0", "no")
         )
         # 辅助判官：在**指纹不同但疑似相似**时再让 LLM 裁决一次"根因是否一致"。

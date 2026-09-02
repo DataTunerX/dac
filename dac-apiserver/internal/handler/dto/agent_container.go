@@ -53,6 +53,7 @@ type CreateAgentContainerRequest struct {
 	Model                     ModelSpecDTO      `json:"model" binding:"required"`
 	ExpertAgentMaxSteps       string            `json:"expertAgentMaxSteps,omitempty"`
 	OrchestratorAgentMaxLoops string            `json:"orchestratorAgentMaxLoops,omitempty"`
+	SkillAgentMaxLoops        string            `json:"skillAgentMaxLoops,omitempty"`
 }
 
 // UpdateAgentContainerRequest represents the HTTP update request
@@ -65,6 +66,7 @@ type UpdateAgentContainerRequest struct {
 	Model                     *ModelSpecDTO      `json:"model,omitempty"`
 	ExpertAgentMaxSteps       *string            `json:"expertAgentMaxSteps,omitempty"`
 	OrchestratorAgentMaxLoops *string            `json:"orchestratorAgentMaxLoops,omitempty"`
+	SkillAgentMaxLoops        *string            `json:"skillAgentMaxLoops,omitempty"`
 }
 
 // AgentContainerResponse represents the HTTP response for agent container
@@ -79,6 +81,7 @@ type AgentContainerResponse struct {
 	Model                     ModelSpecResponse              `json:"model"`
 	ExpertAgentMaxSteps       string                         `json:"expertAgentMaxSteps,omitempty"`
 	OrchestratorAgentMaxLoops string                         `json:"orchestratorAgentMaxLoops,omitempty"`
+	SkillAgentMaxLoops        string                         `json:"skillAgentMaxLoops,omitempty"`
 	ActiveDataDescriptors     []ActiveDataDescriptorResponse `json:"activeDataDescriptors,omitempty"`
 	Endpoint                  *EndpointResponse              `json:"endpoint,omitempty"`
 	Conditions                []ConditionResponse            `json:"conditions,omitempty"`
@@ -151,6 +154,7 @@ func ToAgentContainerResponse(container *entity.AgentContainer) AgentContainerRe
 		DACType:                   container.DACType,
 		ExpertAgentMaxSteps:       container.ExpertAgentMaxSteps,
 		OrchestratorAgentMaxLoops: container.OrchestratorAgentMaxLoops,
+		SkillAgentMaxLoops:        container.SkillAgentMaxLoops,
 		CreatedAt:                 container.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:           container.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}

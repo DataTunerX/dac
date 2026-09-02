@@ -113,7 +113,6 @@ async def main(query: str) -> None:
         llm=llm,
         max_steps=25,
         cmd_timeout_sec=60,
-        empty_tool_retry=1,
         use_skill_search=True,
     )
 

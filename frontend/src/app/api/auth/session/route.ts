@@ -82,17 +82,17 @@ export async function GET(request: NextRequest) {
   }
 
   // Fallback: the backend could not be reached or rejected the /users/me call.
-  // Keep the previous JWT-only behaviour so UI hydration still works.
+  // Do NOT return a stale session with empty permissionCodes — that would wipe
+  // the previously-fetched permissions and cause the sidebar menu to disappear.
+  // Instead, signal a temporary unavailability so the client keeps its last
+  // confirmed snapshot.
   const payload = await readJwtPayload(token)
   if (!payload || !isPayloadAcceptable(payload)) {
     return NextResponse.json(EMPTY_ME)
   }
 
-  return NextResponse.json({
-    authenticated: true,
-    username: usernameFromPayload(payload),
-    isSuper: false,
-    platformRoles: [],
-    permissionCodes: [],
-  })
+  return NextResponse.json(
+    { authenticated: false, username: "", isSuper: false, platformRoles: [], permissionCodes: [] },
+    { status: 503 },
+  )
 }

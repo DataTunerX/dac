@@ -105,9 +105,12 @@ spec:
                 type: object
               orchestratorAgentMaxLoops:
                 type: string
+              skillAgentMaxLoops:
+                type: string
               skillPolicy:
-                description: SkillPolicy is the raw skill-hub selection for dacType=skill
-                  (empty for ds/normal).
+                description: |-
+                  SkillPolicy is the raw skill-hub selection for dacType=skill (required) and
+                  optionally for dacType=normal LocalSkill packs (empty for ds).
                 properties:
                   skills:
                     description: |-
@@ -143,6 +146,7 @@ spec:
             - expertAgentMaxSteps
             - model
             - orchestratorAgentMaxLoops
+            - skillAgentMaxLoops
             type: object
           status:
             description: DataAgentContainerStatus defines the observed state of DataAgentContainer

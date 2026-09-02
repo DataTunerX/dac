@@ -46,9 +46,15 @@ RUN id -u app &>/dev/null || (groupadd -r app && useradd -r -g app -d /app -s /s
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git gh curl \
     fd-find ripgrep libstdc++6 wget ca-certificates \
-    golang-go nodejs npm openjdk-21-jre-headless clangd cargo \
+    nodejs npm openjdk-21-jre-headless clangd cargo \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd \
-    # gopls — Go language server (keep Go SDK: gopls needs 'go' at runtime)
+    # Go 1.26.7 — required by gopls latest (Google China CDN)
+    && curl -fsSL --retry 3 "https://golang.google.cn/dl/go1.26.7.linux-amd64.tar.gz" -o /tmp/go.tar.gz \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz \
+    && ln -s /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
+    # gopls — Go language server
     && go install golang.org/x/tools/gopls@latest \
     && cp /root/go/bin/gopls /usr/local/bin/ \
     && rm -rf /root/go \
@@ -75,7 +81,7 @@ RUN mkdir -p /app/code
 COPY --from=uv --chown=app:app /app/.venv /app/.venv
 
 # Place executables in the environment at the front of the path
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:/usr/local/go/bin:$PATH"
 
 COPY agent_card /app/agent_card
 

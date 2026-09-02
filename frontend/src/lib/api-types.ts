@@ -142,6 +142,7 @@ export type AgentContainerResponse = {
   model: ModelSpecResponse
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
+  skillAgentMaxLoops?: string
   activeDataDescriptors?: ActiveDataDescriptorResponse[]
   endpoint?: EndpointResponse
   conditions?: ConditionResponse[]
@@ -160,6 +161,7 @@ export type CreateAgentContainerRequest = {
   model: ModelSpecResponse
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
+  skillAgentMaxLoops?: string
 }
 
 /** PATCH/PUT agent update body (aligned with UpdateAgentContainerRequest). */
@@ -172,6 +174,7 @@ export type UpdateAgentContainerRequest = {
   model?: ModelSpecResponse
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
+  skillAgentMaxLoops?: string
 }
 
 /** GET /namespaces/:ns/agents or GET /agents list payload (after unwrap) */

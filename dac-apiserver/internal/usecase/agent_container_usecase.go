@@ -60,6 +60,7 @@ func (u *agentContainerUsecase) Create(ctx context.Context, req *domain.CreateAg
 		Model:                     req.Model,
 		ExpertAgentMaxSteps:       req.ExpertAgentMaxSteps,
 		OrchestratorAgentMaxLoops: req.OrchestratorAgentMaxLoops,
+		SkillAgentMaxLoops:        req.SkillAgentMaxLoops,
 	}
 
 	// Create in repository
@@ -123,6 +124,9 @@ func (u *agentContainerUsecase) Update(ctx context.Context, namespace, name stri
 	}
 	if req.OrchestratorAgentMaxLoops != nil {
 		existing.OrchestratorAgentMaxLoops = *req.OrchestratorAgentMaxLoops
+	}
+	if req.SkillAgentMaxLoops != nil {
+		existing.SkillAgentMaxLoops = *req.SkillAgentMaxLoops
 	}
 
 	// skillPolicy / agentCard constraints by dacType

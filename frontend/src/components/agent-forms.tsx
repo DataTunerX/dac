@@ -71,6 +71,7 @@ const formSchema = z
     expertModel: z.string().optional(),
     expertAgentMaxSteps: z.string().optional(),
     orchestratorAgentMaxLoops: z.string().optional(),
+    skillAgentMaxLoops: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     // skill 类型不绑定 DD/SG，无需 dataSourceId
@@ -113,6 +114,7 @@ export type CreateAgentPayload = FormValues & {
   skills: Skill[]
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
+  skillAgentMaxLoops?: string
   /** skill DAC 必填；Semantic Group 可选（驱动 LocalSkill 下载） */
   skillPolicy?: SkillPolicy
 }
@@ -246,6 +248,7 @@ export function CreateAgentDialog({
       description: "",
       expertAgentMaxSteps: "2",
       orchestratorAgentMaxLoops: "0",
+      skillAgentMaxLoops: "2",
     },
   })
   const resetAll = () => {
@@ -281,6 +284,7 @@ export function CreateAgentDialog({
       description: "",
       expertAgentMaxSteps: "2",
       orchestratorAgentMaxLoops: "0",
+      skillAgentMaxLoops: "2",
     })
   }
 
@@ -324,6 +328,7 @@ export function CreateAgentDialog({
       // skill 单容器默认：与设计示例对齐
       form.setValue("orchestratorAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "10", { shouldDirty: false, shouldTouch: false })
+      form.setValue("skillAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
     } else {
       form.setValue("orchestratorAgentMaxLoops", "1", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
@@ -861,6 +866,7 @@ export function CreateAgentDialog({
           skillPolicy: { skills: skillPolicySkills },
           expertAgentMaxSteps: values.expertAgentMaxSteps || "10",
           orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "2",
+          skillAgentMaxLoops: values.skillAgentMaxLoops || "2",
         })
         handleOpenChange(false)
         return
@@ -954,7 +960,7 @@ export function CreateAgentDialog({
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="descriptor">Data Descriptor (单一数据源)</SelectItem>
+                          <SelectItem value="descriptor">Data Descriptor (数据源)</SelectItem>
                           <SelectItem value="semantic-group">Semantic Group (语义组)</SelectItem>
                           <SelectItem value="skill">Skill（技能）</SelectItem>
                         </SelectContent>
@@ -1175,7 +1181,7 @@ export function CreateAgentDialog({
                 <div className="text-xs font-semibold text-content-muted">模型配置</div>
                 {dataSourceType === "skill" ? (
                   // skill 类型：单 LLM，绑定 expertModel（运行时读 expertLLM）
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-4">
                     <FormField
                       control={form.control}
                       name="expertModel"
@@ -1222,23 +1228,42 @@ export function CreateAgentDialog({
                         </FormItem>
                       )}
                     />
-                    <FormField
-                      control={form.control}
-                      name="expertAgentMaxSteps"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>最大步数</FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="默认 10"
-                              {...field}
-                              disabled={isSubmitting}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <FormField
+                        control={form.control}
+                        name="skillAgentMaxLoops"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>最大Turn数</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="默认 2"
+                                {...field}
+                                disabled={isSubmitting}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="expertAgentMaxSteps"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>最大步数</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="默认 10"
+                                {...field}
+                                disabled={isSubmitting}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
                   </div>
                 ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

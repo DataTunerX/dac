@@ -28,4 +28,5 @@ data:
   sg-member-capability-max-concurrency: {{ .Values.executionEngine.dacConfig.memberCapabilityMaxConcurrency | default 8 | quote }}
   sg-member-capability-member-timeout-sec: {{ .Values.executionEngine.dacConfig.memberCapabilityMemberTimeoutSec | default 60 | quote }}
   sg-member-capability-total-timeout-sec: {{ .Values.executionEngine.dacConfig.memberCapabilityTotalTimeoutSec | default 180 | quote }}
+  cross-sg-max-hop: {{ .Values.executionEngine.dacConfig.crossSGMaxHop | default "5" | quote }}
 {{- end }}

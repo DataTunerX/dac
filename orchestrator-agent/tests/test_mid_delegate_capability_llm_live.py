@@ -206,7 +206,6 @@ async def test_live_mid_delegate_selects_membership_peer(monkeypatch):
         synthesized_query=query,
         collaborator_cards=_peer_cards(),
         soft_target_hints=[],
-        already_delegated={},
         user_id="live-mid-tester",
         run_id="live-mid-delegate",
         trace_id="b" * 32,
@@ -241,7 +240,6 @@ async def test_live_mid_delegate_soft_hint_miss_falls_back(monkeypatch):
         synthesized_query=query,
         collaborator_cards=_peer_cards(),
         soft_target_hints=["RocketSG"],  # intentionally wrong
-        already_delegated={},
         user_id="live-mid-tester",
         run_id="live-mid-delegate",
         trace_id="b" * 32,
@@ -337,7 +335,6 @@ async def test_live_mid_delegate_end_to_end_detect_then_select(monkeypatch):
         synthesized_query=synth,
         collaborator_cards=_peer_cards(),
         soft_target_hints=list(detection.get("target_sgs") or []),
-        already_delegated={},
         user_id="live-mid-tester",
         run_id="live-mid-delegate",
         trace_id="b" * 32,

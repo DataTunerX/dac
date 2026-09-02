@@ -41,6 +41,7 @@ var (
 		"skill-agent-image",
 		"default-planner-llm",
 		"default-expert-llm",
+		"cross-sg-max-hop",
 	}
 	DDConfigurationExposedKeys = []string{
 		"data-sinker-job-image",

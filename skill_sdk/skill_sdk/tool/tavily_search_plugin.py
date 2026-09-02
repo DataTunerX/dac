@@ -50,10 +50,7 @@ class TavilySearchPlugin(ToolPlugin):
 
         query = str(kwargs.get("query", "")).strip()
         if not query:
-            return json.dumps(
-                {"error": "tavily_search requires a non-empty query."},
-                ensure_ascii=False,
-            )
+            return self._format_error("tavily_search requires a non-empty query.")
 
         kw: dict[str, Any] = {
             "include_answer": bool(kwargs.get("include_answer", False)),
@@ -89,12 +86,10 @@ class TavilySearchPlugin(ToolPlugin):
         try:
             out = run_tavily_search(query, **kw)
         except TavilySearchError as exc:
-            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+            return self._format_error(str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("tavily_search unexpected error")
-            return json.dumps(
-                {"error": f"tavily_search failed: {exc}"}, ensure_ascii=False
-            )
+            return self._format_error(f"tavily_search failed: {exc}")
         return _tavily_json_dumps(out)
 
 
@@ -117,6 +112,7 @@ def _tavily_json_dumps(payload: dict[str, Any], *, max_chars: int = 48000) -> st
     return json.dumps(
         {
             "error": "tavily response too large to return; narrow query/urls or reduce max_results",
+            "is_error": True,
             "provider": payload.get("provider"),
             "count": payload.get("count"),
         },

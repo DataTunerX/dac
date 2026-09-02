@@ -17,6 +17,7 @@ type AgentContainer struct {
 	Model                     ModelSpec
 	ExpertAgentMaxSteps       string
 	OrchestratorAgentMaxLoops string
+	SkillAgentMaxLoops        string
 
 	// Status
 	ActiveDataDescriptors []ActiveDataDescriptor

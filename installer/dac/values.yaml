@@ -363,7 +363,7 @@ dataServices:
   enabled: true
   image:
     repository: data-services
-    tag: "v0.11.0-amd64"
+    tag: "v0.12.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -425,7 +425,7 @@ executionEngine:
   enabled: true
   image:
     repository: execution-engine
-    tag: "v0.11.0-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   resources:
     requests:
@@ -443,38 +443,38 @@ executionEngine:
     orchestratorAgent:
       # -- Repository name under global.imageRegistry
       repository: "orchestrator-agent"
-      tag: "v0.11.0-amd64"
+      tag: "v0.12.0-amd64"
     expertAgent:
       # -- Repository name under global.imageRegistry
       repository: "expert-agent"
-      tag: "v0.11.0-amd64"
+      tag: "v0.12.0-amd64"
     codeAgent:
       # -- Repository name under global.imageRegistry
       repository: "code-agent"
-      tag: "v0.11.0-amd64"
+      tag: "v0.12.0-amd64"
     docAgent:
       # -- Repository name under global.imageRegistry
       repository: "doc-agent"
-      tag: "v0.11.0-amd64"
+      tag: "v0.12.0-amd64"
     dacDataServices:
       # -- Repository name under global.imageRegistry
       repository: "dac-data-services"
-      tag: "v0.11.0-amd64"
+      tag: "v0.12.0-amd64"
     dataSinkerJob:
       # -- Repository name under global.imageRegistry (image = registry/repository:tag)
       repository: "data-sinkers-job"
-      tag: "v0.11.0-amd64"
+      tag: "v0.12.0-amd64"
     dataSinkerStatus:
       # -- Repository name under global.imageRegistry
       repository: "data-sinkers-status"
-      tag: "v0.11.0-amd64"
+      tag: "v0.12.0-amd64"
     dataSinkersObserver:
       repository: "data-sinkers-observer"
-      tag: "v0.11.0-amd64"
+      tag: "v0.12.0-amd64"
     # -- Image for dacType=skill single-container skill-agent Deployments
     skillAgent:
       repository: "skill-agent"
-      tag: "v0.11.0-amd64"
+      tag: "v0.12.0-amd64"
 
   # -- dac-configuration ConfigMap values (read by DAC controller)
   dacConfig:
@@ -496,6 +496,9 @@ executionEngine:
     memberCapabilityMemberTimeoutSec: 60
     # -- Total timeout in seconds for all member capability probes (also used as SG Expert sidecar check timeout).
     memberCapabilityTotalTimeoutSec: 180
+
+  # -- Maximum cross-SG delegation hops for skill agents (env: CROSS_SG_MAX_HOP)
+    crossSGMaxHop: "5"
 
   # -- dd-configuration ConfigMap values (read by DD controller)
   ddConfig:
@@ -520,7 +523,7 @@ semanticGrouper:
   enabled: true
   image:
     repository: semantic-grouper
-    tag: "v0.11.0-amd64"
+    tag: "v0.12.0-amd64"
   api:
     replicas: 1
     resources:
@@ -569,7 +572,7 @@ orchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.11.0-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   config:
     # -- Vector collection name for agent cards
@@ -595,7 +598,7 @@ bizOrchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "v0.11.0-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   config:
     collectionName: "biz_orchestrator_agent_cards"
@@ -623,7 +626,7 @@ bizRoutingAgent:
   enabled: true
   image:
     repository: routing-agent
-    tag: "v0.11.0-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state
@@ -649,10 +652,10 @@ bizRoutingAgent:
 # biz-chart-agent - ECharts generation agent (agent mode, self-registers)
 # ---------------------------------------------------------------------------
 bizChartAgent:
-  enabled: true
+  enabled: false
   image:
     repository: chart-agent
-    tag: "v0.11.0-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   config:
     redisDb: "2"
@@ -681,7 +684,7 @@ bizSkillAgent:
   enabled: true
   image:
     repository: skill-agent
-    tag: "v0.11.0-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state / registration
@@ -716,6 +719,8 @@ bizSkillAgent:
     skillDownloadConcurrency: "8"
     # -- Per-request HTTP timeout in seconds. "" -> use module default (30).
     skillDownloadTimeout: ""
+    # -- Maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP)
+    crossSGMaxHop: "5"
   service:
     type: ClusterIP
     # -- A2A protocol port
@@ -740,7 +745,7 @@ skillHub:
   enabled: true
   image:
     repository: skill-hub
-    tag: "v0.11.0-amd64"
+    tag: "v0.12.0-amd64"
   # hostPath persistence is node-local — keep replicas at 1.
   replicas: 1
   config:

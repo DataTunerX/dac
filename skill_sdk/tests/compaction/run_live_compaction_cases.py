@@ -428,7 +428,6 @@ async def case_09(llm: Any) -> CaseResult:
         max_steps=2,
         compaction=config,
         use_skill_search=False,
-        empty_tool_retry=0,
     )
     template = runner._compaction_template
     assert template is not None
@@ -487,7 +486,6 @@ async def case_10(llm: Any) -> CaseResult:
         max_steps=4,
         compaction=config,
         use_skill_search=False,
-        empty_tool_retry=0,
     )
     skill = Skill(
         name="hello-compact",

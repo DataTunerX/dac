@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: skill-hub
-          image: registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-hub:v0.11.0-amd64
+          image: registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-hub:v0.12.0-amd64
           imagePullPolicy: IfNotPresent
           env:
             - name: LANGFUSE_ENABLED

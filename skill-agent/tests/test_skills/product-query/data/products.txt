@@ -1,0 +1,20 @@
+PROD-001|iPhone 15 Pro|7999|手机|128
+PROD-002|MacBook Pro 14|14999|笔记本电脑|45
+PROD-003|AirPods Pro|1899|耳机|320
+PROD-004|iPad Air|4799|平板电脑|67
+PROD-005|Apple Watch Ultra|6299|智能手表|89
+PROD-006|Magic Keyboard|1399|键盘|156
+PROD-007|Sony WH-1000XM5|2499|耳机|210
+PROD-008|Dell U2723QE 显示器|3999|显示器|38
+PROD-009|Logitech MX Master 3S|699|鼠标|275
+PROD-010|Samsung T7 2TB|1099|存储设备|190
+PROD-011|机械革命 极光 Pro|6999|笔记本电脑|53
+PROD-012|罗技 G Pro X 耳机|1299|耳机|142
+PROD-013|Cherry MX Board 3.0S|899|键盘|88
+PROD-014|Anker 充电器|149|配件|540
+PROD-015|华为 MatePad Pro|3999|平板电脑|76
+PROD-016|小米 13 Ultra|5999|手机|95
+PROD-017|ThinkPad X1 Carbon|10999|笔记本电脑|34
+PROD-018|HHKB Professional HYBRID|2199|键盘|62
+PROD-019|Bose QuietComfort Earbuds|1999|耳机|180
+PROD-020|WD Black SN850X 2TB|1499|存储设备|115

@@ -58,6 +58,8 @@ type DACConfig struct {
 	SGMemberCapabilityTotalTimeout  string
 	// SkillAgentImage is used by dacType=skill single-container Deployments.
 	SkillAgentImage string
+	// CrossSGMaxHop is the maximum cross-SG delegation hops for skill agents.
+	CrossSGMaxHop string
 }
 
 // appendNonEmptyEnv appends env vars whose values are non-empty after trim.
@@ -586,6 +588,7 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 		SGMemberCapabilityMemberTimeout: configMap.Data["sg-member-capability-member-timeout-sec"],
 		SGMemberCapabilityTotalTimeout:  configMap.Data["sg-member-capability-total-timeout-sec"],
 		SkillAgentImage:                 configMap.Data["skill-agent-image"],
+		CrossSGMaxHop:                   configMap.Data["cross-sg-max-hop"],
 	}, nil
 }
 
@@ -1593,6 +1596,11 @@ func (h *DataAgentContainerGenerator) generateSkillAgentArgs(dac *dacv1alpha1.Da
 		maxSteps = "20"
 	}
 
+	maxLoops := dac.Spec.SkillAgentMaxLoops
+	if maxLoops == "" {
+		maxLoops = "2"
+	}
+
 	return []string{
 		"--port", "10100",
 		"--redis-host", redisHost,
@@ -1604,6 +1612,7 @@ func (h *DataAgentContainerGenerator) generateSkillAgentArgs(dac *dacv1alpha1.Da
 		"--base-url", llmConfig.BaseURL,
 		"--model", llmConfig.Model,
 		"--max-steps", maxSteps,
+		"--max-loops", maxLoops,
 	}
 }
 
@@ -1631,6 +1640,7 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 			corev1.EnvVar{Name: "LANGFUSE_SECRET_KEY", Value: dacConfig.ObservationSecretKey},
 			corev1.EnvVar{Name: "LANGFUSE_PUBLIC_KEY", Value: dacConfig.ObservationPublicKey},
 		)
+		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: dacConfig.CrossSGMaxHop})
 	}
 	return envs
 }
@@ -1657,7 +1667,7 @@ func (h *DataAgentContainerGenerator) GenerateSkillDataAgentContainerDeployment(
 	}
 
 	// Default matches design; override from dac-configuration when present.
-	skillAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:v0.11.0-amd64"
+	skillAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:v0.12.0-amd64"
 	if dacConfig != nil && dacConfig.SkillAgentImage != "" {
 		skillAgentImage = dacConfig.SkillAgentImage
 	}

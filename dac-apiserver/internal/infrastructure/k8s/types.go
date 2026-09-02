@@ -91,6 +91,7 @@ type K8sAgentContainer struct {
 		} `json:"model"`
 		ExpertAgentMaxSteps       string `json:"expertAgentMaxSteps,omitempty"`
 		OrchestratorAgentMaxLoops string `json:"orchestratorAgentMaxLoops,omitempty"`
+		SkillAgentMaxLoops        string `json:"skillAgentMaxLoops,omitempty"`
 	} `json:"spec"`
 	Status struct {
 		ActiveDataDescriptors []struct {

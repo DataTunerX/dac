@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
@@ -33,6 +34,23 @@ class ToolPlugin(ABC):
     name: ClassVar[str]
     description: ClassVar[str]
     args_schema: ClassVar[type[BaseModel]]
+
+    @staticmethod
+    def _format_error(message: str, **extra: Any) -> str:
+        """Format a consistent error response JSON string.
+
+        All plugin error returns should use this helper so the stagnation
+        detector and runner consistently recognize failures via the
+        ``"is_error": True`` and ``"error"`` keys.
+
+        Args:
+            message: Human-readable error message.
+            **extra: Additional key-value pairs to include in the error JSON.
+
+        Returns:
+            A JSON string with ``{"error": message, "is_error": True, ...}``.
+        """
+        return json.dumps({"error": message, "is_error": True, **extra}, ensure_ascii=False)
 
     @abstractmethod
     def execute(self, **kwargs: Any) -> str:

@@ -313,6 +313,12 @@ export default function AgentDetailPage() {
                     value={<span>{displayLimitValue(agent?.orchestratorAgentMaxLoops)}</span>}
                   />
                 )}
+                {isSkillAgent && (
+                  <InfoItem
+                    label="最大Turn数"
+                    value={<span>{displayLimitValue(agent?.skillAgentMaxLoops)}</span>}
+                  />
+                )}
                 <InfoItem
                   label={isSkillAgent ? "最大步数" : "专家最大步数"}
                   value={<span>{displayLimitValue(agent?.expertAgentMaxSteps)}</span>}

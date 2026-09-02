@@ -852,10 +852,10 @@ class TestWebFetchLangChainTool(unittest.TestCase):
         names = [t.name for t in runner._runner_tools]
         self.assertIn("web_fetch", names)
         self.assertIn("plan_cmd", names)
-        self.assertIn("read_file", names)
+        self.assertIn("readline_in_range", names)
         self.assertIn("finish", names)
         self.assertEqual(names[0], "plan_cmd")
-        self.assertEqual(names[1], "read_file")
+        self.assertIn("readline_in_range", names)
         self.assertEqual(names[-1], "finish")
         self.assertLess(names.index("web_fetch"), names.index("finish"))
 

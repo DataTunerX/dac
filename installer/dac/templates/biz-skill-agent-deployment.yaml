@@ -63,6 +63,8 @@ spec:
             {{- end }}
             {{- end }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
+            - name: CROSS_SG_MAX_HOP
+              value: {{ .Values.bizSkillAgent.config.crossSGMaxHop | default "5" | quote }}
           args:
             {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizSkillAgent.config.redisDb) | nindent 12 }}
             {{- include "dac.llmArgs" . | nindent 12 }}

@@ -410,10 +410,7 @@ class ReadlineInRangePlugin(ToolPlugin):
         try:
             inp = ReadlineInRangeInput.model_validate(kwargs)
         except ValidationError as exc:
-            return json.dumps(
-                {"error": f"Invalid input: {exc}", "error_code": 400},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"Invalid input: {exc}", error_code=400)
 
         try:
             result = readline_in_range(
@@ -424,32 +421,16 @@ class ReadlineInRangePlugin(ToolPlugin):
                 focused=focused,
             )
         except FileNotFoundError as exc:
-            return json.dumps(
-                {"error": str(exc), "error_code": 404}, ensure_ascii=False
-            )
+            return self._format_error(str(exc), error_code=404)
         except WindowTooLargeError as exc:
-            return json.dumps(
-                {"error": str(exc), "error_code": 400}, ensure_ascii=False
-            )
+            return self._format_error(str(exc), error_code=400)
         except SourceReadPolicyError as exc:
-            return json.dumps(
-                {
-                    "error": str(exc),
-                    "error_code": 400,
-                    "blocked_by_policy": True,
-                },
-                ensure_ascii=False,
-            )
+            return self._format_error(str(exc), error_code=400, blocked_by_policy=True)
         except ValueError as exc:
-            return json.dumps(
-                {"error": str(exc), "error_code": 400}, ensure_ascii=False
-            )
+            return self._format_error(str(exc), error_code=400)
         except Exception as exc:
             logger.exception("readline_in_range failed")
-            return json.dumps(
-                {"error": f"read failed: {exc}", "error_code": 500},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"read failed: {exc}", error_code=500)
 
         payload: dict[str, Any] = {
             "content": result.content,

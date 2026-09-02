@@ -53,10 +53,7 @@ class TavilyExtractPlugin(ToolPlugin):
         urls = list(kwargs.get("urls") or [])
         cleaned = [u.strip() for u in urls if u and str(u).strip()]
         if not cleaned:
-            return json.dumps(
-                {"error": "tavily_extract requires at least one URL."},
-                ensure_ascii=False,
-            )
+            return self._format_error("tavily_extract requires at least one URL.")
 
         query = (kwargs.get("query") or "").strip() or None
         kw: dict[str, Any] = {
@@ -73,10 +70,8 @@ class TavilyExtractPlugin(ToolPlugin):
         try:
             out = run_tavily_extract(cleaned, **kw)
         except TavilyExtractError as exc:
-            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+            return self._format_error(str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("tavily_extract unexpected error")
-            return json.dumps(
-                {"error": f"tavily_extract failed: {exc}"}, ensure_ascii=False
-            )
+            return self._format_error(f"tavily_extract failed: {exc}")
         return _tavily_json_dumps(out)

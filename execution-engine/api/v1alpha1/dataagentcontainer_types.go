@@ -84,6 +84,7 @@ type DataAgentContainerSpec struct {
 	DACType                   string      `json:"dacType"`
 	Model                     ModelSpec   `json:"model"`
 	OrchestratorAgentMaxLoops string      `json:"orchestratorAgentMaxLoops"`
+	SkillAgentMaxLoops        string      `json:"skillAgentMaxLoops"`
 	ExpertAgentMaxSteps       string      `json:"expertAgentMaxSteps"`
 }
 

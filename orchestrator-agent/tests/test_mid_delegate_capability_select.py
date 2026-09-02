@@ -151,7 +151,6 @@ def test_select_mid_delegate_single_round_broadcast_ranks_soft_hints(monkeypatch
             synthesized_query="查会员折扣率",
             collaborator_cards=cards,
             soft_target_hints=["hint-sg-aaa"],
-            already_delegated={},
             user_id="u",
             run_id="r",
             trace_id="t",
@@ -270,16 +269,21 @@ def test_select_mid_delegate_resolves_soft_hint_from_extra_cards(monkeypatch):
     assert result["target_sg_names"] == ["user-sg-bbb"]
 
 
-def test_select_mid_delegate_skips_already_delegated(monkeypatch):
+def test_select_mid_delegate_includes_all_registry_agents(monkeypatch):
+    """Previously-delegated agents should NOT be excluded from the candidate pool
+    — the same agent may need to be called again with a different synthesized_query."""
     executor = object.__new__(sg.OrchestratorAgentExecutorSemanticGroup)
     executor.agent_card = SimpleNamespace(name="self-sg-xxx")
     executor.agent_id = "self-sg-xxx"
 
     async def _fake_probe(query, probe_cards, *_args, **_kwargs):
-        assert [c.name for c in probe_cards] == ["fresh-sg-bbb"]
+        # Both done-sg-aaa and fresh-sg-bbb should be in the probe set
+        names = [c.name for c in probe_cards]
+        assert "done-sg-aaa" in names, "previously-delegated agents should still be probed"
+        assert "fresh-sg-bbb" in names
         return [
             (
-                probe_cards[0],
+                [c for c in probe_cards if c.name == "fresh-sg-bbb"][0],
                 _resp(can_handle=True, confidence=0.9, agent_name="fresh-sg-bbb"),
             )
         ]
@@ -294,7 +298,6 @@ def test_select_mid_delegate_skips_already_delegated(monkeypatch):
         executor._select_mid_delegate_targets_via_capability(
             synthesized_query="q",
             collaborator_cards=[_card("done-sg-aaa"), _card("fresh-sg-bbb")],
-            already_delegated={"done-sg-aaa": "previous result"},
         )
     )
     assert result["target_sg_names"] == ["fresh-sg-bbb"]

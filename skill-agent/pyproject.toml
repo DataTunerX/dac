@@ -39,8 +39,10 @@ dependencies = [
     "langfuse~=3.9.0",
     "pymupdf>=1.24.0",
     "python-lsp-jsonrpc==1.1.2",
+    "aiohttp>=3.9.0",
+    "json-repair>=0.30.0",
     "model_sdk @ file:///Users/james/daocloud/code/dac/skill-agent/sdks/model_sdk-0.2.0-py3-none-any.whl",
-    "skill_sdk @ file:///Users/james/daocloud/code/dac/skill-agent/sdks/skill_sdk-0.3.1-py3-none-any.whl",
+    "skill_sdk @ file:///Users/james/daocloud/code/dac/skill-agent/sdks/skill_sdk-0.3.2-py3-none-any.whl",
 ]
 
 [project.scripts]

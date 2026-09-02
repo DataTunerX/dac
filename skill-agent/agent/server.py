@@ -44,7 +44,9 @@ logger = logging.getLogger(__name__)
 @click.option('--heartbeat-interval', 'heartbeat_interval',default=10, type=int, help='Heartbeat interval in seconds')
 @click.option('--stream', 'stream', default=True, type=bool, help='Enable streaming mode to process step')
 @click.option('--max-steps', 'max_steps',default=2, type=int, help='max steps to run')
-def main(host, port, agent_card, redis_host, redis_port, redis_db, password, provider, api_key, base_url, model, temperature, heartbeat_interval, stream, max_steps):
+@click.option('--max-loops', 'max_loops', default=1, type=int, help='Max total execution turns. 1 = single execution (default), >1 = enable turn-based retry')
+@click.option('--agent-id', 'agent_id', default=None, help='Agent identifier for tracing')
+def main(host, port, agent_card, redis_host, redis_port, redis_db, password, provider, api_key, base_url, model, temperature, heartbeat_interval, stream, max_steps, max_loops, agent_id):
     """Starts an Agent server."""
     try:
         # Pull skill zip packs from skill-hub based on the SKILLS env var
@@ -75,15 +77,34 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         push_config_store = InMemoryPushNotificationConfigStore()
         push_sender = BasePushNotificationSender(httpx_client=httpx_client, config_store=push_config_store)
 
-        skill_executor = SkillAgentExecutor(
-            provider=provider,
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            stream=stream,
-            temperature=temperature,
-            max_steps=max_steps,
-        )
+        if max_loops > 1:
+            from .skill_agent_turn import SkillAgentExecutorWithTurns
+
+            skill_executor = SkillAgentExecutorWithTurns(
+                provider=provider,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                stream=stream,
+                temperature=temperature,
+                max_steps=max_steps,
+                agent_id=agent_id,
+                max_loops=max_loops,
+            )
+            logger.info(
+                "[TurnLoop] Turn mode enabled | max_loops=%d", max_loops,
+            )
+        else:
+            skill_executor = SkillAgentExecutor(
+                provider=provider,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                stream=stream,
+                temperature=temperature,
+                max_steps=max_steps,
+                agent_id=agent_id,
+            )
         # Eagerly initialise the process-wide SkillRunner so the full skill
         # inventory is printed at startup (instead of lazily on the first
         # request). Safe no-op when ENABLE_LOCAL_SKILLS=false.

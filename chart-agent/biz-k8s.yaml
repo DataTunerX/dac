@@ -36,7 +36,7 @@ spec:
           value: "sk-lf-a8cd7ec4-d08c-4f2b-a174-d458073d6d73"
         - name: LANGFUSE_PUBLIC_KEY
           value: "pk-lf-ebed2fcd-31df-4c35-ba33-d6bf0ab399e5"
-        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/chart-agent:v0.11.0-amd64
+        image: registry.cn-shanghai.aliyuncs.com/jamesxiong/chart-agent:v0.12.0-amd64
         imagePullPolicy: IfNotPresent
         name: biz-chart-agent
         ports:

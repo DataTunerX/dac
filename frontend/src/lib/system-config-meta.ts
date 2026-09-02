@@ -37,6 +37,7 @@ export const SYSTEM_CONFIG_META: Record<SystemConfigName, SystemConfigMeta> = {
           "doc-agent-image",
           "dd-sync-observer-image",
           "skill-agent-image",
+          "cross-sg-max-hop",
         ],
       },
       {

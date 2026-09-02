@@ -55,15 +55,9 @@ class WebFetchPlugin(ToolPlugin):
         max_chars = int(kwargs.get("max_chars", 8000))
 
         if not url:
-            return json.dumps(
-                {"url": url, "error": "URL is required"},
-                ensure_ascii=False,
-            )
+            return self._format_error("URL is required", url=url)
         if extract_mode not in ("markdown", "text"):
-            return json.dumps(
-                {"url": url, "error": f"Invalid extract_mode: {extract_mode!r}"},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"Invalid extract_mode: {extract_mode!r}", url=url)
 
         allow_rfc2544 = os.environ.get("WEB_FETCH_ALLOW_RFC2544", "").strip().lower() in (
             "1", "true", "yes",
@@ -92,21 +86,12 @@ class WebFetchPlugin(ToolPlugin):
                     "rely on auto-detect (which may have been disabled via "
                     "WEB_FETCH_DISABLE_FAKEIP_AUTODETECT)."
                 )
-            return json.dumps(
-                {"url": url, "error": f"{msg}{hint}"},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"{msg}{hint}", url=url)
         except WebFetchError as exc:
-            return json.dumps(
-                {"url": url, "error": f"Web fetch failed: {exc}"},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"Web fetch failed: {exc}", url=url)
         except Exception as exc:  # noqa: BLE001
             logger.exception("web_fetch unexpected error")
-            return json.dumps(
-                {"url": url, "error": f"Web fetch error: {exc}"},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"Web fetch error: {exc}", url=url)
 
         return json.dumps(
             {

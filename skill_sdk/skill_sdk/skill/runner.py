@@ -28,6 +28,8 @@ from skill_sdk.compaction import CompactionConfig, CompactionGuard, default_comp
 from skill_sdk.plugin.registry import ToolRegistry
 from skill_sdk.skill.lister import SkillLister
 from skill_sdk.skill.loader import SkillLoader
+from skill_sdk.skill.tool_result import ToolResult
+from skill_sdk.skill.stagnation import StagnationDetector, generate_stagnation_intervention
 
 logging.basicConfig(
     level=logging.INFO,
@@ -166,52 +168,53 @@ RUNNER_INSTRUCTIONS_ZH = """# 角色：Skill Runner
 > SKILL.md / 脚本里若出现相对路径（例如 `./references/xxx.md`、`assets/yyy.json`），**请以上面列出的 `skill_dir` 为基准拼成绝对路径**再用 `readline_in_range` 读取；不要直接传相对路径。
 > `resource_dirs` 列出的每个目录（如 `assets/`、`references/`、`hooks/`）都已经和 `scripts/` 解压在同一 `skill_dir` 下，可直接访问。
 
-## 工具使用规则
-1. **生成命令用 `plan_cmd`**：`cmd` 字段写你想执行的完整 CLI 命令，`rationale` 写为什么这么写。
-   - 你不需要自己执行命令，`plan_cmd` 的返回值就是真实执行结果（由 runner 在本地代跑）。
-   - 每次只建议一条命令；如需多步，等上一条返回后再继续建议。
-   - 优先使用 skill 说明/脚本里给出的命令模式，不要主观臆造；避免破坏性操作。
-   - **`rationale` 必须包含两段内容**：
-     1. **参照**：本次是首次尝试，还是承接上一次失败？若承接，写出上一条 cmd 与 stderr 的关键首行。
-     2. **改动**：这次在 cmd 上具体改了什么（换子命令 / 加参数 / 改路径 / 换 skill 脚本 / 改探测方向）。
-   - **禁止的命令（runner 会在执行前直接拦截，返回 `{{"blocked_by_policy": true}}`）**：
-     - 文件/目录删除与移动：`rm`, `rmdir`, `unlink`, `mv`, `shred`, `truncate`
-       —— 查看文件请用 `ls` / `stat` / `cat` / `head` / `readline_in_range`。
-     - 磁盘与系统级：`dd`, `mkfs*`, `fdisk`, `parted`, `mkswap`, `shutdown`, `reboot`, `halt`, `poweroff`, `init`。
-     - 进程杀伤：`kill`, `pkill`, `killall`。
-     - 就地编辑：`sed -i`, `perl -i`。如需看差异，先 `cat` / `diff`。
-     - 仓库破坏性子命令：`git reset --hard`, `git clean -f`, `git push --force`, `git checkout -- <path>`。
-     用 `sudo` / `env` 包一层、改别名、拼 `&&` / `|` 都不会绕过拦截；命中后请改成只读探测或直接 `finish`，
-     在 `final_answer` 里把需要用户亲自执行的命令列出来。
-2. **读取文件用 `readline_in_range`**；**解析 PDF（路径或 URL，提取文本/可选整页图）用 `extract_pdf`**。
-3. **完成任务时调用 `finish`**：`final_answer` 写给用户的最终答复。
-4. **禁止以纯文本答复**：只要 query 合理且落在当前 skill 能力范围内（由 planner 已经匹配），**必须先用 `plan_cmd` 探测/执行**，不得直接在 content 里写自然语言回答而不调用任何工具；即使你认为 skill 不适用，也应先用 `plan_cmd` 做一次候选探测，再在 `finish.final_answer` 中说明结论。
+## 工具返回格式（统一 ToolResult）
+每次工具调用的返回都是统一格式的 JSON：
+```json
+{{
+  "tool_name": "工具名",
+  "status": "success | error | blocked",
+  "is_error": true/false,
+  "content": "人类可读的结果摘要",
+  "details": {{ /* 结构化数据，如 returncode、stdout、stderr 等 */ }}
+}}
+```
 
-## 观察与决策规则（每次 plan_cmd 返回后必须执行）
-1. 解析返回 JSON：关注 `returncode`、`stdout`、`stderr`。
-2. 判定成功：`returncode == 0` 且 `stdout` 能回答用户问题 → 调用 `finish` 汇总。
-3. 判定失败：`returncode != 0` 或 `stderr` 含明显错误时：
-   - 先执行下面「从失败中学习」的全部步骤，再调用 `plan_cmd`。
-   - 同一错误原因重试**不超过 2 次**；仍失败则调用 `finish`，在 `final_answer` 中说明原因与建议。
-4. 信息不足时：不要猜测，调用 `readline_in_range` 或用新的 `plan_cmd` 去探测（例如 `gh --help`、`ls`）。
-5. 禁止：
-   - 在 `finish` 的 `final_answer` 里编造未经 `plan_cmd` 验证的输出；
-   - 对已经 `returncode == 0` 的命令反复重跑；
+**三种状态的含义**：
+- `status: "success"` → 工具执行成功。`content` 中是结果文本，`details` 中有原始数据。
+- `status: "error"` → 工具执行失败。`content` 中是错误描述，`details` 中有 returncode/stderr 等原始数据。
+- `status: "blocked"` → 工具被安全策略拦截。`content` 中是被拦截的原因，`details` 中有被拦截的命令等信息。
+
+**关键原则**：`is_error` 和 `status` 是**信息性的**，不是控制指令。Runner 不会因为工具失败而强制你退出。你需要自己根据历史上下文判断：
+- 错误是否可以通过换思路 / 换命令 / 探测更多信息来解决？
+- 还是已经尝试了足够多的不同方法，应该调用 `finish` 向用户报告？
+
+## 观察与决策规则
+1. **解读返回**：每次工具调用的返回都是上述 JSON 格式。先看 `status` 字段判断成败，再看 `content` 了解具体情况，必要时查看 `details` 中的原始数据。
+2. **成功时**：`status == "success"` 且 `content` 已能回答用户问题 → 调用 `finish` 汇总。
+3. **失败时**：`status == "error"` 或 `status == "blocked"` 时：
+   - 先执行下面「从失败中学习」的步骤，再决定下一步。
+   - 根据错误的性质决定是重试、换思路、还是放弃。
+4. **信息不足时**：不要猜测，用 `readline_in_range` 或新的 `plan_cmd` 去探测。
+5. **禁止**：
+   - 在 `finish` 的 `final_answer` 里编造未经工具验证的输出；
+   - 对已经成功的命令反复重跑；
    - 一次发多条 `plan_cmd`（只允许一条）。
-6. 若 ToolMessage 返回里出现 `"must_finish": true`，下一轮**必须**调用 `finish`，`final_answer` 中参考 `observation_hint` 说明原因，禁止再发 `plan_cmd`。
 
-## 从失败中学习（生成下一条 plan_cmd 前必须执行）
-1. **回顾历史**：查看当前会话里所有历史 `plan_cmd` 的返回：
-   - 列出已经尝试过的 cmd 与各自的 `returncode`、`stderr` 首行；
-   - 把错误归类为：命令不存在 / 参数无效 / 认证或权限失败 / 路径错误 / 超时 / 其他。
-2. **禁止原样重发**：若即将生成的 cmd 字符串已经在历史中失败过（逐字符相同，或仅空白差异），必须改写；不得原样再发一次。
-3. **更换思路**：若同一错误类别已经重试过 1 次且仍失败，**换思路**而不是只改参数：
+## 从失败中学习
+1. **回顾历史**：查看会话里所有历史工具返回，特别是 `status` 和 `content` 字段：
+   - 列出已经尝试过的方法与各自的结果；
+   - 把失败归类为：命令不存在 / 参数无效 / 认证或权限失败 / 路径错误 / 超时 / 策略拦截 / 其他。
+2. **禁止原样重发**：若即将生成的 cmd 已经在历史中失败过（逐字符相同），必须改写；不得原样再发一次。
+3. **根据错误类型调整策略**：
    - 参数错误 → 先用 `<command> --help` 或 skill 文档中的原始样例；
    - 认证/权限错误 → 用 `gh auth status`、`whoami` 或 `readline_in_range` 查配置；
    - 路径错误 → 用 `ls`、`readline_in_range` 核实存在性；
-   - 命令不存在 → 检查 skill 可用脚本，或在 `finish` 中告知用户缺失依赖。
-4. **不要盲目拼接**：不要把多条已失败的命令用 `&&` / `;` 拼在一起再跑，这只会让所有错误再来一次。
-5. **在 rationale 里写出学习结论**：按「工具使用规则」第 1 条要求，明确写「参照上一次失败 XXX，本次改动 YYY」。
+   - 命令不存在 → 检查 skill 可用脚本，或告知用户缺失依赖；
+   - 策略拦截 → 这是安全限制，不要尝试绕过。改用只读命令或调用 `finish` 告知用户。
+4. **判断何时放弃**：如果已经尝试了多种不同思路仍然失败，且没有其他合理的方法可以尝试，调用 `finish` 向用户说明当前进展、失败原因和建议的下一步。
+5. **不要盲目拼接**：不要把多条已失败的命令用 `&&` / `;` 拼在一起再跑。
+6. **在 rationale 里写出学习结论**：明确写「参照上一次失败 XXX，本次改动 YYY」。
 """
 
 MAX_STEPS_SUMMARY_SYSTEM_ZH = """# 角色：步数耗尽后的总结助手
@@ -558,7 +561,6 @@ def _summarize_max_steps_state(
     tool_history: list[dict[str, Any]],
     *,
     max_steps: int,
-    total_fails: int,
     max_answer_chars: int = 12000,
 ) -> str:
     """User-facing summary when the ReAct loop exhausts `max_steps` without `finish`."""
@@ -566,8 +568,6 @@ def _summarize_max_steps_state(
         f"本回合已达到单轮最大步数（{max_steps} 步），模型未在步数耗尽前调用 `finish`。"
         "下面是根据当前已执行工具与返回整理的摘要，便于判断进展与下一步。",
     ]
-    if total_fails:
-        lines.append(f"（全程 `plan_cmd` 失败累计：{total_fails} 次）")
 
     tool_names = [e["tool"] for e in tool_history if "tool" in e]
     if tool_names:
@@ -855,10 +855,7 @@ class SkillRunner:
         skills: Sequence[Skill] | None = None,
         max_steps: int = 20,
         cmd_timeout_sec: int = 30,
-        same_cmd_fail_budget: int = 2,
-        total_fail_budget: int = 3,
         make_plan_max_attempts: int = 3,
-        empty_tool_retry: int = 1,
         plan_and_run_max_attempts: int = 3,
         max_concurrency: int = 0,
         code_execution: Any | None = None,
@@ -894,10 +891,7 @@ class SkillRunner:
             CompactionGuard(compaction, llm) if compaction is not None else None
         )
         self.cmd_timeout_sec = cmd_timeout_sec
-        self.same_cmd_fail_budget = same_cmd_fail_budget
-        self.total_fail_budget = total_fail_budget
         self.make_plan_max_attempts = max(1, make_plan_max_attempts)
-        self.empty_tool_retry = max(0, empty_tool_retry)
         self.plan_and_run_max_attempts = max(1, plan_and_run_max_attempts)
         self.max_concurrency = max(0, int(max_concurrency))
         self.allow_destructive_commands = bool(allow_destructive_commands)
@@ -1352,7 +1346,6 @@ class SkillRunner:
         skill: Skill,
         messages: list[Any],
         tool_history: list[dict[str, Any]],
-        total_fails: int,
     ) -> str:
         """One plain LLM call to produce a user-facing summary when the loop hits max_steps."""
         transcript = _format_conversation_for_max_steps_summary(messages)
@@ -1360,7 +1353,6 @@ class SkillRunner:
             "## 元信息\n"
             f"- skill: {skill.name}\n"
             f"- max_steps: {self.max_steps}\n"
-            f"- plan_cmd 失败累计: {total_fails}\n"
             f"- 用户原始问题:\n{query}\n\n"
             "## 会话转写（含工具返回，可能被截断）\n"
             f"{transcript}"
@@ -1386,7 +1378,6 @@ class SkillRunner:
         return _summarize_max_steps_state(
             tool_history,
             max_steps=self.max_steps,
-            total_fails=total_fails,
         )
 
     # Extensions where readline_in_range must follow a prior lsp call (symbol
@@ -1533,9 +1524,8 @@ class SkillRunner:
             [t.name for t in skill_tools],
         )
         tool_history: list[dict[str, Any]] = []
-        fail_counts: dict[str, int] = {}
-        counters: dict[str, int] = {"total_fails": 0}
-        empty_tool_retry_left = self.empty_tool_retry
+        # Fresh per-run stagnation detector
+        stagnation = StagnationDetector()
         # Fresh per-run guard so overflow-recovery state does not leak across runs.
         compaction_guard = (
             self._compaction_template.new_run_guard()
@@ -1689,39 +1679,21 @@ class SkillRunner:
                     [c.get("name") for c in tool_calls],
                 )
                 if not tool_calls:
-                    if empty_tool_retry_left > 0:
-                        empty_tool_retry_left -= 1
-                        logger.warning(
-                            "run STEP=%d empty tool_calls, nudging LLM to use tools "
-                            "(retry_left=%d)",
-                            step_no,
-                            empty_tool_retry_left,
-                        )
-                        messages.append(
-                            HumanMessage(
-                                content=(
-                                    "你上一次没有调用任何工具，仅输出了文字。请严格遵守工具使用规则："
-                                    "必须先通过 `plan_cmd` 发出一条命令进行探测/执行，或者通过 "
-                                    "`readline_in_range` / `extract_pdf` 获取信息；完成任务时使用 `finish` 工具输出最终答复。"
-                                    "不要再直接用纯文本回答。"
-                                )
-                            )
-                        )
-                        continue
-
-                    result = {
-                        "status": "completed_without_finish",
-                        "skill": skill.name,
-                        "final_answer": getattr(ai_msg, "content", ""),
-                        "tool_history": tool_history,
-                    }
                     logger.warning(
-                        "run EXIT status=completed_without_finish step=%d",
+                        "run STEP=%d empty tool_calls, nudging LLM to use tools",
                         step_no,
                     )
-                    span.update_trace(output=result)
-                    langfuse.flush()
-                    return result
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "你上一次没有调用任何工具，仅输出了文字。请严格遵守工具使用规则："
+                                "必须先通过 `plan_cmd` 发出一条命令进行探测/执行，或者通过 "
+                                "`readline_in_range` / `extract_pdf` 获取信息；完成任务时使用 `finish` 工具输出最终答复。"
+                                "不要再直接用纯文本回答。"
+                            )
+                        )
+                    )
+                    continue
 
                 plan_cmd_seen = False
                 for idx, call in enumerate(tool_calls):
@@ -1751,30 +1723,24 @@ class SkillRunner:
                             "run STEP=%d BLOCK second plan_cmd in same turn",
                             step_no,
                         )
-                        tool_result = json.dumps(
-                            {
-                                "blocked_by_policy": True,
-                                "reason": "Only one plan_cmd per turn is allowed.",
-                            },
-                            ensure_ascii=False,
-                        )
+                        tool_result = ToolResult.blocked(
+                            tool_name="plan_cmd",
+                            reason="Only one plan_cmd per turn is allowed.",
+                        ).to_tool_message_content()
                     else:
                         if tool_name == "plan_cmd":
                             plan_cmd_seen = True
 
                         # Skill allow-list: reject tools not declared in _meta.json
                         if not self._is_tool_allowed_for_skill(skill, tool_name):
-                            tool_result = json.dumps(
-                                {
-                                    "blocked_by_policy": True,
-                                    "error": (
-                                        f"Tool `{tool_name}` is not allowed for skill "
-                                        f"`{skill.name}`. Allowed tools: "
-                                        f"{sorted(self._resolve_allowed_tool_names(skill) or [])}."
-                                    ),
-                                },
-                                ensure_ascii=False,
-                            )
+                            tool_result = ToolResult.blocked(
+                                tool_name=tool_name,
+                                reason=(
+                                    f"Tool `{tool_name}` is not allowed for skill "
+                                    f"`{skill.name}`. Allowed tools: "
+                                    f"{sorted(self._resolve_allowed_tool_names(skill) or [])}."
+                                ),
+                            ).to_tool_message_content()
                         # read-code: source files need prior lsp (or lsp failure
                         # fallback). Docs/config (md/toml/yaml/...) skip the gate.
                         elif (
@@ -1787,22 +1753,19 @@ class SkillRunner:
                                 tool_history, tool_args.get("file_path", "")
                             )
                         ):
-                            tool_result = json.dumps(
-                                {
-                                    "error": (
-                                        "readline_in_range requires a prior lsp call for "
-                                        "this specific source file to determine precise line "
-                                        "numbers. Call 'lsp documentSymbol' or 'lsp goToDefinition' on this file "
-                                        "first to get exact start/end line numbers. If lsp returns an error "
-                                        "(server unavailable), you may retry "
-                                        "readline_in_range as a fallback. "
-                                        "Non-source files (md/toml/yaml/json/...) may be "
-                                        "read with readline_in_range directly."
-                                    ),
-                                    "blocked_by_policy": True,
-                                },
-                                ensure_ascii=False,
-                            )
+                            tool_result = ToolResult.blocked(
+                                tool_name="readline_in_range",
+                                reason=(
+                                    "readline_in_range requires a prior lsp call for "
+                                    "this specific source file to determine precise line "
+                                    "numbers. Call 'lsp documentSymbol' or 'lsp goToDefinition' on this file "
+                                    "first to get exact start/end line numbers. If lsp returns an error "
+                                    "(server unavailable), you may retry "
+                                    "readline_in_range as a fallback. "
+                                    "Non-source files (md/toml/yaml/json/...) may be "
+                                    "read with readline_in_range directly."
+                                ),
+                            ).to_tool_message_content()
                         else:
                             # read-code: mark focused readline after documentSymbol
                             # with symbol_name/line so unfocused large-from-start gate relaxes.
@@ -1819,19 +1782,27 @@ class SkillRunner:
                                 )
                             ):
                                 dispatch_args["focused"] = True
+                            # Pre-execution stagnation check: warn if same cmd already failed
+                            pre_check = stagnation.check_same_cmd_before_execute(tool_name, dispatch_args)
                             tool_result = await self._dispatch_tool(
                                 tool_name,
                                 dispatch_args,
                                 user_id=user_id,
                                 run_id=run_id,
                                 trace_id=trace_id,
-                                fail_counts=fail_counts,
-                                counters=counters,
                             )
+                            # If pre-check warned, prepend the warning to the result
+                            if pre_check:
+                                parsed = json.loads(tool_result)
+                                if isinstance(parsed, dict) and parsed.get("status") == "error":
+                                    parsed["content"] = pre_check + "\n\n" + parsed.get("content", "")
+                                    tool_result = json.dumps(parsed, ensure_ascii=False)
 
                     tool_history.append(
                         {"tool": tool_name, "args": tool_args, "result": tool_result}
                     )
+                    # Record for stagnation detection
+                    stagnation.record(step_no, tool_name, tool_args, tool_result)
                     messages.append(
                         ToolMessage(content=str(tool_result), tool_call_id=tool_id)
                     )
@@ -1861,12 +1832,30 @@ class SkillRunner:
                         langfuse.flush()
                         return result
 
+                # --- Stagnation detection: inject intervention if LLM is stuck ---
+                intervention = stagnation.check(step_no)
+                if intervention:
+                    logger.warning(
+                        "run STEP=%d stagnation intervention: %r",
+                        step_no,
+                        _short(intervention, max_len=200),
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "[System: Stagnation Warning]\n"
+                                + intervention
+                                + "\n\nPlease read the above warning carefully "
+                                "and adjust your strategy accordingly."
+                            )
+                        )
+                    )
+
             final_answer = await self._summarize_max_steps_with_llm(
                 query=query,
                 skill=skill,
                 messages=messages,
                 tool_history=tool_history,
-                total_fails=counters["total_fails"],
             )
             result = {
                 "status": "max_steps_exceeded",
@@ -1875,9 +1864,8 @@ class SkillRunner:
                 "tool_history": tool_history,
             }
             logger.warning(
-                "run EXIT status=max_steps_exceeded max_steps=%d total_fails=%d",
+                "run EXIT status=max_steps_exceeded max_steps=%d",
                 self.max_steps,
-                counters["total_fails"],
             )
             span.update_trace(output=result)
             langfuse.flush()
@@ -1891,25 +1879,48 @@ class SkillRunner:
         user_id: str,
         run_id: str,
         trace_id: str,
-        fail_counts: dict[str, int],
-        counters: dict[str, int],
     ) -> str:
-        """Dispatch LLM tool calls. `plan_cmd` is intercepted and really executed here."""
+        """Dispatch LLM tool calls — three-phase pipeline (Pi Agent Loop pattern).
+
+        Phase 1 – prepare: validate args, security checks, block if needed.
+        Phase 2 – execute: run the actual tool, catch exceptions.
+        Phase 3 – finalize: wrap in unified ToolResult, return as JSON string.
+
+        The loop never interprets the result; it only passes it to the LLM.
+        """
+        # Phase 1: prepare
+        prepared = await self._prepare_tool_call(tool_name, tool_args)
+        if isinstance(prepared, ToolResult):
+            # Already finalized (blocked, unknown tool, etc.)
+            return prepared.to_tool_message_content()
+
+        # Phase 2: execute
+        executed = await self._execute_prepared_tool(prepared, user_id, run_id, trace_id)
+
+        # Phase 3: finalize
+        finalized = self._finalize_tool_result(prepared, executed)
+        return finalized.to_tool_message_content()
+
+    async def _prepare_tool_call(
+        self,
+        tool_name: str,
+        tool_args: dict[str, Any],
+    ) -> ToolResult | dict[str, Any]:
+        """Phase 1: validate and prepare a tool call.
+
+        Returns a ``ToolResult`` if the call should be immediately finalized
+        (blocked, unknown tool, empty args), or a ``dict`` with the prepared
+        execution context for phase 2.
+        """
         if tool_name == "plan_cmd":
             cmd = str(tool_args.get("cmd", "")).strip()
-            cwd = tool_args.get("cwd")
-            rationale = tool_args.get("rationale", "")
-            logger.info(
-                "_dispatch plan_cmd cmd=%r cwd=%r rationale=%r total_fails=%d same_cmd_fails=%d",
-                _short(cmd),
-                cwd,
-                _short(rationale),
-                counters["total_fails"],
-                fail_counts.get(cmd, 0),
-            )
             if not cmd:
-                logger.warning("_dispatch plan_cmd rejected: empty cmd")
-                return json.dumps({"error": "Empty cmd in plan_cmd"}, ensure_ascii=False)
+                logger.warning("_prepare plan_cmd: empty cmd")
+                return ToolResult.error(
+                    tool_name="plan_cmd",
+                    content="Empty cmd in plan_cmd",
+                    details={"cmd": ""},
+                )
 
             if not self.allow_destructive_commands:
                 destructive_reason = _check_destructive_cmd(
@@ -1918,186 +1929,249 @@ class SkillRunner:
                     flag_patterns=self.destructive_flag_patterns,
                 )
                 if destructive_reason:
-                    fail_counts[cmd] = fail_counts.get(cmd, 0) + 1
-                    counters["total_fails"] += 1
                     logger.warning(
-                        "_dispatch plan_cmd BLOCKED destructive reason=%r cmd=%r "
-                        "same_cmd_fails=%d total_fails=%d",
+                        "_prepare plan_cmd BLOCKED destructive reason=%r cmd=%r",
                         destructive_reason,
                         _short(cmd),
-                        fail_counts[cmd],
-                        counters["total_fails"],
                     )
-                    payload: dict[str, Any] = {
-                        "blocked_by_policy": True,
-                        "cmd": cmd,
-                        "reason": (
+                    return ToolResult.blocked(
+                        tool_name="plan_cmd",
+                        reason=(
                             f"Destructive command refused by runner policy: "
-                            f"{destructive_reason}. Rewrite your plan_cmd to be "
-                            "read-only / non-destructive (e.g. use `ls`/`cat`/"
-                            "`stat` instead of `rm`/`mv`; avoid `sed -i`, "
+                            f"{destructive_reason}. Use read-only "
+                            "commands instead (e.g. `ls`/`cat`/`stat` "
+                            "instead of `rm`/`mv`; avoid `sed -i`, "
                             "`git reset --hard`, etc.). If the task truly "
                             "needs to mutate state, call `finish` and tell "
                             "the user to run the command themselves."
                         ),
-                    }
-                    if (
-                        fail_counts[cmd] >= self.same_cmd_fail_budget
-                        or counters["total_fails"] >= self.total_fail_budget
-                    ):
-                        payload["must_finish"] = True
-                        payload["observation_hint"] = (
-                            "Destructive attempts exhausted the failure budget; "
-                            "stop retrying and call finish with a read-only "
-                            "summary or an instruction for the user."
-                        )
-                    return json.dumps(payload, ensure_ascii=False)
+                        details={"cmd": cmd, "reason": destructive_reason},
+                    )
 
-            if counters["total_fails"] >= self.total_fail_budget:
-                logger.warning(
-                    "_dispatch plan_cmd HARD-BLOCK total_fails=%d >= budget=%d",
-                    counters["total_fails"],
-                    self.total_fail_budget,
-                )
-                return json.dumps(
-                    {
-                        "blocked_by_policy": True,
-                        "must_finish": True,
-                        "reason": (
-                            f"Total failures {counters['total_fails']} >= budget "
-                            f"{self.total_fail_budget}; plan_cmd is rejected. "
-                            "You must call finish now."
-                        ),
-                    },
-                    ensure_ascii=False,
-                )
-            if fail_counts.get(cmd, 0) >= self.same_cmd_fail_budget:
-                logger.warning(
-                    "_dispatch plan_cmd HARD-BLOCK same_cmd_fails=%d >= budget=%d cmd=%r",
-                    fail_counts[cmd],
-                    self.same_cmd_fail_budget,
-                    _short(cmd),
-                )
-                return json.dumps(
-                    {
-                        "blocked_by_policy": True,
-                        "must_finish": True,
-                        "cmd": cmd,
-                        "reason": (
-                            f"Cmd already failed {fail_counts[cmd]} times "
-                            f"(budget {self.same_cmd_fail_budget}); do NOT retry. "
-                            "You must call finish now."
-                        ),
-                    },
-                    ensure_ascii=False,
-                )
-
-            exec_cwd = cwd if isinstance(cwd, str) and cwd else None
-            logger.info(
-                "_dispatch exec_cmd START cmd=%r cwd=%r timeout=%d max_concurrency=%d",
-                _short(cmd),
-                exec_cwd,
-                self.cmd_timeout_sec,
-                self.max_concurrency,
-            )
-            sem = self._get_cmd_semaphore()
-            if sem is not None:
-                # Log when the semaphore is saturated so operators can tell a
-                # slow response apart from "LLM slow" vs "waiting for a slot".
-                if sem.locked():
-                    logger.info(
-                        "[concurrency] plan_cmd waiting for semaphore slot "
-                        "(max=%d) cmd=%r",
-                        self.max_concurrency,
-                        _short(cmd),
-                    )
-                wait_t0 = _time.perf_counter()
-                async with sem:
-                    wait_ms = int((_time.perf_counter() - wait_t0) * 1000)
-                    if wait_ms >= 10:
-                        logger.info(
-                            "[concurrency] plan_cmd acquired slot after %dms cmd=%r",
-                            wait_ms,
-                            _short(cmd),
-                        )
-                    exec_payload = await _execute_cmd_async(
-                        cmd,
-                        cwd=exec_cwd,
-                        timeout_sec=self.cmd_timeout_sec,
-                    )
-            else:
-                exec_payload = await _execute_cmd_async(
-                    cmd,
-                    cwd=exec_cwd,
-                    timeout_sec=self.cmd_timeout_sec,
-                )
-            exec_payload["rationale"] = rationale
-
-            rc = exec_payload.get("returncode")
-            stderr_head = _stderr_head(exec_payload.get("stderr"))
-            stdout_head = _short(exec_payload.get("stdout", ""), max_len=160)
-            logger.info(
-                "_dispatch exec_cmd END cmd=%r returncode=%s stdout_head=%r stderr_head=%r error=%r",
-                _short(cmd),
-                rc,
-                stdout_head,
-                stderr_head,
-                _short(exec_payload.get("error", "")),
-            )
-
-            if rc == 0:
-                fail_counts[cmd] = 0
-            else:
-                fail_counts[cmd] = fail_counts.get(cmd, 0) + 1
-                counters["total_fails"] += 1
-                hints: list[str] = []
-                if fail_counts[cmd] >= self.same_cmd_fail_budget:
-                    hints.append(
-                        f"Same cmd failed {fail_counts[cmd]} times; do NOT retry this cmd."
-                    )
-                if counters["total_fails"] >= self.total_fail_budget:
-                    hints.append(
-                        f"Total {counters['total_fails']} failures reached; stop exploring new cmds."
-                    )
-                if hints:
-                    exec_payload["must_finish"] = True
-                    exec_payload["observation_hint"] = " ".join(hints)
-                    logger.warning(
-                        "_dispatch plan_cmd SOFT-HINT must_finish=true hint=%r",
-                        _short(exec_payload["observation_hint"]),
-                    )
-                else:
-                    logger.info(
-                        "_dispatch plan_cmd fail_counts[cmd]=%d total_fails=%d",
-                        fail_counts[cmd],
-                        counters["total_fails"],
-                    )
-            return json.dumps(exec_payload, ensure_ascii=False)
+            return {
+                "tool_name": "plan_cmd",
+                "cmd": cmd,
+                "cwd": tool_args.get("cwd"),
+                "rationale": tool_args.get("rationale", ""),
+            }
 
         if tool_name == "code_exec":
-            return await self._dispatch_code_exec(tool_args,user_id=user_id, run_id=run_id, trace_id=trace_id)
+            return {
+                "tool_name": "code_exec",
+                "tool_args": tool_args,
+            }
 
+        # Plugin tools
         target = next((t for t in self._runner_tools if t.name == tool_name), None)
         if target is None:
-            logger.warning("_dispatch unknown tool=%s args=%r", tool_name, _short(tool_args))
-            return json.dumps({"error": f"Unknown tool: {tool_name}"}, ensure_ascii=False)
-        logger.info("_dispatch tool=%s args=%r", tool_name, _short_tool_args(tool_name, tool_args))
+            logger.warning("_prepare unknown tool=%s", tool_name)
+            return ToolResult.error(
+                tool_name=tool_name,
+                content=f"Unknown tool: {tool_name}",
+            )
+
+        return {
+            "tool_name": tool_name,
+            "target": target,
+            "tool_args": tool_args,
+        }
+
+    async def _execute_prepared_tool(
+        self,
+        prepared: dict[str, Any],
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+    ) -> dict[str, Any]:
+        """Phase 2: execute the prepared tool call.
+
+        Returns a dict with the execution result (raw payload, error info, etc.).
+        """
+        tool_name = prepared["tool_name"]
+
+        if tool_name == "plan_cmd":
+            return await self._execute_plan_cmd(prepared)
+
+        if tool_name == "code_exec":
+            return await self._execute_code_exec_token(prepared, user_id, run_id, trace_id)
+
+        # Plugin tools
+        target = prepared["target"]
+        tool_args = prepared["tool_args"]
+        logger.info("_execute tool=%s args=%r", tool_name, _short_tool_args(tool_name, tool_args))
         try:
-            result = str(target.invoke(tool_args))
+            raw_result = str(target.invoke(tool_args))
             logger.info(
-                "_dispatch tool=%s result=%r",
+                "_execute tool=%s result=%r",
                 tool_name,
-                _short_tool_result(tool_name, result, max_len=240),
+                _short_tool_result(tool_name, raw_result, max_len=240),
             )
             if tool_name == "grep":
-                _log_grep_matches(result)
-            return result
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("_dispatch tool=%s invocation failed", tool_name)
-            return json.dumps(
-                {"tool": tool_name, "error": f"Tool invocation failed: {exc}"},
-                ensure_ascii=False,
+                _log_grep_matches(raw_result)
+            return {"status": "success", "raw_result": raw_result}
+        except Exception as exc:
+            logger.exception("_execute tool=%s invocation failed", tool_name)
+            return {"status": "error", "error": str(exc)}
+
+    async def _execute_plan_cmd(self, prepared: dict[str, Any]) -> dict[str, Any]:
+        """Execute a plan_cmd prepared call."""
+        cmd = prepared["cmd"]
+        cwd = prepared.get("cwd")
+        rationale = prepared.get("rationale", "")
+
+        logger.info(
+            "_execute plan_cmd cmd=%r cwd=%r rationale=%r",
+            _short(cmd), cwd, _short(rationale),
+        )
+
+        exec_cwd = cwd if isinstance(cwd, str) and cwd else None
+        logger.info(
+            "_execute plan_cmd START cmd=%r cwd=%r timeout=%d max_concurrency=%d",
+            _short(cmd), exec_cwd, self.cmd_timeout_sec, self.max_concurrency,
+        )
+
+        sem = self._get_cmd_semaphore()
+        if sem is not None:
+            if sem.locked():
+                logger.info(
+                    "[concurrency] plan_cmd waiting for semaphore slot (max=%d) cmd=%r",
+                    self.max_concurrency, _short(cmd),
+                )
+            wait_t0 = _time.perf_counter()
+            async with sem:
+                wait_ms = int((_time.perf_counter() - wait_t0) * 1000)
+                if wait_ms >= 10:
+                    logger.info(
+                        "[concurrency] plan_cmd acquired slot after %dms cmd=%r",
+                        wait_ms, _short(cmd),
+                    )
+                exec_payload = await _execute_cmd_async(cmd, cwd=exec_cwd, timeout_sec=self.cmd_timeout_sec)
+        else:
+            exec_payload = await _execute_cmd_async(cmd, cwd=exec_cwd, timeout_sec=self.cmd_timeout_sec)
+
+        exec_payload["rationale"] = rationale
+
+        rc = exec_payload.get("returncode")
+        stderr_head = _stderr_head(exec_payload.get("stderr"))
+        stdout_head = _short(exec_payload.get("stdout", ""), max_len=160)
+        logger.info(
+            "_execute plan_cmd END cmd=%r returncode=%s stdout_head=%r stderr_head=%r error=%r",
+            _short(cmd), rc, stdout_head, stderr_head, _short(exec_payload.get("error", "")),
+        )
+
+        return {
+            "status": "success" if rc == 0 else "error",
+            "exec_payload": exec_payload,
+        }
+
+    async def _execute_code_exec_token(
+        self, prepared: dict[str, Any], user_id: str, run_id: str, trace_id: str,
+    ) -> dict[str, Any]:
+        """Execute a code_exec prepared call."""
+        raw_result = await self._dispatch_code_exec(
+            prepared["tool_args"], user_id=user_id, run_id=run_id, trace_id=trace_id,
+        )
+        return {"status": "success", "raw_result": raw_result}
+
+    def _finalize_tool_result(
+        self, prepared: dict[str, Any], executed: dict[str, Any],
+    ) -> ToolResult:
+        """Phase 3: wrap execution result in unified ToolResult.
+
+        Mirrors Pi Agent Loop's finalizeExecutedToolCall — the output always
+        has the same structure, regardless of success, error, or block.
+        """
+        tool_name = prepared["tool_name"]
+
+        if tool_name == "plan_cmd":
+            return self._finalize_plan_cmd_result(prepared, executed)
+
+        if tool_name == "code_exec":
+            return ToolResult.success(
+                tool_name="code_exec",
+                content=executed.get("raw_result", ""),
             )
+
+        # Plugin tools
+        if executed.get("status") == "error":
+            return ToolResult.error(
+                tool_name=tool_name,
+                content=f"Tool invocation failed: {executed['error']}",
+            )
+        # Check if the raw result is a JSON string with an "error" key
+        # (web_fetch and other plugins return {"error": "..."} on failure)
+        raw = executed.get("raw_result", "")
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict) and "error" in parsed:
+                    return ToolResult.error(
+                        tool_name=tool_name,
+                        content=raw,
+                        details={"error": parsed.get("error", "")},
+                    )
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return ToolResult.success(
+            tool_name=tool_name,
+            content=executed.get("raw_result", ""),
+        )
+
+    def _finalize_plan_cmd_result(
+        self, prepared: dict[str, Any], executed: dict[str, Any],
+    ) -> ToolResult:
+        """Wrap plan_cmd execution result into unified ToolResult.
+
+        The LLM receives a single JSON blob with:
+          - status: "success" or "error"
+          - is_error: true/false
+          - content: human-readable summary of what happened
+          - details: the full raw execution payload (returncode, stdout, stderr, etc.)
+
+        The LLM uses this information to decide: retry with a different command,
+        read more context, or call finish. No code-level termination logic.
+        """
+        cmd = prepared["cmd"]
+        exec_payload = executed.get("exec_payload", {})
+        rc = exec_payload.get("returncode")
+        stdout = exec_payload.get("stdout", "") or ""
+        stderr = exec_payload.get("stderr", "") or ""
+        error = exec_payload.get("error", "") or ""
+
+        if executed.get("status") == "success":
+            content = stdout if stdout else "(command completed successfully with no output)"
+            return ToolResult.success(
+                tool_name="plan_cmd",
+                content=_trim_text(content, max_chars=8000),
+                details={
+                    "cmd": cmd,
+                    "returncode": rc,
+                    "stdout": _trim_text(stdout, max_chars=8000),
+                    "stderr": stderr[:2000],
+                },
+            )
+
+        # Error: build a clear summary for the LLM
+        parts = [f"Command failed (returncode={rc})."]
+        if error:
+            parts.append(f"Error: {error}")
+        if stderr:
+            parts.append(f"Stderr: {_trim_text(stderr, max_chars=2000)}")
+        if stdout:
+            parts.append(f"Stdout: {_trim_text(stdout, max_chars=1000)}")
+        parts.append(f"Cmd: {cmd}")
+
+        return ToolResult.error(
+            tool_name="plan_cmd",
+            content="\n".join(parts),
+            details={
+                "cmd": cmd,
+                "returncode": rc,
+                "stdout": _trim_text(stdout, max_chars=8000),
+                "stderr": _trim_text(stderr, max_chars=4000),
+                "error": error,
+            },
+        )
 
     async def skill_search(
         self,
