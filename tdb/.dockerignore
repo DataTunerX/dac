@@ -1,0 +1,6 @@
+gateway/node_modules
+gateway/dist
+target
+.git
+.env
+*.log

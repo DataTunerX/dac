@@ -1,0 +1,1 @@
+This directory will be retired as all the DB related functions are now in TDB RPC

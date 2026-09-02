@@ -1,0 +1,42 @@
+{
+  "name": "tdb-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/src/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:acceptance": "vitest run tests/v2_acceptance.test.ts",
+    "verify:p0": "./scripts/verify_p0.sh",
+    "search:backfill": "./scripts/backfill_v2_search_projection.sh",
+    "search:check": "./scripts/check_v2_search_projection_consistency.sh",
+    "verify:p1": "npm run typecheck && npm test && npm run search:check"
+  },
+  "dependencies": {
+    "@fastify/type-provider-typebox": "^5.2.0",
+    "@grpc/grpc-js": "^1.14.1",
+    "@grpc/proto-loader": "^0.8.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.57.2",
+    "@opentelemetry/sdk-node": "^0.57.2",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.2.1",
+    "fastify-plugin": "^5.0.1",
+    "pino": "^9.6.0",
+    "slonik": "^46.8.0",
+    "@sinclair/typebox": "^0.34.27",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.8",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  }
+}

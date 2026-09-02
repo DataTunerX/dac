@@ -1,0 +1,20 @@
+{
+  "nodeEnv": "development",
+  "host": "0.0.0.0",
+  "port": 8080,
+  "databaseUrl": "postgres://tdb:tdb@localhost:5432/tdb",
+  "logLevel": "info",
+  "otelServiceName": "tdb-gateway",
+  "otelExporterOtlpEndpoint": "",
+  "gatewayBackendTimeoutMs": 30000,
+  "embedding": {
+    "enabled": true,
+    "baseUrl": "http://10.124.48.181:11434/v1",
+    "apiKey": "local",
+    "model": "qwen3-embedding:8b",
+    "timeoutSecs": 120,
+    "batchSize": 8,
+    "maxChars": 3000,
+    "strict": true
+  }
+}

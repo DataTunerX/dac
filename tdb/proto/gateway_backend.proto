@@ -1,0 +1,3353 @@
+syntax = "proto3";
+
+package tdb.gateway.backend.v1;
+
+service GatewayBackend {
+  rpc SearchQuery(SearchQueryRequest) returns (SearchQueryResponse);
+  rpc UpsertDomainStreamBinding(UpsertDomainStreamBindingRequest) returns (UpsertDomainStreamBindingResponse);
+  rpc ListDomainStreamBindings(ListDomainStreamBindingsRequest) returns (ListDomainStreamBindingsResponse);
+  rpc IndexEvent(IndexEventRequest) returns (IndexEventResponse);
+  rpc AppendEvent(AppendEventRequest) returns (AppendEventResponse);
+  rpc GetEvents(GetEventsRequest) returns (GetEventsResponse);
+  rpc GetEventSentences(GetEventSentencesRequest) returns (GetEventSentencesResponse);
+  rpc UpsertProperty(UpsertPropertyRequest) returns (UpsertPropertyResponse);
+  rpc GetPropertyAsOf(GetPropertyAsOfRequest) returns (GetPropertyAsOfResponse);
+  rpc UpsertEdge(UpsertEdgeRequest) returns (UpsertEdgeResponse);
+  rpc GetEdgesAsOf(GetEdgesAsOfRequest) returns (GetEdgesAsOfResponse);
+  rpc ListPropertyRows(ListPropertyRowsRequest) returns (ListPropertyRowsResponse);
+  rpc UpsertEntity(UpsertEntityRequest) returns (UpsertEntityResponse);
+  rpc GetEntity(GetEntityRequest) returns (GetEntityResponse);
+  rpc ListEntities(ListEntitiesRequest) returns (ListEntitiesResponse);
+  rpc WriteSnapshot(WriteSnapshotRequest) returns (WriteSnapshotResponse);
+  rpc GetLatestSnapshot(GetLatestSnapshotRequest) returns (GetLatestSnapshotResponse);
+  rpc CreateArtifact(CreateArtifactRequest) returns (CreateArtifactResponse);
+  rpc CreateArtifactVersion(CreateArtifactVersionRequest) returns (CreateArtifactVersionResponse);
+  rpc GetArtifactVersionAsOf(GetArtifactVersionAsOfRequest) returns (GetArtifactVersionAsOfResponse);
+  rpc GetArtifactVersionById(GetArtifactVersionByIdRequest) returns (GetArtifactVersionByIdResponse);
+  rpc UpsertDecision(UpsertDecisionRequest) returns (UpsertDecisionResponse);
+  rpc InsertDecisionEvidence(InsertDecisionEvidenceRequest) returns (InsertDecisionEvidenceResponse);
+  rpc FindDecision(FindDecisionRequest) returns (FindDecisionResponse);
+  rpc ListDecisionEvidence(ListDecisionEvidenceRequest) returns (ListDecisionEvidenceResponse);
+  rpc UpsertAssertion(UpsertAssertionRequest) returns (UpsertAssertionResponse);
+  rpc GetAssertion(GetAssertionRequest) returns (GetAssertionResponse);
+  rpc SearchAssertions(SearchAssertionsRequest) returns (SearchAssertionsResponse);
+  rpc UpsertEvidence(UpsertEvidenceRequest) returns (UpsertEvidenceResponse);
+  rpc GetEvidence(GetEvidenceRequest) returns (GetEvidenceResponse);
+  rpc SearchEvidence(SearchEvidenceRequest) returns (SearchEvidenceResponse);
+  rpc UpsertEvidenceLocator(UpsertEvidenceLocatorRequest) returns (UpsertEvidenceLocatorResponse);
+  rpc ListEvidenceLocators(ListEvidenceLocatorsRequest) returns (ListEvidenceLocatorsResponse);
+  rpc UpsertEvidenceDerivation(UpsertEvidenceDerivationRequest) returns (UpsertEvidenceDerivationResponse);
+  rpc ListEvidenceDerivations(ListEvidenceDerivationsRequest) returns (ListEvidenceDerivationsResponse);
+  rpc UpsertEvidenceClassification(UpsertEvidenceClassificationRequest) returns (UpsertEvidenceClassificationResponse);
+  rpc GetEvidenceClassification(GetEvidenceClassificationRequest) returns (GetEvidenceClassificationResponse);
+  rpc UpsertAssertionEvidenceLink(UpsertAssertionEvidenceLinkRequest) returns (UpsertAssertionEvidenceLinkResponse);
+  rpc ListAssertionEvidenceLinks(ListAssertionEvidenceLinksRequest) returns (ListAssertionEvidenceLinksResponse);
+  rpc UpsertAssertionRelation(UpsertAssertionRelationRequest) returns (UpsertAssertionRelationResponse);
+  rpc ListAssertionRelations(ListAssertionRelationsRequest) returns (ListAssertionRelationsResponse);
+  rpc InsertMemoryDecision(InsertMemoryDecisionRequest) returns (InsertMemoryDecisionResponse);
+  rpc ListRecentMemoryDecisions(ListRecentMemoryDecisionsRequest) returns (ListRecentMemoryDecisionsResponse);
+  rpc InsertMemoryEpisodeSummary(InsertMemoryEpisodeSummaryRequest) returns (InsertMemoryEpisodeSummaryResponse);
+  rpc ListRecentMemoryEpisodeSummaries(ListRecentMemoryEpisodeSummariesRequest) returns (ListRecentMemoryEpisodeSummariesResponse);
+  rpc InsertMemoryAnswerArtifact(InsertMemoryAnswerArtifactRequest) returns (InsertMemoryAnswerArtifactResponse);
+  rpc RecallMemoryAnswerArtifacts(RecallMemoryAnswerArtifactsRequest) returns (RecallMemoryAnswerArtifactsResponse);
+  rpc InsertMemoryAnswerValidation(InsertMemoryAnswerValidationRequest) returns (InsertMemoryAnswerValidationResponse);
+
+  // Ontology Catalog / Graph
+  rpc UpsertOntologyConcept(UpsertOntologyConceptRequest) returns (UpsertOntologyConceptResponse);
+  rpc GetOntologyConcept(GetOntologyConceptRequest) returns (GetOntologyConceptResponse);
+  rpc ListOntologyConcepts(ListOntologyConceptsRequest) returns (ListOntologyConceptsResponse);
+  rpc UpsertConceptAlias(UpsertConceptAliasRequest) returns (UpsertConceptAliasResponse);
+  rpc ListConceptAliases(ListConceptAliasesRequest) returns (ListConceptAliasesResponse);
+  rpc UpsertOntologyEdge(UpsertOntologyEdgeRequest) returns (UpsertOntologyEdgeResponse);
+  rpc ListOntologyEdges(ListOntologyEdgesRequest) returns (ListOntologyEdgesResponse);
+  rpc UpsertEventConceptLink(UpsertEventConceptLinkRequest) returns (UpsertEventConceptLinkResponse);
+  rpc ListEventConceptLinks(ListEventConceptLinksRequest) returns (ListEventConceptLinksResponse);
+  rpc UpsertOntologyObjectType(UpsertOntologyObjectTypeRequest) returns (UpsertOntologyObjectTypeResponse);
+  rpc GetOntologyObjectType(GetOntologyObjectTypeRequest) returns (GetOntologyObjectTypeResponse);
+  rpc ListOntologyObjectTypes(ListOntologyObjectTypesRequest) returns (ListOntologyObjectTypesResponse);
+  rpc UpsertOntologyConceptTypeAssignment(UpsertOntologyConceptTypeAssignmentRequest) returns (UpsertOntologyConceptTypeAssignmentResponse);
+  rpc ListOntologyConceptTypeAssignments(ListOntologyConceptTypeAssignmentsRequest) returns (ListOntologyConceptTypeAssignmentsResponse);
+  rpc UpsertOntologyRelationType(UpsertOntologyRelationTypeRequest) returns (UpsertOntologyRelationTypeResponse);
+  rpc GetOntologyRelationType(GetOntologyRelationTypeRequest) returns (GetOntologyRelationTypeResponse);
+  rpc ListOntologyRelationTypes(ListOntologyRelationTypesRequest) returns (ListOntologyRelationTypesResponse);
+  rpc ListOntologyFacts(ListOntologyFactsRequest) returns (ListOntologyFactsResponse);
+  rpc UpsertOntologyFactWithEvidence(UpsertOntologyFactWithEvidenceRequest) returns (UpsertOntologyFactWithEvidenceResponse);
+  rpc UpsertSemanticBatch(UpsertSemanticBatchRequest) returns (UpsertSemanticBatchResponse);
+  rpc GetSemanticStatement(GetSemanticStatementRequest) returns (GetSemanticStatementResponse);
+  rpc ListSemanticStatements(ListSemanticStatementsRequest) returns (ListSemanticStatementsResponse);
+  rpc SetSemanticStatementStatus(SetSemanticStatementStatusRequest) returns (SetSemanticStatementStatusResponse);
+  rpc GetSemanticStatementProvenance(GetSemanticStatementProvenanceRequest) returns (GetSemanticStatementProvenanceResponse);
+  rpc GetSemanticStatementsByEvidence(GetSemanticStatementsByEvidenceRequest) returns (GetSemanticStatementsByEvidenceResponse);
+  rpc SearchOntologyConcepts(SearchOntologyConceptsRequest) returns (SearchOntologyConceptsResponse);
+  rpc SearchConceptAliases(SearchConceptAliasesRequest) returns (SearchConceptAliasesResponse);
+  rpc SearchOntologyFacts(SearchOntologyFactsRequest) returns (SearchOntologyFactsResponse);
+  rpc GetOntologyConceptNeighbors(GetOntologyConceptNeighborsRequest) returns (GetOntologyConceptNeighborsResponse);
+  rpc ArchiveOntologyFact(ArchiveOntologyFactRequest) returns (ArchiveOntologyFactResponse);
+  rpc UpsertTermMappingRegistry(UpsertTermMappingRegistryRequest) returns (UpsertTermMappingRegistryResponse);
+  rpc GetTermMappingRegistry(GetTermMappingRegistryRequest) returns (GetTermMappingRegistryResponse);
+  rpc ListTermMappingRegistries(ListTermMappingRegistriesRequest) returns (ListTermMappingRegistriesResponse);
+  rpc UpsertTermMappingRule(UpsertTermMappingRuleRequest) returns (UpsertTermMappingRuleResponse);
+  rpc GetTermMappingRule(GetTermMappingRuleRequest) returns (GetTermMappingRuleResponse);
+  rpc SearchTermMappingRules(SearchTermMappingRulesRequest) returns (SearchTermMappingRulesResponse);
+  rpc UpsertTermMappingRuleEvidence(UpsertTermMappingRuleEvidenceRequest) returns (UpsertTermMappingRuleEvidenceResponse);
+  rpc ListTermMappingRuleEvidence(ListTermMappingRuleEvidenceRequest) returns (ListTermMappingRuleEvidenceResponse);
+  rpc InterpretTerm(InterpretTermRequest) returns (InterpretTermResponse);
+  rpc InterpretTermBatch(InterpretTermBatchRequest) returns (InterpretTermBatchResponse);
+  rpc UpsertOntologyRawTerm(UpsertOntologyRawTermRequest) returns (UpsertOntologyRawTermResponse);
+  rpc GetOntologyRawTerm(GetOntologyRawTermRequest) returns (GetOntologyRawTermResponse);
+  rpc SearchOntologyRawTerms(SearchOntologyRawTermsRequest) returns (SearchOntologyRawTermsResponse);
+  rpc UpsertOntologyRawTermCandidate(UpsertOntologyRawTermCandidateRequest) returns (UpsertOntologyRawTermCandidateResponse);
+  rpc ListOntologyRawTermCandidates(ListOntologyRawTermCandidatesRequest) returns (ListOntologyRawTermCandidatesResponse);
+  rpc UpsertOntologyNormalizedTerm(UpsertOntologyNormalizedTermRequest) returns (UpsertOntologyNormalizedTermResponse);
+  rpc GetOntologyNormalizedTerm(GetOntologyNormalizedTermRequest) returns (GetOntologyNormalizedTermResponse);
+  rpc SearchOntologyNormalizedTerms(SearchOntologyNormalizedTermsRequest) returns (SearchOntologyNormalizedTermsResponse);
+  rpc UpsertOntologyTermCluster(UpsertOntologyTermClusterRequest) returns (UpsertOntologyTermClusterResponse);
+  rpc GetOntologyTermCluster(GetOntologyTermClusterRequest) returns (GetOntologyTermClusterResponse);
+  rpc ListOntologyTermClusters(ListOntologyTermClustersRequest) returns (ListOntologyTermClustersResponse);
+  rpc UpsertOntologyClusterMember(UpsertOntologyClusterMemberRequest) returns (UpsertOntologyClusterMemberResponse);
+  rpc ListOntologyClusterMembers(ListOntologyClusterMembersRequest) returns (ListOntologyClusterMembersResponse);
+  rpc UpsertOntologyRelationCandidate(UpsertOntologyRelationCandidateRequest) returns (UpsertOntologyRelationCandidateResponse);
+  rpc ListOntologyRelationCandidates(ListOntologyRelationCandidatesRequest) returns (ListOntologyRelationCandidatesResponse);
+  rpc UpsertOntologyRawTermNormalization(UpsertOntologyRawTermNormalizationRequest) returns (UpsertOntologyRawTermNormalizationResponse);
+  rpc ListOntologyRawTermNormalizations(ListOntologyRawTermNormalizationsRequest) returns (ListOntologyRawTermNormalizationsResponse);
+
+  // Governance
+  rpc UpsertRule(UpsertRuleRequest) returns (UpsertRuleResponse);
+  rpc InsertAuthorityGrant(InsertAuthorityGrantRequest) returns (InsertAuthorityGrantResponse);
+  rpc InsertRuleOverride(InsertRuleOverrideRequest) returns (InsertRuleOverrideResponse);
+  rpc FindAuthorityAsOf(FindAuthorityAsOfRequest) returns (FindAuthorityAsOfResponse);
+  rpc ListRuleOverridesAsOf(ListRuleOverridesAsOfRequest) returns (ListRuleOverridesAsOfResponse);
+  rpc UpsertMethodologyFramework(UpsertMethodologyFrameworkRequest) returns (UpsertMethodologyFrameworkResponse);
+  rpc GetMethodologyFramework(GetMethodologyFrameworkRequest) returns (GetMethodologyFrameworkResponse);
+  rpc ListMethodologyFrameworks(ListMethodologyFrameworksRequest) returns (ListMethodologyFrameworksResponse);
+  rpc GetMethodologyFrameworkBundle(GetMethodologyFrameworkBundleRequest) returns (GetMethodologyFrameworkBundleResponse);
+  rpc UpsertTaxonomyScheme(UpsertTaxonomySchemeRequest) returns (UpsertTaxonomySchemeResponse);
+  rpc GetTaxonomyScheme(GetTaxonomySchemeRequest) returns (GetTaxonomySchemeResponse);
+  rpc ListTaxonomySchemes(ListTaxonomySchemesRequest) returns (ListTaxonomySchemesResponse);
+  rpc UpsertEvidencePolicyRule(UpsertEvidencePolicyRuleRequest) returns (UpsertEvidencePolicyRuleResponse);
+  rpc GetEvidencePolicyRule(GetEvidencePolicyRuleRequest) returns (GetEvidencePolicyRuleResponse);
+  rpc ListEvidencePolicyRules(ListEvidencePolicyRulesRequest) returns (ListEvidencePolicyRulesResponse);
+  rpc UpsertAssertionPolicyRule(UpsertAssertionPolicyRuleRequest) returns (UpsertAssertionPolicyRuleResponse);
+  rpc GetAssertionPolicyRule(GetAssertionPolicyRuleRequest) returns (GetAssertionPolicyRuleResponse);
+  rpc ListAssertionPolicyRules(ListAssertionPolicyRulesRequest) returns (ListAssertionPolicyRulesResponse);
+  rpc UpsertReviewPolicy(UpsertReviewPolicyRequest) returns (UpsertReviewPolicyResponse);
+  rpc GetReviewPolicy(GetReviewPolicyRequest) returns (GetReviewPolicyResponse);
+  rpc ListReviewPolicies(ListReviewPoliciesRequest) returns (ListReviewPoliciesResponse);
+
+  // Ontology Facts
+  rpc ReviewOntologyFact(ReviewOntologyFactRequest) returns (ReviewOntologyFactResponse);
+  rpc GetOntologyFact(GetOntologyFactRequest) returns (GetOntologyFactResponse);
+  rpc ListOntologyFactReviews(ListOntologyFactReviewsRequest) returns (ListOntologyFactReviewsResponse);
+  rpc ListOntologyFactEvidence(ListOntologyFactEvidenceRequest) returns (ListOntologyFactEvidenceResponse);
+  rpc ListOntologyFactLinkedCases(ListOntologyFactLinkedCasesRequest) returns (ListOntologyFactLinkedCasesResponse);
+  rpc ListOntologyFactLinkedAlerts(ListOntologyFactLinkedAlertsRequest) returns (ListOntologyFactLinkedAlertsResponse);
+  rpc SelectOntologyFactsForBulkReview(SelectOntologyFactsForBulkReviewRequest) returns (SelectOntologyFactsForBulkReviewResponse);
+
+  // Ontology Cases
+  rpc InsertOntologyCase(InsertOntologyCaseRequest) returns (InsertOntologyCaseResponse);
+  rpc GetOntologyCase(GetOntologyCaseRequest) returns (GetOntologyCaseResponse);
+  rpc ListOntologyCases(ListOntologyCasesRequest) returns (ListOntologyCasesResponse);
+  rpc UpdateOntologyCase(UpdateOntologyCaseRequest) returns (UpdateOntologyCaseResponse);
+  rpc LinkOntologyCaseFact(LinkOntologyCaseFactRequest) returns (LinkOntologyCaseFactResponse);
+  rpc ListOntologyCaseFacts(ListOntologyCaseFactsRequest) returns (ListOntologyCaseFactsResponse);
+  rpc InsertOntologyCaseDecision(InsertOntologyCaseDecisionRequest) returns (InsertOntologyCaseDecisionResponse);
+  rpc ListOntologyCaseDecisions(ListOntologyCaseDecisionsRequest) returns (ListOntologyCaseDecisionsResponse);
+  rpc InsertOntologyCaseEvent(InsertOntologyCaseEventRequest) returns (InsertOntologyCaseEventResponse);
+  rpc ListOntologyCaseEvents(ListOntologyCaseEventsRequest) returns (ListOntologyCaseEventsResponse);
+
+  // Ontology Alerts
+  rpc InsertOntologyAlert(InsertOntologyAlertRequest) returns (InsertOntologyAlertResponse);
+  rpc GetOntologyAlertDetail(GetOntologyAlertDetailRequest) returns (GetOntologyAlertDetailResponse);
+  rpc ListOntologyAlerts(ListOntologyAlertsRequest) returns (ListOntologyAlertsResponse);
+  rpc UpdateOntologyAlert(UpdateOntologyAlertRequest) returns (UpdateOntologyAlertResponse);
+  rpc RefreshTriggeredOntologyAlert(RefreshTriggeredOntologyAlertRequest) returns (RefreshTriggeredOntologyAlertResponse);
+
+  // Ontology Ops
+  rpc UpsertOntologyOpsRuleConfig(UpsertOntologyOpsRuleConfigRequest) returns (UpsertOntologyOpsRuleConfigResponse);
+  rpc ListOntologyOpsRuleConfig(ListOntologyOpsRuleConfigRequest) returns (ListOntologyOpsRuleConfigResponse);
+  rpc ListStalePendingOntologyCandidates(ListStalePendingOntologyCandidatesRequest) returns (ListOntologyFactsResponse);
+  rpc ListConflictPredicateOntologyCandidates(ListConflictPredicateOntologyCandidatesRequest) returns (ListOntologyFactsResponse);
+  rpc GetActiveOntologyCaseByTitle(GetActiveOntologyCaseByTitleRequest) returns (GetActiveOntologyCaseByTitleResponse);
+  rpc GetActiveOntologyAlertByRuleKey(GetActiveOntologyAlertByRuleKeyRequest) returns (GetActiveOntologyAlertByRuleKeyResponse);
+  rpc InsertOntologyOpsRuleRun(InsertOntologyOpsRuleRunRequest) returns (InsertOntologyOpsRuleRunResponse);
+  rpc GetOntologyOpsRun(GetOntologyOpsRunRequest) returns (GetOntologyOpsRunResponse);
+  rpc ListOntologyOpsRuns(ListOntologyOpsRunsRequest) returns (ListOntologyOpsRunsResponse);
+
+  // Wiki layer
+  rpc UpsertWikiPage(UpsertWikiPageRequest) returns (UpsertWikiPageResponse);
+  rpc UpsertWikiPageLink(UpsertWikiPageLinkRequest) returns (UpsertWikiPageLinkResponse);
+  rpc GetWikiPage(GetWikiPageRequest) returns (GetWikiPageResponse);
+  rpc SearchWikiPages(SearchWikiPagesRequest) returns (SearchWikiPagesResponse);
+  rpc ListWikiPages(ListWikiPagesRequest) returns (ListWikiPagesResponse);
+  rpc ReinforceWikiPage(ReinforceWikiPageRequest) returns (ReinforceWikiPageResponse);
+  rpc AppendWikiLog(AppendWikiLogRequest) returns (AppendWikiLogResponse);
+  rpc ListWikiLogs(ListWikiLogsRequest) returns (ListWikiLogsResponse);
+  rpc LintWikiDomain(LintWikiDomainRequest) returns (LintWikiDomainResponse);
+}
+
+message SearchQueryRequest {
+  string query = 1;
+  string case_id = 2;
+  string stream_id = 3;
+  repeated string stream_ids = 4;
+  string mode = 5;
+  int32 limit = 6;
+  repeated double query_embedding = 7;
+  double alpha = 8;
+  string trace_id = 9;
+  // When true, stream_id/stream_ids match the named stream and all
+  // dot-delimited descendants (e.g. "kb.customer.bmw" includes
+  // "kb.customer.bmw.sales"). Defaults to exact match.
+  bool stream_prefix = 10;
+  string domain = 11;
+}
+
+message SearchHit {
+  string doc_id = 1;
+  string case_id = 2;
+  string stream_id = 3;
+  string event_id = 4;
+  int32 event_seq = 5;
+  string content = 6;
+  string metadata_json = 7;
+  double lexical_score = 8;
+  double vector_score = 9;
+  double hybrid_score = 10;
+}
+
+message SearchQueryResponse {
+  repeated SearchHit hits = 1;
+  repeated string resolved_stream_ids = 2;
+}
+
+message DomainStreamBindingRecord {
+  string binding_id = 1;
+  string domain = 2;
+  string stream_id = 3;
+  string status = 4;
+  string binding_kind = 5;
+  string source = 6;
+  int32 priority = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message UpsertDomainStreamBindingRequest {
+  string domain = 1;
+  string stream_id = 2;
+  string status = 3;
+  string binding_kind = 4;
+  string source = 5;
+  int32 priority = 6;
+}
+
+message UpsertDomainStreamBindingResponse {
+  DomainStreamBindingRecord binding = 1;
+}
+
+message ListDomainStreamBindingsRequest {
+  string domain = 1;
+  string stream_id = 2;
+  string status = 3;
+  int32 limit = 4;
+}
+
+message ListDomainStreamBindingsResponse {
+  repeated DomainStreamBindingRecord bindings = 1;
+}
+
+message IndexEventRequest {
+  string case_id = 1;
+  string stream_id = 2;
+  string event_id = 3;
+  int32 event_seq = 4;
+  string content = 5;
+  string metadata_json = 6;
+  repeated double embedding = 7;
+  string embedding_model = 8;
+}
+
+message IndexEventResponse {
+  string doc_id = 1;
+}
+
+message AppendEventRequest {
+  string case_id = 1;
+  string stream_id = 2;
+  string event_type = 3;
+  string actor_id = 4;
+  string subject_id = 5;
+  string object_id = 6;
+  string payload_json = 7;
+  string event_text = 8;
+  repeated double embedding = 9;
+  string embedding_model = 10;
+  string valid_time = 11;
+  string system_time = 12;
+}
+
+message AppendEventResponse {
+  string event_id = 1;
+  int32 event_seq = 2;
+  string system_time = 3;
+}
+
+message GetEventsRequest {
+  string case_id = 1;
+  int32 from_seq = 2;
+  int32 to_seq = 3;
+  int32 limit = 4;
+}
+
+message GetEventsResponse {
+  repeated EventItem events = 1;
+}
+
+message EventItem {
+  string event_id = 1;
+  string case_id = 2;
+  int32 event_seq = 3;
+  string event_type = 4;
+  string actor_id = 5;
+  string subject_id = 6;
+  string object_id = 7;
+  string payload_json = 8;
+  string valid_time = 9;
+  string system_time = 10;
+}
+
+message GetEventSentencesRequest {
+  string stream_id = 1;
+  int32 limit = 2;
+}
+
+message EventSentenceRecord {
+  string stream_id = 1;
+  string event_id = 2;
+  int32 sent_index = 3;
+  int32 start_char = 4;
+  int32 end_char = 5;
+  string sentence_text = 6;
+}
+
+message GetEventSentencesResponse {
+  repeated EventSentenceRecord sentences = 1;
+}
+
+message UpsertPropertyRequest {
+  string object_id = 1;
+  string key = 2;
+  string value_json = 3;
+  string valid_from = 4;
+  string system_from = 5;
+  string source_event_id = 6;
+  float confidence = 7;
+}
+
+message UpsertPropertyResponse {
+  PropertyRecord property = 1;
+}
+
+message GetPropertyAsOfRequest {
+  string object_id = 1;
+  string key = 2;
+  string as_of_valid_time = 3;
+  string as_of_system_time = 4;
+}
+
+message GetPropertyAsOfResponse {
+  PropertyRecord property = 1;
+}
+
+message PropertyRecord {
+  string property_state_id = 1;
+  string object_id = 2;
+  string key = 3;
+  string value_json = 4;
+  string valid_from = 5;
+  string valid_to = 6;
+  string system_from = 7;
+  string system_to = 8;
+  string source_event_id = 9;
+  float confidence = 10;
+}
+
+message UpsertEdgeRequest {
+  string src_id = 1;
+  string predicate = 2;
+  string dst_id = 3;
+  string valid_from = 4;
+  string system_from = 5;
+  string source_event_id = 6;
+  float confidence = 7;
+}
+
+message UpsertEdgeResponse {
+  EdgeRecord edge = 1;
+}
+
+message GetEdgesAsOfRequest {
+  string src_id = 1;
+  string predicate = 2;
+  string as_of_valid_time = 3;
+  string as_of_system_time = 4;
+}
+
+message GetEdgesAsOfResponse {
+  repeated EdgeRecord edges = 1;
+}
+
+message EdgeRecord {
+  string edge_state_id = 1;
+  string src_id = 2;
+  string predicate = 3;
+  string dst_id = 4;
+  string valid_from = 5;
+  string valid_to = 6;
+  string system_from = 7;
+  string system_to = 8;
+  string source_event_id = 9;
+  float confidence = 10;
+}
+
+message ListPropertyRowsRequest {
+  string object_id = 1;
+  string key = 2;
+  int32 limit = 3;
+}
+
+message ListPropertyRowsResponse {
+  repeated PropertyRecord properties = 1;
+}
+
+message UpsertEntityRequest {
+  string entity_id = 1;
+  string entity_type = 2;
+  string display_name = 3;
+  string external_refs_json = 4;
+  string status = 5;
+}
+
+message UpsertEntityResponse {
+  EntityRecord entity = 1;
+}
+
+message GetEntityRequest {
+  string entity_id = 1;
+}
+
+message GetEntityResponse {
+  EntityRecord entity = 1;
+}
+
+message ListEntitiesRequest {
+  string entity_type = 1;
+  string status = 2;
+  string query = 3;
+  int32 limit = 4;
+  int32 offset = 5;
+}
+
+message ListEntitiesResponse {
+  repeated EntityRecord entities = 1;
+}
+
+message EntityRecord {
+  string entity_id = 1;
+  string entity_type = 2;
+  string display_name = 3;
+  string external_refs_json = 4;
+  string status = 5;
+  string created_at = 6;
+  string updated_at = 7;
+}
+
+message WriteSnapshotRequest {
+  string case_id = 1;
+  int64 event_seq = 2;
+  string projection_version = 3;
+  string state_blob_json = 4;
+  string state_hash = 5;
+}
+
+message WriteSnapshotResponse {
+  SnapshotRecord snapshot = 1;
+}
+
+message GetLatestSnapshotRequest {
+  string case_id = 1;
+  string projection_version = 2;
+  int64 target_seq = 3;
+}
+
+message GetLatestSnapshotResponse {
+  SnapshotRecord snapshot = 1;
+}
+
+message SnapshotRecord {
+  string snapshot_id = 1;
+  string case_id = 2;
+  int64 event_seq = 3;
+  string projection_version = 4;
+  string state_blob_json = 5;
+  string state_hash = 6;
+  string created_at = 7;
+}
+
+message CreateArtifactRequest {
+  string artifact_type = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message CreateArtifactResponse {
+  ArtifactRecord artifact = 1;
+}
+
+message CreateArtifactVersionRequest {
+  string artifact_id = 1;
+  int32 version_number = 2;
+  string status = 3;
+  string valid_from = 4;
+  string valid_to = 5;
+  string system_from = 6;
+  string content_ref = 7;
+  string content_hash = 8;
+  string author_id = 9;
+  string approver_id = 10;
+}
+
+message CreateArtifactVersionResponse {
+  ArtifactVersionRecord version = 1;
+}
+
+message GetArtifactVersionAsOfRequest {
+  string artifact_id = 1;
+  string as_of_valid_time = 2;
+}
+
+message GetArtifactVersionAsOfResponse {
+  ArtifactVersionRecord version = 1;
+}
+
+message GetArtifactVersionByIdRequest {
+  string artifact_version_id = 1;
+}
+
+message GetArtifactVersionByIdResponse {
+  ArtifactVersionRecord version = 1;
+}
+
+message ArtifactRecord {
+  string artifact_id = 1;
+  string artifact_type = 2;
+  string name = 3;
+  string description = 4;
+  string created_at = 5;
+}
+
+message ArtifactVersionRecord {
+  string artifact_version_id = 1;
+  string artifact_id = 2;
+  int32 version_number = 3;
+  string status = 4;
+  string valid_from = 5;
+  string valid_to = 6;
+  string system_from = 7;
+  string system_to = 8;
+  string content_ref = 9;
+  string content_hash = 10;
+  string author_id = 11;
+  string approver_id = 12;
+  string created_at = 13;
+}
+
+message UpsertDecisionRequest {
+  string case_id = 1;
+  int64 event_seq = 2;
+  string projection_version = 3;
+  string chosen_action = 4;
+  string candidates_json = 5;
+  string scores_json = 6;
+  repeated string constraints_hit = 7;
+  string detail_json = 8;
+}
+
+message UpsertDecisionResponse {
+  DecisionRecord decision = 1;
+}
+
+message InsertDecisionEvidenceRequest {
+  string decision_id = 1;
+  string artifact_version_id = 2;
+  string citation_json = 3;
+}
+
+message InsertDecisionEvidenceResponse {
+  DecisionEvidenceRecord evidence = 1;
+}
+
+message FindDecisionRequest {
+  string case_id = 1;
+  int64 event_seq = 2;
+  string projection_version = 3;
+}
+
+message FindDecisionResponse {
+  DecisionRecord decision = 1;
+}
+
+message ListDecisionEvidenceRequest {
+  string decision_id = 1;
+}
+
+message ListDecisionEvidenceResponse {
+  repeated DecisionEvidenceRecord evidence = 1;
+}
+
+message DecisionRecord {
+  string decision_id = 1;
+  string case_id = 2;
+  int64 event_seq = 3;
+  string projection_version = 4;
+  string chosen_action = 5;
+  string candidates_json = 6;
+  string scores_json = 7;
+  repeated string constraints_hit = 8;
+  string detail_json = 9;
+  string created_at = 10;
+}
+
+message DecisionEvidenceRecord {
+  string decision_evidence_id = 1;
+  string decision_id = 2;
+  string artifact_version_id = 3;
+  string citation_json = 4;
+  string created_at = 5;
+}
+
+message UpsertAssertionRequest {
+  string assertion_id = 1;
+  string case_id = 2;
+  string subject_type = 3;
+  string subject_id = 4;
+  string predicate = 5;
+  string object_type = 6;
+  string object_id = 7;
+  string object_literal_json = 8;
+  string assertion_type = 9;
+  string asserted_by_type = 10;
+  string asserted_by_id = 11;
+  float confidence = 12;
+  string status = 13;
+  string methodology_framework_id = 14;
+  string source_event_id = 15;
+  string metadata_json = 16;
+}
+
+message UpsertAssertionResponse {
+  AssertionRecord assertion = 1;
+}
+
+message GetAssertionRequest {
+  string assertion_id = 1;
+}
+
+message GetAssertionResponse {
+  AssertionRecord assertion = 1;
+}
+
+message SearchAssertionsRequest {
+  string case_id = 1;
+  string subject_type = 2;
+  string subject_id = 3;
+  string predicate = 4;
+  string assertion_type = 5;
+  string status = 6;
+  string methodology_framework_id = 7;
+  string query = 8;
+  int32 limit = 9;
+  int32 offset = 10;
+}
+
+message SearchAssertionsResponse {
+  repeated AssertionRecord assertions = 1;
+}
+
+message AssertionRecord {
+  string assertion_id = 1;
+  string case_id = 2;
+  string subject_type = 3;
+  string subject_id = 4;
+  string predicate = 5;
+  string object_type = 6;
+  string object_id = 7;
+  string object_literal_json = 8;
+  string assertion_type = 9;
+  string asserted_by_type = 10;
+  string asserted_by_id = 11;
+  float confidence = 12;
+  string status = 13;
+  string methodology_framework_id = 14;
+  string source_event_id = 15;
+  string metadata_json = 16;
+  string created_at = 17;
+  string updated_at = 18;
+}
+
+message UpsertEvidenceRequest {
+  string evidence_id = 1;
+  string case_id = 2;
+  int64 event_seq = 3;
+  string source_kind = 4;
+  string source_id = 5;
+  string artifact_version_id = 6;
+  string evidence_type = 7;
+  string evidence_role = 8;
+  string methodology_framework_id = 9;
+  string evidence_payload_json = 10;
+  string created_by_type = 11;
+  string created_by_id = 12;
+  bool is_derived = 13;
+  string status = 14;
+}
+
+message UpsertEvidenceResponse {
+  EvidenceRecord evidence = 1;
+}
+
+message GetEvidenceRequest {
+  string evidence_id = 1;
+}
+
+message GetEvidenceResponse {
+  EvidenceRecord evidence = 1;
+}
+
+message SearchEvidenceRequest {
+  string case_id = 1;
+  string source_kind = 2;
+  string evidence_type = 3;
+  string evidence_role = 4;
+  string status = 5;
+  string methodology_framework_id = 6;
+  string query = 7;
+  int32 limit = 8;
+  int32 offset = 9;
+}
+
+message SearchEvidenceResponse {
+  repeated EvidenceRecord evidence = 1;
+}
+
+message EvidenceRecord {
+  string evidence_id = 1;
+  string case_id = 2;
+  int64 event_seq = 3;
+  string source_kind = 4;
+  string source_id = 5;
+  string artifact_version_id = 6;
+  string evidence_type = 7;
+  string evidence_role = 8;
+  string methodology_framework_id = 9;
+  string evidence_payload_json = 10;
+  string created_by_type = 11;
+  string created_by_id = 12;
+  bool is_derived = 13;
+  string status = 14;
+  string created_at = 15;
+  string updated_at = 16;
+}
+
+message UpsertEvidenceLocatorRequest {
+  string evidence_locator_id = 1;
+  string evidence_id = 2;
+  string locator_type = 3;
+  string page_span = 4;
+  string char_span = 5;
+  string sentence_ref_json = 6;
+  string bbox_json = 7;
+  string polygon_json = 8;
+  string time_range = 9;
+  string table_cell_json = 10;
+  string measurement_field = 11;
+  string locator_payload_json = 12;
+  string normalized_text = 13;
+  string preview_text = 14;
+}
+
+message UpsertEvidenceLocatorResponse {
+  EvidenceLocatorRecord locator = 1;
+}
+
+message ListEvidenceLocatorsRequest {
+  string evidence_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message ListEvidenceLocatorsResponse {
+  repeated EvidenceLocatorRecord locators = 1;
+}
+
+message EvidenceLocatorRecord {
+  string evidence_locator_id = 1;
+  string evidence_id = 2;
+  string locator_type = 3;
+  string page_span = 4;
+  string char_span = 5;
+  string sentence_ref_json = 6;
+  string bbox_json = 7;
+  string polygon_json = 8;
+  string time_range = 9;
+  string table_cell_json = 10;
+  string measurement_field = 11;
+  string locator_payload_json = 12;
+  string normalized_text = 13;
+  string preview_text = 14;
+  string created_at = 15;
+}
+
+message UpsertEvidenceDerivationRequest {
+  string evidence_derivation_id = 1;
+  string child_evidence_id = 2;
+  string parent_evidence_id = 3;
+  string derivation_type = 4;
+  string method = 5;
+  string run_id = 6;
+  string artifact_version_id = 7;
+  string derivation_metadata_json = 8;
+}
+
+message UpsertEvidenceDerivationResponse {
+  EvidenceDerivationRecord derivation = 1;
+}
+
+message ListEvidenceDerivationsRequest {
+  string evidence_id = 1;
+  string direction = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListEvidenceDerivationsResponse {
+  repeated EvidenceDerivationRecord derivations = 1;
+}
+
+message EvidenceDerivationRecord {
+  string evidence_derivation_id = 1;
+  string child_evidence_id = 2;
+  string parent_evidence_id = 3;
+  string derivation_type = 4;
+  string method = 5;
+  string run_id = 6;
+  string artifact_version_id = 7;
+  string derivation_metadata_json = 8;
+  string created_at = 9;
+}
+
+message UpsertEvidenceClassificationRequest {
+  string evidence_id = 1;
+  string source_reliability_tier = 2;
+  string evidence_strength_tier = 3;
+  string evidence_modality = 4;
+  string institutional_trust_class = 5;
+  bool is_primary_source = 6;
+  bool is_machine_generated = 7;
+  bool requires_human_validation = 8;
+  string methodology_framework_id = 9;
+  string classification_status = 10;
+  string metadata_json = 11;
+}
+
+message UpsertEvidenceClassificationResponse {
+  EvidenceClassificationRecord classification = 1;
+}
+
+message GetEvidenceClassificationRequest {
+  string evidence_id = 1;
+}
+
+message GetEvidenceClassificationResponse {
+  EvidenceClassificationRecord classification = 1;
+}
+
+message EvidenceClassificationRecord {
+  string evidence_id = 1;
+  string source_reliability_tier = 2;
+  string evidence_strength_tier = 3;
+  string evidence_modality = 4;
+  string institutional_trust_class = 5;
+  bool is_primary_source = 6;
+  bool is_machine_generated = 7;
+  bool requires_human_validation = 8;
+  string methodology_framework_id = 9;
+  string classification_status = 10;
+  string metadata_json = 11;
+  string created_at = 12;
+  string updated_at = 13;
+}
+
+message UpsertAssertionEvidenceLinkRequest {
+  string assertion_evidence_link_id = 1;
+  string assertion_id = 2;
+  string evidence_id = 3;
+  string artifact_version_id = 4;
+  string event_id = 5;
+  string memory_decision_id = 6;
+  string support_type = 7;
+  float weight = 8;
+  string note = 9;
+  string evidence_json = 10;
+}
+
+message UpsertAssertionEvidenceLinkResponse {
+  AssertionEvidenceLinkRecord evidence_link = 1;
+}
+
+message ListAssertionEvidenceLinksRequest {
+  string assertion_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message ListAssertionEvidenceLinksResponse {
+  repeated AssertionEvidenceLinkRecord evidence_links = 1;
+}
+
+message AssertionEvidenceLinkRecord {
+  string assertion_evidence_link_id = 1;
+  string assertion_id = 2;
+  string evidence_id = 3;
+  string artifact_version_id = 4;
+  string event_id = 5;
+  string memory_decision_id = 6;
+  string support_type = 7;
+  float weight = 8;
+  string note = 9;
+  string evidence_json = 10;
+  string created_at = 11;
+}
+
+message UpsertAssertionRelationRequest {
+  string assertion_relation_id = 1;
+  string from_assertion_id = 2;
+  string to_assertion_id = 3;
+  string relation_type = 4;
+  string metadata_json = 5;
+}
+
+message UpsertAssertionRelationResponse {
+  AssertionRelationRecord relation = 1;
+}
+
+message ListAssertionRelationsRequest {
+  string assertion_id = 1;
+  string direction = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListAssertionRelationsResponse {
+  repeated AssertionRelationRecord relations = 1;
+}
+
+message AssertionRelationRecord {
+  string assertion_relation_id = 1;
+  string from_assertion_id = 2;
+  string to_assertion_id = 3;
+  string relation_type = 4;
+  string metadata_json = 5;
+  string created_at = 6;
+}
+
+message InsertMemoryDecisionRequest {
+  string task_id = 1;
+  string run_id = 2;
+  string decision_text = 3;
+  string rationale_text = 4;
+  repeated string alternatives_considered = 5;
+  string source_evidence_json = 6;
+  repeated string entity_ids = 7;
+  float confidence = 8;
+  string author_json = 9;
+  string decision_timestamp = 10;
+  repeated string consequences = 11;
+  string metadata_json = 12;
+  string idempotency_key = 13;
+}
+
+message InsertMemoryDecisionResponse {
+  MemoryDecisionRecord decision = 1;
+}
+
+message ListRecentMemoryDecisionsRequest {
+  string task_id = 1;
+  string run_id = 2;
+  repeated string entity_ids = 3;
+  string as_of = 4;
+  int32 limit = 5;
+}
+
+message ListRecentMemoryDecisionsResponse {
+  repeated MemoryDecisionRecord decisions = 1;
+}
+
+message InsertMemoryEpisodeSummaryRequest {
+  string episode_label = 1;
+  string task_id = 2;
+  string run_id = 3;
+  string session_id = 4;
+  string summary_text = 5;
+  repeated string outcomes = 6;
+  string key_facts_json = 7;
+  repeated string decisions = 8;
+  repeated string unresolved_questions = 9;
+  string source_evidence_json = 10;
+  repeated string entity_ids = 11;
+  float confidence = 12;
+  string author_json = 13;
+  string summary_timestamp = 14;
+  string metadata_json = 15;
+  string idempotency_key = 16;
+}
+
+message InsertMemoryEpisodeSummaryResponse {
+  MemoryEpisodeSummaryRecord summary = 1;
+}
+
+message ListRecentMemoryEpisodeSummariesRequest {
+  string task_id = 1;
+  string run_id = 2;
+  string as_of = 3;
+  int32 limit = 4;
+}
+
+message ListRecentMemoryEpisodeSummariesResponse {
+  repeated MemoryEpisodeSummaryRecord summaries = 1;
+}
+
+message InsertMemoryAnswerArtifactRequest {
+  string domain_id = 1;
+  string intent = 2;
+  string normalized_question = 3;
+  string question_fingerprint_json = 4;
+  repeated string entity_ids = 5;
+  string answer_text = 6;
+  string answer_payload_json = 7;
+  string source_task_id = 8;
+  string source_run_id = 9;
+  string source_decision_id = 10;
+  string source_episode_summary_id = 11;
+  string evidence_refs_json = 12;
+  string provenance_json = 13;
+  string freshness_policy_json = 14;
+  string validation_contract_json = 15;
+  string metadata_json = 16;
+  string serving_status = 17;
+  string superseded_by = 18;
+  string idempotency_key = 19;
+}
+
+message InsertMemoryAnswerArtifactResponse {
+  MemoryAnswerArtifactRecord artifact = 1;
+}
+
+message RecallMemoryAnswerArtifactsRequest {
+  string domain_id = 1;
+  string intent = 2;
+  string question_fingerprint_json = 3;
+  repeated string entity_ids = 4;
+  repeated string serving_statuses = 5;
+  int32 limit = 6;
+}
+
+message RecallMemoryAnswerArtifactsResponse {
+  repeated MemoryAnswerArtifactRecord artifacts = 1;
+}
+
+message InsertMemoryAnswerValidationRequest {
+  string answer_artifact_id = 1;
+  string validator_type = 2;
+  string check_spec_json = 3;
+  string observed_values_json = 4;
+  bool pass = 5;
+  string failure_reason = 6;
+  int32 latency_ms = 7;
+  string metadata_json = 8;
+  string validated_at = 9;
+}
+
+message InsertMemoryAnswerValidationResponse {
+  MemoryAnswerValidationRecord validation = 1;
+}
+
+message MemoryAnswerArtifactRecord {
+  string answer_artifact_id = 1;
+  string domain_id = 2;
+  string intent = 3;
+  string normalized_question = 4;
+  string question_fingerprint_json = 5;
+  repeated string entity_ids = 6;
+  string answer_text = 7;
+  string answer_payload_json = 8;
+  string source_task_id = 9;
+  string source_run_id = 10;
+  string source_decision_id = 11;
+  string source_episode_summary_id = 12;
+  string evidence_refs_json = 13;
+  string provenance_json = 14;
+  string freshness_policy_json = 15;
+  string validation_contract_json = 16;
+  string metadata_json = 17;
+  string serving_status = 18;
+  string superseded_by = 19;
+  string idempotency_key = 20;
+  string created_at = 21;
+  string updated_at = 22;
+}
+
+message MemoryAnswerValidationRecord {
+  string answer_validation_id = 1;
+  string answer_artifact_id = 2;
+  string validator_type = 3;
+  string check_spec_json = 4;
+  string observed_values_json = 5;
+  bool pass = 6;
+  string failure_reason = 7;
+  int32 latency_ms = 8;
+  string metadata_json = 9;
+  string validated_at = 10;
+}
+
+message UpsertOntologyConceptRequest {
+  string concept_id = 1;
+  string canonical_name = 2;
+  string concept_type = 3;
+  string aliases_json = 4;
+}
+
+message UpsertOntologyConceptResponse {
+  OntologyConceptRecord concept = 1;
+}
+
+message GetOntologyConceptRequest {
+  string concept_id = 1;
+}
+
+message GetOntologyConceptResponse {
+  OntologyConceptRecord concept = 1;
+}
+
+message ListOntologyConceptsRequest {
+  string concept_type = 1;
+  string query = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListOntologyConceptsResponse {
+  repeated OntologyConceptRecord concepts = 1;
+}
+
+message OntologyConceptRecord {
+  string concept_id = 1;
+  string canonical_name = 2;
+  string concept_type = 3;
+  string aliases_json = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message UpsertConceptAliasRequest {
+  string concept_id = 1;
+  string alias_text = 2;
+  double confidence = 3;
+  string extractor = 4;
+}
+
+message UpsertConceptAliasResponse {
+  ConceptAliasRecord alias = 1;
+}
+
+message ListConceptAliasesRequest {
+  string concept_id = 1;
+  string query = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListConceptAliasesResponse {
+  repeated ConceptAliasRecord aliases = 1;
+}
+
+message ConceptAliasRecord {
+  string concept_id = 1;
+  string alias_text = 2;
+  double confidence = 3;
+  string extractor = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message UpsertOntologyEdgeRequest {
+  string src_concept_id = 1;
+  string predicate = 2;
+  string dst_concept_id = 3;
+  double weight = 4;
+}
+
+message UpsertOntologyEdgeResponse {
+  OntologyEdgeRecord edge = 1;
+}
+
+message ListOntologyEdgesRequest {
+  string src_concept_id = 1;
+  string predicate = 2;
+  string dst_concept_id = 3;
+  int32 limit = 4;
+}
+
+message ListOntologyEdgesResponse {
+  repeated OntologyEdgeRecord edges = 1;
+}
+
+message OntologyEdgeRecord {
+  string src_concept_id = 1;
+  string predicate = 2;
+  string dst_concept_id = 3;
+  double weight = 4;
+  string created_at = 5;
+}
+
+message UpsertEventConceptLinkRequest {
+  string stream_id = 1;
+  string event_id = 2;
+  string concept_id = 3;
+  string role = 4;
+  double confidence = 5;
+  string asset_id = 6;
+  int64 version_number = 7;
+  string extractor = 8;
+  string source_span = 9;
+  string evidence_json = 10;
+}
+
+message UpsertEventConceptLinkResponse {
+  EventConceptLinkRecord link = 1;
+}
+
+message ListEventConceptLinksRequest {
+  string stream_id = 1;
+  string event_id = 2;
+  string concept_id = 3;
+  string role = 4;
+  int32 limit = 5;
+}
+
+message ListEventConceptLinksResponse {
+  repeated EventConceptLinkRecord links = 1;
+}
+
+message EventConceptLinkRecord {
+  string stream_id = 1;
+  string event_id = 2;
+  string concept_id = 3;
+  string role = 4;
+  double confidence = 5;
+  string asset_id = 6;
+  int64 version_number = 7;
+  string extractor = 8;
+  string source_span = 9;
+  string evidence_json = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+message UpsertOntologyObjectTypeRequest {
+  string type_id = 1;
+  string display_name = 2;
+  string description = 3;
+  bool enabled = 4;
+}
+
+message UpsertOntologyObjectTypeResponse {
+  OntologyObjectTypeRecord object_type = 1;
+}
+
+message GetOntologyObjectTypeRequest {
+  string type_id = 1;
+}
+
+message GetOntologyObjectTypeResponse {
+  OntologyObjectTypeRecord object_type = 1;
+}
+
+message ListOntologyObjectTypesRequest {
+  bool enabled_only = 1;
+  string query = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListOntologyObjectTypesResponse {
+  repeated OntologyObjectTypeRecord object_types = 1;
+}
+
+message OntologyObjectTypeRecord {
+  string type_id = 1;
+  string display_name = 2;
+  string description = 3;
+  bool enabled = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message UpsertOntologyConceptTypeAssignmentRequest {
+  string assignment_id = 1;
+  string domain = 2;
+  string concept_id = 3;
+  string object_type_id = 4;
+  string assignment_status = 5;
+  string source_kind = 6;
+  double confidence = 7;
+  string metadata_json = 8;
+}
+
+message UpsertOntologyConceptTypeAssignmentResponse {
+  OntologyConceptTypeAssignmentRecord assignment = 1;
+}
+
+message ListOntologyConceptTypeAssignmentsRequest {
+  string domain = 1;
+  string concept_id = 2;
+  string object_type_id = 3;
+  string assignment_status = 4;
+  int32 limit = 5;
+  int32 offset = 6;
+}
+
+message ListOntologyConceptTypeAssignmentsResponse {
+  repeated OntologyConceptTypeAssignmentRecord assignments = 1;
+}
+
+message OntologyConceptTypeAssignmentRecord {
+  string assignment_id = 1;
+  string domain = 2;
+  string concept_id = 3;
+  string object_type_id = 4;
+  string assignment_status = 5;
+  string source_kind = 6;
+  double confidence = 7;
+  string metadata_json = 8;
+  string created_at = 9;
+  string updated_at = 10;
+}
+
+message UpsertOntologyRelationTypeRequest {
+  string predicate = 1;
+  string src_type_id = 2;
+  string dst_type_id = 3;
+  string display_name = 4;
+  string description = 5;
+  bool is_symmetric = 6;
+  bool is_transitive = 7;
+  bool enabled = 8;
+}
+
+message UpsertOntologyRelationTypeResponse {
+  OntologyRelationTypeRecord relation_type = 1;
+}
+
+message GetOntologyRelationTypeRequest {
+  string predicate = 1;
+}
+
+message GetOntologyRelationTypeResponse {
+  OntologyRelationTypeRecord relation_type = 1;
+}
+
+message ListOntologyRelationTypesRequest {
+  string src_type_id = 1;
+  string dst_type_id = 2;
+  bool enabled_only = 3;
+  string query = 4;
+  int32 limit = 5;
+  int32 offset = 6;
+}
+
+message ListOntologyRelationTypesResponse {
+  repeated OntologyRelationTypeRecord relation_types = 1;
+}
+
+message OntologyRelationTypeRecord {
+  string predicate = 1;
+  string src_type_id = 2;
+  string dst_type_id = 3;
+  string display_name = 4;
+  string description = 5;
+  bool is_symmetric = 6;
+  bool is_transitive = 7;
+  bool enabled = 8;
+  string created_at = 9;
+  string updated_at = 10;
+}
+
+message ListOntologyFactsRequest {
+  string status = 1;
+  string stream_id = 2;
+  string predicate = 3;
+  string extractor = 4;
+  int32 limit = 5;
+  int32 offset = 6;
+  string src_concept_id = 7;
+  string dst_concept_id = 8;
+  // When true, stream_id matches the named stream and all dot-delimited
+  // descendants. Defaults to exact match.
+  bool stream_prefix = 9;
+}
+
+message ListOntologyFactsResponse {
+  repeated OntologyFactRecord facts = 1;
+}
+
+message OntologyFactEvidenceWrite {
+  string stream_id = 1;
+  string event_id = 2;
+  string asset_id = 3;
+  int64 version_number = 4;
+  string source_span = 5;
+  string evidence_json = 6;
+  double confidence = 7;
+}
+
+message UpsertOntologyFactWithEvidenceRequest {
+  string src_concept_id = 1;
+  string predicate = 2;
+  string dst_concept_id = 3;
+  string qualifier_json = 4;
+  double confidence = 5;
+  string extractor = 6;
+  string status = 7;
+  string review_note = 8;
+  repeated OntologyFactEvidenceWrite evidence = 9;
+  string valid_from = 10;
+  string valid_to = 11;
+}
+
+message UpsertOntologyFactWithEvidenceResponse {
+  OntologyFactRecord fact = 1;
+  int32 evidence_count = 2;
+}
+
+message SemanticEntityWrite {
+  string entity_id = 1;
+  string entity_kind = 2;
+  string semantic_role = 3;
+  string namespace = 4;
+  string status = 5;
+  string property_datatype = 6;
+  string metadata_json = 7;
+}
+
+message SemanticStatementWrite {
+  string statement_key = 1;
+  string subject_id = 2;
+  string property_id = 3;
+  string value_type = 4;
+  string value_entity_id = 5;
+  string value_json = 6;
+  string status = 7;
+  double confidence = 8;
+  string created_by = 9;
+  string metadata_json = 10;
+}
+
+message StatementQualifierWrite {
+  string statement_key = 1;
+  string property_id = 2;
+  string value_type = 3;
+  string value_json = 4;
+  string value_entity_id = 5;
+  int32 ordinal = 6;
+}
+
+message StatementReferenceWrite {
+  string statement_key = 1;
+  string property_id = 2;
+  string value_type = 3;
+  string value_json = 4;
+  string evidence_id = 5;
+  string source_span = 6;
+  int32 ordinal = 7;
+}
+
+message UpsertSemanticBatchRequest {
+  repeated SemanticEntityWrite entities = 1;
+  repeated SemanticStatementWrite statements = 2;
+  repeated StatementQualifierWrite qualifiers = 3;
+  repeated StatementReferenceWrite references = 4;
+}
+
+message UpsertSemanticBatchResponse {
+  int32 semantic_entity_count = 1;
+  int32 semantic_statement_count = 2;
+  int32 statement_qualifier_count = 3;
+  int32 statement_reference_count = 4;
+}
+
+message GetSemanticStatementRequest {
+  string statement_id = 1;
+}
+
+message SemanticStatementRecord {
+  string statement_id = 1;
+  string subject_concept_id = 2;
+  string subject_name = 3;
+  string predicate = 4;
+  string object_concept_id = 5;
+  string object_name = 6;
+  string value_type = 7;
+  string value_json = 8;
+  double confidence = 9;
+  string status = 10;
+  string created_by = 11;
+  string metadata_json = 12;
+  string provenance_json = 13;
+  string created_at = 14;
+  string updated_at = 15;
+}
+
+message SemanticStatementQualifierRecord {
+  string statement_id = 1;
+  string property_id = 2;
+  string value_type = 3;
+  string value_entity_id = 4;
+  string value_json = 5;
+  int32 ordinal = 6;
+}
+
+message ListSemanticStatementsRequest {
+  string subject_id = 1;
+  string property_id = 2;
+  string value_entity_id = 3;
+  string status = 4;
+  int32 limit = 5;
+  int32 offset = 6;
+}
+
+message SemanticStatementWithQualifiers {
+  SemanticStatementRecord statement = 1;
+  repeated SemanticStatementQualifierRecord qualifiers = 2;
+}
+
+message SetSemanticStatementStatusRequest {
+  string statement_id = 1;
+  string status = 2;
+  string note = 3;
+}
+
+message SetSemanticStatementStatusResponse {
+  int32 updated_rows = 1;
+}
+
+message ListSemanticStatementsResponse {
+  repeated SemanticStatementWithQualifiers statements = 1;
+}
+
+message GetSemanticStatementResponse {
+  SemanticStatementRecord statement = 1;
+  repeated SemanticStatementQualifierRecord qualifiers = 2;
+}
+
+message SemanticStatementReferenceRecord {
+  string statement_id = 1;
+  string property_id = 2;
+  string value_type = 3;
+  string value_json = 4;
+  string evidence_id = 5;
+  string source_span = 6;
+  int32 ordinal = 7;
+  EvidenceRecord evidence = 8;
+  repeated EvidenceLocatorRecord locators = 9;
+}
+
+message GetSemanticStatementProvenanceRequest {
+  string statement_id = 1;
+  bool include_locators = 2;
+  int32 evidence_limit = 3;
+}
+
+message GetSemanticStatementProvenanceResponse {
+  repeated SemanticStatementReferenceRecord references = 1;
+}
+
+message GetSemanticStatementsByEvidenceRequest {
+  string evidence_id = 1;
+  bool include_locators = 2;
+  int32 limit = 3;
+}
+
+message GetSemanticStatementsByEvidenceResponse {
+  repeated SemanticStatementReferenceRecord references = 1;
+}
+
+message SearchOntologyConceptsRequest {
+  string query = 1;
+  string concept_type = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+  string domain = 5;
+}
+
+message SearchOntologyConceptsResponse {
+  repeated OntologyConceptRecord concepts = 1;
+}
+
+message SearchConceptAliasesRequest {
+  string query = 1;
+  string concept_id = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message SearchConceptAliasesResponse {
+  repeated ConceptAliasRecord aliases = 1;
+}
+
+message SearchOntologyFactsRequest {
+  string query = 1;
+  string status = 2;
+  string stream_id = 3;
+  string predicate = 4;
+  string extractor = 5;
+  string src_concept_id = 6;
+  string dst_concept_id = 7;
+  int32 limit = 8;
+  int32 offset = 9;
+  // When true, stream_id matches the named stream and all dot-delimited
+  // descendants. Defaults to exact match.
+  bool stream_prefix = 10;
+}
+
+message SearchOntologyFactsResponse {
+  repeated OntologyFactRecord facts = 1;
+}
+
+message GetOntologyConceptNeighborsRequest {
+  string concept_id = 1;
+  string direction = 2;
+  string predicate = 3;
+  int32 limit = 4;
+}
+
+message OntologyNeighborRecord {
+  int64 fact_id = 1;
+  string predicate = 2;
+  string direction = 3;
+  string neighbor_concept_id = 4;
+  string neighbor_canonical_name = 5;
+  string neighbor_concept_type = 6;
+  string status = 7;
+  double confidence = 8;
+}
+
+message GetOntologyConceptNeighborsResponse {
+  repeated OntologyNeighborRecord neighbors = 1;
+}
+
+message ArchiveOntologyFactRequest {
+  int64 fact_id = 1;
+  string reviewer = 2;
+  string note = 3;
+}
+
+message ArchiveOntologyFactResponse {
+  int32 updated_rows = 1;
+}
+
+message UpsertTermMappingRegistryRequest {
+  string domain = 1;
+  string registry_name = 2;
+  string version_label = 3;
+  string status = 4;
+  string description = 5;
+  string owner = 6;
+  string metadata_json = 7;
+}
+
+message UpsertTermMappingRegistryResponse {
+  TermMappingRegistryRecord registry = 1;
+}
+
+message GetTermMappingRegistryRequest {
+  string registry_id = 1;
+}
+
+message GetTermMappingRegistryResponse {
+  TermMappingRegistryRecord registry = 1;
+}
+
+message ListTermMappingRegistriesRequest {
+  string domain = 1;
+  string status = 2;
+  string query = 3;
+  int32 limit = 4;
+  int32 offset = 5;
+}
+
+message ListTermMappingRegistriesResponse {
+  repeated TermMappingRegistryRecord registries = 1;
+}
+
+message TermMappingRegistryRecord {
+  string registry_id = 1;
+  string domain = 2;
+  string registry_name = 3;
+  string version_label = 4;
+  string status = 5;
+  string description = 6;
+  string owner = 7;
+  string metadata_json = 8;
+  string created_at = 9;
+  string updated_at = 10;
+}
+
+message UpsertTermMappingRuleRequest {
+  string rule_id = 1;
+  string registry_id = 2;
+  string raw_term = 3;
+  string language = 4;
+  string context_hint = 5;
+  string term_type = 6;
+  string normalization_status = 7;
+  string canonical_term = 8;
+  string canonical_concept_id = 9;
+  bool is_compound = 10;
+  string split_rule_json = 11;
+  string semantic_slot = 12;
+  string json_targets_json = 13;
+  string ontology_target_kind = 14;
+  bool ambiguity_flag = 15;
+  string ambiguity_note = 16;
+  string review_status = 17;
+  double confidence = 18;
+  string metadata_json = 19;
+}
+
+message UpsertTermMappingRuleResponse {
+  TermMappingRuleRecord rule = 1;
+}
+
+message GetTermMappingRuleRequest {
+  string rule_id = 1;
+}
+
+message GetTermMappingRuleResponse {
+  TermMappingRuleRecord rule = 1;
+}
+
+message SearchTermMappingRulesRequest {
+  string registry_id = 1;
+  string raw_term = 2;
+  string query = 3;
+  string language = 4;
+  string term_type = 5;
+  string semantic_slot = 6;
+  string review_status = 7;
+  bool ambiguity_only = 8;
+  int32 limit = 9;
+  int32 offset = 10;
+}
+
+message SearchTermMappingRulesResponse {
+  repeated TermMappingRuleRecord rules = 1;
+}
+
+message TermMappingRuleRecord {
+  string rule_id = 1;
+  string registry_id = 2;
+  string raw_term = 3;
+  string language = 4;
+  string context_hint = 5;
+  string term_type = 6;
+  string normalization_status = 7;
+  string canonical_term = 8;
+  string canonical_concept_id = 9;
+  bool is_compound = 10;
+  string split_rule_json = 11;
+  string semantic_slot = 12;
+  string json_targets_json = 13;
+  string ontology_target_kind = 14;
+  bool ambiguity_flag = 15;
+  string ambiguity_note = 16;
+  string review_status = 17;
+  double confidence = 18;
+  string metadata_json = 19;
+  string created_at = 20;
+  string updated_at = 21;
+}
+
+message UpsertTermMappingRuleEvidenceRequest {
+  string rule_evidence_id = 1;
+  string rule_id = 2;
+  string artifact_id = 3;
+  string artifact_version_id = 4;
+  string event_id = 5;
+  string memory_decision_id = 6;
+  string source_span = 7;
+  string note = 8;
+  double confidence = 9;
+  string evidence_json = 10;
+}
+
+message UpsertTermMappingRuleEvidenceResponse {
+  TermMappingRuleEvidenceRecord evidence = 1;
+}
+
+message ListTermMappingRuleEvidenceRequest {
+  string rule_id = 1;
+  int32 limit = 2;
+}
+
+message ListTermMappingRuleEvidenceResponse {
+  repeated TermMappingRuleEvidenceRecord evidence = 1;
+}
+
+message TermMappingRuleEvidenceRecord {
+  string rule_evidence_id = 1;
+  string rule_id = 2;
+  string artifact_id = 3;
+  string artifact_version_id = 4;
+  string event_id = 5;
+  string memory_decision_id = 6;
+  string source_span = 7;
+  string note = 8;
+  double confidence = 9;
+  string evidence_json = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+message InterpretTermRequest {
+  string registry_id = 1;
+  string domain = 2;
+  string registry_name = 3;
+  string version_label = 4;
+  string raw_term = 5;
+  string language = 6;
+  string context_hint = 7;
+}
+
+message InterpretTermResponse {
+  TermMappingInterpretationRecord interpretation = 1;
+}
+
+message InterpretTermBatchRequest {
+  string registry_id = 1;
+  string domain = 2;
+  string registry_name = 3;
+  string version_label = 4;
+  repeated string raw_terms = 5;
+  string language = 6;
+  string context_hint = 7;
+}
+
+message InterpretTermBatchResponse {
+  repeated TermMappingInterpretationRecord interpretations = 1;
+}
+
+message TermMappingInterpretationRecord {
+  bool found = 1;
+  string raw_term = 2;
+  string matched_rule_id = 3;
+  string registry_id = 4;
+  string language = 5;
+  string term_type = 6;
+  string normalization_status = 7;
+  string canonical_term = 8;
+  string canonical_concept_id = 9;
+  bool is_compound = 10;
+  string split_rule_json = 11;
+  string semantic_slot = 12;
+  string json_targets_json = 13;
+  string ontology_target_kind = 14;
+  bool ambiguity_flag = 15;
+  string ambiguity_note = 16;
+  string review_status = 17;
+  double confidence = 18;
+}
+
+message UpsertOntologyRawTermRequest {
+  string raw_term_id = 1;
+  string domain = 2;
+  string raw_term = 3;
+  string language = 4;
+  string normalized_hint = 5;
+  string term_type_hint = 6;
+  string source_kind = 7;
+  string source_ref = 8;
+  string artifact_version_id = 9;
+  string evidence_id = 10;
+  string context_text = 11;
+  string context_locator_json = 12;
+  string extracted_by_type = 13;
+  string extracted_by_id = 14;
+  string status = 15;
+  string metadata_json = 16;
+}
+
+message UpsertOntologyRawTermResponse {
+  OntologyRawTermRecord raw_term = 1;
+}
+
+message GetOntologyRawTermRequest {
+  string raw_term_id = 1;
+}
+
+message GetOntologyRawTermResponse {
+  OntologyRawTermRecord raw_term = 1;
+}
+
+message SearchOntologyRawTermsRequest {
+  string domain = 1;
+  string raw_term = 2;
+  string query = 3;
+  string language = 4;
+  string status = 5;
+  string term_type_hint = 6;
+  int32 limit = 7;
+  int32 offset = 8;
+}
+
+message SearchOntologyRawTermsResponse {
+  repeated OntologyRawTermRecord raw_terms = 1;
+}
+
+message OntologyRawTermRecord {
+  string raw_term_id = 1;
+  string domain = 2;
+  string raw_term = 3;
+  string language = 4;
+  string normalized_hint = 5;
+  string term_type_hint = 6;
+  string source_kind = 7;
+  string source_ref = 8;
+  string artifact_version_id = 9;
+  string evidence_id = 10;
+  string context_text = 11;
+  string context_locator_json = 12;
+  string extracted_by_type = 13;
+  string extracted_by_id = 14;
+  string status = 15;
+  string metadata_json = 16;
+  string created_at = 17;
+  string updated_at = 18;
+}
+
+message UpsertOntologyRawTermCandidateRequest {
+  string candidate_id = 1;
+  string raw_term_id = 2;
+  string candidate_label = 3;
+  string candidate_concept_id = 4;
+  string candidate_object_type = 5;
+  string candidate_relation_type = 6;
+  double confidence = 7;
+  string candidate_status = 8;
+  string review_note = 9;
+  string metadata_json = 10;
+}
+
+message UpsertOntologyRawTermCandidateResponse {
+  OntologyRawTermCandidateRecord candidate = 1;
+}
+
+message ListOntologyRawTermCandidatesRequest {
+  string raw_term_id = 1;
+  string candidate_status = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListOntologyRawTermCandidatesResponse {
+  repeated OntologyRawTermCandidateRecord candidates = 1;
+}
+
+message OntologyRawTermCandidateRecord {
+  string candidate_id = 1;
+  string raw_term_id = 2;
+  string candidate_label = 3;
+  string candidate_concept_id = 4;
+  string candidate_object_type = 5;
+  string candidate_relation_type = 6;
+  double confidence = 7;
+  string candidate_status = 8;
+  string review_note = 9;
+  string metadata_json = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+message UpsertOntologyNormalizedTermRequest {
+  string normalized_term_id = 1;
+  string domain = 2;
+  string normalized_surface = 3;
+  string normalized_type = 4;
+  string merge_key = 5;
+  double type_confidence = 6;
+  string head_term = 7;
+  string modifier_terms_json = 8;
+  string canonical_candidate_label = 9;
+  string canonical_candidate_concept_id = 10;
+  string primary_cluster_id = 11;
+  int32 source_support_count = 12;
+  bool is_promotable = 13;
+  string normalization_status = 14;
+  string metadata_json = 15;
+}
+
+message UpsertOntologyNormalizedTermResponse {
+  OntologyNormalizedTermRecord normalized_term = 1;
+}
+
+message GetOntologyNormalizedTermRequest {
+  string normalized_term_id = 1;
+}
+
+message GetOntologyNormalizedTermResponse {
+  OntologyNormalizedTermRecord normalized_term = 1;
+}
+
+message SearchOntologyNormalizedTermsRequest {
+  string domain = 1;
+  string normalized_surface = 2;
+  string query = 3;
+  string normalized_type = 4;
+  string normalization_status = 5;
+  string primary_cluster_id = 6;
+  bool promotable_only = 7;
+  int32 limit = 8;
+  int32 offset = 9;
+}
+
+message SearchOntologyNormalizedTermsResponse {
+  repeated OntologyNormalizedTermRecord normalized_terms = 1;
+}
+
+message OntologyNormalizedTermRecord {
+  string normalized_term_id = 1;
+  string domain = 2;
+  string normalized_surface = 3;
+  string normalized_type = 4;
+  string merge_key = 5;
+  double type_confidence = 6;
+  string head_term = 7;
+  string modifier_terms_json = 8;
+  string canonical_candidate_label = 9;
+  string canonical_candidate_concept_id = 10;
+  string primary_cluster_id = 11;
+  int32 source_support_count = 12;
+  bool is_promotable = 13;
+  string normalization_status = 14;
+  string metadata_json = 15;
+  string created_at = 16;
+  string updated_at = 17;
+}
+
+message UpsertOntologyTermClusterRequest {
+  string cluster_id = 1;
+  string domain = 2;
+  string cluster_type = 3;
+  string proposed_canonical = 4;
+  string proposed_type = 5;
+  string cluster_status = 6;
+  int32 member_count = 7;
+  int32 source_support_count = 8;
+  double confidence = 9;
+  string metadata_json = 10;
+}
+
+message UpsertOntologyTermClusterResponse {
+  OntologyTermClusterRecord cluster = 1;
+}
+
+message GetOntologyTermClusterRequest {
+  string cluster_id = 1;
+}
+
+message GetOntologyTermClusterResponse {
+  OntologyTermClusterRecord cluster = 1;
+}
+
+message ListOntologyTermClustersRequest {
+  string domain = 1;
+  string cluster_type = 2;
+  string cluster_status = 3;
+  string proposed_type = 4;
+  int32 limit = 5;
+  int32 offset = 6;
+}
+
+message ListOntologyTermClustersResponse {
+  repeated OntologyTermClusterRecord clusters = 1;
+}
+
+message OntologyTermClusterRecord {
+  string cluster_id = 1;
+  string domain = 2;
+  string cluster_type = 3;
+  string proposed_canonical = 4;
+  string proposed_type = 5;
+  string cluster_status = 6;
+  int32 member_count = 7;
+  int32 source_support_count = 8;
+  double confidence = 9;
+  string metadata_json = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+message UpsertOntologyClusterMemberRequest {
+  string cluster_member_id = 1;
+  string cluster_id = 2;
+  string normalized_term_id = 3;
+  string member_role = 4;
+  double membership_confidence = 5;
+  string added_by = 6;
+  string note = 7;
+}
+
+message UpsertOntologyClusterMemberResponse {
+  OntologyClusterMemberRecord member = 1;
+}
+
+message ListOntologyClusterMembersRequest {
+  string cluster_id = 1;
+  string normalized_term_id = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListOntologyClusterMembersResponse {
+  repeated OntologyClusterMemberRecord members = 1;
+}
+
+message OntologyClusterMemberRecord {
+  string cluster_member_id = 1;
+  string cluster_id = 2;
+  string normalized_term_id = 3;
+  string member_role = 4;
+  double membership_confidence = 5;
+  string added_by = 6;
+  string note = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message UpsertOntologyRelationCandidateRequest {
+  string relation_candidate_id = 1;
+  string domain = 2;
+  string subject_label = 3;
+  string relation_type = 4;
+  string object_label = 5;
+  string subject_concept_id = 6;
+  string object_concept_id = 7;
+  string candidate_status = 8;
+  string source_kind = 9;
+  string source_cluster_id = 10;
+  double confidence = 11;
+  string metadata_json = 12;
+}
+
+message UpsertOntologyRelationCandidateResponse {
+  OntologyRelationCandidateRecord relation_candidate = 1;
+}
+
+message ListOntologyRelationCandidatesRequest {
+  string domain = 1;
+  string relation_type = 2;
+  string candidate_status = 3;
+  string subject_label = 4;
+  string object_label = 5;
+  string source_kind = 6;
+  int32 limit = 7;
+  int32 offset = 8;
+}
+
+message ListOntologyRelationCandidatesResponse {
+  repeated OntologyRelationCandidateRecord relation_candidates = 1;
+}
+
+message OntologyRelationCandidateRecord {
+  string relation_candidate_id = 1;
+  string domain = 2;
+  string subject_label = 3;
+  string relation_type = 4;
+  string object_label = 5;
+  string subject_concept_id = 6;
+  string object_concept_id = 7;
+  string candidate_status = 8;
+  string source_kind = 9;
+  string source_cluster_id = 10;
+  double confidence = 11;
+  string metadata_json = 12;
+  string created_at = 13;
+  string updated_at = 14;
+}
+
+message UpsertOntologyRawTermNormalizationRequest {
+  string mapping_id = 1;
+  string raw_term_id = 2;
+  string normalized_term_id = 3;
+  double mapping_confidence = 4;
+  string mapping_type = 5;
+  string mapping_status = 6;
+  string component_role = 7;
+  string normalization_rule = 8;
+  string note = 9;
+  string metadata_json = 10;
+}
+
+message UpsertOntologyRawTermNormalizationResponse {
+  OntologyRawTermNormalizationRecord mapping = 1;
+}
+
+message ListOntologyRawTermNormalizationsRequest {
+  string raw_term_id = 1;
+  string normalized_term_id = 2;
+  string mapping_status = 3;
+  int32 limit = 4;
+  int32 offset = 5;
+}
+
+message ListOntologyRawTermNormalizationsResponse {
+  repeated OntologyRawTermNormalizationRecord mappings = 1;
+}
+
+message OntologyRawTermNormalizationRecord {
+  string mapping_id = 1;
+  string raw_term_id = 2;
+  string normalized_term_id = 3;
+  double mapping_confidence = 4;
+  string mapping_type = 5;
+  string mapping_status = 6;
+  string component_role = 7;
+  string normalization_rule = 8;
+  string note = 9;
+  string metadata_json = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+message UpsertMethodologyFrameworkRequest {
+  string framework_id = 1;
+  string domain = 2;
+  string framework_name = 3;
+  string version_label = 4;
+  string status = 5;
+  string description = 6;
+  string owner = 7;
+  string question_types_json = 8;
+  string metadata_json = 9;
+}
+
+message UpsertMethodologyFrameworkResponse {
+  MethodologyFrameworkRecord framework = 1;
+}
+
+message GetMethodologyFrameworkRequest {
+  string framework_id = 1;
+}
+
+message GetMethodologyFrameworkResponse {
+  MethodologyFrameworkRecord framework = 1;
+}
+
+message ListMethodologyFrameworksRequest {
+  string domain = 1;
+  string status = 2;
+  string query = 3;
+  int32 limit = 4;
+  int32 offset = 5;
+}
+
+message ListMethodologyFrameworksResponse {
+  repeated MethodologyFrameworkRecord frameworks = 1;
+}
+
+message MethodologyFrameworkRecord {
+  string framework_id = 1;
+  string domain = 2;
+  string framework_name = 3;
+  string version_label = 4;
+  string status = 5;
+  string description = 6;
+  string owner = 7;
+  string question_types_json = 8;
+  string metadata_json = 9;
+  string created_at = 10;
+  string updated_at = 11;
+}
+
+message GetMethodologyFrameworkBundleRequest {
+  string framework_id = 1;
+}
+
+message GetMethodologyFrameworkBundleResponse {
+  MethodologyFrameworkRecord framework = 1;
+  repeated TaxonomySchemeRecord taxonomy_schemes = 2;
+  repeated EvidencePolicyRuleRecord evidence_policy_rules = 3;
+  repeated AssertionPolicyRuleRecord assertion_policy_rules = 4;
+  repeated ReviewPolicyRecord review_policies = 5;
+}
+
+message UpsertTaxonomySchemeRequest {
+  string scheme_id = 1;
+  string framework_id = 2;
+  string scheme_name = 3;
+  string scheme_type = 4;
+  string status = 5;
+  string description = 6;
+  string canonical_source = 7;
+  string scheme_json = 8;
+  string metadata_json = 9;
+}
+
+message UpsertTaxonomySchemeResponse {
+  TaxonomySchemeRecord scheme = 1;
+}
+
+message GetTaxonomySchemeRequest {
+  string scheme_id = 1;
+}
+
+message GetTaxonomySchemeResponse {
+  TaxonomySchemeRecord scheme = 1;
+}
+
+message ListTaxonomySchemesRequest {
+  string framework_id = 1;
+  string scheme_type = 2;
+  string status = 3;
+  string query = 4;
+  int32 limit = 5;
+  int32 offset = 6;
+}
+
+message ListTaxonomySchemesResponse {
+  repeated TaxonomySchemeRecord schemes = 1;
+}
+
+message TaxonomySchemeRecord {
+  string scheme_id = 1;
+  string framework_id = 2;
+  string scheme_name = 3;
+  string scheme_type = 4;
+  string status = 5;
+  string description = 6;
+  string canonical_source = 7;
+  string scheme_json = 8;
+  string metadata_json = 9;
+  string created_at = 10;
+  string updated_at = 11;
+}
+
+message UpsertEvidencePolicyRuleRequest {
+  string evidence_policy_rule_id = 1;
+  string framework_id = 2;
+  string rule_key = 3;
+  string question_type = 4;
+  string evidence_kind = 5;
+  string source_tier = 6;
+  string status = 7;
+  int32 priority = 8;
+  bool review_required = 9;
+  string applicability_json = 10;
+  string effect_json = 11;
+  string description = 12;
+  string metadata_json = 13;
+}
+
+message UpsertEvidencePolicyRuleResponse {
+  EvidencePolicyRuleRecord rule = 1;
+}
+
+message GetEvidencePolicyRuleRequest {
+  string evidence_policy_rule_id = 1;
+}
+
+message GetEvidencePolicyRuleResponse {
+  EvidencePolicyRuleRecord rule = 1;
+}
+
+message ListEvidencePolicyRulesRequest {
+  string framework_id = 1;
+  string question_type = 2;
+  string evidence_kind = 3;
+  string status = 4;
+  string query = 5;
+  int32 limit = 6;
+  int32 offset = 7;
+}
+
+message ListEvidencePolicyRulesResponse {
+  repeated EvidencePolicyRuleRecord rules = 1;
+}
+
+message EvidencePolicyRuleRecord {
+  string evidence_policy_rule_id = 1;
+  string framework_id = 2;
+  string rule_key = 3;
+  string question_type = 4;
+  string evidence_kind = 5;
+  string source_tier = 6;
+  string status = 7;
+  int32 priority = 8;
+  bool review_required = 9;
+  string applicability_json = 10;
+  string effect_json = 11;
+  string description = 12;
+  string metadata_json = 13;
+  string created_at = 14;
+  string updated_at = 15;
+}
+
+message UpsertAssertionPolicyRuleRequest {
+  string assertion_policy_rule_id = 1;
+  string framework_id = 2;
+  string rule_key = 3;
+  string assertion_type = 4;
+  string question_type = 5;
+  string status = 6;
+  int32 priority = 7;
+  bool review_required = 8;
+  string required_evidence_json = 9;
+  string outcome_json = 10;
+  string description = 11;
+  string metadata_json = 12;
+}
+
+message UpsertAssertionPolicyRuleResponse {
+  AssertionPolicyRuleRecord rule = 1;
+}
+
+message GetAssertionPolicyRuleRequest {
+  string assertion_policy_rule_id = 1;
+}
+
+message GetAssertionPolicyRuleResponse {
+  AssertionPolicyRuleRecord rule = 1;
+}
+
+message ListAssertionPolicyRulesRequest {
+  string framework_id = 1;
+  string assertion_type = 2;
+  string question_type = 3;
+  string status = 4;
+  string query = 5;
+  int32 limit = 6;
+  int32 offset = 7;
+}
+
+message ListAssertionPolicyRulesResponse {
+  repeated AssertionPolicyRuleRecord rules = 1;
+}
+
+message AssertionPolicyRuleRecord {
+  string assertion_policy_rule_id = 1;
+  string framework_id = 2;
+  string rule_key = 3;
+  string assertion_type = 4;
+  string question_type = 5;
+  string status = 6;
+  int32 priority = 7;
+  bool review_required = 8;
+  string required_evidence_json = 9;
+  string outcome_json = 10;
+  string description = 11;
+  string metadata_json = 12;
+  string created_at = 13;
+  string updated_at = 14;
+}
+
+message UpsertReviewPolicyRequest {
+  string review_policy_id = 1;
+  string framework_id = 2;
+  string policy_key = 3;
+  string question_type = 4;
+  string trigger_kind = 5;
+  string action = 6;
+  string status = 7;
+  int32 priority = 8;
+  string trigger_json = 9;
+  string description = 10;
+  string metadata_json = 11;
+}
+
+message UpsertReviewPolicyResponse {
+  ReviewPolicyRecord policy = 1;
+}
+
+message GetReviewPolicyRequest {
+  string review_policy_id = 1;
+}
+
+message GetReviewPolicyResponse {
+  ReviewPolicyRecord policy = 1;
+}
+
+message ListReviewPoliciesRequest {
+  string framework_id = 1;
+  string question_type = 2;
+  string trigger_kind = 3;
+  string status = 4;
+  string query = 5;
+  int32 limit = 6;
+  int32 offset = 7;
+}
+
+message ListReviewPoliciesResponse {
+  repeated ReviewPolicyRecord policies = 1;
+}
+
+message ReviewPolicyRecord {
+  string review_policy_id = 1;
+  string framework_id = 2;
+  string policy_key = 3;
+  string question_type = 4;
+  string trigger_kind = 5;
+  string action = 6;
+  string status = 7;
+  int32 priority = 8;
+  string trigger_json = 9;
+  string description = 10;
+  string metadata_json = 11;
+  string created_at = 12;
+  string updated_at = 13;
+}
+
+message MemoryDecisionRecord {
+  string memory_decision_id = 1;
+  string task_id = 2;
+  string run_id = 3;
+  string decision_text = 4;
+  string rationale_text = 5;
+  repeated string alternatives_considered = 6;
+  string source_evidence_json = 7;
+  repeated string entity_ids = 8;
+  float confidence = 9;
+  string author_json = 10;
+  string decision_timestamp = 11;
+  repeated string consequences = 12;
+  string metadata_json = 13;
+  string idempotency_key = 14;
+  string created_at = 15;
+}
+
+message MemoryEpisodeSummaryRecord {
+  string episode_summary_id = 1;
+  string episode_label = 2;
+  string task_id = 3;
+  string run_id = 4;
+  string session_id = 5;
+  string summary_text = 6;
+  repeated string outcomes = 7;
+  string key_facts_json = 8;
+  repeated string decisions = 9;
+  repeated string unresolved_questions = 10;
+  string source_evidence_json = 11;
+  repeated string entity_ids = 12;
+  float confidence = 13;
+  string author_json = 14;
+  string summary_timestamp = 15;
+  string metadata_json = 16;
+  string idempotency_key = 17;
+  string created_at = 18;
+}
+
+// --- Governance Messages ---
+
+message UpsertRuleRequest {
+  string rule_key = 1;
+  int32 rule_version = 2;
+  string severity = 3;
+  string expression = 4;
+  string effective_from = 5;
+  string effective_to = 6;
+  string source_artifact_version_id = 7;
+}
+
+message UpsertRuleResponse {
+  RuleRecord rule = 1;
+}
+
+message RuleRecord {
+  string rule_id = 1;
+  string rule_key = 2;
+  int32 rule_version = 3;
+  string severity = 4;
+  string expression = 5;
+  string effective_from = 6;
+  string effective_to = 7;
+  string source_artifact_version_id = 8;
+  string created_at = 9;
+}
+
+message InsertAuthorityGrantRequest {
+  string grantee_id = 1;
+  string action_type = 2;
+  string scope_json = 3;
+  string valid_from = 4;
+  string valid_to = 5;
+  string system_from = 6;
+  string mandate_artifact_version_id = 7;
+}
+
+message InsertAuthorityGrantResponse {
+  AuthorityGrantRecord grant = 1;
+}
+
+message AuthorityGrantRecord {
+  string authority_grant_id = 1;
+  string grantee_id = 2;
+  string action_type = 3;
+  string scope_json = 4;
+  string valid_from = 5;
+  string valid_to = 6;
+  string system_from = 7;
+  string system_to = 8;
+  string mandate_artifact_version_id = 9;
+  string created_at = 10;
+}
+
+message InsertRuleOverrideRequest {
+  string rule_key = 1;
+  int32 rule_version = 2;
+  string authority_grant_id = 3;
+  string justification_artifact_version_id = 4;
+  string valid_from = 5;
+  string valid_to = 6;
+  string system_from = 7;
+  int64 case_id = 8;
+  string event_id = 9;
+}
+
+message InsertRuleOverrideResponse {
+  RuleOverrideRecord override = 1;
+}
+
+message RuleOverrideRecord {
+  string rule_override_id = 1;
+  string rule_key = 2;
+  int32 rule_version = 3;
+  string authority_grant_id = 4;
+  string justification_artifact_version_id = 5;
+  string valid_from = 6;
+  string valid_to = 7;
+  string system_from = 8;
+  string system_to = 9;
+  int64 case_id = 10;
+  string event_id = 11;
+  string created_at = 12;
+}
+
+message FindAuthorityAsOfRequest {
+  string grantee_id = 1;
+  string action_type = 2;
+  string scope_json = 3;
+  string as_of_valid = 4;
+  string as_of_system = 5;
+}
+
+message FindAuthorityAsOfResponse {
+  AuthorityGrantRecord grant = 1;
+}
+
+message ListRuleOverridesAsOfRequest {
+  string rule_key = 1;
+  int32 rule_version = 2;
+  string as_of_valid = 3;
+  string as_of_system = 4;
+}
+
+message ListRuleOverridesAsOfResponse {
+  repeated RuleOverrideRecord overrides = 1;
+}
+
+// --- Ontology Fact Messages ---
+
+message ReviewOntologyFactRequest {
+  int64 fact_id = 1;
+  string decision = 2;
+  string reviewer = 3;
+  string note = 4;
+}
+
+message ReviewOntologyFactResponse {
+  int32 updated_rows = 1;
+}
+
+message GetOntologyFactRequest {
+  int64 fact_id = 1;
+}
+
+message GetOntologyFactResponse {
+  OntologyFactRecord fact = 1;
+}
+
+message OntologyFactRecord {
+  int64 fact_id = 1;
+  string src_concept_id = 2;
+  string predicate = 3;
+  string dst_concept_id = 4;
+  string qualifier_json = 5;
+  float confidence = 6;
+  string extractor = 7;
+  string status = 8;
+  string review_note = 9;
+  string valid_from = 10;
+  string valid_to = 11;
+  string created_at = 12;
+  string updated_at = 13;
+  string stream_id = 14;
+  int32 stale_fact_count = 15;
+  int32 fact_count = 16;
+  int32 dst_count = 17;
+  repeated int64 fact_ids = 18;
+  repeated string dst_values = 19;
+  string src_concept_label = 20;
+  string dst_concept_label = 21;
+  string statement_id = 22;
+}
+
+message ListOntologyFactReviewsRequest {
+  int64 fact_id = 1;
+}
+
+message ListOntologyFactReviewsResponse {
+  repeated OntologyFactReviewRecord reviews = 1;
+}
+
+message OntologyFactReviewRecord {
+  int64 review_id = 1;
+  int64 fact_id = 2;
+  string reviewer = 3;
+  string decision = 4;
+  string note = 5;
+  string created_at = 6;
+}
+
+message ListOntologyFactEvidenceRequest {
+  int64 fact_id = 1;
+  int32 limit = 2;
+  string stream_id = 3;
+}
+
+message ListOntologyFactEvidenceResponse {
+  repeated OntologyFactEvidenceRecord evidence = 1;
+}
+
+message OntologyFactEvidenceRecord {
+  string stream_id = 1;
+  string event_id = 2;
+  string asset_id = 3;
+  int32 version_number = 4;
+  string source_span = 5;
+  string evidence_json = 6;
+  float confidence = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message ListOntologyFactLinkedCasesRequest {
+  int64 fact_id = 1;
+}
+
+message ListOntologyFactLinkedCasesResponse {
+  repeated OntologyFactLinkedCaseRecord linked_cases = 1;
+}
+
+message OntologyFactLinkedCaseRecord {
+  int64 case_id = 1;
+  string stream_id = 2;
+  string title = 3;
+  string status = 4;
+  string priority = 5;
+  string owner = 6;
+  string linked_at = 7;
+}
+
+message ListOntologyFactLinkedAlertsRequest {
+  int64 fact_id = 1;
+}
+
+message ListOntologyFactLinkedAlertsResponse {
+  repeated OntologyFactLinkedAlertRecord linked_alerts = 1;
+}
+
+message OntologyFactLinkedAlertRecord {
+  int64 alert_id = 1;
+  int64 case_id = 2;
+  string stream_id = 3;
+  string severity = 4;
+  string status = 5;
+  string message = 6;
+  string rule_key = 7;
+  string linked_at = 8;
+}
+
+message SelectOntologyFactsForBulkReviewRequest {
+  string status = 1;
+  string stream_id = 2;
+  string predicate = 3;
+  string extractor = 4;
+  int32 stale_days = 5;
+  float min_confidence = 6;
+  float max_confidence = 7;
+  int32 limit = 8;
+}
+
+message SelectOntologyFactsForBulkReviewResponse {
+  repeated OntologyFactBulkSelectionRecord selected = 1;
+}
+
+message OntologyFactBulkSelectionRecord {
+  int64 fact_id = 1;
+  string status = 2;
+  float confidence = 3;
+}
+
+// --- Ontology Case Messages ---
+
+message InsertOntologyCaseRequest {
+  string stream_id = 1;
+  string title = 2;
+  string description = 3;
+  string priority = 4;
+  string owner = 5;
+  string created_by = 6;
+}
+
+message InsertOntologyCaseResponse {
+  OntologyCaseRecord ontology_case = 1;
+}
+
+message OntologyCaseRecord {
+  int64 case_id = 1;
+  string stream_id = 2;
+  string title = 3;
+  string description = 4;
+  string status = 5;
+  string priority = 6;
+  string owner = 7;
+  string created_by = 8;
+  string created_at = 9;
+  string updated_at = 10;
+  string closed_at = 11;
+}
+
+message GetOntologyCaseRequest {
+  int64 case_id = 1;
+}
+
+message GetOntologyCaseResponse {
+  OntologyCaseRecord ontology_case = 1;
+}
+
+message ListOntologyCasesRequest {
+  string stream_id = 1;
+  string status = 2;
+  int32 limit = 3;
+}
+
+message ListOntologyCasesResponse {
+  repeated OntologyCaseSummaryRecord cases = 1;
+}
+
+message OntologyCaseSummaryRecord {
+  int64 case_id = 1;
+  string stream_id = 2;
+  string title = 3;
+  string description = 4;
+  string status = 5;
+  string priority = 6;
+  string owner = 7;
+  string created_by = 8;
+  string created_at = 9;
+  string updated_at = 10;
+  string closed_at = 11;
+  int32 fact_count = 12;
+  int32 active_alert_count = 13;
+}
+
+message UpdateOntologyCaseRequest {
+  int64 case_id = 1;
+  string status = 2;
+  string owner = 3;
+}
+
+message UpdateOntologyCaseResponse {
+  int32 updated_rows = 1;
+}
+
+message LinkOntologyCaseFactRequest {
+  int64 case_id = 1;
+  int64 fact_id = 2;
+  string added_by = 3;
+  string added_note = 4;
+  string stream_id = 5;
+}
+
+message LinkOntologyCaseFactResponse {
+  bool linked = 1;
+}
+
+message ListOntologyCaseFactsRequest {
+  int64 case_id = 1;
+  int32 evidence_limit = 2;
+}
+
+message ListOntologyCaseFactsResponse {
+  repeated OntologyCaseFactRecord facts = 1;
+}
+
+message OntologyCaseFactRecord {
+  int64 fact_id = 1;
+  string src_concept_id = 2;
+  string predicate = 3;
+  string dst_concept_id = 4;
+  float confidence = 5;
+  string status = 6;
+  string extractor = 7;
+  string updated_at = 8;
+  string linked_at = 9;
+  string added_by = 10;
+  string added_note = 11;
+  int32 evidence_count = 12;
+  string evidence_sample_json = 13;
+}
+
+message InsertOntologyCaseDecisionRequest {
+  int64 case_id = 1;
+  string decision_kind = 2;
+  string verdict = 3;
+  string summary = 4;
+  string rationale = 5;
+  string as_of_system_time = 6;
+  string as_of_effective_time = 7;
+  string snapshot_id = 8;
+  string source_evidence_json = 9;
+  int64 supersedes_case_decision_id = 10;
+  string created_by = 11;
+}
+
+message InsertOntologyCaseDecisionResponse {
+  OntologyCaseDecisionRecord decision = 1;
+}
+
+message OntologyCaseDecisionRecord {
+  int64 case_decision_id = 1;
+  int64 case_id = 2;
+  string decision_kind = 3;
+  string verdict = 4;
+  string summary = 5;
+  string rationale = 6;
+  string as_of_system_time = 7;
+  string as_of_effective_time = 8;
+  string snapshot_id = 9;
+  string source_evidence_json = 10;
+  int64 supersedes_case_decision_id = 11;
+  string created_by = 12;
+  string created_at = 13;
+}
+
+message ListOntologyCaseDecisionsRequest {
+  int64 case_id = 1;
+}
+
+message ListOntologyCaseDecisionsResponse {
+  repeated OntologyCaseDecisionRecord decisions = 1;
+}
+
+message InsertOntologyCaseEventRequest {
+  int64 case_id = 1;
+  string action = 2;
+  string actor = 3;
+  string note = 4;
+  string payload_json = 5;
+}
+
+message InsertOntologyCaseEventResponse {
+  OntologyCaseEventRecord event = 1;
+}
+
+message OntologyCaseEventRecord {
+  int64 event_id = 1;
+  int64 case_id = 2;
+  string action = 3;
+  string actor = 4;
+  string note = 5;
+  string payload_json = 6;
+  string created_at = 7;
+}
+
+message ListOntologyCaseEventsRequest {
+  int64 case_id = 1;
+}
+
+message ListOntologyCaseEventsResponse {
+  repeated OntologyCaseEventRecord events = 1;
+}
+
+// --- Ontology Alert Messages ---
+
+message InsertOntologyAlertRequest {
+  int64 case_id = 1;
+  string stream_id = 2;
+  string severity = 3;
+  string message = 4;
+  string detail_json = 5;
+  string rule_key = 6;
+}
+
+message InsertOntologyAlertResponse {
+  OntologyAlertRecord alert = 1;
+}
+
+message OntologyAlertRecord {
+  int64 alert_id = 1;
+  int64 case_id = 2;
+  string stream_id = 3;
+  string severity = 4;
+  string status = 5;
+  string message = 6;
+  string detail_json = 7;
+  string rule_key = 8;
+  int32 trigger_count = 9;
+  string first_triggered_at = 10;
+  string last_triggered_at = 11;
+  string acked_by = 12;
+  string acked_at = 13;
+  string closed_at = 14;
+  string created_at = 15;
+  string updated_at = 16;
+}
+
+message GetOntologyAlertDetailRequest {
+  int64 alert_id = 1;
+}
+
+message GetOntologyAlertDetailResponse {
+  OntologyAlertDetailRecord alert_detail = 1;
+}
+
+message OntologyAlertDetailRecord {
+  OntologyAlertRecord alert = 1;
+  string case_title = 2;
+  int32 linked_fact_count = 3;
+}
+
+message ListOntologyAlertsRequest {
+  string stream_id = 1;
+  string status = 2;
+  int32 limit = 3;
+}
+
+message ListOntologyAlertsResponse {
+  repeated OntologyAlertSummaryRecord alerts = 1;
+}
+
+message OntologyAlertSummaryRecord {
+  OntologyAlertRecord alert = 1;
+  string case_title = 2;
+  int32 linked_fact_count = 3;
+}
+
+message UpdateOntologyAlertRequest {
+  int64 alert_id = 1;
+  string status = 2;
+  string acked_by = 3;
+}
+
+message UpdateOntologyAlertResponse {
+  int32 updated_rows = 1;
+}
+
+message RefreshTriggeredOntologyAlertRequest {
+  int64 alert_id = 1;
+}
+
+message RefreshTriggeredOntologyAlertResponse {
+  bool refreshed = 1;
+}
+
+// --- Ontology Ops Messages ---
+
+message UpsertOntologyOpsRuleConfigRequest {
+  string stream_id = 1;
+  string rule_name = 2;
+  bool enabled = 3;
+  int32 stale_days = 4;
+  string conflict_predicate = 5;
+  string severity = 6;
+  string note = 7;
+  string updated_by = 8;
+}
+
+message UpsertOntologyOpsRuleConfigResponse {
+  OntologyOpsRuleConfigRecord config = 1;
+}
+
+message OntologyOpsRuleConfigRecord {
+  int32 config_id = 1;
+  string stream_id = 2;
+  string rule_name = 3;
+  bool enabled = 4;
+  int32 stale_days = 5;
+  string conflict_predicate = 6;
+  string severity = 7;
+  string note = 8;
+  string updated_by = 9;
+  string updated_at = 10;
+}
+
+message ListOntologyOpsRuleConfigRequest {
+  string stream_id = 1;
+}
+
+message ListOntologyOpsRuleConfigResponse {
+  repeated OntologyOpsRuleConfigRecord configs = 1;
+}
+
+message ListStalePendingOntologyCandidatesRequest {
+  string stream_id = 1;
+  int32 stale_days = 2;
+}
+
+message ListConflictPredicateOntologyCandidatesRequest {
+  string stream_id = 1;
+  string predicate = 2;
+}
+
+message GetActiveOntologyCaseByTitleRequest {
+  string title = 1;
+}
+
+message GetActiveOntologyCaseByTitleResponse {
+  OntologyCaseRecord case = 1;
+}
+
+message GetActiveOntologyAlertByRuleKeyRequest {
+  string rule_key = 1;
+}
+
+message GetActiveOntologyAlertByRuleKeyResponse {
+  OntologyAlertRecord alert = 1;
+}
+
+message InsertOntologyOpsRuleRunRequest {
+  string stream_id_filter = 1;
+  int32 stale_days = 2;
+  string conflict_predicate = 3;
+  bool dry_run = 4;
+  int32 candidate_count = 5;
+  int32 created_case_count = 6;
+  int32 existing_case_count = 7;
+  int32 created_alert_count = 8;
+  int32 existing_alert_count = 9;
+  int64 duration_ms = 10;
+  string started_at = 11;
+  string finished_at = 12;
+}
+
+message InsertOntologyOpsRuleRunResponse {
+  OntologyOpsRuleRunRecord run = 1;
+}
+
+message OntologyOpsRuleRunRecord {
+  int32 run_id = 1;
+  string stream_id_filter = 2;
+  int32 stale_days = 3;
+  string conflict_predicate = 4;
+  bool dry_run = 5;
+  int32 candidate_count = 6;
+  int32 created_case_count = 7;
+  int32 existing_case_count = 8;
+  int32 created_alert_count = 9;
+  int32 existing_alert_count = 10;
+  int64 duration_ms = 11;
+  string started_at = 12;
+  string finished_at = 13;
+}
+
+message GetOntologyOpsRunRequest {
+  int32 run_id = 1;
+}
+
+message GetOntologyOpsRunResponse {
+  OntologyOpsRuleRunRecord run = 1;
+}
+
+message ListOntologyOpsRunsRequest {
+  string stream_id = 1;
+  int32 limit = 2;
+}
+
+message ListOntologyOpsRunsResponse {
+  repeated OntologyOpsRuleRunRecord runs = 1;
+}
+
+// ── Wiki layer messages ────────────────────────────────────────────────────
+
+message WikiPageRecord {
+  string page_id = 1;
+  string domain = 2;
+  string slug = 3;
+  string title = 4;
+  string content = 5;
+  string page_type = 6;
+  string tags_json = 7;
+  int32 source_count = 8;
+  float confidence = 9;
+  string last_reinforced_at = 10;
+  string created_at = 11;
+  string updated_at = 12;
+  string superseded_by = 13;
+  string knowledge_level = 14;
+  string authority_kind = 15;
+}
+
+message UpsertWikiPageRequest {
+  string domain = 1;
+  string slug = 2;
+  string title = 3;
+  string content = 4;
+  string page_type = 5;
+  string tags_json = 6;
+  float confidence = 7;
+  string source_ref = 8;
+  // If true, preserve the current page as a historical version and create a new
+  // current page with the same slug. superseded_page_id in the response will be
+  // set to the old page's ID. If false (default), the existing page is overwritten.
+  bool supersede = 9;
+  string knowledge_level = 10;
+  string authority_kind = 11;
+}
+
+message UpsertWikiPageResponse {
+  string page_id = 1;
+  string slug = 2;
+  // "created" | "updated" | "versioned" (supersede=true and prior version existed)
+  string status = 3;
+  // Set when status=="versioned": the page_id of the now-superseded old version.
+  string superseded_page_id = 4;
+}
+
+message UpsertWikiPageLinkRequest {
+  string domain = 1;
+  string from_slug = 2;
+  string to_slug = 3;
+  string link_text = 4;
+}
+
+message UpsertWikiPageLinkResponse {
+  string from_page_id = 1;
+  string to_page_id = 2;
+  string status = 3;
+}
+
+message GetWikiPageRequest {
+  string domain = 1;
+  string slug = 2;
+}
+
+message GetWikiPageResponse {
+  WikiPageRecord page = 1;
+}
+
+message SearchWikiPagesRequest {
+  string domain = 1;
+  string query = 2;
+  string page_type = 3;
+  int32 limit = 4;
+  string knowledge_level = 5;
+  string authority_kind = 6;
+}
+
+message SearchWikiPagesResponse {
+  repeated WikiPageRecord pages = 1;
+}
+
+message ListWikiPagesRequest {
+  string domain = 1;
+  // Optional: filter by page_type (empty = return all types)
+  string page_type = 2;
+  string knowledge_level = 3;
+  string authority_kind = 4;
+  bool include_content = 5;
+  int32 limit = 6;
+  int32 offset = 7;
+}
+
+message ListWikiPagesResponse {
+  repeated WikiPageRecord pages = 1;
+  int32 total = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ReinforceWikiPageRequest {
+  string page_id = 1;
+  float delta_confidence = 2;
+}
+
+message ReinforceWikiPageResponse {
+  WikiPageRecord page = 1;
+}
+
+message WikiLogRecord {
+  string log_id = 1;
+  string domain = 2;
+  string action_type = 3;
+  string source_ref = 4;
+  int32 pages_touched = 5;
+  string summary = 6;
+  string created_at = 7;
+}
+
+message AppendWikiLogRequest {
+  string domain = 1;
+  string action_type = 2;
+  string source_ref = 3;
+  int32 pages_touched = 4;
+  string summary = 5;
+}
+
+message AppendWikiLogResponse {
+  WikiLogRecord log = 1;
+}
+
+message ListWikiLogsRequest {
+  string domain = 1;
+  int32 limit = 2;
+}
+
+message ListWikiLogsResponse {
+  repeated WikiLogRecord logs = 1;
+}
+
+message WikiLintIssue {
+  string type = 1;
+  string page_id = 2;
+  string slug = 3;
+  string description = 4;
+  string severity = 5;
+}
+
+message LintWikiDomainRequest {
+  string domain = 1;
+}
+
+message LintWikiDomainResponse {
+  repeated WikiLintIssue issues = 1;
+}

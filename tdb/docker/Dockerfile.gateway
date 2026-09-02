@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1.7
+
+FROM rust:1-bookworm AS rust-builder
+WORKDIR /src
+
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY proto ./proto
+COPY src ./src
+
+RUN cargo build --release --bin tdb_gateway_backend
+
+FROM node:20-bookworm-slim AS gateway-builder
+WORKDIR /src/gateway
+
+COPY gateway/package.json gateway/package-lock.json ./
+RUN npm ci
+
+COPY gateway ./
+RUN npm run build && npm prune --omit=dev
+
+FROM node:20-bookworm-slim AS runtime
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    TDB_GATEWAY_NODE_ENV=production \
+    TDB_GATEWAY_HOST=0.0.0.0 \
+    TDB_GATEWAY_PORT=8080 \
+    TDB_GATEWAY_BACKEND_ADDR=127.0.0.1:50051 \
+    TDB_GATEWAY_BACKEND_TIMEOUT_MS=30000 \
+    TDB_GATEWAY_LOG_LEVEL=info \
+    RUST_BACKTRACE=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates postgresql-client tini \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=rust-builder /src/target/release/tdb_gateway_backend /usr/local/bin/tdb_gateway_backend
+COPY --from=gateway-builder /src/gateway/package.json ./gateway/package.json
+COPY --from=gateway-builder /src/gateway/node_modules ./gateway/node_modules
+COPY --from=gateway-builder /src/gateway/dist ./gateway/dist
+COPY --from=gateway-builder /src/gateway/config ./gateway/config
+COPY proto ./gateway/proto
+COPY db/migrations_v2 ./db/migrations_v2
+COPY db_migrate.sh db_verify.sh ./scripts/
+COPY docker/entrypoint.sh /usr/local/bin/tdb-entrypoint
+
+EXPOSE 8080 50051
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:' + (process.env.TDB_GATEWAY_PORT || '8080') + '/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+ENTRYPOINT ["tini", "--", "tdb-entrypoint"]

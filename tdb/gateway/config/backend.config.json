@@ -1,0 +1,11 @@
+{
+  "embedding": {
+    "enabled": true,
+    "baseUrl": "http://10.124.48.181:11434/v1",
+    "apiKey": "local",
+    "model": "qwen3-embedding:8b",
+    "timeoutSecs": 120,
+    "maxChars": 3000,
+    "strict": true
+  }
+}
