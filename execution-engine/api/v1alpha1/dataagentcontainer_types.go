@@ -31,8 +31,10 @@ type DataPolicy struct {
 	SourceNameSelector []string `json:"sourceNameSelector,omitempty"`
 }
 
-// SkillPolicy binds skill-hub packages. Dedicated skill DACs execute them in a
-// skill-agent; ds/normal DACs execute them locally in the orchestrator.
+// SkillPolicy binds skill-hub packages.
+// - dacType=skill: required; drives skill-agent zip download.
+// - dacType=normal (Semantic Group): optional; drives orchestrator LocalSkill download (overwrites same-name baked zips).
+// - dacType=ds: must be empty.
 type SkillPolicy struct {
 	// Skills is the multi-select list from skill-hub.
 	// Constraint: SkillRef.Name must be unique within one DAC (even across namespaces).
@@ -75,12 +77,14 @@ type ModelSpec struct {
 // DataAgentContainerSpec defines the desired state of DataAgentContainer
 type DataAgentContainerSpec struct {
 	DataPolicy DataPolicy `json:"dataPolicy"`
-	// SkillPolicy is the raw skill-hub selection for dedicated or locally attached skills.
+	// SkillPolicy is the raw skill-hub selection for dacType=skill (required) and
+	// optionally for dacType=normal LocalSkill packs (empty for ds).
 	SkillPolicy               SkillPolicy `json:"skillPolicy,omitempty"`
 	AgentCard                 AgentCard   `json:"agentCard"`
 	DACType                   string      `json:"dacType"`
 	Model                     ModelSpec   `json:"model"`
 	OrchestratorAgentMaxLoops string      `json:"orchestratorAgentMaxLoops"`
+	SkillAgentMaxLoops        string      `json:"skillAgentMaxLoops"`
 	ExpertAgentMaxSteps       string      `json:"expertAgentMaxSteps"`
 }
 

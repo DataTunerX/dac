@@ -13,6 +13,7 @@ vi.mock("@/lib/auth-session", () => ({
 
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from "axios"
 import { api } from "./api"
+import { setActiveTenantId } from "./tenant-context"
 import {
   clearClientSession,
   redirectToLogin,
@@ -46,8 +47,30 @@ describe("api interceptors", () => {
     const requestHandlers = (
       api.interceptors.request as unknown as InterceptorBucket<InternalAxiosRequestConfig>
     ).handlers
-    // No request interceptor that injects Authorization
-    expect(requestHandlers.filter((h) => h.fulfilled).length).toBe(0)
+    // The only request interceptor is the X-Tenant-Id scoping one — none inject Authorization.
+    const injectsAuth = requestHandlers.filter((h) => {
+      if (!h.fulfilled) return false
+      return String(h.fulfilled).includes("Authorization")
+    })
+    expect(injectsAuth.length).toBe(0)
+  })
+
+  it("injects X-Tenant-Id header when a tenant is active", () => {
+    const requestHandlers = (
+      api.interceptors.request as unknown as InterceptorBucket<InternalAxiosRequestConfig>
+    ).handlers
+    const tenantInterceptor = requestHandlers.find((h) => h.fulfilled)
+    expect(tenantInterceptor?.fulfilled).toBeTypeOf("function")
+
+    const setHeader = vi.fn()
+    const config = {
+      headers: { set: setHeader },
+    } as unknown as InternalAxiosRequestConfig
+
+    setActiveTenantId("tenant-123")
+    tenantInterceptor!.fulfilled!(config)
+    expect(setHeader).toHaveBeenCalledWith("X-Tenant-Id", "tenant-123")
+    setActiveTenantId(null)
   })
 
   it("unwraps Go envelope { code, message, data }", async () => {

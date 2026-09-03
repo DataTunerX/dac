@@ -148,13 +148,17 @@ MYSQL_NEXT_STEP_PROMPT_ZH = """
 - 环比变化率 = (本期数值 - 上期数值) / 上期数值 × 100%
 
 **回答决策规则：**
-1. 若背景知识足以提供信息来生成准确的sql，在conclusion字段设置 `terminate`，requery字段设置空字符串，answer中设置生成的sql。
-2. 若背景知识和问题无关，或者背景知识不足以提供信息来生成准确的sql，你就基于原始问题生成5个语义相似但表述不同的新问题，从中选择与历史查询不重复的问题作为下次提问。并在conclusion字段设置 `continue`，requery字段设置新选择的query，answer中设置生成空字符串。
-3. 如果回答核心指标所必需的表或字段在背景知识中不存在（例如问题要求退款率，但 schema 没有退款标记、退款状态或退款记录），属于信息不足。禁止用订单数量、状态猜测或编造该指标，必须按第2条返回 `continue`。
+1. 若背景知识足以提供信息来生成准确的sql，在conclusion字段设置 `terminate`，requery字段设置空字符串，answer中设置生成的sql，reason_detail可为空字符串。
+2. 若背景知识和问题无关，或者背景知识不足以提供信息来生成准确的sql，你就基于原始问题生成5个语义相似但表述不同的新问题，从中选择与历史查询不重复的问题作为下次提问。并在conclusion字段设置 `continue`，requery字段设置新选择的query，answer中设置生成空字符串，并在 reason_detail 中用一两句话说明无法生成 SQL 的具体原因（例如缺少哪类表/字段/指标）。
+3. 如果回答核心指标所必需的表或字段在背景知识中不存在（例如问题要求退款率，但 schema 没有退款标记、退款状态或退款记录），属于信息不足。禁止用订单数量、状态猜测或编造该指标，必须按第2条返回 `continue`，并在 reason_detail 写明缺失的核心表/字段。
+4. **本域部分可答必须先查**：若问题同时需要本 schema 内指标/关联键（如按 user_id 聚合订单数、消费额）以及本 schema 外的属性（如用户姓名），只要本域部分可用当前表准确生成 SQL，就必须 `conclusion=terminate` 并在 answer 中给出该本域 SQL（包含可传递的关联键字段）；禁止因缺外域字段而把已写好的本域 SQL 标成 `continue`。外域缺口由上游跨域协作补齐。
+5. reason_code 仅在“整题超出本专家领域、不应由本专家继续处理”时设为 `out_of_scope_non_retryable`；普通 schema 不足应保持 reason_code 为空，把原因写在 reason_detail。
+6. `continue` 时 answer 必须为空字符串；只要 answer 中已有可执行 SQL，就必须是 `terminate`。
 
 **输出格式：**
 - 必须返回标准 JSON 字符串，确保可被 `json.loads()` 解析
-- 包含三个必要字段：`answer`、`conclusion`、`requery`
+- 包含字段：`answer`、`conclusion`、`requery`、`reason_code`、`reason_detail`
+- 当 conclusion=`continue` 且 answer 为空时，`reason_detail` 必填
 - 不包含任何额外文本或解释
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
@@ -230,12 +234,17 @@ You are an expert at answering questions based on the provided MySQL database sc
 - Month-over-month change rate = (Current period value - Previous period value) / Previous period value × 100%
 
 **Response Decision Rules:**
-1. If the background knowledge is sufficient to generate accurate SQL, set `conclusion` field to `terminate`, set `requery` field to empty string, and set the generated SQL in the `answer` field.
-2. If the background knowledge is irrelevant to the question or insufficient to generate accurate SQL, generate 5 semantically similar but differently phrased new questions based on the original question, select one that doesn't duplicate historical queries as the next question. Set `conclusion` field to `continue`, set `requery` field to the newly selected query, and set `answer` field to empty string.
+1. If the background knowledge is sufficient to generate accurate SQL, set `conclusion` field to `terminate`, set `requery` field to empty string, set the generated SQL in the `answer` field, and leave `reason_detail` empty.
+2. If the background knowledge is irrelevant to the question or insufficient to generate accurate SQL, generate 5 semantically similar but differently phrased new questions based on the original question, select one that doesn't duplicate historical queries as the next question. Set `conclusion` field to `continue`, set `requery` field to the newly selected query, set `answer` field to empty string, and put a concrete 1-2 sentence explanation in `reason_detail` (e.g. which tables/fields/metrics are missing).
+3. If core tables/fields required by the metric are absent, do not invent SQL; return `continue` and explain the missing schema in `reason_detail`.
+4. **Local partial answer first**: if the question needs both in-schema metrics/join keys and out-of-schema attributes, and the local slice can be expressed accurately with current tables, you MUST `conclusion=terminate` with that local SQL (including join-key columns). Do NOT mark a ready local SQL as `continue` only because cross-domain fields are missing; upstream collaboration will fill those gaps.
+5. Set `reason_code` to `out_of_scope_non_retryable` only when the whole task is outside this expert domain; for ordinary schema insufficiency keep `reason_code` empty and use `reason_detail`.
+6. When `continue`, `answer` MUST be empty; if `answer` already contains executable SQL, conclusion MUST be `terminate`.
 
 **Output Format:**
 - Must return a standard JSON string that can be parsed by `json.loads()`
-- Contains three required fields: `answer`, `conclusion`, `requery`
+- Fields: `answer`, `conclusion`, `requery`, `reason_code`, `reason_detail`
+- When `conclusion=continue` and `answer` is empty, `reason_detail` is required
 - Does not contain any additional text or explanation
 - Do not add extra quotes around the output
 - Ensure it is valid JSON format
@@ -333,14 +342,18 @@ POSTGRES_NEXT_STEP_PROMPT_ZH = """
 - 环比变化率 = (本期数值 - 上期数值) / 上期数值 × 100%
 
 **回答决策规则：**
-1. 若背景知识足以提供信息来生成准确的sql，在conclusion字段设置 `terminate`，requery字段设置空字符串，answer中设置生成的sql。
-2. 若背景知识和问题无关，或者背景知识不足以提供信息来生成准确的sql，你就基于原始问题生成5个语义相似但表述不同的新问题，从中选择与历史查询不重复的问题作为下次提问。并在conclusion字段设置 `continue`，requery字段设置新选择的query，answer中设置生成空字符串。
-3. 如果回答核心指标所必需的表或字段在背景知识中不存在（例如问题要求退款率，但 schema 没有退款标记、退款状态或退款记录），属于信息不足。禁止用订单数量、状态猜测或编造该指标，必须按第2条返回 `continue`。
+1. 若背景知识足以提供信息来生成准确的sql，在conclusion字段设置 `terminate`，requery字段设置空字符串，answer中设置生成的sql，reason_detail可为空字符串。
+2. 若背景知识和问题无关，或者背景知识不足以提供信息来生成准确的sql，你就基于原始问题生成5个语义相似但表述不同的新问题，从中选择与历史查询不重复的问题作为下次提问。并在conclusion字段设置 `continue`，requery字段设置新选择的query，answer中设置生成空字符串，并在 reason_detail 中用一两句话说明无法生成 SQL 的具体原因（例如缺少哪类表/字段/指标）。
+3. 如果回答核心指标所必需的表或字段在背景知识中不存在（例如问题要求退款率，但 schema 没有退款标记、退款状态或退款记录），属于信息不足。禁止用订单数量、状态猜测或编造该指标，必须按第2条返回 `continue`，并在 reason_detail 写明缺失的核心表/字段。
+4. **本域部分可答必须先查**：若问题同时需要本 schema 内指标/关联键以及本 schema 外的属性，只要本域部分可用当前表准确生成 SQL，就必须 `conclusion=terminate` 并给出该本域 SQL（含可传递关联键）；禁止因缺外域字段而把已写好的本域 SQL 标成 `continue`。
+5. reason_code 仅在“整题超出本专家领域、不应由本专家继续处理”时设为 `out_of_scope_non_retryable`；普通 schema 不足应保持 reason_code 为空，把原因写在 reason_detail。
+6. `continue` 时 answer 必须为空字符串；只要 answer 中已有可执行 SQL，就必须是 `terminate`。
 
 
 **输出格式：**
 - 必须返回标准 JSON 字符串，确保可被 `json.loads()` 解析
-- 包含三个必要字段：`answer`、`conclusion`、`requery`
+- 包含字段：`answer`、`conclusion`、`requery`、`reason_code`、`reason_detail`
+- 当 conclusion=`continue` 且 answer 为空时，`reason_detail` 必填
 - 不包含任何额外文本或解释
 - 不要在外层添加额外的引号
 - 确保是有效的JSON格式
@@ -423,25 +436,30 @@ You are an expert at answering questions based on the provided PostgreSQL databa
 - Month-over-month change rate = (Current period value - Previous period value) / Previous period value × 100%
 
 **Response Decision Rules:**
-1. If background knowledge is sufficient to generate accurate SQL, set the `conclusion` field to `terminate`, set the `requery` field to an empty string, and set the generated SQL in the `answer` field.
-2. If background knowledge is irrelevant to the question or insufficient to generate accurate SQL, generate 5 semantically similar but differently phrased new questions based on the original question, select one that doesn't duplicate historical queries as the next question. Set the `conclusion` field to `continue`, set the `requery` field to the newly selected query, and set the `answer` field to an empty string.
+1. If background knowledge is sufficient to generate accurate SQL, set the `conclusion` field to `terminate`, set the `requery` field to an empty string, set the generated SQL in the `answer` field, and leave `reason_detail` empty.
+2. If background knowledge is irrelevant to the question or insufficient to generate accurate SQL, generate 5 semantically similar but differently phrased new questions based on the original question, select one that doesn't duplicate historical queries as the next question. Set the `conclusion` field to `continue`, set the `requery` field to the newly selected query, set the `answer` field to an empty string, and put a concrete explanation in `reason_detail`.
+3. If core tables/fields required by the metric are absent, do not invent SQL; return `continue` and explain the missing schema in `reason_detail`.
+4. **Local partial answer first**: if the question needs both in-schema metrics/join keys and out-of-schema attributes, and the local slice can be expressed accurately with current tables, you MUST `conclusion=terminate` with that local SQL (including join-key columns). Do NOT mark a ready local SQL as `continue` only because cross-domain fields are missing.
+5. Set `reason_code` to `out_of_scope_non_retryable` only when the whole task is outside this expert domain; for ordinary schema insufficiency keep `reason_code` empty and use `reason_detail`.
+6. When `continue`, `answer` MUST be empty; if `answer` already contains executable SQL, conclusion MUST be `terminate`.
 
 **Output Format:**
 - Must return a standard JSON string that can be parsed by `json.loads()`
-- Contains three required fields: `answer`, `conclusion`, `requery`
+- Fields: `answer`, `conclusion`, `requery`, `reason_code`, `reason_detail`
+- When `conclusion=continue` and `answer` is empty, `reason_detail` is required
 - Does not contain any additional text or explanation
 - Do not add extra quotes around the output
 - Ensure it is valid JSON format
 - [CRITICAL] Use double quotes for keys and string values. Do NOT use Python dict format (single quotes). SQL string literals in answer (e.g. 'Branch Name') may use single quotes, but the outer JSON structure must use double quotes.
 
-Correct example (answer with SQL): {{"answer": "SELECT x FROM t WHERE name = 'value'", "conclusion": "terminate", "requery": ""}}
+Correct example (answer with SQL): {{"answer": "SELECT x FROM t WHERE name = 'value'", "conclusion": "terminate", "requery": "", "reason_code": "", "reason_detail": ""}}
 
 Wrong (forbidden): {{'answer': 'SELECT ...', 'conclusion': 'terminate'}}  // single-quote format cannot be parsed
 
 Please strictly follow the following JSON format, using double quotes:
 
 Correct format:
-{{"answer": "content", "conclusion": "terminate|continue", "requery": "question"}}
+{{"answer": "content", "conclusion": "terminate|continue", "requery": "question", "reason_code": "", "reason_detail": "why SQL was skipped if continue"}}
 
 **Example Reference:**
 
@@ -802,6 +820,7 @@ COMMON_NEXT_STEP_PROMPT_ZH = """
 5. 若背景知识与用户问题无关或信息不足，在 `answer` 字段中说明无法直接回答的原因，并提示需要更相关的信息，结论字段返回 `continue`。
 6. 特别注意：即使你的通用知识中可能知道答案，但如果问题不在你的专业领域内，或背景知识中没有提供相关内容，你也必须返回 `continue`。诚实地回答"不知道"比编造答案更重要。
 7. 当且仅当你判断“问题超出当前专家领域，不应由本专家处理”时，必须设置 `reason_code` 为 `out_of_scope_non_retryable`，并将 `requery` 置为空字符串。
+8. 当 conclusion=`continue` 时，必须在 `reason_detail` 用一两句话说明原因（缺什么信息/为何不能直接回答）。`reason_detail` 只做解释，不改变控制流；普通信息不足不要填 `reason_code`。
 
 
 **任务处理要求**
@@ -822,7 +841,8 @@ COMMON_NEXT_STEP_PROMPT_ZH = """
 **输出格式要求：**
 - 必须返回标准的 JSON 格式字符串
 - 确保输出可直接被 `json.loads()` 解析
-- 包含四个字段：`answer`, `conclusion`, `requery`, `reason_code`
+- 包含字段：`answer`, `conclusion`, `requery`, `reason_code`, `reason_detail`
+- 当 conclusion=`continue` 时，`reason_detail` 必填
 
 
 **注意：** 请严格遵循JSON格式输出，不要包含任何额外的解释或文本。
@@ -910,6 +930,7 @@ You are a versatile AI expert. Based on the user's question and the provided rel
 4. When generating a new question, do not ask the user to supplement materials.
 5. If the provided relevant information is irrelevant or insufficient, explain the reason why you cannot answer directly in the `answer` field and indicate that more relevant information is needed.
 6. If and only if you judge that the task is outside this expert's domain and should be handled by another expert, set `reason_code` to `out_of_scope_non_retryable` and set `requery` to an empty string.
+7. When `conclusion=continue`, you must fill `reason_detail` with a 1-2 sentence explanation. `reason_detail` is explanatory only and does not change control flow; do not set `reason_code` for ordinary information insufficiency.
 
 **Task Processing Requirements**
 
@@ -926,7 +947,8 @@ You are a versatile AI expert. Based on the user's question and the provided rel
 **Output Format Requirements:**
 - Must return a standard JSON format string.
 - Ensure the output can be directly parsed by `json.loads()`.
-- Include four fields: `answer`, `conclusion`, `requery`, `reason_code`.
+- Include fields: `answer`, `conclusion`, `requery`, `reason_code`, `reason_detail`.
+- When `conclusion=continue`, `reason_detail` is required.
 
 **Example Reference:**
 

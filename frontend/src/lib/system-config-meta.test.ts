@@ -39,8 +39,8 @@ describe("validateSystemLlmConfigMaps", () => {
     } as never)
 
     await expect(validateSystemLlmConfigMaps("default")).resolves.toBeNull()
-    expect(getConfigMap).toHaveBeenCalledWith("default", "llm-default")
-    expect(getConfigMap).not.toHaveBeenCalledWith("dac", "llm-default")
+    expect(getConfigMap).toHaveBeenCalledWith("default", "llm-default", "llm")
+    expect(getConfigMap).not.toHaveBeenCalledWith("dac", "llm-default", "llm")
   })
 
   it("reports missing ConfigMaps on 404 in the target namespace", async () => {

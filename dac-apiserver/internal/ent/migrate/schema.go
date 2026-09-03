@@ -45,6 +45,121 @@ var (
 			},
 		},
 	}
+	// PermissionsColumns holds the columns for the "permissions" table.
+	PermissionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "code", Type: field.TypeString, Unique: true, Size: 64},
+		{Name: "name", Type: field.TypeString, Size: 64},
+		{Name: "resource", Type: field.TypeString, Size: 64},
+		{Name: "action", Type: field.TypeString, Size: 32},
+		{Name: "http_method", Type: field.TypeString, Default: "*"},
+		{Name: "http_path", Type: field.TypeString, Size: 256},
+		{Name: "description", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// PermissionsTable holds the schema information for the "permissions" table.
+	PermissionsTable = &schema.Table{
+		Name:       "permissions",
+		Columns:    PermissionsColumns,
+		PrimaryKey: []*schema.Column{PermissionsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "permission_resource_action",
+				Unique:  false,
+				Columns: []*schema.Column{PermissionsColumns[3], PermissionsColumns[4]},
+			},
+		},
+	}
+	// PlatformRolesColumns holds the columns for the "platform_roles" table.
+	PlatformRolesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "code", Type: field.TypeString, Unique: true, Size: 64},
+		{Name: "name", Type: field.TypeString, Size: 64},
+		{Name: "is_super", Type: field.TypeBool, Default: false},
+		{Name: "description", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// PlatformRolesTable holds the schema information for the "platform_roles" table.
+	PlatformRolesTable = &schema.Table{
+		Name:       "platform_roles",
+		Columns:    PlatformRolesColumns,
+		PrimaryKey: []*schema.Column{PlatformRolesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "platformrole_is_super",
+				Unique:  false,
+				Columns: []*schema.Column{PlatformRolesColumns[3]},
+			},
+		},
+	}
+	// PlatformRolePermissionsColumns holds the columns for the "platform_role_permissions" table.
+	PlatformRolePermissionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "permission_id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "role_id", Type: field.TypeUUID},
+	}
+	// PlatformRolePermissionsTable holds the schema information for the "platform_role_permissions" table.
+	PlatformRolePermissionsTable = &schema.Table{
+		Name:       "platform_role_permissions",
+		Columns:    PlatformRolePermissionsColumns,
+		PrimaryKey: []*schema.Column{PlatformRolePermissionsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "platform_role_permissions_platform_roles_permissions",
+				Columns:    []*schema.Column{PlatformRolePermissionsColumns[3]},
+				RefColumns: []*schema.Column{PlatformRolesColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "platformrolepermission_role_id_permission_id",
+				Unique:  true,
+				Columns: []*schema.Column{PlatformRolePermissionsColumns[3], PlatformRolePermissionsColumns[1]},
+			},
+		},
+	}
+	// PlatformUserRolesColumns holds the columns for the "platform_user_roles" table.
+	PlatformUserRolesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "user_id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "role_id", Type: field.TypeUUID},
+	}
+	// PlatformUserRolesTable holds the schema information for the "platform_user_roles" table.
+	PlatformUserRolesTable = &schema.Table{
+		Name:       "platform_user_roles",
+		Columns:    PlatformUserRolesColumns,
+		PrimaryKey: []*schema.Column{PlatformUserRolesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "platform_user_roles_platform_roles_users",
+				Columns:    []*schema.Column{PlatformUserRolesColumns[3]},
+				RefColumns: []*schema.Column{PlatformRolesColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "platformuserrole_user_id_role_id",
+				Unique:  true,
+				Columns: []*schema.Column{PlatformUserRolesColumns[1], PlatformUserRolesColumns[3]},
+			},
+			{
+				Name:    "platformuserrole_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{PlatformUserRolesColumns[1]},
+			},
+			{
+				Name:    "platformuserrole_role_id",
+				Unique:  false,
+				Columns: []*schema.Column{PlatformUserRolesColumns[3]},
+			},
+		},
+	}
 	// RunsColumns holds the columns for the "runs" table.
 	RunsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -74,12 +189,168 @@ var (
 			},
 		},
 	}
+	// TenantsColumns holds the columns for the "tenants" table.
+	TenantsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "code", Type: field.TypeString, Unique: true, Size: 64},
+		{Name: "name", Type: field.TypeString, Size: 128},
+		{Name: "status", Type: field.TypeString, Default: "active"},
+		{Name: "description", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// TenantsTable holds the schema information for the "tenants" table.
+	TenantsTable = &schema.Table{
+		Name:       "tenants",
+		Columns:    TenantsColumns,
+		PrimaryKey: []*schema.Column{TenantsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "tenant_status",
+				Unique:  false,
+				Columns: []*schema.Column{TenantsColumns[3]},
+			},
+		},
+	}
+	// TenantNamespacesColumns holds the columns for the "tenant_namespaces" table.
+	TenantNamespacesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "namespace", Type: field.TypeString, Size: 253},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "tenant_id", Type: field.TypeUUID},
+	}
+	// TenantNamespacesTable holds the schema information for the "tenant_namespaces" table.
+	TenantNamespacesTable = &schema.Table{
+		Name:       "tenant_namespaces",
+		Columns:    TenantNamespacesColumns,
+		PrimaryKey: []*schema.Column{TenantNamespacesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "tenant_namespaces_tenants_namespaces",
+				Columns:    []*schema.Column{TenantNamespacesColumns[3]},
+				RefColumns: []*schema.Column{TenantsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "tenantnamespace_tenant_id_namespace",
+				Unique:  true,
+				Columns: []*schema.Column{TenantNamespacesColumns[3], TenantNamespacesColumns[1]},
+			},
+		},
+	}
+	// TenantRolesColumns holds the columns for the "tenant_roles" table.
+	TenantRolesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "code", Type: field.TypeString, Size: 64},
+		{Name: "name", Type: field.TypeString, Size: 64},
+		{Name: "is_default", Type: field.TypeBool, Default: false},
+		{Name: "description", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "tenant_id", Type: field.TypeUUID},
+	}
+	// TenantRolesTable holds the schema information for the "tenant_roles" table.
+	TenantRolesTable = &schema.Table{
+		Name:       "tenant_roles",
+		Columns:    TenantRolesColumns,
+		PrimaryKey: []*schema.Column{TenantRolesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "tenant_roles_tenants_roles",
+				Columns:    []*schema.Column{TenantRolesColumns[7]},
+				RefColumns: []*schema.Column{TenantsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "tenantrole_tenant_id_code",
+				Unique:  true,
+				Columns: []*schema.Column{TenantRolesColumns[7], TenantRolesColumns[1]},
+			},
+		},
+	}
+	// TenantRolePermissionsColumns holds the columns for the "tenant_role_permissions" table.
+	TenantRolePermissionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "permission_id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "role_id", Type: field.TypeUUID},
+	}
+	// TenantRolePermissionsTable holds the schema information for the "tenant_role_permissions" table.
+	TenantRolePermissionsTable = &schema.Table{
+		Name:       "tenant_role_permissions",
+		Columns:    TenantRolePermissionsColumns,
+		PrimaryKey: []*schema.Column{TenantRolePermissionsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "tenant_role_permissions_tenant_roles_permissions",
+				Columns:    []*schema.Column{TenantRolePermissionsColumns[3]},
+				RefColumns: []*schema.Column{TenantRolesColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "tenantrolepermission_role_id_permission_id",
+				Unique:  true,
+				Columns: []*schema.Column{TenantRolePermissionsColumns[3], TenantRolePermissionsColumns[1]},
+			},
+		},
+	}
+	// TenantUsersColumns holds the columns for the "tenant_users" table.
+	TenantUsersColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "user_id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "tenant_id", Type: field.TypeUUID},
+		{Name: "role_id", Type: field.TypeUUID},
+	}
+	// TenantUsersTable holds the schema information for the "tenant_users" table.
+	TenantUsersTable = &schema.Table{
+		Name:       "tenant_users",
+		Columns:    TenantUsersColumns,
+		PrimaryKey: []*schema.Column{TenantUsersColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "tenant_users_tenants_members",
+				Columns:    []*schema.Column{TenantUsersColumns[3]},
+				RefColumns: []*schema.Column{TenantsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "tenant_users_tenant_roles_users",
+				Columns:    []*schema.Column{TenantUsersColumns[4]},
+				RefColumns: []*schema.Column{TenantRolesColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "tenantuser_tenant_id_user_id",
+				Unique:  true,
+				Columns: []*schema.Column{TenantUsersColumns[3], TenantUsersColumns[1]},
+			},
+			{
+				Name:    "tenantuser_user_id",
+				Unique:  true,
+				Columns: []*schema.Column{TenantUsersColumns[1]},
+			},
+			{
+				Name:    "tenantuser_role_id",
+				Unique:  false,
+				Columns: []*schema.Column{TenantUsersColumns[4]},
+			},
+		},
+	}
 	// UsersColumns holds the columns for the "users" table.
 	UsersColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
 		{Name: "username", Type: field.TypeString, Unique: true, Size: 50},
 		{Name: "password_hash", Type: field.TypeString},
-		{Name: "role", Type: field.TypeString, Default: "user"},
+		{Name: "email", Type: field.TypeString, Nullable: true, Size: 255},
 		{Name: "last_login_at", Type: field.TypeTime, Nullable: true},
 		{Name: "deleted_at", Type: field.TypeTime, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime},
@@ -106,11 +377,27 @@ var (
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		DiscoveryJobsTable,
+		PermissionsTable,
+		PlatformRolesTable,
+		PlatformRolePermissionsTable,
+		PlatformUserRolesTable,
 		RunsTable,
+		TenantsTable,
+		TenantNamespacesTable,
+		TenantRolesTable,
+		TenantRolePermissionsTable,
+		TenantUsersTable,
 		UsersTable,
 	}
 )
 
 func init() {
+	PlatformRolePermissionsTable.ForeignKeys[0].RefTable = PlatformRolesTable
+	PlatformUserRolesTable.ForeignKeys[0].RefTable = PlatformRolesTable
 	RunsTable.ForeignKeys[0].RefTable = UsersTable
+	TenantNamespacesTable.ForeignKeys[0].RefTable = TenantsTable
+	TenantRolesTable.ForeignKeys[0].RefTable = TenantsTable
+	TenantRolePermissionsTable.ForeignKeys[0].RefTable = TenantRolesTable
+	TenantUsersTable.ForeignKeys[0].RefTable = TenantsTable
+	TenantUsersTable.ForeignKeys[1].RefTable = TenantRolesTable
 }

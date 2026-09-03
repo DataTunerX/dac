@@ -255,40 +255,59 @@ class CapabilityCheckToolResult(BaseModel):
     reason: str = Field(default="", description="Detailed reasoning")
 
 
-CHART_CAPABILITY_CHECK_PROMPT = """# Role：图表与可视化需求判定器
+CHART_CAPABILITY_CHECK_PROMPT = """# Role：capability judge for a chart / visualization agent
 
-请按以下步骤**逐步思考**，将推理过程写入 reason 字段，最后**只输出一个 JSON 对象**（不要用 Markdown 代码块包裹）。
+Think step by step internally, then call evaluate_capability.
+Shared rules (generic only; never invent business-specific few-shot examples).
+Keep the same judgment semantics as SD member capability checks and skill-agent capability checks; only the evidence inventory differs (chart/visualization capability instead of DB/repo/docs or arbitrary local skills).
 
-## 思考步骤
+Decision order (follow in sequence):
+D1) Identify the anchoring subject(s) of the query — the entity/topic the question is primarily about. Prefer the entity being looked up, counted, listed, visualized, or iterated over. If the query is framed as walking instances of X and then reading related attributes of Y, X is the anchor — Y's attributes are related fields, not a second anchor.
+D2) Decide domain_match from topical overlap with THIS agent's chart inventory (visualization / ECharts / Mermaid capabilities below). AgentCard / description prose may support domain_match for topical affinity, but never alone proves can_handle.
+D3) Decide can_handle from whether this agent can actually cover EVERY anchoring subject from D1 by producing the needed chart/diagram result. Independently decide can_contribute from whether it can supply a concrete needed visualization slice. Both may be true only when this agent owns the chart-side anchor but still has related gaps it can partially produce.
 
-**步骤 1 - 用户意图**：用户是否在请求绘制/展示图表、可视化、趋势、占比、对比图、统计图、流程图/架构图（适合 Mermaid）等？还是仅要求纯数值计算、翻译、与作图无关的文本问答？
+Rules:
+1) Extract needed entities and the PRIMARY / anchoring subject (D1).
+2) domain_match = topical overlap between the query and chart/visualization capability. AgentCard naming may support domain_match only. It never grants can_handle without real chart-side coverage of the anchor.
+3) can_handle = this agent can actually produce the chart/diagram for the anchoring subject from usable input data. Do NOT require end-to-end completeness across unrelated systems.
+4) can_contribute = this agent can supply a concrete needed visualization slice **right now** from data already in the query/history. Vague 'might help', consulting advice, suggesting another agent/SQL, or promising a chart after someone else fetches proprietary data is NOT enough.
+5) If domain_match=false → can_handle=false AND can_contribute=false. Do not set can_contribute=true just by explaining what is missing.
+6) Peer anchors = two or more independent anchoring subjects, each asked as a first-class topic. If any peer is outside this agent's chart capability, can_handle MUST be false — even when charts fully cover one peer. Then can_contribute=true only for the owned peer slice. One anchor + related attribute/metric is NOT peer anchors.
+7) History may hint OTHER agents' ownership; it never proves THIS agent can produce the answer. History may, however, supply structured data usable as chart input.
+8) Live record lookups (concrete identifiers / proprietary stored business values not provided in the query) belong to structured data agents, not chart agents. For those queries: can_handle=false; usually can_contribute=false unless the user already provided plottable data and explicitly asks for a chart of that provided data.
+9) can_handle=true is reserved for when this agent owns the chart/visualization anchor. Prefer can_handle=false when it is unclear whether visualization is requested or whether usable plot data exists.
+10) When unsure about domain_match for a weak overlap, prefer domain_match=true only if a concrete chart output path is clearly available; otherwise domain_match=false.
 
-**步骤 2 - 数据可得性**：问题或历史对话中是否包含可用于作图的结构化或半结构化数据（数字列表、表格、分类与取值、时间序列等）？若完全没有数据且需要编造数据才能画图，应倾向 can_handle=false。
-
-**步骤 3 - 本智能体匹配**：本智能体根据**用户提供的真实数据或描述**生成 ECharts 或 Mermaid。不承担业务库 SQL 查询职责；纯闭式数学计算且无「画图/可视化」诉求时，通常不归本智能体处理。
-
-**步骤 4 - 反思**：① 纯数学/逻辑题且无可视化诉求 → 通常 can_handle=false。② 有可视化诉求但关键数据缺失 → can_handle=false。③ 数据与可视化意图均清晰 → can_handle=true。
-
-**步骤 5 - 结论**：综合判定 can_handle 与 confidence（0.0～1.0）。
-
-**步骤 6 - 可贡献性（仅当 can_handle=false）**：仅当能给出**具体、可验证**的补充要求（例如需要哪些字段或表格）时设 can_contribute=true；禁止「补充相关信息」等空泛表述。
+Evidence gate for THIS agent (chart / visualization):
+- Inventory = chart generation capability (ECharts / Mermaid / equivalent) described below, using data already present in the user query or history.
+- Gate can_handle by whether: (a) the user asks for a chart/diagram/visualization, AND (b) usable structured or semi-structured data is already available in query/history — not by AgentCard marketing text.
+- Visualization intent + usable data present → can_handle=true.
+- Explicit visualization intent but critical plot data missing → can_handle=false AND can_contribute=false.
+  Do not pre-claim contribute for a chart that cannot be produced until another agent fetches proprietary data.
+- No explicit visualization intent (pure text Q&A, pure closed-form math, proprietary live-record / grouped business statistics lookup without asking to plot) → domain_match=false; can_handle=false; can_contribute=false.
+  Words like "分布/统计/分组" alone are NOT visualization intent.
+- Do NOT set can_contribute=true for a hypothetical future chart ("if another agent fetches the table, I could plot it").
+- This agent does NOT run business-DB SQL or fetch proprietary live records by itself.
+- Uncertain → prefer can_handle=false and can_contribute=false.
 
 ---
-**本智能体信息：**
-- 名称：{agent_name}
-- 描述：{agent_description}
-- 技能参考（仅供参考，不限定能力边界）：
+Agent info:
+- name: {agent_name}
+- description: {agent_description}
+- skill inventory (chart capabilities; evidence for judgment):
 {agent_skills}
 
-**历史对话：**
+History:
 {history}
 
-**用户问题：**
+User query:
 {query}
 
 ---
-## 输出格式
-{{"can_handle": true 或 false, "can_contribute": true 或 false, "contribution": "（仅当 can_contribute=true）", "confidence": 0.0 到 1.0, "reason": "步骤1：... 步骤2：... 步骤3：... 步骤4：... 步骤5：... 步骤6：... 结论：..."}}
+Output guidance:
+- Put D1–D3 and rules reasoning into reason (include your domain_match decision).
+- contribution: only when can_contribute=true; state the concrete chart-side output or concrete missing plot inputs.
+Call evaluate_capability to output the verdict.
 """
 
 # Initialize Langfuse client

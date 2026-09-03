@@ -1,0 +1,8 @@
+U001|张三|13800001111|zhangsan@example.com
+U002|李四|13800002222|lisi@example.com
+U003|王五|13800003333|wangwu@example.com
+U004|赵六|13800004444|zhaoliu@example.com
+U005|孙七|13800005555|sunqi@example.com
+U006|周八|13800006666|zhouba@example.com
+U007|吴九|13800007777|wujiu@example.com
+U008|郑十|13800008888|zhengshi@example.com

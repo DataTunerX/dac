@@ -575,6 +575,14 @@ export function CreateDataSourceDialog({
       const res = await listNamespaces()
       const adapted = (res.items ?? []).map((x) => x.name).filter(Boolean)
       setNamespaces(adapted)
+      // Auto-select the first available namespace when the current form value
+      // (e.g. "default") is not in the tenant's bound namespace list.
+      if (adapted.length > 0) {
+        const currentNs = form.getValues("namespace")
+        if (!currentNs || !adapted.includes(currentNs)) {
+          form.setValue("namespace", adapted[0], { shouldValidate: true })
+        }
+      }
     } catch (e) {
       console.error("Failed to load namespaces", e)
       setNamespaces([])
@@ -690,12 +698,12 @@ export function CreateDataSourceDialog({
                       <FormControl>
                         {namespaces.length > 0 ? (
                           <Select
-                            value={field.value || "default"}
+                            value={field.value || ""}
                             onValueChange={field.onChange}
                             disabled={isAppend || isSubmitting || isLoadingNs}
                           >
                             <SelectTrigger className="w-full">
-                              <SelectValue placeholder="选择命名空间" />
+                              <SelectValue placeholder={isLoadingNs ? "加载中…" : "选择命名空间"} />
                             </SelectTrigger>
                             <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
                               {nsLoadError ? (

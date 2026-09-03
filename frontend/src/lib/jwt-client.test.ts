@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { decodeJwtPayload, getJwtRole, isJwtUsable } from "./jwt-client"
+import { decodeJwtPayload, isJwtUsable } from "./jwt-client"
 
 function makeToken(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url")
@@ -15,23 +15,9 @@ describe("isJwtUsable", () => {
   })
 
   it("accepts unexpired tokens and rejects expired ones", () => {
-    const ok = makeToken({ role: "admin", exp: Math.floor(Date.now() / 1000) + 3600 })
-    const expired = makeToken({ role: "admin", exp: Math.floor(Date.now() / 1000) - 3600 })
+    const ok = makeToken({ username: "admin", exp: Math.floor(Date.now() / 1000) + 3600 })
+    const expired = makeToken({ username: "admin", exp: Math.floor(Date.now() / 1000) - 3600 })
     expect(isJwtUsable(ok)).toBe(true)
     expect(isJwtUsable(expired)).toBe(false)
-  })
-})
-
-describe("getJwtRole", () => {
-  it("returns anonymous for expired tokens (beyond clock skew)", () => {
-    // isJwtUsable allows a 30s skew; expire well past that
-    const expired = makeToken({ role: "admin", exp: Math.floor(Date.now() / 1000) - 120 })
-    expect(getJwtRole(expired)).toBe("anonymous")
-  })
-
-  it("reads role from usable tokens", () => {
-    const tok = makeToken({ role: "admin", exp: Math.floor(Date.now() / 1000) + 60 })
-    expect(getJwtRole(tok)).toBe("admin")
-    expect(decodeJwtPayload(tok)?.role).toBe("admin")
   })
 })

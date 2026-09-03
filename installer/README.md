@@ -2,7 +2,7 @@
 
 [DAC](https://github.com/James-Dao/dac) 本 Chart 用于在 Kubernetes 集群中一键部署全部平台组件。
 
-> Chart 版本 `0.1.0` · App 版本 `0.11.0`
+> Chart 版本 `0.1.0` · App 版本 `0.12.0`
 
 ## 前置条件
 
@@ -310,7 +310,7 @@ apiserver:
   enabled: true
   image:
     repository: dac-apiserver
-    tag: "12-amd64"
+    tag: "v0.12.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -371,7 +371,7 @@ frontend:
   image:
     registry: ""
     repository: frontend
-    tag: "12"
+    tag: "v0.12.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -414,7 +414,7 @@ dataServices:
   enabled: true
   image:
     repository: data-services
-    tag: "12-amd64"
+    tag: "v0.12.0-amd64"
   # -- Number of replicas
   replicas: 1
   service:
@@ -471,7 +471,7 @@ executionEngine:
   enabled: true
   image:
     repository: execution-engine
-    tag: "12-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   resources:
     requests:
@@ -487,19 +487,19 @@ executionEngine:
   #    dac-data-services, data-sinkers-job and data-sinkers-status containers.
   agentImages:
     orchestratorAgent:
-      tag: "12-amd64"
+      tag: "v0.12.0-amd64"
     expertAgent:
-      tag: "12-amd64"
+      tag: "v0.12.0-amd64"
     codeAgent:
-      tag: "12-amd64"
+      tag: "v0.12.0-amd64"
     docAgent:
-      tag: "12-amd64"
+      tag: "v0.12.0-amd64"
     dacDataServices:
-      tag: "12-amd64"
+      tag: "v0.12.0-amd64"
     dataSinkerJob:
-      tag: "12-amd64"
+      tag: "v0.12.0-amd64"
     dataSinkerStatus:
-      tag: "12-amd64"
+      tag: "v0.12.0-amd64"
 
   # -- dac-configuration ConfigMap values (read by DAC controller)
   dacConfig:
@@ -534,7 +534,7 @@ semanticGrouper:
   enabled: true
   image:
     repository: semantic-grouper
-    tag: "12-amd64"
+    tag: "v0.12.0-amd64"
   api:
     replicas: 1
     resources:
@@ -583,7 +583,7 @@ orchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "12-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   config:
     # -- Vector collection name for agent cards
@@ -609,7 +609,7 @@ bizOrchestratorRegistry:
   enabled: true
   image:
     repository: agent-registry
-    tag: "12-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   config:
     collectionName: "biz_orchestrator_agent_cards"
@@ -637,7 +637,7 @@ bizRoutingAgent:
   enabled: true
   image:
     repository: routing-agent
-    tag: "12-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   config:
     # -- Redis DB index for agent state
@@ -666,7 +666,7 @@ bizChartAgent:
   enabled: true
   image:
     repository: chart-agent
-    tag: "12-amd64"
+    tag: "v0.12.0-amd64"
   replicas: 1
   config:
     redisDb: "2"
@@ -762,12 +762,6 @@ helm status dac -n dac
 
 所有 Pod 进入 `Running` / `Ready` 后，按 NOTES 中的说明访问前端（NodePort / Ingress / port-forward）。
 
-### 将 Skill 本地附加到 DAC
-
-创建 Data Descriptor 或 Semantic Group 智能体时，可在表单中启用“本地技能附件”，从 Skill Hub 选择 `namespace / name / version`。选择结果写入 DAC 的 `spec.skillPolicy`；execution-engine 会为该 DAC 的 `orchestrator` 容器挂载临时技能目录，并在启动时下载、加载这些 zip。Skill 内容更新不需要重建 DAC 镜像；修改绑定或版本会更新 Deployment 并触发 Pod 滚动。
-
-`dacType=skill` 的独立 `skill-agent` 模式仍然保留，适合需要单独注册和复用的技能 Agent。本地附件仅在所属 DAC 内执行，不会注册成独立 Agent。未固定版本时，每次 Pod 启动拉取最新版本；已固定版本始终拉取指定版本。
-
 ## 配置
 
 所有参数均在 [`values.yaml`](dac/values.yaml) 中以行内注释形式说明。下表列出安装前**必须检查**的关键项。
@@ -798,10 +792,6 @@ helm status dac -n dac
 | `frontend.image.registry` | 前端仓库（空则用 global） | `""` → `global.imageRegistry` |
 | `global.imagePullPolicy` | 拉取策略 | `IfNotPresent` |
 | `global.imagePullSecrets` | 私有仓库认证 Secret | `[]` |
-| `tdb.enabled` | 部署共享 TDB API 服务 | `true` |
-| `tdb.image.repository` / `tdb.image.tag` | TDB 组合运行时镜像 | `tdb-gateway` / `12-amd64` |
-| `tdb.database.name` | TDB 使用的 PostgreSQL 逻辑数据库 | `tdb` |
-| `tdb.database.existingSecret` | 可选，提供 `DATABASE_URL` 的现有 Secret | `""` |
 
 ### 存储
 
@@ -943,14 +933,11 @@ kubectl get sc
 | 层级 | 组件 | 说明 |
 |------|------|------|
 | **中间件** | MySQL、Redis、PGVector、Neo4j | 内置单节点 StatefulSet；设 `*.external.host` 对接外部实例并跳过内置部署 |
-| **共享数据服务** | TDB | 面向 DAC 和其他 Agent 的 HTTP API；默认复用 PGVector 实例中的独立 `tdb` 数据库 |
 | **平台服务** | apiserver、frontend、data-services | API 网关 / 前端 UI / 数据与向量服务 |
 | **Operator** | execution-engine | 监听 `DataAgentContainer` / `DataDescriptor` CRD，动态创建 Agent 工作负载 |
 | **语义分组** | semantic-grouper（API + Worker） | Celery 异步语义分组 |
 | **Agent 注册中心** | orchestrator-registry、biz-orchestrator-registry | A2A Agent Card 发现 |
 | **Agent** | biz-routing-agent、biz-chart-agent、biz-skill-agent | 路由 / 图表生成 / 技能执行等业务 Agent |
 | **Skill Hub** | skill-hub | 技能 zip 包索引 / 下载 HTTP 服务，供 biz-skill-agent 启动时按 `SKILLS` 拉取；上传/创建的 zip 默认落在节点 hostPath（`skillHub.persistence`），避免 Pod 重启丢失 |
-
-TDB 启用后，chart 会把集群内地址写入 `dac-configuration` 的 `tdb-url`。execution-engine 会将它作为 `TDB_BASE_URL` 注入动态创建的 orchestrator、expert 和 skill agent；内置 `biz-skill-agent` 也会收到同一变量。
 
 > `orchestrator-agent`、`expert-agent`、`code-agent`、`doc-agent`、`data-sinkers-job` 、`data-sinkers-observer` 等组件**不在 Helm 中静态部署**，由 execution-engine Operator 根据 CR 动态管理。

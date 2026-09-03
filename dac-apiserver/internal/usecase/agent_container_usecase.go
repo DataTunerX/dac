@@ -60,6 +60,7 @@ func (u *agentContainerUsecase) Create(ctx context.Context, req *domain.CreateAg
 		Model:                     req.Model,
 		ExpertAgentMaxSteps:       req.ExpertAgentMaxSteps,
 		OrchestratorAgentMaxLoops: req.OrchestratorAgentMaxLoops,
+		SkillAgentMaxLoops:        req.SkillAgentMaxLoops,
 	}
 
 	// Create in repository
@@ -124,9 +125,11 @@ func (u *agentContainerUsecase) Update(ctx context.Context, namespace, name stri
 	if req.OrchestratorAgentMaxLoops != nil {
 		existing.OrchestratorAgentMaxLoops = *req.OrchestratorAgentMaxLoops
 	}
+	if req.SkillAgentMaxLoops != nil {
+		existing.SkillAgentMaxLoops = *req.SkillAgentMaxLoops
+	}
 
-	// Dedicated skill DACs require AgentCard projection parity. Other DAC types
-	// may carry an optional skillPolicy as local orchestrator attachments.
+	// skillPolicy / agentCard constraints by dacType
 	if existing.DACType == "skill" {
 		if err := validateSkillPolicy(existing.SkillPolicy, existing.AgentCard); err != nil {
 			u.logger.Error("skill DAC update validation failed",
@@ -136,8 +139,19 @@ func (u *agentContainerUsecase) Update(ctx context.Context, namespace, name stri
 			)
 			return nil, fmt.Errorf("invalid request: %w", err)
 		}
-	} else if err := validateSkillRefs(existing.SkillPolicy, false); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
+	} else if existing.DACType == "normal" {
+		if err := validateOptionalSkillPolicyRefs(existing.SkillPolicy); err != nil {
+			u.logger.Error("normal DAC skillPolicy update validation failed",
+				"namespace", namespace,
+				"name", name,
+				"error", err,
+			)
+			return nil, fmt.Errorf("invalid request: %w", err)
+		}
+	} else if existing.DACType == "ds" {
+		if err := rejectSkillPolicyForDS(existing.SkillPolicy); err != nil {
+			return nil, fmt.Errorf("invalid request: %w", err)
+		}
 	}
 
 	// Update in repository
@@ -174,9 +188,8 @@ func (u *agentContainerUsecase) validateCreateRequest(req *domain.CreateAgentCon
 		return domain.ErrInvalidInput
 	}
 
-	// Dedicated skill DACs require a non-empty policy and matching AgentCard.
-	// Other DAC types accept an optional policy for local execution.
-	if req.DACType == "skill" {
+	switch req.DACType {
+	case "skill":
 		if err := validateSkillPolicy(req.SkillPolicy, req.AgentCard); err != nil {
 			u.logger.Error("skill DAC create validation failed",
 				"name", req.Name,
@@ -185,32 +198,19 @@ func (u *agentContainerUsecase) validateCreateRequest(req *domain.CreateAgentCon
 			)
 			return err
 		}
-	} else if err := validateSkillRefs(req.SkillPolicy, false); err != nil {
-		return err
-	}
-	return nil
-}
-
-// validateSkillRefs validates the package identities shared by dedicated skill
-// DACs and local attachments. Names remain unique inside one DAC because ZIPs
-// are downloaded to a flat local directory as <name>.zip.
-func validateSkillRefs(policy entity.SkillPolicy, required bool) error {
-	if len(policy.Skills) == 0 {
-		if required {
-			return domain.NewInvalidInputError("skillPolicy.skills must not be empty")
+	case "normal":
+		if err := validateOptionalSkillPolicyRefs(req.SkillPolicy); err != nil {
+			u.logger.Error("normal DAC skillPolicy create validation failed",
+				"name", req.Name,
+				"namespace", req.Namespace,
+				"error", err,
+			)
+			return err
 		}
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(policy.Skills))
-	for _, s := range policy.Skills {
-		if s.Namespace == "" || s.Name == "" {
-			return domain.NewInvalidInputError("skillPolicy skill requires namespace and name")
+	case "ds", "":
+		if err := rejectSkillPolicyForDS(req.SkillPolicy); err != nil {
+			return err
 		}
-		if _, ok := seen[s.Name]; ok {
-			return domain.NewInvalidInputError(fmt.Sprintf("duplicate skillPolicy skill name %q (must be unique within a DAC)", s.Name))
-		}
-		seen[s.Name] = struct{}{}
 	}
 	return nil
 }
@@ -220,7 +220,10 @@ func validateSkillRefs(policy entity.SkillPolicy, required bool) error {
 // - SkillRef.Name unique within the DAC (even across skill-hub namespaces)
 // - agentCard.skills must be non-empty and match skillPolicy name set (detail-derived projection)
 func validateSkillPolicy(policy entity.SkillPolicy, card entity.AgentCard) error {
-	if err := validateSkillRefs(policy, true); err != nil {
+	if len(policy.Skills) == 0 {
+		return domain.NewInvalidInputError("skillPolicy.skills must not be empty for dacType=skill")
+	}
+	if err := validateSkillPolicyRefs(policy); err != nil {
 		return err
 	}
 	policyNames := make(map[string]struct{}, len(policy.Skills))
@@ -244,6 +247,39 @@ func validateSkillPolicy(policy entity.SkillPolicy, card entity.AgentCard) error
 		if _, ok := cardNames[n]; !ok {
 			return domain.NewInvalidInputError(fmt.Sprintf("agentCard.skills missing skill %q from skillPolicy", n))
 		}
+	}
+	return nil
+}
+
+// validateOptionalSkillPolicyRefs validates skillPolicy for dacType=normal (Semantic Group).
+// Empty policy is allowed (image-baked LocalSkill only). Non-empty requires namespace+name and unique names.
+// Does not require agentCard.skills alignment (Expert card stays fingerprint-derived).
+func validateOptionalSkillPolicyRefs(policy entity.SkillPolicy) error {
+	if len(policy.Skills) == 0 {
+		return nil
+	}
+	return validateSkillPolicyRefs(policy)
+}
+
+// rejectSkillPolicyForDS rejects non-empty skillPolicy on dacType=ds.
+func rejectSkillPolicyForDS(policy entity.SkillPolicy) error {
+	if len(policy.Skills) == 0 {
+		return nil
+	}
+	return domain.NewInvalidInputError("skillPolicy must be empty for dacType=ds")
+}
+
+// validateSkillPolicyRefs checks namespace+name presence and unique skill names within a DAC.
+func validateSkillPolicyRefs(policy entity.SkillPolicy) error {
+	seen := make(map[string]struct{}, len(policy.Skills))
+	for _, s := range policy.Skills {
+		if s.Namespace == "" || s.Name == "" {
+			return domain.NewInvalidInputError("skillPolicy skill requires namespace and name")
+		}
+		if _, ok := seen[s.Name]; ok {
+			return domain.NewInvalidInputError(fmt.Sprintf("duplicate skillPolicy skill name %q (must be unique within a DAC)", s.Name))
+		}
+		seen[s.Name] = struct{}{}
 	}
 	return nil
 }

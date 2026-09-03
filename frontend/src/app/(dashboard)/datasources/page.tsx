@@ -16,6 +16,13 @@ import { Button } from "@/components/ui/button"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
 import { PaginationBar } from "@/components/pagination-bar"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -42,6 +49,7 @@ import { getDataSourceKindLabel, normalizeDataSourceKind, type DataSourceKind } 
 import { validateSystemLlmConfigMaps } from "@/lib/system-config-meta"
 import { buildCreateDescriptorPayload } from "@/lib/descriptor-payload"
 import { getApiErrorMessage } from "@/lib/api-error"
+import { apiFetcher } from "@/lib/swr"
 
 // --- Types ---
 interface DataSource {
@@ -70,7 +78,7 @@ const DATASOURCES_LIST_COLUMNS = [
 const DATASOURCES_DEPENDENT_COLUMNS = [
   { id: "resource", size: 240 },
   { id: "namespace", size: 112 },
-  { id: "actions", size: 176 },
+  { id: "actions", size: 224 },
 ] as const
 
 interface CreateDataSourcePayload {
@@ -157,21 +165,35 @@ export default function DataSourcesPage() {
   const [showDependencyDialog, setShowDependencyDialog] = useState(false)
   const [checkingDependency, setCheckingDependency] = useState(false)
   const [detachingGroupId, setDetachingGroupId] = useState<string | null>(null)
+  const [deletingAgentKey, setDeletingAgentKey] = useState<string | null>(null)
+  const [confirmDeleteAgent, setConfirmDeleteAgent] = useState<DataDescriptorDependency | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deletingKeys, setDeletingKeys] = useState<Set<string>>(new Set())
 
   const [pageSize, setPageSize] = useState(20)
   const [page, setPage] = useState(1)
+  const [namespaceFilter, setNamespaceFilter] = useState<string>("all")
 
   const descriptorsKey = useMemo(
-    () => ["descriptors", page, pageSize] as const,
-    [page, pageSize]
+    () => ["descriptors-all"] as const,
+    [],
   )
   const { data: descriptorsData, error: descriptorsError, isLoading, mutate: mutateDescriptors } = useSWR<DataDescriptorListResponse>(
     descriptorsKey,
-    async ([, p, ps]: readonly [string, number, number]) =>
-      listDescriptorsAll({ offset: (p - 1) * ps, limit: ps })
+    async () => listDescriptorsAll({ offset: 0, limit: 2000 })
   )
+
+  const { data: nsData } = useSWR<{ items?: unknown[] }>(
+    "/namespaces",
+    apiFetcher,
+  )
+
+  const namespaces = useMemo(() => {
+    const items = nsData?.items ?? [];
+    return items
+      .map((it) => (isRecord(it) ? String(it.name ?? "") : ""))
+      .filter((n) => n.length > 0);
+  }, [nsData]);
 
   const { dataSources: adaptedList, totalCount: rawTotal } = useMemo(() => {
     const items = descriptorsData?.items ?? []
@@ -196,11 +218,19 @@ export default function DataSourcesPage() {
         raw: item,
       } as DataSource
     })
-    return { dataSources: adapted, totalCount: total }
-  }, [descriptorsData])
+    // Apply namespace filter client-side
+    const filtered = namespaceFilter === "all"
+      ? adapted
+      : adapted.filter((ds) => ds.namespace === namespaceFilter)
+    return { dataSources: filtered, totalCount: filtered.length }
+  }, [descriptorsData, namespaceFilter])
 
-  const dataSources = adaptedList
-  const totalCount = Number.isFinite(rawTotal) && rawTotal >= 0 ? rawTotal : dataSources.length
+  const dataSources = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return adaptedList.slice(start, start + pageSize)
+  }, [adaptedList, page, pageSize])
+
+  const totalCount = Number.isFinite(rawTotal) && rawTotal >= 0 ? rawTotal : adaptedList.length
 
   useEffect(() => {
     if (descriptorsError) toast.error("获取数据源列表失败")
@@ -213,6 +243,10 @@ export default function DataSourcesPage() {
     if (page > totalPages) setPage(totalPages)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [totalPages])
+
+  useEffect(() => {
+    setPage(1)
+  }, [namespaceFilter])
 
   const checkDependencies = async (namespace: string, name: string) => {
     setCheckingDependency(true)
@@ -271,6 +305,25 @@ export default function DataSourcesPage() {
       toast.error(e.response?.data?.message || "从语义组移除失败")
     } finally {
       setDetachingGroupId(null)
+    }
+  }
+
+  const handleDeleteAgent = async () => {
+    if (!pendingDelete || !confirmDeleteAgent) return
+    const agent = confirmDeleteAgent
+    const key = `${agent.namespace}/${agent.name}`
+    setDeletingAgentKey(key)
+    try {
+      await api.delete(`/namespaces/${encodeURIComponent(agent.namespace)}/agents/${encodeURIComponent(agent.name)}`)
+      toast.success(`智能体 ${agent.name} 已删除`)
+      setConfirmDeleteAgent(null)
+      await refreshPendingDeleteDependencies()
+    } catch (err) {
+      console.error("delete agent failed", err)
+      const e = err as { response?: { data?: { message?: string } } }
+      toast.error(e.response?.data?.message || "删除智能体失败")
+    } finally {
+      setDeletingAgentKey(null)
     }
   }
 
@@ -337,14 +390,29 @@ export default function DataSourcesPage() {
           <span className="text-content font-semibold">数据管理</span>
         </div>
         <div className="flex items-center gap-2">
+          <Select
+            value={namespaceFilter}
+            onValueChange={setNamespaceFilter}
+          >
+            <SelectTrigger className="h-9 w-[min(10rem,40vw)] bg-surface">
+              <SelectValue placeholder="命名空间" />
+            </SelectTrigger>
+            <SelectContent align="end">
+              <SelectItem value="all">全部命名空间</SelectItem>
+              {namespaces.map((ns) => (
+                <SelectItem key={ns} value={ns}>
+                  {ns}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading} aria-label="刷新">
             <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
           <RbacButton 
             className="flex items-center gap-2" 
             onClick={() => setIsCreateOpen(true)}
-            requiredRole="admin"
-            fallbackTitle="无权限：仅管理员可创建"
+            requiredPermission="descriptor:create"
           >
             <Plus className="w-4 h-4" />
             新建数据源
@@ -379,7 +447,7 @@ export default function DataSourcesPage() {
             <TableRow>
               <TableCell colSpan={7} className="text-center text-content-muted py-10">
                 暂无数据源
-                <RbacWrapper requiredRole="admin">
+                <RbacWrapper requiredPermission="descriptor:create">
                   <Button
                     variant="link"
                     className="ml-2 text-cta cursor-pointer"
@@ -461,7 +529,7 @@ export default function DataSourcesPage() {
                     >
                         <Eye className="w-4 h-4 text-content-muted" />
                     </Button>
-                    <RbacWrapper requiredRole="admin">
+                    <RbacWrapper requiredPermission="descriptor:delete">
                       <Button
                         variant="ghost"
                         size="icon"
@@ -542,6 +610,17 @@ export default function DataSourcesPage() {
                               {detachingGroupId === r.id ? "移除中…" : "从语义组移除"}
                             </Button>
                           ) : null}
+                          {r.kind === "agent" ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={Boolean(deletingAgentKey)}
+                              onClick={() => setConfirmDeleteAgent(r)}
+                              className="text-red-600 hover:text-red-700 whitespace-nowrap cursor-pointer"
+                            >
+                              {deletingAgentKey === `${r.namespace}/${r.name}` ? "删除中…" : "删除智能体"}
+                            </Button>
+                          ) : null}
                           <Button
                             variant="ghost"
                             size="sm"
@@ -567,12 +646,35 @@ export default function DataSourcesPage() {
               </Table>
             </TableWrapper>
             <div className="text-sm text-content">
-              若仅被语义组引用，可先「从语义组移除」再删除；若还被智能体引用，请先处理智能体依赖。
+              若仅被语义组引用，可先「从语义组移除」再删除；若还被智能体引用，可直接「删除智能体」解除依赖后再删除。
             </div>
           </div>
 
           <AlertDialogFooter>
             <AlertDialogAction onClick={() => setShowDependencyDialog(false)}>知道了</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 删除智能体确认弹窗 */}
+      <AlertDialog open={!!confirmDeleteAgent} onOpenChange={(open) => !open && setConfirmDeleteAgent(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除智能体？</AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作将永久删除智能体「{confirmDeleteAgent?.name}」（{confirmDeleteAgent?.namespace}/{confirmDeleteAgent?.name}），
+              删除后该智能体引用的数据源依赖将被解除。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(deletingAgentKey)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void handleDeleteAgent()}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              disabled={Boolean(deletingAgentKey)}
+            >
+              {deletingAgentKey ? "删除中..." : "确认删除"}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

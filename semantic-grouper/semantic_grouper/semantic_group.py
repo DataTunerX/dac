@@ -126,34 +126,27 @@ SEMANTIC_GROUP_CONSOLIDATION_SYSTEM_PROMPT = """
         - 要求：体现所负责的**整个系统**的业务领域名称（不要只用某一个子领域命名）
         - 示例：若系统是电商交易平台，应命名为 `EcommerceTransactionAgent`，而非 `EcommerceUserManagementAgent`
 
-        **2. description 字段（核心，约800-1200字）**：
-        【请严格按照以下三层结构书写，形成从宏观到微观的完整描述】
+        **2. description 字段（核心，软上限 10000 字，宁全勿堆）**：
+        【请严格按照以下三层结构书写，形成从宏观到微观的完整描述。必须做到：凡是输入中出现的、与本领域有关的核心业务概念、数据实体、表名/字段名/属性/状态枚举/业务规则，**只要不冗余，一律写入 description**；description 应是"密级清单式"的长文，而不是一句话概览。严禁为了简短而合并或删减输入中的明细。每一层都用一个独立自然段（或换行分段），不要写成一整段连排。】
 
-        **第一层：语义域声明（最关键，约200字）**
-        用2-3句话，清晰、概括地声明本 Agent 负责的完整业务领域。这段话的目的是让编排器一眼就能判断"这个领域涵盖了哪些类型的业务问题"。
+        **第一层：语义域总声明（2-3句话，不展开明细）**
+        用2-3句话，概括性地声明本 Agent 负责的完整业务领域与业务大类（例如"本Agent是全渠道零售与供应链管理系统数据领域的专家"），让编排器能在秒级内判断领域归属。**禁止在本层罗列括号明细**——所有主题词、表名、字段明细统一放到第二层展开。
 
-        要求：
-        - 明确说出所属的**行业**和**业务大类**
-        - 列出该领域涉及的**所有核心业务主题词**（含同义词、近义词、口语表达）
-        - 使用"涵盖……等一切相关问题"这类包容性语句
+        **第二层：子领域逐项展开（本层是描述主体，约占全文 80%）**
+        依据输入中实际存在的子领域/限界上下文/业务模块，**逐个**列出小节，每个小节用 `【子领域名】` 开头并另起一段。每个子领域小节必须做到：
 
-        示例：
-        > "本Agent是银行业分支机构财务数据领域的全能专家，负责处理与银行网点/支行/分行的财务状况相关的一切问题。覆盖的核心主题包括但不限于：资产负债表、总资产、总负债、净资产、存款（储蓄、定期、活期、对公存款、个人存款、零售存款）、贷款（放款、授信、信贷、按揭、消费贷、对公贷款、零售贷款）、客户规模、员工规模，以及围绕这些数据的查询、统计、分析、对比、排名、趋势等各类操作。"
+        1. **核心职责**：一两句说明该子领域做什么。
+        2. **数据实体与表/字段明细**：列出该子领域在输入中出现的**全部相关表名、字段名、属性名、状态枚举、关键业务规则**。明细必须**逐项写出、中间用顿号分隔**，可以写成括号补充的形式（如 `商品spu（spu_id、spu名称、销售状态、审核状态）`）。**不要用"等"字省略输入中已有的重要明细**。
+        3. **常见问题方向**：用"用户可能围绕着……提出查询、统计、分析、对比、排名、趋势等各类问题"一句概括，不举具体反例。
 
-        **第二层：子领域与业务概念展开（约400-600字）**
-        按业务子领域分组，展开描述每个子领域包含的业务概念和典型问题类型。每个子领域都应该：
-        - 说明其核心职责
-        - 列出涉及的全部业务术语和数据实体（含同义词）
-        - 说明该子领域下用户可能提出的问题方向（用"包括XXX类问题"的方式概括，不要举过于具体的例子）
+        每个子领域都要实实在在地展开到"把输入的每一张表/字段说明都映射进去"的程度；输入有多少个有业务含义的子领域，本层就要有多少个小节，**一个都不能少**。
 
-        示例：
-        > "【存款业务】管理各分支机构的存款数据，涉及的概念包括：存款结构、存款分布、对公存款与零售存款的区分、活期存款与定期存款的比例、存款总额与趋势变化等。用户可能围绕存款提出查询、汇总、排名、对比、趋势分析等各类问题。"
+        示例（用于体现"逐项展开"的样子，实际以输入的真实表名为准）：
+        > 【存款业务】管理各分支机构存款数据。数据实体包括：存款明细（branch_id、account_type、balance、rate、open_date）、定期存款（term、interest_rate）、活期存款（min_balance）等；状态枚举：在存/已结清/挂失。用户可能围绕存款提出查询、汇总、排名、对比、趋势分析等各类问题。
+        > 【贷款业务】管理贷款全流程数据。数据实体包括：贷款合同（loan_no、customer_id、principal、interest_rate、term）、还款计划（due_date、amount、paid_flag）、征信查询记录等。用户可能围绕放款、还款、逾期、催收提出查询、统计、占比、趋势等各类问题。
 
-        **第三层：协作声明（约100-200字）**
-        简要说明本 Agent 在多智能体协作中的定位：
-        - 当其他 Agent 或用户遇到与本领域相关的任何问题时，都应路由到本 Agent
-        - 本 Agent 具备对该领域数据进行多维度分析的能力
-        - 如果用户的问题涉及的数据实体属于本领域，无论具体操作方式如何（查询、统计、可视化、导出等），本 Agent 都能处理
+        **第三层：协作声明（1段）**
+        简要说明本 Agent 在多智能体协作中的定位：当其他 Agent 或用户遇到与本领域相关的任何问题时，都应路由到本 Agent；本 Agent 具备对该领域数据进行多维度分析的能力；如果用户的问题涉及的数据实体属于本领域，无论具体操作方式如何（查询、统计、可视化、导出等），本 Agent 都能处理。
 
         **3. skills 数组**：
         每个 skill 代表该语义域下的一个子领域或核心业务能力：
@@ -198,14 +191,15 @@ SEMANTIC_GROUP_CONSOLIDATION_SYSTEM_PROMPT = """
             ]
         }
 
-        ### 关键检查清单（生成后请自查）：
-        1. ✅ description 第一层是否用概括性语言声明了完整的语义域？
-        2. ✅ 是否覆盖了所有核心业务名词的同义词和口语表达？
-        3. ✅ 是否避免了"只处理"、"仅限于"等排他性表述？
-        4. ✅ 是否说明了"任何与该领域相关的问题都能处理"？
-        5. ✅ skills 是否按子领域划分，而非按具体操作划分？
-        6. ✅ tags 是否包含了足够的同义词和关联词？
-        7. ✅ 当输入里已经包含「语义组旧的 description / agent_card」或与成员域语义高度重叠时，输出的 description 必须是**重新归纳后的单一去重正文**，禁止把旧 description 整段保留再在文末追加「补充」造成同一子领域写两遍。
+        ### 关键检查清单（生成后请自查，全部必须为"是"）：
+        1. ✅ description 第一层是否只用 2-3 句概括了领域归属、且**没有**在本层展开括号明细？
+        2. ✅ description 第二层是否按子领域逐项展开、每个子领域都列出了表名/字段名/属性/状态枚举/业务规则，覆盖了输入中的所有相关子领域？
+        3. ✅ 是否覆盖了所有核心业务名词的同义词和口语表达？
+        4. ✅ 是否避免了"只处理"、"仅限于"等排他性表述？
+        5. ✅ 是否说明了"任何与该领域相关的问题都能处理"？
+        6. ✅ skills 是否按子领域划分，而非按具体操作划分？
+        7. ✅ tags 是否包含了足够的同义词和关联词？
+        8. ✅ 当输入里已经包含「语义组旧的 description / agent_card」或与成员域语义高度重叠时，输出的 description 必须是**重新归纳后的单一去重正文**，禁止把旧 description 整段保留再在文末追加「补充」造成同一子领域写两遍。
 
         ### 最终要求：
         1. 基于用户提供的业务描述，生成完整的JSON
@@ -1103,28 +1097,74 @@ class SemanticGrouper:
                 break
         return out
 
-    def _build_preservation_contract(self, card: Dict[str, Any]) -> Dict[str, Any]:
-        """Build a deterministic preservation contract from old agent card."""
-        if not isinstance(card, dict):
+    @staticmethod
+    def _skill_capability_terms(skill: Dict[str, Any]) -> List[str]:
+        """Return stable, user-authored terms that identify a skill's capability."""
+        terms: List[str] = []
+        for value in [skill.get("name", "")] + list(skill.get("tags", []) or []):
+            term = str(value).strip().lower()
+            if term and term not in terms:
+                terms.append(term)
+        if not terms:
+            description = str(skill.get("description", "")).lower()
+            terms.extend(
+                token
+                for token in re.findall(r"[a-z0-9][a-z0-9_-]{2,}|[\u4e00-\u9fff]{2,}", description)
+                if token not in terms
+            )
+        return terms[:20]
+
+    def _build_preservation_contract(
+        self, card: Dict[str, Any], additional_cards: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """Build a deterministic capability contract from one or more Agent Cards."""
+        cards = [card] + list(additional_cards or [])
+        cards = [item for item in cards if isinstance(item, dict) and item]
+        if not cards:
             return {
                 "required_name": "",
                 "required_description": False,
                 "required_skill_ids": [],
+                "required_skills": {},
+                "baseline_description_length": 0,
             }
 
-        required_name = str(card.get("name", "")).strip()
-        required_description = bool(str(card.get("description", "")).strip())
+        required_name = str(cards[0].get("name", "")).strip()
+        descriptions = [str(item.get("description", "")).strip() for item in cards]
+        required_description = any(descriptions)
         required_skill_ids: List[str] = []
-        for sk in card.get("skills", []) or []:
-            if not isinstance(sk, dict):
-                continue
-            sid = str(sk.get("id", "")).strip()
-            if sid and sid not in required_skill_ids:
-                required_skill_ids.append(sid)
+        required_skills: Dict[str, Dict[str, Any]] = {}
+        for source_card in cards:
+            for sk in source_card.get("skills", []) or []:
+                if not isinstance(sk, dict):
+                    continue
+                sid = str(sk.get("id", "")).strip()
+                if not sid:
+                    continue
+                if sid not in required_skill_ids:
+                    required_skill_ids.append(sid)
+                entry = required_skills.setdefault(
+                    sid, {"terms": [], "requires_content": False}
+                )
+                terms = self._skill_capability_terms(sk)
+                entry["terms"] = self._merge_unique_strings(
+                    entry["terms"], terms, max_size=20
+                )
+                entry["requires_content"] = entry["requires_content"] or bool(
+                    str(sk.get("name", "")).strip()
+                    or str(sk.get("description", "")).strip()
+                    or (sk.get("tags", []) or [])
+                )
         return {
             "required_name": required_name,
             "required_description": required_description,
             "required_skill_ids": required_skill_ids,
+            "required_skills": required_skills,
+            # A consolidated description may be shorter than the sum, but should
+            # not collapse far below every individual baseline description.
+            "baseline_description_length": max(
+                (len(description) for description in descriptions), default=0
+            ),
         }
 
     def _validate_preservation_contract(
@@ -1138,6 +1178,7 @@ class SemanticGrouper:
         merged_description = str(merged.get("description", "")).strip()
         merged_skills = merged.get("skills", [])
         merged_skill_ids = set()
+        merged_skills_by_id: Dict[str, Dict[str, Any]] = {}
         if isinstance(merged_skills, list):
             for sk in merged_skills:
                 if not isinstance(sk, dict):
@@ -1145,6 +1186,7 @@ class SemanticGrouper:
                 sid = str(sk.get("id", "")).strip()
                 if sid:
                     merged_skill_ids.add(sid)
+                    merged_skills_by_id[sid] = sk
 
         required_name = str(contract.get("required_name", "")).strip()
         required_description = bool(contract.get("required_description", False))
@@ -1155,10 +1197,46 @@ class SemanticGrouper:
         name_preserved = (not required_name) or (merged_name == required_name)
         description_preserved = (not required_description) or bool(merged_description)
         missing_skill_ids = sorted(list(required_skill_ids - merged_skill_ids))
+        missing_skill_content: List[str] = []
+        required_skills = contract.get("required_skills", {}) or {}
+        for sid in sorted(required_skill_ids & merged_skill_ids):
+            requirement = required_skills.get(sid, {})
+            if not requirement.get("requires_content"):
+                continue
+            merged_skill = merged_skills_by_id.get(sid, {})
+            skill_text = " ".join(
+                [
+                    str(merged_skill.get("name", "")),
+                    str(merged_skill.get("description", "")),
+                    " ".join(str(x) for x in (merged_skill.get("tags", []) or [])),
+                ]
+            ).lower()
+            terms = [str(x).lower() for x in requirement.get("terms", []) if str(x)]
+            if not skill_text.strip() or (terms and not any(term in skill_text for term in terms)):
+                missing_skill_content.append(sid)
+
+        baseline_description_length = int(
+            contract.get("baseline_description_length", 0) or 0
+        )
+        description_length_ratio = (
+            len(merged_description) / baseline_description_length
+            if baseline_description_length
+            else 1.0
+        )
+        severe_description_shrink = (
+            baseline_description_length >= 40 and description_length_ratio < 0.5
+        )
         required_skill_count = len(required_skill_ids)
-        retained_skill_count = required_skill_count - len(missing_skill_ids)
-        skill_retention_ratio = (
-            retained_skill_count / max(1, required_skill_count) if required_skill_count else 1.0
+        requirement_count = required_skill_count * 2 + (1 if required_description else 0)
+        failed_requirement_count = (
+            len(missing_skill_ids)
+            + len(missing_skill_content)
+            + (1 if severe_description_shrink else 0)
+        )
+        coverage_ratio = (
+            1.0 - (failed_requirement_count / max(1, requirement_count))
+            if requirement_count
+            else 1.0
         )
 
         missing_requirements: List[str] = []
@@ -1168,14 +1246,30 @@ class SemanticGrouper:
             missing_requirements.append("required_description")
         if missing_skill_ids:
             missing_requirements.extend([f"skill_id:{sid}" for sid in missing_skill_ids[:30]])
+        if missing_skill_content:
+            missing_requirements.extend(
+                [f"skill_content:{sid}" for sid in missing_skill_content[:30]]
+            )
+        if severe_description_shrink:
+            missing_requirements.append("description_severe_shrink")
 
-        passed = name_preserved and description_preserved and not missing_skill_ids
+        passed = (
+            name_preserved
+            and description_preserved
+            and not missing_skill_ids
+            and not missing_skill_content
+            and not severe_description_shrink
+        )
         return {
             "pass": passed,
-            "coverage_score": round(skill_retention_ratio, 4),
+            "coverage_score": round(max(0.0, coverage_ratio), 4),
             "missing_requirements": missing_requirements,
             "required_skill_count": required_skill_count,
             "merged_skill_count": len(merged_skill_ids),
+            "old_description_length": baseline_description_length,
+            "new_description_length": len(merged_description),
+            "description_length_ratio": round(description_length_ratio, 4),
+            "missing_capabilities": missing_skill_ids + missing_skill_content,
             # Backward-compatible keys:
             "missing_tokens": missing_requirements,
             "old_token_count": required_skill_count,
@@ -1235,6 +1329,31 @@ class SemanticGrouper:
         merged["skills"] = merged_skills
         return merged
 
+    def _member_agent_cards(
+        self, member_domains: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Parse usable Agent Cards from member snapshots in stable member order."""
+        cards: List[Dict[str, Any]] = []
+        for domain in member_domains or []:
+            if not isinstance(domain, dict):
+                continue
+            card = self._parse_agent_card(domain.get("agent_card", ""))
+            if card:
+                cards.append(card)
+        return cards
+
+    def _deterministic_card_from_members(
+        self, member_domains: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Build a card solely from current members, never from stale group metadata."""
+        cards = self._member_agent_cards(member_domains)
+        if not cards:
+            return {}
+        result = deepcopy(cards[0])
+        for card in cards[1:]:
+            result = self.safe_merge_agent_card(result, card)
+        return result
+
     def merge_consolidated_agent_card(
         self, old_card: Dict[str, Any], candidate_card: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -1284,10 +1403,31 @@ class SemanticGrouper:
         self,
         old_card: Dict[str, Any],
         merged_card: Dict[str, Any],
+        member_cards: Optional[List[Dict[str, Any]]] = None,
+        mode: str = "incremental",
     ) -> Dict[str, Any]:
-        """Validate merged card covers old core semantics via structured contract."""
-        contract = self._build_preservation_contract(old_card)
-        return self._validate_preservation_contract(contract, merged_card)
+        """Validate a candidate against the correct Add/Update or Delete baseline."""
+        cards = [card for card in (member_cards or []) if isinstance(card, dict) and card]
+        if mode == "decremental":
+            baseline = deepcopy(cards[0]) if cards else {}
+            # Group identity is stable across member removal; only the
+            # capability contract is rebuilt from remaining members.
+            stable_name = (
+                str((old_card or {}).get("name", "")).strip()
+                if len(cards) > 1
+                else ""
+            )
+            if stable_name:
+                baseline["name"] = stable_name
+            additional = cards[1:]
+        else:
+            baseline = old_card
+            additional = cards
+        contract = self._build_preservation_contract(baseline, additional)
+        result = self._validate_preservation_contract(contract, merged_card)
+        result["mode"] = mode
+        result["member_count"] = len(cards)
+        return result
 
     @staticmethod
     def _extract_entities(text: str) -> set:
@@ -2852,57 +2992,89 @@ class SemanticGrouper:
                 len(member_snapshots),
             )
 
-            if len(member_snapshots) <= 1:
-                consolidated_result = self.consolidate_semantic_domain_into_semantic_group(
-                    semantic_domain=member_snapshots[0],
-                    semantic_group=group_data_before,
-                    max_retries=3,
-                    retry_delay=1.0,
-                )
-            elif not self.semantic_domain_client:
+            consolidated_result = None
+            try:
+                if len(member_snapshots) <= 1:
+                    consolidated_result = self.consolidate_semantic_domain_into_semantic_group(
+                        semantic_domain=member_snapshots[0],
+                        semantic_group=group_data_before,
+                        max_retries=3,
+                        retry_delay=1.0,
+                    )
+                elif not self.semantic_domain_client:
+                    logger.warning(
+                        "多成员组需要 SemanticDomainClient 拉取其余成员；回退为仅变更域与组快照合并"
+                    )
+                    consolidated_result = self.consolidate_semantic_domain_into_semantic_group(
+                        semantic_domain=new_domain,
+                        semantic_group=group_data_before,
+                        max_retries=3,
+                        retry_delay=1.0,
+                    )
+                else:
+                    consolidated_result = self.consolidate_semantic_domains_into_semantic_group(
+                        semantic_domains=member_snapshots,
+                        semantic_group=group_data_before,
+                        max_retries=3,
+                        retry_delay=1.0,
+                    )
+            except Exception as e:
                 logger.warning(
-                    "多成员组需要 SemanticDomainClient 拉取其余成员；回退为仅变更域与组快照合并"
-                )
-                consolidated_result = self.consolidate_semantic_domain_into_semantic_group(
-                    semantic_domain=new_domain,
-                    semantic_group=group_data_before,
-                    max_retries=3,
-                    retry_delay=1.0,
-                )
-            else:
-                consolidated_result = self.consolidate_semantic_domains_into_semantic_group(
-                    semantic_domains=member_snapshots,
-                    semantic_group=group_data_before,
-                    max_retries=3,
-                    retry_delay=1.0,
+                    "incremental consolidation 失败，使用确定性安全合并: group_id=%s error=%s",
+                    target_group_id,
+                    e,
+                    exc_info=True,
                 )
 
-            if consolidated_result:
+            if consolidated_result or member_snapshots:
                 try:
                     logger.info("使用合并后的 agent_card 更新组 %s", target_group_id)
                     old_card = self._parse_agent_card(group_data_before.get("agent_card", ""))
+                    member_cards = self._member_agent_cards(member_snapshots)
                     candidate_card = (
                         consolidated_result
                         if isinstance(consolidated_result, dict)
                         else self._parse_agent_card(consolidated_result)
                     )
-                    merged_card = self.merge_consolidated_agent_card(
-                        old_card, candidate_card
+                    if candidate_card:
+                        merged_card = self.merge_consolidated_agent_card(
+                            old_card, candidate_card
+                        )
+                    else:
+                        merged_card = deepcopy(old_card)
+                        for member_card in member_cards:
+                            merged_card = self.safe_merge_agent_card(
+                                merged_card, member_card
+                            )
+                    coverage_check = self.validate_semantic_coverage(
+                        old_card,
+                        merged_card,
+                        member_cards=member_cards,
+                        mode="incremental",
                     )
-                    coverage_check = self.validate_semantic_coverage(old_card, merged_card)
                     logger.info(
-                        "[MergeGuard] group_id=%s pass=%s coverage_score=%s missing_requirements=%s",
+                        "[MetadataStability] mode=%s group_id=%s member_count=%s "
+                        "old_description_length=%s new_description_length=%s "
+                        "coverage=%s missing_capabilities=%s",
+                        "incremental",
                         target_group_id,
-                        coverage_check.get("pass"),
+                        len(member_cards),
+                        coverage_check.get("old_description_length"),
+                        coverage_check.get("new_description_length"),
                         coverage_check.get("coverage_score"),
-                        coverage_check.get("missing_requirements", [])[:10],
+                        coverage_check.get("missing_capabilities", [])[:10],
                     )
                     if not coverage_check.get("pass", False):
                         logger.warning(
-                            "[MergeGuard] 拒绝覆盖更新，保留旧 agent_card: group_id=%s",
+                            "[MergeGuard] 候选未通过，使用 old + member cards 确定性安全合并: group_id=%s missing=%s",
                             target_group_id,
+                            coverage_check.get("missing_requirements", [])[:10],
                         )
-                        new_agent_card_result = old_card
+                        new_agent_card_result = deepcopy(old_card)
+                        for member_card in member_cards:
+                            new_agent_card_result = self.safe_merge_agent_card(
+                                new_agent_card_result, member_card
+                            )
                     else:
                         new_agent_card_result = merged_card
 
@@ -3201,10 +3373,18 @@ class SemanticGrouper:
                 )
 
         prompt = SEMANTIC_GROUP_CONSOLIDATION_SYSTEM_PROMPT
-        old_group_card = self._parse_agent_card(semantic_group.get("agent_card", ""))
-        preservation_contract = self._build_preservation_contract(old_group_card)
-
         is_decremental = mode == "decremental"
+        old_group_card = self._parse_agent_card(semantic_group.get("agent_card", ""))
+        member_cards = self._member_agent_cards(semantic_domains)
+        if is_decremental:
+            preservation_contract = self._build_preservation_contract(
+                member_cards[0] if member_cards else {},
+                member_cards[1:],
+            )
+        else:
+            preservation_contract = self._build_preservation_contract(
+                old_group_card, member_cards
+            )
         domain_blocks: List[str] = []
         for i, d in enumerate(semantic_domains, 1):
             label = f"第 {i} 个语义域成员"
@@ -3248,7 +3428,7 @@ class SemanticGrouper:
             f"semantic_group_agent_card:\n{semantic_group.get('agent_card', '')}\n\n"
             f"must_keep_contract(必须保留):\n"
             f"{json.dumps(preservation_contract, ensure_ascii=False)}\n\n"
-            "要求：严格保留 must_keep_contract 中的 required_name、required_description、required_skill_ids。\n\n"
+            "要求：严格覆盖 must_keep_contract 中的 required_name、required_description、required_skill_ids 及能力内容。\n\n"
             "【去重要求】多个成员域与 semantic_group 输入之间常有重叠；输出的 description 必须是**一份**联合归纳后的去重正文，"
             "禁止把旧组 description 原样保留再在文末叠加与成员域重复的子领域展开；skills 中同一子领域也只保留合并后的单一描述，"
             "勿在 skill.description 里用「增量补充」堆叠与旧文高度相似的段落。"
@@ -3343,34 +3523,27 @@ class SemanticGrouper:
         - 要求：体现所负责的**整个系统**的业务领域名称（不要只用某一个子领域命名）
         - 示例：若系统是电商交易平台，应命名为 `EcommerceTransactionAgent`，而非 `EcommerceUserManagementAgent`
 
-        **2. description 字段（核心，约800-1200字）**：
-        【请严格按照以下三层结构书写，形成从宏观到微观的完整描述】
+        **2. description 字段（核心，软上限 10000 字，宁全勿堆）**：
+        【请严格按照以下三层结构书写，形成从宏观到微观的完整描述。必须做到：凡是输入中出现的、与本领域有关的核心业务概念、数据实体、表名/字段名/属性/状态枚举/业务规则，**只要不冗余，一律写入 description**；description 应是"密级清单式"的长文，而不是一句话概览。严禁为了简短而合并或删减输入中的明细。每一层都用一个独立自然段（或换行分段），不要写成一整段连排。】
 
-        **第一层：语义域声明（最关键，约200字）**
-        用2-3句话，清晰、概括地声明本 Agent 负责的完整业务领域。这段话的目的是让编排器一眼就能判断"这个领域涵盖了哪些类型的业务问题"。
+        **第一层：语义域总声明（2-3句话，不展开明细）**
+        用2-3句话，概括性地声明本 Agent 负责的完整业务领域与业务大类（例如"本Agent是全渠道零售与供应链管理系统数据领域的专家"），让编排器能在秒级内判断领域归属。**禁止在本层罗列括号明细**——所有主题词、表名、字段明细统一放到第二层展开。
 
-        要求：
-        - 明确说出所属的**行业**和**业务大类**
-        - 列出该领域涉及的**所有核心业务主题词**（含同义词、近义词、口语表达）
-        - 使用"涵盖……等一切相关问题"这类包容性语句
+        **第二层：子领域逐项展开（本层是描述主体，约占全文 80%）**
+        依据输入中实际存在的子领域/限界上下文/业务模块，**逐个**列出小节，每个小节用 `【子领域名】` 开头并另起一段。每个子领域小节必须做到：
 
-        示例：
-        > "本Agent是银行业分支机构财务数据领域的全能专家，负责处理与银行网点/支行/分行的财务状况相关的一切问题。覆盖的核心主题包括但不限于：资产负债表、总资产、总负债、净资产、存款（储蓄、定期、活期、对公存款、个人存款、零售存款）、贷款（放款、授信、信贷、按揭、消费贷、对公贷款、零售贷款）、客户规模、员工规模，以及围绕这些数据的查询、统计、分析、对比、排名、趋势等各类操作。"
+        1. **核心职责**：一两句说明该子领域做什么。
+        2. **数据实体与表/字段明细**：列出该子领域在输入中出现的**全部相关表名、字段名、属性名、状态枚举、关键业务规则**。明细必须**逐项写出、中间用顿号分隔**，可以写成括号补充的形式（如 `商品spu（spu_id、spu名称、销售状态、审核状态）`）。**不要用"等"字省略输入中已有的重要明细**。
+        3. **常见问题方向**：用"用户可能围绕着……提出查询、统计、分析、对比、排名、趋势等各类问题"一句概括，不举具体反例。
 
-        **第二层：子领域与业务概念展开（约400-600字）**
-        按业务子领域分组，展开描述每个子领域包含的业务概念和典型问题类型。每个子领域都应该：
-        - 说明其核心职责
-        - 列出涉及的全部业务术语和数据实体（含同义词）
-        - 说明该子领域下用户可能提出的问题方向（用"包括XXX类问题"的方式概括，不要举过于具体的例子）
+        每个子领域都要实实在在地展开到"把输入的每一张表/字段说明都映射进去"的程度；输入有多少个有业务含义的子领域，本层就要有多少个小节，**一个都不能少**。
 
-        示例：
-        > "【存款业务】管理各分支机构的存款数据，涉及的概念包括：存款结构、存款分布、对公存款与零售存款的区分、活期存款与定期存款的比例、存款总额与趋势变化等。用户可能围绕存款提出查询、汇总、排名、对比、趋势分析等各类问题。"
+        示例（用于体现"逐项展开"的样子，实际以输入的真实表名为准）：
+        > 【存款业务】管理各分支机构存款数据。数据实体包括：存款明细（branch_id、account_type、balance、rate、open_date）、定期存款（term、interest_rate）、活期存款（min_balance）等；状态枚举：在存/已结清/挂失。用户可能围绕存款提出查询、汇总、排名、对比、趋势分析等各类问题。
+        > 【贷款业务】管理贷款全流程数据。数据实体包括：贷款合同（loan_no、customer_id、principal、interest_rate、term）、还款计划（due_date、amount、paid_flag）、征信查询记录等。用户可能围绕放款、还款、逾期、催收提出查询、统计、占比、趋势等各类问题。
 
-        **第三层：协作声明（约100-200字）**
-        简要说明本 Agent 在多智能体协作中的定位：
-        - 当其他 Agent 或用户遇到与本领域相关的任何问题时，都应路由到本 Agent
-        - 本 Agent 具备对该领域数据进行多维度分析的能力
-        - 如果用户的问题涉及的数据实体属于本领域，无论具体操作方式如何（查询、统计、可视化、导出等），本 Agent 都能处理
+        **第三层：协作声明（1段）**
+        简要说明本 Agent 在多智能体协作中的定位：当其他 Agent 或用户遇到与本领域相关的任何问题时，都应路由到本 Agent；本 Agent 具备对该领域数据进行多维度分析的能力；如果用户的问题涉及的数据实体属于本领域，无论具体操作方式如何（查询、统计、可视化、导出等），本 Agent 都能处理。
 
         **3. skills 数组**：
         每个 skill 代表该语义域下的一个子领域或核心业务能力：
@@ -3415,14 +3588,15 @@ class SemanticGrouper:
             ]
         }
 
-        ### 关键检查清单（生成后请自查）：
-        1. ✅ description 第一层是否用概括性语言声明了完整的语义域？
-        2. ✅ 是否覆盖了所有核心业务名词的同义词和口语表达？
-        3. ✅ 是否避免了"只处理"、"仅限于"等排他性表述？
-        4. ✅ 是否说明了"任何与该领域相关的问题都能处理"？
-        5. ✅ skills 是否按子领域划分，而非按具体操作划分？
-        6. ✅ tags 是否包含了足够的同义词和关联词？
-        7. ✅ 当输入里已经包含「语义组旧的 description / agent_card」或与成员域语义高度重叠时，输出的 description 必须是**重新归纳后的单一去重正文**，禁止把旧 description 整段保留再在文末追加「补充」造成同一子领域写两遍。
+        ### 关键检查清单（生成后请自查，全部必须为"是"）：
+        1. ✅ description 第一层是否只用 2-3 句概括了领域归属、且**没有**在本层展开括号明细？
+        2. ✅ description 第二层是否按子领域逐项展开、每个子领域都列出了表名/字段名/属性/状态枚举/业务规则，覆盖了输入中的所有相关子领域？
+        3. ✅ 是否覆盖了所有核心业务名词的同义词和口语表达？
+        4. ✅ 是否避免了"只处理"、"仅限于"等排他性表述？
+        5. ✅ 是否说明了"任何与该领域相关的问题都能处理"？
+        6. ✅ skills 是否按子领域划分，而非按具体操作划分？
+        7. ✅ tags 是否包含了足够的同义词和关联词？
+        8. ✅ 当输入里已经包含「语义组旧的 description / agent_card」或与成员域语义高度重叠时，输出的 description 必须是**重新归纳后的单一去重正文**，禁止把旧 description 整段保留再在文末追加「补充」造成同一子领域写两遍。
 
         ### 最终要求：
         1. 基于用户提供的业务描述，生成完整的JSON
@@ -3505,12 +3679,11 @@ class SemanticGrouper:
         self,
         group_id: str,
         group_data: Dict[str, Any],
-        consolidated_result: Dict[str, Any],
+        consolidated_result: Optional[Dict[str, Any]],
         member_domains: List[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         """
-        Merge LLM candidate with existing group agent_card (MergeGuard) and persist.
-        Same post-processing as the Add/Update JOIN merge path.
+        Validate and persist a decremental candidate against remaining members only.
         """
         fallback_group_name = group_data.get("group_name", "") or f"group-{group_id}"
         try:
@@ -3524,23 +3697,55 @@ class SemanticGrouper:
                 if isinstance(consolidated_result, dict)
                 else self._parse_agent_card(consolidated_result)
             )
-            merged_card = self.merge_consolidated_agent_card(old_card, candidate_card)
-            coverage_check = self.validate_semantic_coverage(old_card, merged_card)
+            member_cards = self._member_agent_cards(member_domains)
+            deterministic_card = self._deterministic_card_from_members(member_domains)
+            if not member_cards or not deterministic_card:
+                logger.warning(
+                    "decremental metadata 更新缺少剩余成员 Agent Card，跳过持久化: group_id=%s",
+                    group_id,
+                )
+                return None
+            stable_name = (
+                str(old_card.get("name", "")).strip()
+                if len(member_cards) > 1
+                else ""
+            )
+            if stable_name:
+                deterministic_card["name"] = stable_name
+                if candidate_card:
+                    candidate_card = deepcopy(candidate_card)
+                    candidate_card["name"] = stable_name
+            # Never merge old group metadata on Delete: it may contain capabilities
+            # belonging only to the member that has just been removed.
+            candidate_to_validate = candidate_card or deterministic_card
+            coverage_check = self.validate_semantic_coverage(
+                old_card,
+                candidate_to_validate,
+                member_cards=member_cards,
+                mode="decremental",
+            )
             logger.info(
-                "[MergeGuard] group_id=%s pass=%s coverage_score=%s missing_requirements=%s",
+                "[MetadataStability] mode=%s group_id=%s member_count=%s "
+                "old_description_length=%s new_description_length=%s "
+                "coverage=%s missing_capabilities=%s",
+                "decremental",
                 group_id,
-                coverage_check.get("pass"),
+                len(member_cards),
+                coverage_check.get("old_description_length"),
+                coverage_check.get("new_description_length"),
                 coverage_check.get("coverage_score"),
-                coverage_check.get("missing_requirements", [])[:10],
+                coverage_check.get("missing_capabilities", [])[:10],
             )
             if not coverage_check.get("pass", False):
                 logger.warning(
-                    "[MergeGuard] 拒绝覆盖更新，保留旧 agent_card: group_id=%s",
+                    "[MergeGuard] decremental 候选未通过，使用剩余成员确定性卡片: "
+                    "group_id=%s missing=%s",
                     group_id,
+                    coverage_check.get("missing_requirements", [])[:10],
                 )
-                new_agent_card_result = old_card
+                new_agent_card_result = deterministic_card
             else:
-                new_agent_card_result = merged_card
+                new_agent_card_result = candidate_to_validate
 
             new_agent_card = (
                 json.dumps(new_agent_card_result, ensure_ascii=False)
@@ -3577,14 +3782,22 @@ class SemanticGrouper:
             )
         except Exception as e:
             logger.warning(
-                "处理合并后的 agent_card 失败: %s，使用原组的 agent_card 和 group_name",
+                "处理 decremental agent_card 失败: %s，使用剩余成员确定性卡片",
                 str(e),
                 exc_info=True,
             )
-            new_agent_card = group_data.get("agent_card", "")
+            new_agent_card_result = self._deterministic_card_from_members(member_domains)
+            if not new_agent_card_result:
+                logger.warning(
+                    "无法从剩余成员构建安全卡片，跳过 decremental metadata 更新: group_id=%s",
+                    group_id,
+                )
+                return None
+            new_agent_card = json.dumps(new_agent_card_result, ensure_ascii=False)
             new_group_name = fallback_group_name
-            new_description = self._extract_description_from_agent_card(new_agent_card)
-            new_agent_card_result = self._parse_agent_card(new_agent_card)
+            new_description = self._extract_description_from_agent_card(
+                new_agent_card_result
+            )
 
         next_version = self._version_for_semantic_group_update(
             group_data,
@@ -3730,35 +3943,43 @@ class SemanticGrouper:
             member_domains = self._fetch_member_domain_snapshots(remaining_relations_data)
             updated_group_name = group_name
             if member_domains and all(d.get("semantic_domain") for d in member_domains):
-                try:
-                    consolidated_result = self.consolidate_semantic_domains_into_semantic_group(
-                        semantic_domains=member_domains,
-                        semantic_group=group_data,
-                        mode="decremental",
-                        max_retries=3,
-                        retry_delay=1.0,
+                consolidated_result: Optional[Dict[str, Any]] = None
+                if len(member_domains) == 1:
+                    # A one-member group is a projection, not a consolidation.
+                    consolidated_result = self._parse_agent_card(
+                        member_domains[0].get("agent_card", "")
                     )
-                    if consolidated_result:
-                        apply_result = self._apply_consolidation_to_group(
-                            group_id,
-                            group_data,
-                            consolidated_result,
-                            member_domains,
-                        )
-                        if apply_result:
-                            updated_group_name = apply_result.get("group_name", group_name)
-                    else:
-                        logger.warning(
-                            "decremental consolidation 返回空结果，跳过 group metadata 更新: group_id=%s",
-                            group_id,
-                        )
-                except Exception as e:
-                    logger.error(
-                        "decremental 重新聚合语义失败: group_id=%s, error=%s",
+                    logger.info(
+                        "[MetadataStability] mode=decremental group_id=%s "
+                        "member_count=1 direct_member_projection=true",
                         group_id,
-                        e,
-                        exc_info=True,
                     )
+                else:
+                    try:
+                        consolidated_result = self.consolidate_semantic_domains_into_semantic_group(
+                            semantic_domains=member_domains,
+                            semantic_group=group_data,
+                            mode="decremental",
+                            max_retries=3,
+                            retry_delay=1.0,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "decremental 重新聚合失败，使用剩余成员确定性卡片: "
+                            "group_id=%s error=%s",
+                            group_id,
+                            e,
+                            exc_info=True,
+                        )
+
+                apply_result = self._apply_consolidation_to_group(
+                    group_id,
+                    group_data,
+                    consolidated_result,
+                    member_domains,
+                )
+                if apply_result:
+                    updated_group_name = apply_result.get("group_name", group_name)
             else:
                 logger.warning(
                     "无法获取剩余成员的完整语义域数据，跳过重新聚合（已获取 %s 个成员快照）",

@@ -37,6 +37,7 @@ export const SYSTEM_CONFIG_META: Record<SystemConfigName, SystemConfigMeta> = {
           "doc-agent-image",
           "dd-sync-observer-image",
           "skill-agent-image",
+          "cross-sg-max-hop",
         ],
       },
       {
@@ -123,7 +124,7 @@ export async function validateSystemLlmConfigMaps(
     if (seen.has(dedupe)) continue
     seen.add(dedupe)
     try {
-      await getConfigMap(ns, ref.name)
+      await getConfigMap(ns, ref.name, "llm")
     } catch (e) {
       if (axios.isAxiosError(e) && e.response?.status === 404) {
         missing.push(`${ref.key} → "${ref.name}"`)

@@ -82,6 +82,7 @@ PROGRESS_BASE_FIELDS = (
     "status",
 )
 PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
+    "query_received": set(),
     "routing_plan_ready": {"mode", "task_count"},
     "multi_root_plan_reason": {
         "task_count",
@@ -91,6 +92,7 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "tasks",
     },
     "root_selected": {"mode", "route_paths", "selected_root", "best_path", "root_plans", "root_count"},
+    "pre_make_plan": {"candidate_count", "candidates", "selected", "plan_count", "message"},
     "route_plan_with_capability_check": {
         "mode",
         "strategy",
@@ -345,9 +347,11 @@ class PlannerStep(BaseModel):
 # ==================== Capability Check Protocol (Broadcast Routing) ====================
 # Message type flag used in A2A metadata to indicate a capability check request
 CAPABILITY_CHECK_MESSAGE_TYPE = "capability_check"
+PRE_MAKE_PLAN_MESSAGE_TYPE = "pre_make_plan"
 ROUTING_AGENT_POOL_KEY = "routing_agent_pool"
 ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY = "routing_skip_broadcast_eligible"
 ROUTING_SELECTED_ROOT_KEY = "routing_selected_root"
+SG_EXECUTION_HINT_KEY = "sg_execution_hint"
 
 
 class CapabilityCheckResponse(BaseModel):
@@ -395,6 +399,10 @@ class CapabilityCheckResponse(BaseModel):
         default="single",
         description="Execution strategy for the selected SG. Single-layer SG only returns 'single'."
     )
+    execution_hint: dict = Field(
+        default_factory=dict,
+        description="Opaque SG-issued execution evidence; Routing only transports it."
+    )
     latency_ms: int = Field(
         default=0,
         description="Capability check end-to-end latency in milliseconds, measured by the responding agent."
@@ -429,6 +437,12 @@ def _is_non_actionable_contribution_text(text: str) -> bool:
         r"additional information",
         r"related information",
         r"auxiliary information",
+        r"无法访问",
+        r"无法查询",
+        r"无任何业务数据库",
+        r"仅具备 weather",
+        r"cannot access",
+        r"no business database",
     )
     return any(re.search(pattern, normalized) for pattern in generic_patterns)
 
@@ -1428,6 +1442,20 @@ class RoutingAgent(BaseAgent):
             )
             response.can_contribute = False
             response.contribution = ""
+            return response
+        blob = f"{response.contribution or ''} {response.reason or ''}"
+        if _is_non_actionable_contribution_text(blob):
+            response.can_contribute = False
+            response.contribution = ""
+            return response
+        name = str(getattr(response, "agent_name", "") or "").lower()
+        if "weather" in name and not re.search(r"天气|weather|forecast|气温", blob, flags=re.I):
+            logger.info(
+                "Broadcast routing: normalize skill-mismatch contributor '%s'",
+                response.agent_name,
+            )
+            response.can_contribute = False
+            response.contribution = ""
         return response
 
     def _prior_task_payloads_for_multi_root(
@@ -1969,6 +1997,7 @@ class RoutingAgent(BaseAgent):
                     can_contribute=response_data.get("can_contribute", False),
                     contribution=response_data.get("contribution", ""),
                     execution_strategy=response_data.get("execution_strategy", "single"),
+                    execution_hint=response_data.get("execution_hint") or {},
                     latency_ms=agent_latency_ms,
                 )
         except json.JSONDecodeError as e:
@@ -1979,6 +2008,85 @@ class RoutingAgent(BaseAgent):
         except Exception as e:
             logger.error(
                 f"Broadcast routing: capability check failed for agent {agent_card.name} ({agent_card.url}): {e}"
+            )
+            return None
+
+    async def send_pre_make_plan(
+        self,
+        query: str,
+        agent_card: AgentCard,
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+    ) -> Optional[dict]:
+        """Send a pre-make-plan A2A request to a single agent.
+
+        The agent runs its planner against the query and returns the
+        resulting ``TaskList`` as JSON.  This is used by
+        :meth:`_select_by_pre_make_plan` to compare planning quality
+        across candidate agents before making a routing decision.
+        """
+        send_message_payload: dict[str, Any] = {
+            'message': {
+                'role': 'user',
+                'parts': [{'type': 'text', 'text': query}],
+                'messageId': uuid4().hex,
+            },
+            'metadata': {
+                'message_type': PRE_MAKE_PLAN_MESSAGE_TYPE,
+                'user_id': user_id,
+                'run_id': run_id,
+                'trace_id': trace_id,
+            },
+        }
+
+        timeout = float(os.getenv("PRE_MAKE_PLAN_TIMEOUT", "30"))
+        _t0 = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as httpx_client:
+                client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
+                streaming_request = SendStreamingMessageRequest(
+                    id=uuid4().hex,
+                    params=MessageSendParams(**send_message_payload),
+                )
+                stream_response = client.send_message_streaming(streaming_request)
+                response_parts = []
+                async for chunk in stream_response:
+                    result = self.get_response_text(chunk)
+                    if result and result != "":
+                        response_parts.append(result)
+
+                full_response = "".join(response_parts).strip()
+
+                if full_response.startswith("```json"):
+                    full_response = full_response[7:]
+                elif full_response.startswith("```"):
+                    full_response = full_response[3:]
+                if full_response.endswith("```"):
+                    full_response = full_response[:-3]
+                full_response = full_response.strip()
+
+                elapsed_ms = int((time.monotonic() - _t0) * 1000)
+                plan = json.loads(full_response)
+                logger.info(
+                    "[PreMakePlan] agent=%s responded in %dms | tasks=%d",
+                    agent_card.name,
+                    elapsed_ms,
+                    len(plan.get("tasks", [])),
+                )
+                return plan
+        except json.JSONDecodeError:
+            logger.error(
+                "[PreMakePlan] agent=%s returned invalid JSON | raw_chars=%d "
+                "| preview=%s",
+                agent_card.name,
+                len(full_response),
+                full_response[:500],
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                "[PreMakePlan] agent=%s failed: %s", agent_card.name, e
             )
             return None
 
@@ -2341,12 +2449,16 @@ class RoutingAgent(BaseAgent):
             return summary
 
         def _execution_meta(_resp) -> dict:
-            return {
+            meta = {
                 "execution_strategy": "single",
                 "root_candidates": _root_candidate_summary(),
                 "candidate_count": len(capable_agents),
                 PROPAGATED_HISTORY_KEY: history_payload,
             }
+            hint = getattr(_resp, "execution_hint", None) if _resp else None
+            if isinstance(hint, dict) and hint:
+                meta[SG_EXECUTION_HINT_KEY] = hint
+            return meta
 
         def _root_plan_entry(card: AgentCard, resp: CapabilityCheckResponse) -> dict:
             rps = getattr(resp, "route_paths", None) or []
@@ -2519,6 +2631,186 @@ class RoutingAgent(BaseAgent):
         )
         return step, None, [selected_card], (rps if rps else None), exec_meta
 
+    async def _select_by_pre_make_plan(
+        self,
+        query: str,
+        candidates: list[tuple[AgentCard, CapabilityCheckResponse]],
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+    ) -> Optional[tuple[AgentCard, CapabilityCheckResponse]]:
+        """Select the best agent from candidates by comparing their task plans.
+
+        Sends concurrent ``pre_make_plan`` requests to the top-N candidates,
+        collects their ``TaskList`` results, and uses an LLM to compare the
+        plans and pick the most suitable agent.
+
+        Returns ``None`` when all candidates fail — the caller should fall
+        back to the simple first-pick logic.
+        """
+        top_n = min(len(candidates), int(os.getenv("PRE_MAKE_PLAN_TOP_N", "3")))
+
+        candidate_names = [c[0].name for c in candidates[:top_n]]
+        logger.info(
+            "[PreMakePlan] ========== Pre-Make-Plan Start ==========\n"
+            "  candidates=%d (top_n=%d) | agents=%s\n"
+            "===========================================",
+            len(candidates),
+            top_n,
+            candidate_names,
+        )
+
+        tasks = [
+            self.send_pre_make_plan(query, card, user_id, run_id, trace_id)
+            for card, _ in candidates[:top_n]
+        ]
+        plan_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        candidates_with_plans: list[tuple[AgentCard, CapabilityCheckResponse, dict]] = []
+        for i, result in enumerate(plan_results):
+            if i >= len(candidates):
+                break
+            card, resp = candidates[i]
+            if isinstance(result, Exception):
+                logger.warning(
+                    "[PreMakePlan] agent=%s exception: %s", card.name, result
+                )
+                continue
+            if result is None:
+                continue
+            candidates_with_plans.append((card, resp, result))
+            logger.info(
+                "[PreMakePlan] agent=%s plan: tasks=%d",
+                card.name,
+                len(result.get("tasks", [])),
+            )
+
+        if not candidates_with_plans:
+            logger.warning(
+                "[PreMakePlan] all agents failed pre-make-plan, "
+                "falling back to simple first-pick"
+            )
+            return None
+
+        if len(candidates_with_plans) == 1:
+            logger.info(
+                "[PreMakePlan] only one agent returned valid plan — "
+                "selecting agent=%s directly",
+                candidates_with_plans[0][0].name,
+            )
+            return (candidates_with_plans[0][0], candidates_with_plans[0][1])
+
+        logger.info(
+            "[PreMakePlan] entering LLM comparison | candidates=%d",
+            len(candidates_with_plans),
+        )
+        return await self._llm_select_best_plan(
+            query=query,
+            candidates_with_plans=candidates_with_plans,
+            user_id=user_id,
+            run_id=run_id,
+            trace_id=trace_id,
+        )
+
+    async def _llm_select_best_plan(
+        self,
+        query: str,
+        candidates_with_plans: list[tuple[AgentCard, CapabilityCheckResponse, dict]],
+        user_id: str,
+        run_id: str,
+        trace_id: str,
+    ) -> tuple[AgentCard, CapabilityCheckResponse]:
+        """Use an LLM to compare task plans from multiple agents and pick the best.
+
+        Each candidate agent has independently produced a ``TaskList`` for the same
+        query.  The LLM compares the plans and selects the agent whose decomposition
+        best matches the query's intent.
+        """
+        # ── Build candidate context ──
+        plans_text_parts: list[str] = []
+        for idx, (card, _, plan) in enumerate(candidates_with_plans):
+            tasks = plan.get("tasks", [])
+            tasks_text = json.dumps(tasks, ensure_ascii=False, indent=2)
+            plans_text_parts.append(
+                f"### Agent {idx + 1}: {card.name}\n"
+                f"Description: {card.description}\n"
+                f"Planned tasks:\n{tasks_text}"
+            )
+        plans_text = "\n\n".join(plans_text_parts)
+
+        # ── CoT prompt ──
+        prompt = (
+            "你是一个路由评估专家。你的任务是：给定一个用户问题，以及多个 Agent 各自为该问题"
+            "生成的 task 规划（TaskList），比较这些规划，选出最合理的一个 Agent。\n\n"
+            "请按以下步骤推理（思考过程写入 thought 字段）：\n\n"
+            "## Step 1 — 理解问题\n"
+            "用户问题的核心意图是什么？要回答这个问题，必须获取哪些数据或完成哪些操作？\n\n"
+            "## Step 2 — 逐个评估\n"
+            "对每个 Agent 的规划，从以下角度评估：\n"
+            "a) 覆盖度：规划是否覆盖了 Step 1 中识别的核心需求？有无遗漏或冗余？\n"
+            "b) 合理性：任务划分粒度是否合适？任务之间的依赖关系是否正确？\n"
+            "c) 自洽性：每个子任务分配的 agent 与该 Agent 的 description 是否匹配？\n"
+            "d) 整体印象：该规划是否能高效、准确地回答用户问题？\n\n"
+            "## Step 3 — 比较与选择\n"
+            "横向比较各 Agent 的规划，选出最优的一个。如果有多个规划质量接近，优先选择"
+            "覆盖度更完整、任务划分更清晰的。\n\n"
+            f"用户问题：{query}\n\n"
+            f"各 Agent 的规划：\n{plans_text}\n\n"
+            "请调用 select_best_plan 工具输出你的选择。"
+        )
+
+        class SelectBestPlanResult(BaseModel):
+            thought: str = Field(
+                description="按 Step 1 → Step 2 → Step 3 的完整推理过程"
+            )
+            selected_agent_index: int = Field(
+                description="选中的 Agent 编号（1-based，对应上面 Agent N 的 N）"
+            )
+            reason: str = Field(
+                description="选择理由，一句话总结"
+            )
+
+        select_tool = StructuredTool(
+            name="select_best_plan",
+            description="输出最佳 Agent 选择及推理过程",
+            args_schema=SelectBestPlanResult,
+            func=None,
+            coroutine=None,
+        )
+
+        try:
+            result = await invoke_llm_with_tool(
+                llm=self.planner_agent.llm,
+                tool=select_tool,
+                messages=[HumanMessage(content=prompt)],
+                metadata={"user_id": user_id, "run_id": run_id, "trace_id": trace_id},
+                tool_choice="select_best_plan",
+                span_name="routing-select-best-plan",
+            )
+        except Exception as e:
+            logger.error(
+                "[PreMakePlan] LLM selection failed: %s — falling back to first",
+                e,
+            )
+            return (candidates_with_plans[0][0], candidates_with_plans[0][1])
+
+        if result is None:
+            logger.warning(
+                "[PreMakePlan] LLM did not call select_best_plan — "
+                "falling back to first"
+            )
+            return (candidates_with_plans[0][0], candidates_with_plans[0][1])
+
+        idx = int(result.get("selected_agent_index", 1)) - 1
+        idx = max(0, min(idx, len(candidates_with_plans) - 1))
+        logger.info(
+            "[PreMakePlan] selected agent=%s reason=%s thought=%s",
+            candidates_with_plans[idx][0].name,
+            result.get("reason", ""),
+            (result.get("thought", "") or "")[:300],
+        )
+        return (candidates_with_plans[idx][0], candidates_with_plans[idx][1])
+
     async def get_best_agent_by_broadcast(
         self,
         query: str,
@@ -2526,6 +2818,7 @@ class RoutingAgent(BaseAgent):
         run_id: str,
         trace_id: str,
         propagated_history: Optional[dict] = None,
+        on_pre_make_plan_progress: Optional[Callable[[str, str, str, Optional[Dict[str, Any]]], Awaitable[None]]] = None,
     ) -> tuple[Optional[PlannerStep], Optional[list[dict]], dict]:
         """Broadcast capability check and pick the single best agent.
 
@@ -2554,7 +2847,51 @@ class RoutingAgent(BaseAgent):
             logger.info("[RoutePlan] Simple route: no capable agent found")
             return None, None, {}
 
-        selected_card, selected_resp = capable_agents[0]
+        # ── Pre-Make-Plan selection (enabled by default) ──
+        if (
+            os.getenv("ENABLE_PRE_MAKE_PLAN_SELECTION", "true").strip().lower()
+            in ("true", "1", "yes")
+            and len(capable_agents) >= 2
+        ):
+            candidate_names = [c[0].name for c in capable_agents[:int(os.getenv("PRE_MAKE_PLAN_TOP_N", "3"))]]
+            if on_pre_make_plan_progress:
+                await on_pre_make_plan_progress(
+                    "pre_make_plan",
+                    f"检测到 {len(capable_agents)} 个候选 Agent，启动 Pre-Make-Plan 评估：{', '.join(candidate_names)}",
+                    "running",
+                    {"candidate_count": len(capable_agents), "candidates": candidate_names},
+                )
+            pre_select_result = await self._select_by_pre_make_plan(
+                query, capable_agents, user_id, run_id, trace_id,
+            )
+            if pre_select_result is not None:
+                selected_card, selected_resp = pre_select_result
+            else:
+                selected_card, selected_resp = capable_agents[0]
+            # Emit pre-make-plan done progress with the selected agent
+            if on_pre_make_plan_progress:
+                await on_pre_make_plan_progress(
+                    "pre_make_plan",
+                    f"Pre-Make-Plan 完成：评估了 {len(candidate_names)} 个候选 Agent，选定 {selected_card.name}",
+                    "done",
+                    {
+                        "candidate_count": len(capable_agents),
+                        "candidates": candidate_names,
+                        "selected": selected_card.name,
+                        "plan_count": len(candidate_names),
+                        "message": f"选定 {selected_card.name} 作为最佳路由目标",
+                    },
+                )
+        else:
+            if len(capable_agents) >= 2:
+                logger.info(
+                    "[PreMakePlan] skipped (ENABLE_PRE_MAKE_PLAN_SELECTION=%s) — "
+                    "falling back to simple first-pick",
+                    os.getenv("ENABLE_PRE_MAKE_PLAN_SELECTION", "true"),
+                )
+            selected_card, selected_resp = capable_agents[0]
+        # ── End Pre-Make-Plan ──
+
         self.agent_cards = [selected_card]
 
         step = PlannerStep(original_query=query, agent=selected_card.name)
@@ -2587,6 +2924,8 @@ class RoutingAgent(BaseAgent):
             ),
             "candidate_count": len(capable_agents),
         }
+        if isinstance(selected_resp.execution_hint, dict) and selected_resp.execution_hint:
+            exec_meta[SG_EXECUTION_HINT_KEY] = selected_resp.execution_hint
 
         path_str = (
             " -> ".join(selected_resp.route_path)
@@ -3489,6 +3828,14 @@ class RoutingAgentExecutor(AgentExecutor):
         execution_meta: dict = {}
         self._history_progress_frames = []
 
+        # ── Emit query_received progress so the UI immediately shows "processing" ──
+        await self._emit_progress(
+            updater,
+            event="query_received",
+            message=f"接收到查询请求，正在分析并路由到合适的 Agent...",
+            status="running",
+        )
+
         if routing_mode == "simple":
             # ---- Simple Mode: pick the single best agent, forward original query ----
             # Controlled by env ROUTING_MODE=simple.
@@ -3502,6 +3849,9 @@ class RoutingAgentExecutor(AgentExecutor):
                     run_id,
                     trace_id,
                     propagated_history=propagated_history,
+                    on_pre_make_plan_progress=lambda event, msg, status, extra: self._emit_progress(
+                        updater, event=event, message=msg, status=status, extra=extra,
+                    ),
                 )
                 logger.info(
                     "===== RoutingAgentExecutor (simple), attempt %d, step=%s",
@@ -3878,14 +4228,28 @@ class RoutingAgentExecutor(AgentExecutor):
                 routing_pool = (execution_meta or {}).get(ROUTING_AGENT_POOL_KEY)
                 if routing_pool:
                     send_message_payload['metadata'][ROUTING_AGENT_POOL_KEY] = routing_pool
-                    send_message_payload['metadata'][ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY] = True
+                    execution_hint = (execution_meta or {}).get(SG_EXECUTION_HINT_KEY)
+                    skip_eligible = True
+                    if isinstance(execution_hint, dict) and execution_hint.get("missing_requirements"):
+                        skip_eligible = False
+                    send_message_payload['metadata'][ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY] = skip_eligible
                     selected_root = (execution_meta or {}).get(ROUTING_SELECTED_ROOT_KEY)
                     if selected_root:
                         send_message_payload['metadata'][ROUTING_SELECTED_ROOT_KEY] = selected_root
                     logger.info(
-                        "Routing forward: routing_agent_pool size=%d skip_broadcast_eligible=true root=%s",
+                        "Routing forward: routing_agent_pool size=%d skip_broadcast_eligible=%s root=%s",
                         len(routing_pool),
+                        skip_eligible,
                         selected_root or step.agent,
+                    )
+                execution_hint = (execution_meta or {}).get(SG_EXECUTION_HINT_KEY)
+                if isinstance(execution_hint, dict) and execution_hint:
+                    send_message_payload["metadata"][SG_EXECUTION_HINT_KEY] = execution_hint
+                    logger.info(
+                        "Routing forward: opaque SG execution hint | target=%s "
+                        "selected_members=%s",
+                        execution_hint.get("agent_name") or step.agent,
+                        (execution_hint.get("selected_members") or [])[:10],
                     )
 
                 # build a2a client from agent_card.url

@@ -9,8 +9,35 @@ import (
 // DiscoveryJob is the predicate function for discoveryjob builders.
 type DiscoveryJob func(*sql.Selector)
 
+// Permission is the predicate function for permission builders.
+type Permission func(*sql.Selector)
+
+// PlatformRole is the predicate function for platformrole builders.
+type PlatformRole func(*sql.Selector)
+
+// PlatformRolePermission is the predicate function for platformrolepermission builders.
+type PlatformRolePermission func(*sql.Selector)
+
+// PlatformUserRole is the predicate function for platformuserrole builders.
+type PlatformUserRole func(*sql.Selector)
+
 // Run is the predicate function for run builders.
 type Run func(*sql.Selector)
+
+// Tenant is the predicate function for tenant builders.
+type Tenant func(*sql.Selector)
+
+// TenantNamespace is the predicate function for tenantnamespace builders.
+type TenantNamespace func(*sql.Selector)
+
+// TenantRole is the predicate function for tenantrole builders.
+type TenantRole func(*sql.Selector)
+
+// TenantRolePermission is the predicate function for tenantrolepermission builders.
+type TenantRolePermission func(*sql.Selector)
+
+// TenantUser is the predicate function for tenantuser builders.
+type TenantUser func(*sql.Selector)
 
 // User is the predicate function for user builders.
 type User func(*sql.Selector)

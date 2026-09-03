@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -13,6 +14,59 @@ import (
 type SemanticGroupHandler struct {
 	usecase domain.SemanticGroupUsecase
 	logger  *slog.Logger
+}
+
+// isSemanticGroupVisibleToTenant checks whether the given members slice contains
+// at least one member whose DDNamespace belongs to the current tenant's bound
+// namespaces. Platform admins always see everything; tenants with no bound
+// namespaces see nothing.
+func (h *SemanticGroupHandler) isSemanticGroupVisibleToTenant(c *app.RequestContext, members []domain.SemanticGroupMemberDetail) bool {
+	if hasPlatformK8sView(c) {
+		return true
+	}
+	allowed, shouldFilter := tenantAllowedNamespaceSet(c)
+	if !shouldFilter {
+		return true
+	}
+	if len(allowed) == 0 {
+		return false
+	}
+	for _, member := range members {
+		if member.SemanticDomain != nil {
+			if _, ok := allowed[member.SemanticDomain.DDNamespace]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// filterSemanticGroups fetches members for each group and retains only those
+// visible to the current tenant. Platform admins receive the original list
+// unchanged.
+func (h *SemanticGroupHandler) filterSemanticGroups(ctx context.Context, c *app.RequestContext, groups []domain.SemanticGroup) []domain.SemanticGroup {
+	if hasPlatformK8sView(c) {
+		return groups
+	}
+	allowed, shouldFilter := tenantAllowedNamespaceSet(c)
+	if !shouldFilter {
+		return groups
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	out := make([]domain.SemanticGroup, 0, len(groups))
+	for _, g := range groups {
+		wm, err := h.usecase.GetWithMembers(ctx, g.ID)
+		if err != nil {
+			h.logger.Warn("semantic group visibility check: get members failed", "group_id", g.ID, "error", err)
+			continue
+		}
+		if h.isSemanticGroupVisibleToTenant(c, wm.Members) {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 func NewSemanticGroupHandler(uc domain.SemanticGroupUsecase, logger *slog.Logger) *SemanticGroupHandler {
@@ -66,12 +120,16 @@ func (h *SemanticGroupHandler) BatchCreate(ctx context.Context, c *app.RequestCo
 
 func (h *SemanticGroupHandler) Get(ctx context.Context, c *app.RequestContext) {
 	id := c.Param("id")
-	g, err := h.usecase.Get(ctx, id)
+	wm, err := h.usecase.GetWithMembers(ctx, id)
 	if err != nil {
 		ErrorResponse(c, err)
 		return
 	}
-	SuccessResponse(c, dto.ToSemanticGroupResponse(g))
+	if !h.isSemanticGroupVisibleToTenant(c, wm.Members) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+	SuccessResponse(c, dto.ToSemanticGroupResponse(&wm.Group))
 }
 
 func (h *SemanticGroupHandler) GetWithMembers(ctx context.Context, c *app.RequestContext) {
@@ -81,32 +139,38 @@ func (h *SemanticGroupHandler) GetWithMembers(ctx context.Context, c *app.Reques
 		ErrorResponse(c, err)
 		return
 	}
+	if !h.isSemanticGroupVisibleToTenant(c, w.Members) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 	SuccessResponse(c, dto.ToSemanticGroupWithMembersResponse(w))
 }
 
 func (h *SemanticGroupHandler) ListRoots(ctx context.Context, c *app.RequestContext) {
-	items, total, err := h.usecase.ListRoots(ctx)
+	items, _, err := h.usecase.ListRoots(ctx)
 	if err != nil {
 		ErrorResponse(c, err)
 		return
 	}
+	items = h.filterSemanticGroups(ctx, c, items)
 	out := make([]*dto.SemanticGroupResponse, 0, len(items))
 	for i := range items {
 		out = append(out, dto.ToSemanticGroupResponse(&items[i]))
 	}
 	SuccessResponse(c, map[string]any{
 		"items":      out,
-		"totalCount": total,
+		"totalCount": len(out),
 	})
 }
 
 func (h *SemanticGroupHandler) List(ctx context.Context, c *app.RequestContext) {
 	lo := parseLimitOffset(c, 50, 200)
-	items, total, err := h.usecase.List(ctx, lo.Limit, lo.Offset)
+	items, _, err := h.usecase.List(ctx, lo.Limit, lo.Offset)
 	if err != nil {
 		ErrorResponse(c, err)
 		return
 	}
+	items = h.filterSemanticGroups(ctx, c, items)
 	out := make([]*dto.SemanticGroupResponse, 0, len(items))
 	for i := range items {
 		g := items[i]
@@ -114,7 +178,7 @@ func (h *SemanticGroupHandler) List(ctx context.Context, c *app.RequestContext) 
 	}
 	SuccessResponse(c, map[string]any{
 		"items":      out,
-		"totalCount": total,
+		"totalCount": len(out),
 		"limit":      lo.Limit,
 		"offset":     lo.Offset,
 	})
@@ -142,6 +206,24 @@ func (h *SemanticGroupHandler) Update(ctx context.Context, c *app.RequestContext
 
 func (h *SemanticGroupHandler) Delete(ctx context.Context, c *app.RequestContext) {
 	id := c.Param("id")
+
+	// Block deletion when the semantic group still has members.
+	// Members must be removed first (via RemoveMember API) before the group
+	// can be deleted. This is a business rule enforced at the application
+	// layer rather than at the data-services layer, because other consumers
+	// of data-services may have different deletion semantics.
+	wm, err := h.usecase.GetWithMembers(ctx, id)
+	if err != nil {
+		ErrorResponse(c, err)
+		return
+	}
+	if len(wm.Members) > 0 {
+		ErrorResponse(c, domain.NewInvalidInputError(
+			fmt.Sprintf("语义组尚有 %d 个成员，请先移除所有成员后再删除", len(wm.Members)),
+		))
+		return
+	}
+
 	if err := h.usecase.Delete(ctx, id); err != nil {
 		ErrorResponse(c, err)
 		return

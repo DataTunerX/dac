@@ -56,6 +56,8 @@ spec:
           value: "cpu"
         - name: regroup_batch_size
           value: "10"
+        - name: TABLES_OVERVIEW_BATCH_SIZE
+          value: "20"
         image: registry.cn-shanghai.aliyuncs.com/jamesxiong/data-sinkers:v0.6.0-amd64
         imagePullPolicy: IfNotPresent
         name: data-sinkers

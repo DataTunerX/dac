@@ -73,6 +73,11 @@ func NewDataDescriptorHandler(uc domain.DataDescriptorUsecase, logger *slog.Logg
 func (h *DataDescriptorHandler) Create(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	var req dto.CreateDataDescriptorRequest
 	if err := c.BindAndValidate(&req); err != nil {
 		h.logger.Error("invalid request", "error", err)
@@ -126,6 +131,11 @@ func (h *DataDescriptorHandler) Get(ctx context.Context, c *app.RequestContext) 
 	namespace := c.Param("namespace")
 	name := c.Param("name")
 
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	descriptor, err := h.usecase.Get(ctx, namespace, name)
 	if err != nil {
 		h.logger.Error("failed to get data descriptor",
@@ -147,6 +157,11 @@ func (h *DataDescriptorHandler) GetSignature(ctx context.Context, c *app.Request
 	namespace := c.Param("namespace")
 	name := c.Param("name")
 
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	// Ensure DD exists
 	if _, err := h.usecase.Get(ctx, namespace, name); err != nil {
 		ErrorResponse(c, err)
@@ -167,6 +182,11 @@ func (h *DataDescriptorHandler) GetSignature(ctx context.Context, c *app.Request
 func (h *DataDescriptorHandler) GetSemanticDomain(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	// Ensure DD exists
 	if _, err := h.usecase.Get(ctx, namespace, name); err != nil {
@@ -205,6 +225,10 @@ func (h *DataDescriptorHandler) ListAll(ctx context.Context, c *app.RequestConte
 		return
 	}
 
+	// Tenant namespace isolation: filter to only the namespaces bound to the
+	// active tenant. Platform admins and super admins see all.
+	descriptors = filterByTenantNamespaces(descriptors, func(d *entity.DataDescriptor) string { return d.Namespace }, c, h.logger)
+
 	sort.Slice(descriptors, func(i, j int) bool {
 		if descriptors[i].Namespace != descriptors[j].Namespace {
 			return descriptors[i].Namespace < descriptors[j].Namespace
@@ -229,6 +253,12 @@ func (h *DataDescriptorHandler) ListAll(ctx context.Context, c *app.RequestConte
 // List lists data descriptors
 func (h *DataDescriptorHandler) List(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	lo := parseLimitOffset(c, 50, 200)
 
 	opts := domain.ListOptions{
@@ -273,6 +303,11 @@ func (h *DataDescriptorHandler) List(ctx context.Context, c *app.RequestContext)
 func (h *DataDescriptorHandler) Update(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	var req dto.UpdateDataDescriptorRequest
 	if err := c.BindAndValidate(&req); err != nil {
@@ -343,6 +378,11 @@ func (h *DataDescriptorHandler) RequestResync(ctx context.Context, c *app.Reques
 	namespace := c.Param("namespace")
 	name := c.Param("name")
 
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	if err := h.usecase.RequestResync(ctx, namespace, name); err != nil {
 		h.logger.Error("failed to request data descriptor resync",
 			"namespace", namespace,
@@ -365,6 +405,11 @@ func (h *DataDescriptorHandler) Delete(ctx context.Context, c *app.RequestContex
 	namespace := c.Param("namespace")
 	name := c.Param("name")
 
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	if err := h.usecase.Delete(ctx, namespace, name); err != nil {
 		h.logger.Error("failed to delete data descriptor",
 			"namespace", namespace,
@@ -384,6 +429,11 @@ func (h *DataDescriptorHandler) Delete(ctx context.Context, c *app.RequestContex
 func (h *DataDescriptorHandler) SearchKnowledge(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	type searchReq struct {
 		Query string `json:"query" query:"query"`
@@ -416,6 +466,11 @@ func (h *DataDescriptorHandler) GetKnowledge(ctx context.Context, c *app.Request
 	namespace := c.Param("namespace")
 	name := c.Param("name")
 
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
 	results, err := h.usecase.GetAllKnowledge(ctx, namespace, name)
 	if err != nil {
 		h.logger.Error("failed to get all knowledge", "error", err)
@@ -433,6 +488,11 @@ func (h *DataDescriptorHandler) GetKnowledge(ctx context.Context, c *app.Request
 func (h *DataDescriptorHandler) DeleteKnowledge(ctx context.Context, c *app.RequestContext) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
 
 	type deleteReq struct {
 		DocumentIDs []string `json:"documents"`

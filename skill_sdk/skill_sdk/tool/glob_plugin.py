@@ -162,10 +162,7 @@ class GlobPlugin(ToolPlugin):
             path_opt = None
 
         if not pattern:
-            return json.dumps(
-                {"error": "pattern is required", "error_code": 1},
-                ensure_ascii=False,
-            )
+            return self._format_error("pattern is required", error_code=1)
 
         cwd = _working_directory()
         search_root = cwd
@@ -182,15 +179,9 @@ class GlobPlugin(ToolPlugin):
                         f"Directory does not exist: {path_opt}. {_FILE_NOT_FOUND_HINT} "
                         f"CWD is {cwd}."
                     )
-                    return json.dumps(
-                        {"error": msg, "error_code": 1},
-                        ensure_ascii=False,
-                    )
+                    return self._format_error(msg, error_code=1)
                 if not p.is_dir():
-                    return json.dumps(
-                        {"error": f"Path is not a directory: {path_opt}", "error_code": 2},
-                        ensure_ascii=False,
-                    )
+                    return self._format_error(f"Path is not a directory: {path_opt}", error_code=2)
                 search_root = str(p.resolve())
 
         limit_env = os.environ.get("SKILL_SDK_GLOB_MAX_RESULTS", "").strip()
@@ -208,9 +199,6 @@ class GlobPlugin(ToolPlugin):
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("glob failed")
-            return json.dumps(
-                {"error": f"Glob failed: {exc}", "error_code": 3},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"Glob failed: {exc}", error_code=3)
 
         return json.dumps(out, ensure_ascii=False)

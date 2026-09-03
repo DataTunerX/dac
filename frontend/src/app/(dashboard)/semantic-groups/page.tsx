@@ -222,7 +222,7 @@ const SEMANTIC_GROUPS_COLUMNS = [
 const SEMANTIC_GROUPS_DEPENDENT_COLUMNS = [
   { id: "agent", size: 240 },
   { id: "namespace", size: 112 },
-  { id: "actions", size: 112 },
+  { id: "actions", size: 176 },
 ] as const
 
 export default function SemanticGroupsPage() {
@@ -234,6 +234,8 @@ export default function SemanticGroupsPage() {
   const [checkingDependency, setCheckingDependency] = useState(false)
   const [dependentAgents, setDependentAgents] = useState<{ name: string; namespace: string }[]>([])
   const [showDependencyDialog, setShowDependencyDialog] = useState(false)
+  const [deletingAgentKey, setDeletingAgentKey] = useState<string | null>(null)
+  const [confirmDeleteAgent, setConfirmDeleteAgent] = useState<{ name: string; namespace: string } | null>(null)
 
   const rootsKey = useMemo(() => ["/semantic-groups/roots"] as const, [])
   const { data: listData, error: listError, isLoading, mutate: mutateList } = useSWR(
@@ -285,6 +287,47 @@ export default function SemanticGroupsPage() {
       setCheckingDependency(false)
     }
     setDeleteOpen(true)
+  }
+
+  const refreshDeleteDependencies = async () => {
+    if (!deleting?.id) return []
+    setCheckingDependency(true)
+    try {
+      const { items } = await listAgentsAll()
+      const deps = items.filter(
+        (a) => a.dataPolicy?.semanticGroupID === deleting.id
+      ).map((a) => ({ name: a.name, namespace: a.namespace }))
+      setDependentAgents(deps)
+      if (deps.length === 0) {
+        setShowDependencyDialog(false)
+        setDeleteOpen(true)
+      }
+      return deps
+    } catch (err) {
+      console.error("refresh group DAC dependencies failed", err)
+      return []
+    } finally {
+      setCheckingDependency(false)
+    }
+  }
+
+  const handleDeleteAgent = async () => {
+    if (!deleting || !confirmDeleteAgent) return
+    const agent = confirmDeleteAgent
+    const key = `${agent.namespace}/${agent.name}`
+    setDeletingAgentKey(key)
+    try {
+      await api.delete(`/namespaces/${encodeURIComponent(agent.namespace)}/agents/${encodeURIComponent(agent.name)}`)
+      toast.success(`智能体 ${agent.name} 已删除`)
+      setConfirmDeleteAgent(null)
+      await refreshDeleteDependencies()
+    } catch (err) {
+      console.error("delete agent failed", err)
+      const e = err as { response?: { data?: { message?: string } } }
+      toast.error(e.response?.data?.message || "删除智能体失败")
+    } finally {
+      setDeletingAgentKey(null)
+    }
   }
 
   const confirmDelete = async () => {
@@ -378,7 +421,7 @@ export default function SemanticGroupsPage() {
                       >
                         <Eye className="w-4 h-4" />
                       </Button>
-                      <RbacWrapper requiredRole="admin">
+                      <RbacWrapper requiredPermission="semantic-group:manage">
                         <Button
                           variant="ghost"
                           size="icon"
@@ -455,27 +498,61 @@ export default function SemanticGroupsPage() {
                       <TableCell columnId="agent" className="font-medium whitespace-normal break-all">{a.name}</TableCell>
                       <TableCell columnId="namespace" className="text-content-muted">{a.namespace}</TableCell>
                       <TableCell columnId="actions" className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setShowDependencyDialog(false)
-                            router.push(`/agents/${encodeURIComponent(a.namespace)}/${encodeURIComponent(a.name)}`)
-                          }}
-                          className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"
-                        >
-                          查看详情 →
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={Boolean(deletingAgentKey)}
+                            onClick={() => setConfirmDeleteAgent(a)}
+                            className="text-red-600 hover:text-red-700 whitespace-nowrap cursor-pointer"
+                          >
+                            {deletingAgentKey === `${a.namespace}/${a.name}` ? "删除中…" : "删除智能体"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setShowDependencyDialog(false)
+                              router.push(`/agents/${encodeURIComponent(a.namespace)}/${encodeURIComponent(a.name)}`)
+                            }}
+                            className="text-cta hover:text-cta/90 whitespace-nowrap cursor-pointer"
+                          >
+                            查看详情 →
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </TableWrapper>
-            <div className="text-sm text-content">请先删除这些智能体或修改其关联的语义组，然后再删除。</div>
+            <div className="text-sm text-content">可直接「删除智能体」解除引用后再删除语义组，也可先修改智能体关联的语义组。</div>
           </div>
           <AlertDialogFooter>
             <AlertDialogAction onClick={() => setShowDependencyDialog(false)}>知道了</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 删除智能体确认弹窗 */}
+      <AlertDialog open={!!confirmDeleteAgent} onOpenChange={(open) => !open && setConfirmDeleteAgent(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除智能体？</AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作将永久删除智能体「{confirmDeleteAgent?.name}」（{confirmDeleteAgent?.namespace}/{confirmDeleteAgent?.name}），
+              删除后该智能体对语义组的引用将被解除。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(deletingAgentKey)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void handleDeleteAgent()}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              disabled={Boolean(deletingAgentKey)}
+            >
+              {deletingAgentKey ? "删除中..." : "确认删除"}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

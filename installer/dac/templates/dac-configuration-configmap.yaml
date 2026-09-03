@@ -30,4 +30,10 @@ data:
   skill-cmd-timeout-sec: {{ .Values.executionEngine.skillCmdTimeoutSeconds | quote }}
   default-planner-llm: {{ .Values.executionEngine.dacConfig.defaultPlannerLLM | default "llm-default" | quote }}
   default-expert-llm: {{ .Values.executionEngine.dacConfig.defaultExpertLLM | default "llm-default" | quote }}
+  sg-member-capability-check-enabled: {{ .Values.executionEngine.dacConfig.memberCapabilityCheckEnabled | quote }}
+  sg-member-capability-check-shadow: {{ .Values.executionEngine.dacConfig.memberCapabilityCheckShadow | default false | quote }}
+  sg-member-capability-max-concurrency: {{ .Values.executionEngine.dacConfig.memberCapabilityMaxConcurrency | default 8 | quote }}
+  sg-member-capability-member-timeout-sec: {{ .Values.executionEngine.dacConfig.memberCapabilityMemberTimeoutSec | default 60 | quote }}
+  sg-member-capability-total-timeout-sec: {{ .Values.executionEngine.dacConfig.memberCapabilityTotalTimeoutSec | default 180 | quote }}
+  cross-sg-max-hop: {{ .Values.executionEngine.dacConfig.crossSGMaxHop | default "5" | quote }}
 {{- end }}

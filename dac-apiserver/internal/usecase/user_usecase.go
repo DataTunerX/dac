@@ -30,7 +30,7 @@ func NewUserUsecase(
 }
 
 // Register User registration
-func (u *userUsecase) Register(ctx context.Context, username, password string) (*entity.User, error) {
+func (u *userUsecase) Register(ctx context.Context, username, password string, email *string) (*entity.User, error) {
 	// 验证请求
 	if err := u.validateRegisterRequest(username, password); err != nil {
 		return nil, err
@@ -52,7 +52,7 @@ func (u *userUsecase) Register(ctx context.Context, username, password string) (
 	}
 
 	// createuser
-	user, err := u.userRepo.Create(ctx, username, passwordHash)
+	user, err := u.userRepo.Create(ctx, username, passwordHash, email)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
@@ -141,7 +141,39 @@ func (u *userUsecase) DeleteUser(ctx context.Context, userID string) error {
 	return nil
 }
 
+// UpdateUser 更新用户信息（邮箱或密码可任选其一或都更新）
+func (u *userUsecase) UpdateUser(ctx context.Context, userID string, email *string, password *string) (*entity.User, error) {
+	// 密码可选更新
+	var passwordHash *string
+	if password != nil && *password != "" {
+		if len(*password) < 6 {
+			return nil, domain.NewInvalidInputError("password must be at least 6 characters")
+		}
+		if len(*password) > 72 {
+			return nil, domain.NewInvalidInputError("password too long (max 72 characters)")
+		}
+		hash, err := hashPassword(*password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to hash password: %w", err)
+		}
+		passwordHash = &hash
+	}
+
+	if err := u.userRepo.UpdateUser(ctx, userID, email, passwordHash); err != nil {
+		return nil, fmt.Errorf("failed to update user: %w", err)
+	}
+
+	user, err := u.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	u.logger.Info("user updated successfully", "user_id", userID)
+	return user, nil
+}
+
 // SeedAdmin ensures that the admin user exists.
+// The role column is deprecated; the RBAC seed flow handles platform role grants.
 func (u *userUsecase) SeedAdmin(ctx context.Context) error {
 	const (
 		adminUsername = "admin"
@@ -149,16 +181,8 @@ func (u *userUsecase) SeedAdmin(ctx context.Context) error {
 	)
 
 	// Check if admin already exists
-	user, err := u.userRepo.GetByUsername(ctx, adminUsername)
+	_, err := u.userRepo.GetByUsername(ctx, adminUsername)
 	if err == nil {
-		// Admin exists, check and update role if necessary
-		if user.Role != "admin" {
-			if err := u.userRepo.UpdateRole(ctx, user.ID, "admin"); err != nil {
-				u.logger.Error("failed to update existing admin user role", "error", err)
-				return err
-			}
-			u.logger.Info("existing admin user role updated to admin")
-		}
 		return nil
 	}
 	if !domain.IsNotFound(err) {
@@ -172,15 +196,9 @@ func (u *userUsecase) SeedAdmin(ctx context.Context) error {
 		return fmt.Errorf("failed to hash admin password: %w", err)
 	}
 
-	// createuser
-	newUser, err := u.userRepo.Create(ctx, adminUsername, passwordHash)
+	_, err = u.userRepo.Create(ctx, adminUsername, passwordHash, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create admin user: %w", err)
-	}
-
-	// Update role to admin
-	if err := u.userRepo.UpdateRole(ctx, newUser.ID, "admin"); err != nil {
-		return fmt.Errorf("failed to set admin role: %w", err)
 	}
 
 	u.logger.Info("admin user created successfully", "username", adminUsername, "password", adminPassword)

@@ -197,10 +197,16 @@ export default function SkillMarketplacePage() {
   })
 
   const namespaces = useMemo(
-    () =>
-      (nsData?.items ?? [])
+    () => {
+      const raw = (nsData?.items ?? [])
         .map((n) => n.id?.trim())
-        .filter((id): id is string => Boolean(id)),
+        .filter((id): id is string => Boolean(id))
+      // Always include "default" — it holds public skills visible to all users
+      if (!raw.includes("default")) {
+        raw.unshift("default")
+      }
+      return raw
+    },
     [nsData]
   )
 
@@ -281,7 +287,7 @@ export default function SkillMarketplacePage() {
             disabled={nsLoading || namespaces.length === 0}
           >
             <SelectTrigger className="h-9 w-[min(12rem,45vw)] bg-surface">
-              <SelectValue placeholder={nsLoading ? "加载中…" : "命名空间"} />
+              <SelectValue placeholder={nsLoading ? "加载中…" : "技能命名空间"} />
             </SelectTrigger>
             <SelectContent align="end">
               {namespaces.map((ns) => (
@@ -315,7 +321,7 @@ export default function SkillMarketplacePage() {
         <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed border-line-hover bg-surface-muted">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Package className="h-10 w-10 opacity-20" />
-            <p>暂无命名空间，请先在「命名空间」中创建</p>
+            <p>暂无技能命名空间，请先在「技能命名空间」中创建</p>
           </div>
         </div>
       ) : loading ? (
@@ -326,7 +332,7 @@ export default function SkillMarketplacePage() {
         <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed border-line-hover bg-surface-muted">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <Package className="h-10 w-10 opacity-20" />
-            <p>{skills.length === 0 ? "当前命名空间暂无技能" : "没有匹配的技能"}</p>
+            <p>{skills.length === 0 ? "当前技能命名空间暂无技能" : "没有匹配的技能"}</p>
           </div>
         </div>
       ) : viewMode === "list" ? (
@@ -424,7 +430,7 @@ export default function SkillMarketplacePage() {
               {detailSkill?.name || "技能详情"}
             </DialogTitle>
             <DialogDescription>
-              命名空间{" "}
+              技能命名空间{" "}
               <span className="font-mono text-content">{detailSkill?.namespace}</span>
             </DialogDescription>
           </DialogHeader>
@@ -447,7 +453,7 @@ export default function SkillMarketplacePage() {
                 <DetailField label="名称">
                   <span className="font-medium break-all">{skillDetail.name}</span>
                 </DetailField>
-                <DetailField label="命名空间">
+                <DetailField label="技能命名空间">
                   <span className="font-mono">{skillDetail.namespace}</span>
                 </DetailField>
                 <DetailField label="描述">

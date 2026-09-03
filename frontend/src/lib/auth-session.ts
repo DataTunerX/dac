@@ -2,13 +2,19 @@
 export const AUTH_CHANGE_EVENT = "dac:auth-change"
 
 export type ClientSessionUser = {
-  role?: string
   username?: string
+  isSuper?: boolean
+  /** Platform-role codes (e.g. ["super_admin", "ops"]). */
+  platformRoles?: string[]
+  /** Every permission code the user holds (platform roles + tenant memberships). */
+  permissionCodes?: string[]
 }
 
 export type ClientSession = {
-  role: string
   username: string
+  isSuper: boolean
+  platformRoles: string[]
+  permissionCodes: string[]
 }
 
 let clientSession: ClientSession | null = null
@@ -28,10 +34,17 @@ function normalizeRelativePath(rawPath: string): string {
 }
 
 function normalizeSessionUser(user: ClientSessionUser): ClientSession {
-  const role =
-    typeof user.role === "string" && user.role.trim() ? user.role.trim() : "user"
   const username = typeof user.username === "string" ? user.username : ""
-  return { role, username }
+  return {
+    username,
+    isSuper: Boolean(user.isSuper),
+    platformRoles: Array.isArray(user.platformRoles)
+      ? user.platformRoles.filter((x): x is string => typeof x === "string")
+      : [],
+    permissionCodes: Array.isArray(user.permissionCodes)
+      ? user.permissionCodes.filter((x): x is string => typeof x === "string")
+      : [],
+  }
 }
 
 /** In-memory UX snapshot only — JWT lives in HttpOnly `dac_token` set by the backend. */
@@ -40,8 +53,29 @@ export function getClientSession(): ClientSession | null {
 }
 
 export function establishSession(user: ClientSessionUser): void {
-  clientSession = normalizeSessionUser(user)
+  const next = normalizeSessionUser(user)
+  // Avoid creating a new session object and notifying subscribers when
+  // the data is identical. This prevents unnecessary re-renders during
+  // focus/visibility revalidation.
+  if (
+    clientSession &&
+    clientSession.username === next.username &&
+    clientSession.isSuper === next.isSuper &&
+    arraysEqual(clientSession.platformRoles, next.platformRoles) &&
+    arraysEqual(clientSession.permissionCodes, next.permissionCodes)
+  ) {
+    return
+  }
+  clientSession = next
   notifyAuthChange()
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
 
 export function clearClientSession(): void {

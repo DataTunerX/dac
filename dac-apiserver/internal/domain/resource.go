@@ -56,6 +56,7 @@ type CreateAgentContainerRequest struct {
 	Model                     entity.ModelSpec
 	ExpertAgentMaxSteps       string
 	OrchestratorAgentMaxLoops string
+	SkillAgentMaxLoops        string
 }
 
 // UpdateAgentContainerRequest represents a request to update an agent container
@@ -68,6 +69,7 @@ type UpdateAgentContainerRequest struct {
 	Model                     *entity.ModelSpec
 	ExpertAgentMaxSteps       *string
 	OrchestratorAgentMaxLoops *string
+	SkillAgentMaxLoops        *string
 }
 
 // CreateDataDescriptorRequest represents a request to create a data descriptor

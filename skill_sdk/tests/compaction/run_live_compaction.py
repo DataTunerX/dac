@@ -240,7 +240,6 @@ async def test_live_runner_with_compaction(llm: Any) -> None:
         max_steps=3,
         compaction=config,
         use_skill_search=False,
-        empty_tool_retry=0,
     )
     skill = Skill(
         name="demo-compact",

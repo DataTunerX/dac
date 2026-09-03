@@ -7,8 +7,17 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lvyanru/dac-apiserver/internal/ent/discoveryjob"
+	"github.com/lvyanru/dac-apiserver/internal/ent/permission"
+	"github.com/lvyanru/dac-apiserver/internal/ent/platformrole"
+	"github.com/lvyanru/dac-apiserver/internal/ent/platformrolepermission"
+	"github.com/lvyanru/dac-apiserver/internal/ent/platformuserrole"
 	"github.com/lvyanru/dac-apiserver/internal/ent/run"
 	"github.com/lvyanru/dac-apiserver/internal/ent/schema"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenant"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenantnamespace"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenantrole"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenantrolepermission"
+	"github.com/lvyanru/dac-apiserver/internal/ent/tenantuser"
 	"github.com/lvyanru/dac-apiserver/internal/ent/user"
 )
 
@@ -40,6 +49,192 @@ func init() {
 	discoveryjobDescID := discoveryjobFields[0].Descriptor()
 	// discoveryjob.DefaultID holds the default value on creation for the id field.
 	discoveryjob.DefaultID = discoveryjobDescID.Default.(func() uuid.UUID)
+	permissionFields := schema.Permission{}.Fields()
+	_ = permissionFields
+	// permissionDescCode is the schema descriptor for code field.
+	permissionDescCode := permissionFields[1].Descriptor()
+	// permission.CodeValidator is a validator for the "code" field. It is called by the builders before save.
+	permission.CodeValidator = func() func(string) error {
+		validators := permissionDescCode.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(code string) error {
+			for _, fn := range fns {
+				if err := fn(code); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// permissionDescName is the schema descriptor for name field.
+	permissionDescName := permissionFields[2].Descriptor()
+	// permission.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	permission.NameValidator = func() func(string) error {
+		validators := permissionDescName.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(name string) error {
+			for _, fn := range fns {
+				if err := fn(name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// permissionDescResource is the schema descriptor for resource field.
+	permissionDescResource := permissionFields[3].Descriptor()
+	// permission.ResourceValidator is a validator for the "resource" field. It is called by the builders before save.
+	permission.ResourceValidator = func() func(string) error {
+		validators := permissionDescResource.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(resource string) error {
+			for _, fn := range fns {
+				if err := fn(resource); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// permissionDescAction is the schema descriptor for action field.
+	permissionDescAction := permissionFields[4].Descriptor()
+	// permission.ActionValidator is a validator for the "action" field. It is called by the builders before save.
+	permission.ActionValidator = func() func(string) error {
+		validators := permissionDescAction.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(action string) error {
+			for _, fn := range fns {
+				if err := fn(action); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// permissionDescHTTPMethod is the schema descriptor for http_method field.
+	permissionDescHTTPMethod := permissionFields[5].Descriptor()
+	// permission.DefaultHTTPMethod holds the default value on creation for the http_method field.
+	permission.DefaultHTTPMethod = permissionDescHTTPMethod.Default.(string)
+	// permissionDescHTTPPath is the schema descriptor for http_path field.
+	permissionDescHTTPPath := permissionFields[6].Descriptor()
+	// permission.HTTPPathValidator is a validator for the "http_path" field. It is called by the builders before save.
+	permission.HTTPPathValidator = func() func(string) error {
+		validators := permissionDescHTTPPath.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(http_path string) error {
+			for _, fn := range fns {
+				if err := fn(http_path); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// permissionDescCreatedAt is the schema descriptor for created_at field.
+	permissionDescCreatedAt := permissionFields[8].Descriptor()
+	// permission.DefaultCreatedAt holds the default value on creation for the created_at field.
+	permission.DefaultCreatedAt = permissionDescCreatedAt.Default.(func() time.Time)
+	// permissionDescUpdatedAt is the schema descriptor for updated_at field.
+	permissionDescUpdatedAt := permissionFields[9].Descriptor()
+	// permission.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	permission.DefaultUpdatedAt = permissionDescUpdatedAt.Default.(func() time.Time)
+	// permission.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	permission.UpdateDefaultUpdatedAt = permissionDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// permissionDescID is the schema descriptor for id field.
+	permissionDescID := permissionFields[0].Descriptor()
+	// permission.DefaultID holds the default value on creation for the id field.
+	permission.DefaultID = permissionDescID.Default.(func() uuid.UUID)
+	platformroleFields := schema.PlatformRole{}.Fields()
+	_ = platformroleFields
+	// platformroleDescCode is the schema descriptor for code field.
+	platformroleDescCode := platformroleFields[1].Descriptor()
+	// platformrole.CodeValidator is a validator for the "code" field. It is called by the builders before save.
+	platformrole.CodeValidator = func() func(string) error {
+		validators := platformroleDescCode.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(code string) error {
+			for _, fn := range fns {
+				if err := fn(code); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// platformroleDescName is the schema descriptor for name field.
+	platformroleDescName := platformroleFields[2].Descriptor()
+	// platformrole.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	platformrole.NameValidator = func() func(string) error {
+		validators := platformroleDescName.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(name string) error {
+			for _, fn := range fns {
+				if err := fn(name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// platformroleDescIsSuper is the schema descriptor for is_super field.
+	platformroleDescIsSuper := platformroleFields[3].Descriptor()
+	// platformrole.DefaultIsSuper holds the default value on creation for the is_super field.
+	platformrole.DefaultIsSuper = platformroleDescIsSuper.Default.(bool)
+	// platformroleDescCreatedAt is the schema descriptor for created_at field.
+	platformroleDescCreatedAt := platformroleFields[5].Descriptor()
+	// platformrole.DefaultCreatedAt holds the default value on creation for the created_at field.
+	platformrole.DefaultCreatedAt = platformroleDescCreatedAt.Default.(func() time.Time)
+	// platformroleDescUpdatedAt is the schema descriptor for updated_at field.
+	platformroleDescUpdatedAt := platformroleFields[6].Descriptor()
+	// platformrole.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	platformrole.DefaultUpdatedAt = platformroleDescUpdatedAt.Default.(func() time.Time)
+	// platformrole.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	platformrole.UpdateDefaultUpdatedAt = platformroleDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// platformroleDescID is the schema descriptor for id field.
+	platformroleDescID := platformroleFields[0].Descriptor()
+	// platformrole.DefaultID holds the default value on creation for the id field.
+	platformrole.DefaultID = platformroleDescID.Default.(func() uuid.UUID)
+	platformrolepermissionFields := schema.PlatformRolePermission{}.Fields()
+	_ = platformrolepermissionFields
+	// platformrolepermissionDescCreatedAt is the schema descriptor for created_at field.
+	platformrolepermissionDescCreatedAt := platformrolepermissionFields[3].Descriptor()
+	// platformrolepermission.DefaultCreatedAt holds the default value on creation for the created_at field.
+	platformrolepermission.DefaultCreatedAt = platformrolepermissionDescCreatedAt.Default.(func() time.Time)
+	// platformrolepermissionDescID is the schema descriptor for id field.
+	platformrolepermissionDescID := platformrolepermissionFields[0].Descriptor()
+	// platformrolepermission.DefaultID holds the default value on creation for the id field.
+	platformrolepermission.DefaultID = platformrolepermissionDescID.Default.(func() uuid.UUID)
+	platformuserroleFields := schema.PlatformUserRole{}.Fields()
+	_ = platformuserroleFields
+	// platformuserroleDescCreatedAt is the schema descriptor for created_at field.
+	platformuserroleDescCreatedAt := platformuserroleFields[3].Descriptor()
+	// platformuserrole.DefaultCreatedAt holds the default value on creation for the created_at field.
+	platformuserrole.DefaultCreatedAt = platformuserroleDescCreatedAt.Default.(func() time.Time)
+	// platformuserroleDescID is the schema descriptor for id field.
+	platformuserroleDescID := platformuserroleFields[0].Descriptor()
+	// platformuserrole.DefaultID holds the default value on creation for the id field.
+	platformuserrole.DefaultID = platformuserroleDescID.Default.(func() uuid.UUID)
 	runFields := schema.Run{}.Fields()
 	_ = runFields
 	// runDescCreatedAt is the schema descriptor for created_at field.
@@ -56,6 +251,166 @@ func init() {
 	runDescID := runFields[0].Descriptor()
 	// run.DefaultID holds the default value on creation for the id field.
 	run.DefaultID = runDescID.Default.(func() uuid.UUID)
+	tenantFields := schema.Tenant{}.Fields()
+	_ = tenantFields
+	// tenantDescCode is the schema descriptor for code field.
+	tenantDescCode := tenantFields[1].Descriptor()
+	// tenant.CodeValidator is a validator for the "code" field. It is called by the builders before save.
+	tenant.CodeValidator = func() func(string) error {
+		validators := tenantDescCode.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(code string) error {
+			for _, fn := range fns {
+				if err := fn(code); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// tenantDescName is the schema descriptor for name field.
+	tenantDescName := tenantFields[2].Descriptor()
+	// tenant.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	tenant.NameValidator = func() func(string) error {
+		validators := tenantDescName.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(name string) error {
+			for _, fn := range fns {
+				if err := fn(name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// tenantDescStatus is the schema descriptor for status field.
+	tenantDescStatus := tenantFields[3].Descriptor()
+	// tenant.DefaultStatus holds the default value on creation for the status field.
+	tenant.DefaultStatus = tenantDescStatus.Default.(string)
+	// tenantDescCreatedAt is the schema descriptor for created_at field.
+	tenantDescCreatedAt := tenantFields[5].Descriptor()
+	// tenant.DefaultCreatedAt holds the default value on creation for the created_at field.
+	tenant.DefaultCreatedAt = tenantDescCreatedAt.Default.(func() time.Time)
+	// tenantDescUpdatedAt is the schema descriptor for updated_at field.
+	tenantDescUpdatedAt := tenantFields[6].Descriptor()
+	// tenant.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	tenant.DefaultUpdatedAt = tenantDescUpdatedAt.Default.(func() time.Time)
+	// tenant.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	tenant.UpdateDefaultUpdatedAt = tenantDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// tenantDescID is the schema descriptor for id field.
+	tenantDescID := tenantFields[0].Descriptor()
+	// tenant.DefaultID holds the default value on creation for the id field.
+	tenant.DefaultID = tenantDescID.Default.(func() uuid.UUID)
+	tenantnamespaceFields := schema.TenantNamespace{}.Fields()
+	_ = tenantnamespaceFields
+	// tenantnamespaceDescNamespace is the schema descriptor for namespace field.
+	tenantnamespaceDescNamespace := tenantnamespaceFields[2].Descriptor()
+	// tenantnamespace.NamespaceValidator is a validator for the "namespace" field. It is called by the builders before save.
+	tenantnamespace.NamespaceValidator = func() func(string) error {
+		validators := tenantnamespaceDescNamespace.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(namespace string) error {
+			for _, fn := range fns {
+				if err := fn(namespace); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// tenantnamespaceDescCreatedAt is the schema descriptor for created_at field.
+	tenantnamespaceDescCreatedAt := tenantnamespaceFields[3].Descriptor()
+	// tenantnamespace.DefaultCreatedAt holds the default value on creation for the created_at field.
+	tenantnamespace.DefaultCreatedAt = tenantnamespaceDescCreatedAt.Default.(func() time.Time)
+	// tenantnamespaceDescID is the schema descriptor for id field.
+	tenantnamespaceDescID := tenantnamespaceFields[0].Descriptor()
+	// tenantnamespace.DefaultID holds the default value on creation for the id field.
+	tenantnamespace.DefaultID = tenantnamespaceDescID.Default.(func() uuid.UUID)
+	tenantroleFields := schema.TenantRole{}.Fields()
+	_ = tenantroleFields
+	// tenantroleDescCode is the schema descriptor for code field.
+	tenantroleDescCode := tenantroleFields[2].Descriptor()
+	// tenantrole.CodeValidator is a validator for the "code" field. It is called by the builders before save.
+	tenantrole.CodeValidator = func() func(string) error {
+		validators := tenantroleDescCode.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(code string) error {
+			for _, fn := range fns {
+				if err := fn(code); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// tenantroleDescName is the schema descriptor for name field.
+	tenantroleDescName := tenantroleFields[3].Descriptor()
+	// tenantrole.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	tenantrole.NameValidator = func() func(string) error {
+		validators := tenantroleDescName.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(name string) error {
+			for _, fn := range fns {
+				if err := fn(name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// tenantroleDescIsDefault is the schema descriptor for is_default field.
+	tenantroleDescIsDefault := tenantroleFields[4].Descriptor()
+	// tenantrole.DefaultIsDefault holds the default value on creation for the is_default field.
+	tenantrole.DefaultIsDefault = tenantroleDescIsDefault.Default.(bool)
+	// tenantroleDescCreatedAt is the schema descriptor for created_at field.
+	tenantroleDescCreatedAt := tenantroleFields[6].Descriptor()
+	// tenantrole.DefaultCreatedAt holds the default value on creation for the created_at field.
+	tenantrole.DefaultCreatedAt = tenantroleDescCreatedAt.Default.(func() time.Time)
+	// tenantroleDescUpdatedAt is the schema descriptor for updated_at field.
+	tenantroleDescUpdatedAt := tenantroleFields[7].Descriptor()
+	// tenantrole.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	tenantrole.DefaultUpdatedAt = tenantroleDescUpdatedAt.Default.(func() time.Time)
+	// tenantrole.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	tenantrole.UpdateDefaultUpdatedAt = tenantroleDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// tenantroleDescID is the schema descriptor for id field.
+	tenantroleDescID := tenantroleFields[0].Descriptor()
+	// tenantrole.DefaultID holds the default value on creation for the id field.
+	tenantrole.DefaultID = tenantroleDescID.Default.(func() uuid.UUID)
+	tenantrolepermissionFields := schema.TenantRolePermission{}.Fields()
+	_ = tenantrolepermissionFields
+	// tenantrolepermissionDescCreatedAt is the schema descriptor for created_at field.
+	tenantrolepermissionDescCreatedAt := tenantrolepermissionFields[3].Descriptor()
+	// tenantrolepermission.DefaultCreatedAt holds the default value on creation for the created_at field.
+	tenantrolepermission.DefaultCreatedAt = tenantrolepermissionDescCreatedAt.Default.(func() time.Time)
+	// tenantrolepermissionDescID is the schema descriptor for id field.
+	tenantrolepermissionDescID := tenantrolepermissionFields[0].Descriptor()
+	// tenantrolepermission.DefaultID holds the default value on creation for the id field.
+	tenantrolepermission.DefaultID = tenantrolepermissionDescID.Default.(func() uuid.UUID)
+	tenantuserFields := schema.TenantUser{}.Fields()
+	_ = tenantuserFields
+	// tenantuserDescCreatedAt is the schema descriptor for created_at field.
+	tenantuserDescCreatedAt := tenantuserFields[4].Descriptor()
+	// tenantuser.DefaultCreatedAt holds the default value on creation for the created_at field.
+	tenantuser.DefaultCreatedAt = tenantuserDescCreatedAt.Default.(func() time.Time)
+	// tenantuserDescID is the schema descriptor for id field.
+	tenantuserDescID := tenantuserFields[0].Descriptor()
+	// tenantuser.DefaultID holds the default value on creation for the id field.
+	tenantuser.DefaultID = tenantuserDescID.Default.(func() uuid.UUID)
 	userFields := schema.User{}.Fields()
 	_ = userFields
 	// userDescUsername is the schema descriptor for username field.
@@ -80,10 +435,10 @@ func init() {
 	userDescPasswordHash := userFields[2].Descriptor()
 	// user.PasswordHashValidator is a validator for the "password_hash" field. It is called by the builders before save.
 	user.PasswordHashValidator = userDescPasswordHash.Validators[0].(func(string) error)
-	// userDescRole is the schema descriptor for role field.
-	userDescRole := userFields[3].Descriptor()
-	// user.DefaultRole holds the default value on creation for the role field.
-	user.DefaultRole = userDescRole.Default.(string)
+	// userDescEmail is the schema descriptor for email field.
+	userDescEmail := userFields[3].Descriptor()
+	// user.EmailValidator is a validator for the "email" field. It is called by the builders before save.
+	user.EmailValidator = userDescEmail.Validators[0].(func(string) error)
 	// userDescCreatedAt is the schema descriptor for created_at field.
 	userDescCreatedAt := userFields[6].Descriptor()
 	// user.DefaultCreatedAt holds the default value on creation for the created_at field.

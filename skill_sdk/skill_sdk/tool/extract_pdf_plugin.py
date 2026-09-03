@@ -249,11 +249,11 @@ class ExtractPdfPlugin(ToolPlugin):
                 max_json_chars=int(kwargs.get("max_json_chars", 100000)),
             )
         except PdfToolError as exc:
-            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+            return self._format_error(str(exc))
         except ImportError as exc:
-            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+            return self._format_error(str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("extract_pdf failed")
-            return json.dumps({"error": f"extract_pdf failed: {exc}"}, ensure_ascii=False)
+            return self._format_error(f"extract_pdf failed: {exc}")
 
         return json.dumps(payload, ensure_ascii=False)

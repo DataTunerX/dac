@@ -175,6 +175,7 @@ func (r *agentContainerRepository) toUnstructured(container *entity.AgentContain
 			},
 			"expertAgentMaxSteps":       container.ExpertAgentMaxSteps,
 			"orchestratorAgentMaxLoops": container.OrchestratorAgentMaxLoops,
+			"skillAgentMaxLoops":        container.SkillAgentMaxLoops,
 		},
 	}
 
@@ -295,6 +296,7 @@ func (r *agentContainerRepository) fromUnstructured(unst *unstructured.Unstructu
 		},
 		ExpertAgentMaxSteps:       k8sContainer.Spec.ExpertAgentMaxSteps,
 		OrchestratorAgentMaxLoops: k8sContainer.Spec.OrchestratorAgentMaxLoops,
+		SkillAgentMaxLoops:        k8sContainer.Spec.SkillAgentMaxLoops,
 		ActiveDataDescriptors:     activeDDs,
 		Endpoint:              endpoint,
 		Conditions:            conditions,

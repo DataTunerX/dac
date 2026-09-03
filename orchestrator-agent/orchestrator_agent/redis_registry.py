@@ -1,4 +1,5 @@
 import json
+import os
 import redis
 import threading
 import time
@@ -144,30 +145,62 @@ class RedisRegistry:
             return []
 
     def cleanup_expired(self) -> int:
+        """Remove agents whose heartbeat is missing or older than HEARTBEAT_TIMEOUT_SEC.
+
+        Kept in sync with agent-registry.sweep semantics. Orchestrator does not
+        normally run CleanupService; agent-registry owns the sweep. This method
+        remains for tests / emergency tools.
+        """
         expired = 0
         logger.info("== Starting cleanup_expired ==")
 
         agent_urls = set(self.redis.hkeys(self.registry_key))
         heartbeat_urls = set(self.redis.zrange(self.heartbeat_key, 0, -1))
-
         all_urls = agent_urls.union(heartbeat_urls)
-        logger.info(f"Total agents to check: {len(all_urls)}")
+        logger.info("Total agents to check: %d", len(all_urls))
 
         current_time = datetime.now().timestamp()
-        heartbeat_timeout = 30
-        expired_agents = set()
+        raw = (
+            os.getenv("HEARTBEAT_TIMEOUT_SEC", "").strip()
+            or os.getenv("REGISTRY_HEARTBEAT_TIMEOUT_SEC", "").strip()
+            or "30"
+        )
+        try:
+            heartbeat_timeout = max(5.0, float(raw))
+        except ValueError:
+            heartbeat_timeout = 30.0
+        expired_agents: set[str] = set()
 
         for url in all_urls:
             last_heartbeat = self.redis.zscore(self.heartbeat_key, url)
-            heartbeat_expired = (last_heartbeat is not None) and (current_time - last_heartbeat > heartbeat_timeout)
+            if last_heartbeat is None:
+                logger.warning(
+                    "Expired agents heartbeat check | url=%s last_heartbeat=missing "
+                    "heartbeat_expired=True reason=missing_score",
+                    url,
+                )
+                expired_agents.add(url)
+                continue
 
-            readable_time = datetime.fromtimestamp(last_heartbeat).strftime('%Y-%m-%d %H:%M:%S')
-            logger.info(f"Expired agents heartbeat check， url:{url} , last_heartbeat : {readable_time},  {last_heartbeat}, heartbeat_expired={heartbeat_expired}")
+            age = current_time - float(last_heartbeat)
+            heartbeat_expired = age > heartbeat_timeout
+            readable_time = datetime.fromtimestamp(float(last_heartbeat)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            logger.info(
+                "Expired agents heartbeat check | url=%s last_heartbeat=%s age=%.1fs "
+                "timeout=%.1fs heartbeat_expired=%s",
+                url,
+                readable_time,
+                age,
+                heartbeat_timeout,
+                heartbeat_expired,
+            )
             if heartbeat_expired:
                 expired_agents.add(url)
 
-        logger.info(f"Expired agents count to clean: {len(expired_agents)}")
-        logger.info(f"Expired agents url to clean: {expired_agents}")
+        logger.info("Expired agents count to clean: %d", len(expired_agents))
+        logger.info("Expired agents url to clean: %s", expired_agents)
 
         if expired_agents:
             pipe = self.redis.pipeline()
@@ -177,7 +210,7 @@ class RedisRegistry:
                 pipe.delete(f"{self.registry_key}:{url}")
                 expired += 1
             pipe.execute()
-            logger.info(f"Cleaned {expired} expired agents")
+            logger.info("Cleaned %d expired agents", expired)
             self.agents = [a for a in self.agents if a.url not in expired_agents]
 
         return expired
@@ -407,10 +440,11 @@ class HeartbeatService(threading.Thread):
         logger.info("Heartbeat service stopped")
 
     def graceful_shutdown(self, agent_url: str = None):
+        """Stop heartbeats first, then unregister — avoids recover race on exit."""
+        self.stop()
         if agent_url:
             self.unregister_agent(agent_url)
         else:
-            for agent_url in list(self._agents.keys()):
-                self.unregister_agent(agent_url)
-            self.stop()
+            for url in list(self._agents.keys()):
+                self.unregister_agent(url)
         logger.info("Graceful shutdown completed")

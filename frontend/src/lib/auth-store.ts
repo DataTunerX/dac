@@ -31,19 +31,32 @@ async function hydrateFromServer(): Promise<void> {
     }
     const data = (await res.json()) as {
       authenticated?: boolean
-      role?: string
       username?: string
+      isSuper?: boolean
+      platformRoles?: string[]
+      permissionCodes?: string[]
     }
     if (data?.authenticated) {
-      establishSession({ role: data.role, username: data.username })
+      establishSession({
+        username: data.username,
+        isSuper: data.isSuper,
+        platformRoles: data.platformRoles,
+        permissionCodes: data.permissionCodes,
+      })
     } else {
       clearClientSession()
     }
   } catch {
     // Preserve the last confirmed snapshot and retry on the next focus/visibility event.
   } finally {
+    const wasHydrated = hydrated
     hydrated = true
-    notify()
+    // Only notify subscribers if this is the first hydration or if the
+    // session data actually changed (establishSession/clearClientSession
+    // already notify via AUTH_CHANGE_EVENT when data changes).
+    if (!wasHydrated) {
+      notify()
+    }
   }
 }
 
@@ -63,6 +76,17 @@ function revalidateSession() {
 
 function revalidateVisibleSession() {
   if (document.visibilityState !== "hidden") revalidateSession()
+}
+
+/**
+ * Force a re-hydration of the in-memory session snapshot (permission codes etc.)
+ * from GET /api/auth/session. Called by RBAC management mutations so permission
+ * changes made in one tab are reflected immediately instead of waiting for focus.
+ */
+export function revalidateAuthSession(): void {
+  if (typeof window === "undefined") return
+  ensureAttached()
+  void revalidateSession()
 }
 
 function ensureAttached() {

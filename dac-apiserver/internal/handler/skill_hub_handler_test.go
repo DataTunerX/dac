@@ -105,7 +105,7 @@ func newSkillHubTestHandler(uc domain.SkillHubUsecase) *SkillHubHandler {
 
 func TestSkillHubHandler_ListNamespaces(t *testing.T) {
 	uc := &stubSkillHubUC{
-		namespaces: []domain.SkillNamespace{{ID: "default", Visibility: "public"}},
+		namespaces: []domain.SkillNamespace{{ID: "team-a", Visibility: "public"}},
 	}
 	h := newSkillHubTestHandler(uc)
 	c := app.NewContext(0)
@@ -226,7 +226,7 @@ func TestSkillHubHandler_UploadSkill(t *testing.T) {
 	_ = w.Close()
 
 	c := app.NewContext(0)
-	c.Params = append(c.Params, param.Param{Key: "ns", Value: "default"})
+	c.Params = append(c.Params, param.Param{Key: "ns", Value: "team-a"})
 	c.Request.SetBody(buf.Bytes())
 	c.Request.Header.SetContentTypeBytes([]byte(w.FormDataContentType()))
 	c.Request.Header.SetMethod("POST")
@@ -251,7 +251,7 @@ func TestSkillHubHandler_UploadSkillRejectsNonZip(t *testing.T) {
 	_ = w.Close()
 
 	c := app.NewContext(0)
-	c.Params = append(c.Params, param.Param{Key: "ns", Value: "default"})
+	c.Params = append(c.Params, param.Param{Key: "ns", Value: "team-a"})
 	c.Request.SetBody(buf.Bytes())
 	c.Request.Header.SetContentTypeBytes([]byte(w.FormDataContentType()))
 
@@ -267,7 +267,7 @@ func TestSkillHubHandler_DeleteSkill(t *testing.T) {
 	h := newSkillHubTestHandler(uc)
 	c := app.NewContext(0)
 	c.Params = append(c.Params,
-		param.Param{Key: "ns", Value: "default"},
+		param.Param{Key: "ns", Value: "team-a"},
 		param.Param{Key: "name", Value: "hashgen"},
 	)
 	c.Request.SetQueryString("version=1.0.0")
@@ -277,7 +277,7 @@ func TestSkillHubHandler_DeleteSkill(t *testing.T) {
 	if c.Response.StatusCode() != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", c.Response.StatusCode(), c.Response.Body())
 	}
-	if uc.deleted != "default/hashgen@1.0.0" {
+	if uc.deleted != "team-a/hashgen@1.0.0" {
 		t.Fatalf("deleted=%q", uc.deleted)
 	}
 }
@@ -287,7 +287,7 @@ func TestSkillHubHandler_DeleteSkillNotFound(t *testing.T) {
 	h := newSkillHubTestHandler(uc)
 	c := app.NewContext(0)
 	c.Params = append(c.Params,
-		param.Param{Key: "ns", Value: "default"},
+		param.Param{Key: "ns", Value: "team-a"},
 		param.Param{Key: "name", Value: "missing"},
 	)
 

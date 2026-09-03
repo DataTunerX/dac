@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="zh-CN" suppressHydrationWarning className={`${firaCode.variable} ${firaSans.variable}`}>
       <body className="min-h-screen font-sans antialiased">
         {children}
-        <Toaster />
+        <Toaster richColors position="top-center" />
       </body>
     </html>
   )

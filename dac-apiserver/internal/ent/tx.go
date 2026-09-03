@@ -14,8 +14,26 @@ type Tx struct {
 	config
 	// DiscoveryJob is the client for interacting with the DiscoveryJob builders.
 	DiscoveryJob *DiscoveryJobClient
+	// Permission is the client for interacting with the Permission builders.
+	Permission *PermissionClient
+	// PlatformRole is the client for interacting with the PlatformRole builders.
+	PlatformRole *PlatformRoleClient
+	// PlatformRolePermission is the client for interacting with the PlatformRolePermission builders.
+	PlatformRolePermission *PlatformRolePermissionClient
+	// PlatformUserRole is the client for interacting with the PlatformUserRole builders.
+	PlatformUserRole *PlatformUserRoleClient
 	// Run is the client for interacting with the Run builders.
 	Run *RunClient
+	// Tenant is the client for interacting with the Tenant builders.
+	Tenant *TenantClient
+	// TenantNamespace is the client for interacting with the TenantNamespace builders.
+	TenantNamespace *TenantNamespaceClient
+	// TenantRole is the client for interacting with the TenantRole builders.
+	TenantRole *TenantRoleClient
+	// TenantRolePermission is the client for interacting with the TenantRolePermission builders.
+	TenantRolePermission *TenantRolePermissionClient
+	// TenantUser is the client for interacting with the TenantUser builders.
+	TenantUser *TenantUserClient
 	// User is the client for interacting with the User builders.
 	User *UserClient
 
@@ -150,7 +168,16 @@ func (tx *Tx) Client() *Client {
 
 func (tx *Tx) init() {
 	tx.DiscoveryJob = NewDiscoveryJobClient(tx.config)
+	tx.Permission = NewPermissionClient(tx.config)
+	tx.PlatformRole = NewPlatformRoleClient(tx.config)
+	tx.PlatformRolePermission = NewPlatformRolePermissionClient(tx.config)
+	tx.PlatformUserRole = NewPlatformUserRoleClient(tx.config)
 	tx.Run = NewRunClient(tx.config)
+	tx.Tenant = NewTenantClient(tx.config)
+	tx.TenantNamespace = NewTenantNamespaceClient(tx.config)
+	tx.TenantRole = NewTenantRoleClient(tx.config)
+	tx.TenantRolePermission = NewTenantRolePermissionClient(tx.config)
+	tx.TenantUser = NewTenantUserClient(tx.config)
 	tx.User = NewUserClient(tx.config)
 }
 

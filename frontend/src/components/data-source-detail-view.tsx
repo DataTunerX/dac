@@ -487,7 +487,7 @@ export function DataSourceDetailView() {
     setPromptsDetailError(null);
     setIsLoadingPromptsDetail(true);
     try {
-      const data = await getConfigMap(namespace, cmName);
+      const data = await getConfigMap(namespace, cmName, "prompts");
       setPromptsDetail((data?.data ?? {}) as UnknownRecord);
     } catch (e) {
       console.error("load prompts configmap failed", e);
@@ -779,7 +779,7 @@ export function DataSourceDetailView() {
             >
               <RefreshCw className={cn("w-4 h-4", isLoading && "animate-spin")} />
             </Button>
-            <RbacWrapper requiredRole="admin">
+            <RbacWrapper requiredPermission="descriptor:delete">
               <Button
                 variant="outline"
                 onClick={() => void openDeleteDialog()}

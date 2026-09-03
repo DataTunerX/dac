@@ -173,3 +173,10 @@ class AgentRegistryClient:
             endpoint = f"/agents?collection={quote(collection, safe='')}"
         response = await self._amake_request("GET", endpoint)
         return response.get("agent_cards", [])
+
+    async def adelete_agent(self, agent_url: str) -> Dict[str, Any]:
+        """Purge one agent card from the registry service (Redis + vector via watcher)."""
+        if not (agent_url or "").strip():
+            raise ValueError("agent_url is required")
+        endpoint = f"/agents?url={quote(agent_url.strip(), safe='')}"
+        return await self._amake_request("DELETE", endpoint)

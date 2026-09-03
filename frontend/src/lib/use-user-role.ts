@@ -1,28 +1,61 @@
 "use client"
 
 import { useSyncExternalStore } from "react"
-import { getUserRole } from "@/lib/auth"
 import { getClientSession } from "@/lib/auth-session"
 import { isAuthSessionHydrated, subscribeAuth } from "@/lib/auth-store"
 
-/**
- * Client-side role for UX gates only (in-memory session snapshot).
- * Authorization must be enforced by dac-apiserver / Casbin.
- *
- * Uses useSyncExternalStore + shared auth-store listeners so login/logout/hydrate/focus
- * refresh the role without remount, and N components share one listener set.
- * Server snapshot is "anonymous" to keep SSR/hydration deterministic.
- */
-export function useUserRole(): string {
-  return useSyncExternalStore(subscribeAuth, getUserRole, () => "anonymous")
+// Stable server snapshots for useSyncExternalStore's third argument.
+// React requires getServerSnapshot to return a stable reference;
+// returning anonymous objects/arrays inline causes infinite re-renders.
+const SERVER_HYDRATED = false as const
+const SERVER_USERNAME = "" as const
+const SERVER_PERM_CODES: string[] = []
+const SERVER_SUPER = false as const
+
+function getServerHydrated(): boolean {
+  return SERVER_HYDRATED
+}
+function getServerUsername(): string {
+  return SERVER_USERNAME
+}
+function getServerPermCodes(): string[] {
+  return SERVER_PERM_CODES
+}
+function getServerSuper(): boolean {
+  return SERVER_SUPER
+}
+
+// Memoised getSnapshot helpers — React requires both getSnapshot and
+// getServerSnapshot to return stable references across calls with the
+// same underlying state. Inline objects/arrays trigger infinite loops.
+let cachedPermCodes: string[] = []
+let cachedPermCodesSession: unknown = undefined
+
+function getPermissionCodesSnapshot(): string[] {
+  const session = getClientSession()
+  if (session === cachedPermCodesSession) return cachedPermCodes
+  cachedPermCodesSession = session
+  cachedPermCodes = session?.permissionCodes ?? []
+  return cachedPermCodes
+}
+
+let cachedSuper = false
+let cachedSuperSession: unknown = undefined
+
+function getSuperSnapshot(): boolean {
+  const session = getClientSession()
+  if (session === cachedSuperSession) return cachedSuper
+  cachedSuperSession = session
+  cachedSuper = Boolean(session?.isSuper)
+  return cachedSuper
 }
 
 /**
  * False during SSR / until /api/auth/session hydrate completes;
- * true afterward so cookie-backed role gates are safe to apply.
+ * true afterward so cookie-backed permission gates are safe to apply.
  */
 export function useAuthHydrated(): boolean {
-  return useSyncExternalStore(subscribeAuth, isAuthSessionHydrated, () => false)
+  return useSyncExternalStore(subscribeAuth, isAuthSessionHydrated, getServerHydrated)
 }
 
 function getAuthUsername(): string {
@@ -31,9 +64,24 @@ function getAuthUsername(): string {
 
 /** Username from in-memory session; empty on server / when logged out. */
 export function useAuthUsername(): string {
-  return useSyncExternalStore(subscribeAuth, getAuthUsername, () => "")
+  return useSyncExternalStore(subscribeAuth, getAuthUsername, getServerUsername)
 }
 
-export function useHasRole(requiredRole = "admin"): boolean {
-  return useUserRole() === requiredRole
+/** Every permission code in the session snapshot (reactive). */
+export function usePermissionCodes(): string[] {
+  return useSyncExternalStore(subscribeAuth, getPermissionCodesSnapshot, getServerPermCodes)
+}
+
+/** True after hydration when the user holds the permission (super admins pass all). */
+export function useHasPermission(requiredPermission?: string): boolean {
+  const codes = usePermissionCodes()
+  const isSuper = useSyncExternalStore(subscribeAuth, getSuperSnapshot, getServerSuper)
+  if (!requiredPermission) return true
+  if (isSuper) return true
+  return codes.includes(requiredPermission)
+}
+
+/** True when the session user is a super admin (reactive). */
+export function useIsSuper(): boolean {
+  return useSyncExternalStore(subscribeAuth, getSuperSnapshot, getServerSuper)
 }

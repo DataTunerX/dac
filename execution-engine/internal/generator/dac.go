@@ -37,29 +37,69 @@ type LLMConfig struct {
 
 // DACConfig
 type DACConfig struct {
-	ObservationBaseURL           string
-	ObservationSecretKey         string
-	ObservationPublicKey         string
-	RedisHost                    string
-	RedisPort                    string
-	RedisPassword                string
-	DataServicesURL              string
-	TDBBaseURL                   string
-	DSOrchestratorAgentRegistry  string
-	BIZOrchestratorAgentRegistry string
-	OrchestratorAgentImage       string
-	ExpertAgentImage             string
-	DSDataServicesImage          string
-	CodeAgentImage               string
-	DocAgentImage                string
-	DDSyncObserverImage          string
-	ImagePullPolicy              corev1.PullPolicy
+	ObservationBaseURL              string
+	ObservationSecretKey            string
+	ObservationPublicKey            string
+	RedisHost                       string
+	RedisPort                       string
+	RedisPassword                   string
+	DataServicesURL                 string
+	TDBBaseURL                      string
+	DSOrchestratorAgentRegistry     string
+	BIZOrchestratorAgentRegistry    string
+	OrchestratorAgentImage          string
+	ExpertAgentImage                string
+	DSDataServicesImage             string
+	CodeAgentImage                  string
+	DocAgentImage                   string
+	DDSyncObserverImage             string
+	ImagePullPolicy                 corev1.PullPolicy
+	SGMemberCapabilityEnabled       string
+	SGMemberCapabilityShadow        string
+	SGMemberCapabilityConcurrency   string
+	SGMemberCapabilityMemberTimeout string
+	SGMemberCapabilityTotalTimeout  string
 	// SkillAgentImage is used by dacType=skill single-container Deployments.
 	SkillAgentImage string
 	// SkillCmdTimeoutSeconds bounds a single skill subprocess. The skill-agent
 	// default is 30s, which is too short for skills that shell out to do real
 	// work (wwybsj-build runs registry writes and gateway verification).
 	SkillCmdTimeoutSeconds string
+	// CrossSGMaxHop is the maximum cross-SG delegation hops for skill agents.
+	CrossSGMaxHop string
+}
+
+// appendNonEmptyEnv appends env vars whose values are non-empty after trim.
+// Missing ConfigMap keys become "" and must not be injected, so agent-side
+// defaults (e.g. SG_MEMBER_CAPABILITY_CHECK_ENABLED=true) can take effect.
+func appendNonEmptyEnv(envs []corev1.EnvVar, items ...corev1.EnvVar) []corev1.EnvVar {
+	for _, item := range items {
+		if strings.TrimSpace(item.Value) == "" {
+			continue
+		}
+		envs = append(envs, item)
+	}
+	return envs
+}
+
+func memberCapabilityEnvs(dacConfig *DACConfig, includeCheckTimeout bool) []corev1.EnvVar {
+	if dacConfig == nil {
+		return nil
+	}
+	items := []corev1.EnvVar{
+		{Name: "SG_MEMBER_CAPABILITY_CHECK_ENABLED", Value: dacConfig.SGMemberCapabilityEnabled},
+		{Name: "SG_MEMBER_CAPABILITY_CHECK_SHADOW", Value: dacConfig.SGMemberCapabilityShadow},
+		{Name: "SG_MEMBER_CAPABILITY_MAX_CONCURRENCY", Value: dacConfig.SGMemberCapabilityConcurrency},
+		{Name: "SG_MEMBER_CAPABILITY_PER_MEMBER_TIMEOUT", Value: dacConfig.SGMemberCapabilityMemberTimeout},
+		{Name: "SG_MEMBER_CAPABILITY_TOTAL_TIMEOUT", Value: dacConfig.SGMemberCapabilityTotalTimeout},
+	}
+	if includeCheckTimeout {
+		items = append(items, corev1.EnvVar{
+			Name:  "SG_MEMBER_CAPABILITY_CHECK_TIMEOUT",
+			Value: dacConfig.SGMemberCapabilityTotalTimeout,
+		})
+	}
+	return appendNonEmptyEnv(nil, items...)
 }
 
 func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.DataAgentContainer) error {
@@ -274,6 +314,8 @@ func (h *DataAgentContainerGenerator) generateExpertAgentEnvs(dac *dacv1alpha1.D
 			Name:  "Enable_History",
 			Value: "enable",
 		})
+
+		envs = append(envs, memberCapabilityEnvs(dacConfig, false)...)
 	}
 
 	if dacConfig != nil {
@@ -398,6 +440,28 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 			Name:  "Enable_History",
 			Value: "enable",
 		})
+
+		envs = append(envs, memberCapabilityEnvs(dacConfig, true)...)
+
+		// Optional LocalSkill packs from skill-hub (skillPolicy on Semantic Group DACs).
+		if len(dac.Spec.SkillPolicy.Skills) > 0 {
+			skillsJSON, err := buildSkillsEnvJSON(dac)
+			if err != nil {
+				h.Logger.Error(err, "Failed to marshal skillPolicy for orchestrator SKILLS env; skipping download envs",
+					"namespace", dac.Namespace, "name", dac.Name)
+			} else {
+				envs = append(envs,
+					corev1.EnvVar{Name: "SKILLS", Value: skillsJSON},
+					corev1.EnvVar{Name: "SKILL_HUB_URL", Value: "http://skill-hub.dac.svc.cluster.local:8000"},
+					corev1.EnvVar{Name: "SKILLS_DOWNLOAD_DIR", Value: "/app/skills/"},
+					corev1.EnvVar{Name: "SKILL_DOWNLOAD_OVERWRITE", Value: "true"},
+					corev1.EnvVar{Name: "SKILL_DOWNLOAD_CONCURRENCY", Value: "8"},
+				)
+				h.Logger.Info("Orchestrator LocalSkill SKILLS env from skillPolicy",
+					"namespace", dac.Namespace, "name", dac.Name,
+					"skills", skillsJSON, "count", len(dac.Spec.SkillPolicy.Skills))
+			}
+		}
 	}
 
 	if dacConfig != nil {
@@ -436,6 +500,19 @@ func agentCardSkillsSHA256(dac *dacv1alpha1.DataAgentContainer) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// skillPolicySHA256 is a stable checksum of SkillPolicy for rolling Pods when LocalSkill bindings change.
+func skillPolicySHA256(dac *dacv1alpha1.DataAgentContainer) string {
+	if len(dac.Spec.SkillPolicy.Skills) == 0 {
+		return ""
+	}
+	skillsJSON, err := json.Marshal(dac.Spec.SkillPolicy.Skills)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(skillsJSON)
+	return hex.EncodeToString(sum[:])
+}
+
 func podTemplateObjectMeta(labels map[string]string, dac *dacv1alpha1.DataAgentContainer) metav1.ObjectMeta {
 	om := metav1.ObjectMeta{Labels: labels}
 	if dac.Spec.AgentCard.Skills != nil {
@@ -445,6 +522,12 @@ func podTemplateObjectMeta(labels map[string]string, dac *dacv1alpha1.DataAgentC
 			}
 			om.Annotations["dac.dac.io/skills-json-sha256"] = h
 		}
+	}
+	if h := skillPolicySHA256(dac); h != "" {
+		if om.Annotations == nil {
+			om.Annotations = map[string]string{}
+		}
+		om.Annotations["dac.dac.io/skill-policy-sha256"] = h
 	}
 	return om
 }
@@ -492,25 +575,31 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 	}
 
 	return &DACConfig{
-		ObservationBaseURL:           configMap.Data["observation-base-url"],
-		ObservationSecretKey:         configMap.Data["observation-secret-key"],
-		ObservationPublicKey:         configMap.Data["observation-public-key"],
-		RedisHost:                    configMap.Data["redis-host"],
-		RedisPort:                    configMap.Data["redis-port"],
-		RedisPassword:                configMap.Data["redis-password"],
-		DataServicesURL:              configMap.Data["data-services-url"],
-		TDBBaseURL:                   configMap.Data["tdb-url"],
-		BIZOrchestratorAgentRegistry: configMap.Data["biz-orchestrator-agent-registry"],
-		DSOrchestratorAgentRegistry:  configMap.Data["orchestrator-agent-registry"],
-		OrchestratorAgentImage:       configMap.Data["orchestrator-agent-image"],
-		ExpertAgentImage:             configMap.Data["expert-agent-image"],
-		DSDataServicesImage:          configMap.Data["ds-data-services-image"],
-		CodeAgentImage:               configMap.Data["code-agent-image"],
-		DocAgentImage:                configMap.Data["doc-agent-image"],
-		DDSyncObserverImage:          configMap.Data["dd-sync-observer-image"],
-		ImagePullPolicy:              corev1.PullPolicy(configMap.Data["image-pull-policy"]),
-		SkillAgentImage:              configMap.Data["skill-agent-image"],
-		SkillCmdTimeoutSeconds:       configMap.Data["skill-cmd-timeout-sec"],
+		ObservationBaseURL:              configMap.Data["observation-base-url"],
+		ObservationSecretKey:            configMap.Data["observation-secret-key"],
+		ObservationPublicKey:            configMap.Data["observation-public-key"],
+		RedisHost:                       configMap.Data["redis-host"],
+		RedisPort:                       configMap.Data["redis-port"],
+		RedisPassword:                   configMap.Data["redis-password"],
+		DataServicesURL:                 configMap.Data["data-services-url"],
+		TDBBaseURL:                      configMap.Data["tdb-url"],
+		BIZOrchestratorAgentRegistry:    configMap.Data["biz-orchestrator-agent-registry"],
+		DSOrchestratorAgentRegistry:     configMap.Data["orchestrator-agent-registry"],
+		OrchestratorAgentImage:          configMap.Data["orchestrator-agent-image"],
+		ExpertAgentImage:                configMap.Data["expert-agent-image"],
+		DSDataServicesImage:             configMap.Data["ds-data-services-image"],
+		CodeAgentImage:                  configMap.Data["code-agent-image"],
+		DocAgentImage:                   configMap.Data["doc-agent-image"],
+		DDSyncObserverImage:             configMap.Data["dd-sync-observer-image"],
+		ImagePullPolicy:                 corev1.PullPolicy(configMap.Data["image-pull-policy"]),
+		SGMemberCapabilityEnabled:       configMap.Data["sg-member-capability-check-enabled"],
+		SGMemberCapabilityShadow:        configMap.Data["sg-member-capability-check-shadow"],
+		SGMemberCapabilityConcurrency:   configMap.Data["sg-member-capability-max-concurrency"],
+		SGMemberCapabilityMemberTimeout: configMap.Data["sg-member-capability-member-timeout-sec"],
+		SGMemberCapabilityTotalTimeout:  configMap.Data["sg-member-capability-total-timeout-sec"],
+		SkillAgentImage:                 configMap.Data["skill-agent-image"],
+		SkillCmdTimeoutSeconds:          configMap.Data["skill-cmd-timeout-sec"],
+		CrossSGMaxHop:                   configMap.Data["cross-sg-max-hop"],
 	}, nil
 }
 
@@ -1615,6 +1704,11 @@ func (h *DataAgentContainerGenerator) generateSkillAgentArgs(dac *dacv1alpha1.Da
 		maxSteps = "20"
 	}
 
+	maxLoops := dac.Spec.SkillAgentMaxLoops
+	if maxLoops == "" {
+		maxLoops = "2"
+	}
+
 	return []string{
 		"--port", "10100",
 		"--redis-host", redisHost,
@@ -1626,6 +1720,7 @@ func (h *DataAgentContainerGenerator) generateSkillAgentArgs(dac *dacv1alpha1.Da
 		"--base-url", llmConfig.BaseURL,
 		"--model", llmConfig.Model,
 		"--max-steps", maxSteps,
+		"--max-loops", maxLoops,
 	}
 }
 
@@ -1680,6 +1775,7 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 			corev1.EnvVar{Name: "LANGFUSE_SECRET_KEY", Value: dacConfig.ObservationSecretKey},
 			corev1.EnvVar{Name: "LANGFUSE_PUBLIC_KEY", Value: dacConfig.ObservationPublicKey},
 		)
+		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: dacConfig.CrossSGMaxHop})
 	}
 	envs = appendEnableThinkingEnv(envs, llmConfig)
 
@@ -1708,7 +1804,7 @@ func (h *DataAgentContainerGenerator) GenerateSkillDataAgentContainerDeployment(
 	}
 
 	// Default matches design; override from dac-configuration when present.
-	skillAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:v0.11.0-amd64"
+	skillAgentImage := "registry.cn-shanghai.aliyuncs.com/jamesxiong/skill-agent:v0.12.0-amd64"
 	if dacConfig != nil && dacConfig.SkillAgentImage != "" {
 		skillAgentImage = dacConfig.SkillAgentImage
 	}

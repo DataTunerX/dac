@@ -119,8 +119,6 @@ async def main() -> None:
         llm=llm,
         max_steps=100,
         cmd_timeout_sec=60,
-        same_cmd_fail_budget=2,
-        total_fail_budget=3,
         make_plan_max_attempts=3,
         code_execution=build_code_execution(llm),
     )

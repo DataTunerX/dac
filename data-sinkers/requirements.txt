@@ -20,7 +20,7 @@ asyncpg~=0.30.0
 pymysql~=1.1.0 
 psycopg2-binary==2.9.9
 minio==7.2.3
-aiohttp==3.9.3
+aiohttp>=3.10.0
 langchain>=1.0.0
 langchain_community>=0.4.0
 langchain-core>=1.0.0

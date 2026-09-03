@@ -95,8 +95,8 @@ mysql:
       cpu: 200m
       memory: 512Mi
     limits:
-      cpu: 1000m
-      memory: 2Gi
+      cpu: 2000m
+      memory: 4Gi
 
 
   # -- External MySQL connection. When host is set, the built-in StatefulSet/
@@ -132,8 +132,8 @@ redis:
       cpu: 100m
       memory: 256Mi
     limits:
-      cpu: 500m
-      memory: 1Gi
+      cpu: 1000m
+      memory: 2Gi
 
   # -- External Redis connection. When host is set, the built-in StatefulSet/
   #    Service are not rendered and all consumers use these connection values.
@@ -175,8 +175,8 @@ pgvector:
       cpu: 200m
       memory: 512Mi
     limits:
-      cpu: 1000m
-      memory: 2Gi
+      cpu: 2000m
+      memory: 4Gi
 
   # -- External PostgreSQL/pgvector connection. When host is set, the built-in
   #    StatefulSet/Service are not rendered and all consumers use these values.
@@ -280,8 +280,8 @@ neo4j:
       cpu: 200m
       memory: 512Mi
     limits:
-      cpu: 1000m
-      memory: 2Gi
+      cpu: 2000m
+      memory: 4Gi
 
   # -- External Neo4j connection. When host is set, the built-in StatefulSet/
   #    Service are not rendered; bolt/neo4j URLs are built as bolt://host:boltPort
@@ -585,8 +585,8 @@ dataServices:
       cpu: 200m
       memory: 1Gi
     limits:
-      cpu: 1000m
-      memory: 2Gi
+      cpu: 2000m
+      memory: 4Gi
 
 # =============================================================================
 # Execution Engine - CRD-based Operator (manages DataAgentContainer / DataDescriptor)
@@ -668,6 +668,19 @@ executionEngine:
     observationBaseUrl: ""
     observationSecretKey: ""
     observationPublicKey: ""
+    # -- Delegate Semantic Group capability checks to member data agents.
+    memberCapabilityCheckEnabled: true
+    # -- Compare member-delegated and legacy group-summary checks while returning legacy.
+    memberCapabilityCheckShadow: false
+    # -- Maximum concurrent member capability probes per Semantic Group.
+    memberCapabilityMaxConcurrency: 8
+    # -- Timeout in seconds for one member capability probe.
+    memberCapabilityMemberTimeoutSec: 60
+    # -- Total timeout in seconds for all member capability probes (also used as SG Expert sidecar check timeout).
+    memberCapabilityTotalTimeoutSec: 180
+
+  # -- Maximum cross-SG delegation hops for skill agents (env: CROSS_SG_MAX_HOP)
+    crossSGMaxHop: "5"
 
   # -- dd-configuration ConfigMap values (read by DD controller)
   ddConfig:
@@ -817,14 +830,14 @@ bizRoutingAgent:
       cpu: 200m
       memory: 512Mi
     limits:
-      cpu: 1000m
-      memory: 2Gi
+      cpu: 2000m
+      memory: 4Gi
 
 # ---------------------------------------------------------------------------
 # biz-chart-agent - ECharts generation agent (agent mode, self-registers)
 # ---------------------------------------------------------------------------
 bizChartAgent:
-  enabled: true
+  enabled: false
   image:
     repository: chart-agent
     tag: "12-amd64"
@@ -901,6 +914,8 @@ bizSkillAgent:
     skillSyncInterval: "30"
     # -- Pull newly published skills in addition to configured startup skills.
     skillSyncWatchAll: "true"
+    # -- Maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP)
+    crossSGMaxHop: "5"
   service:
     type: ClusterIP
     # -- A2A protocol port

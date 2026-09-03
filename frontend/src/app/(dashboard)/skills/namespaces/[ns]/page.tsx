@@ -234,7 +234,7 @@ export default function SkillNamespaceDetailPage() {
 
   if (!namespace) {
     return (
-      <div className="p-8 text-sm text-content-muted">无效的命名空间</div>
+      <div className="p-8 text-sm text-content-muted">无效的技能命名空间</div>
     )
   }
 
@@ -242,7 +242,7 @@ export default function SkillNamespaceDetailPage() {
     <div className="space-y-6 p-4 sm:space-y-8 sm:p-6 lg:p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Button variant="ghost" size="icon" asChild aria-label="返回命名空间列表">
+          <Button variant="ghost" size="icon" asChild aria-label="返回技能命名空间列表">
             <Link href="/skills/namespaces">
               <ArrowLeft className="h-4 w-4" />
             </Link>
@@ -281,8 +281,7 @@ export default function SkillNamespaceDetailPage() {
             variant="outline"
             onClick={onUploadClick}
             disabled={uploading}
-            requiredRole="admin"
-            fallbackTitle="无权限：仅管理员可上传"
+            requiredPermission="skill:manage"
           >
             {uploading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -294,8 +293,7 @@ export default function SkillNamespaceDetailPage() {
           <RbacButton
             className="flex items-center gap-2"
             onClick={() => setCreateOpen(true)}
-            requiredRole="admin"
-            fallbackTitle="无权限：仅管理员可创建"
+            requiredPermission="skill:manage"
           >
             <Plus className="h-4 w-4" />
             创建技能
@@ -317,7 +315,7 @@ export default function SkillNamespaceDetailPage() {
             <Package className="h-10 w-10 opacity-20" />
             <p>
               {skills.length === 0
-                ? "该命名空间暂无技能，可创建或上传 .zip 技能包"
+                ? "该技能命名空间暂无技能，可创建或上传 .zip 技能包"
                 : "没有匹配的技能"}
             </p>
           </div>
@@ -377,7 +375,7 @@ export default function SkillNamespaceDetailPage() {
                             <Download className="h-4 w-4" />
                           )}
                         </Button>
-                        <RbacWrapper requiredRole="admin">
+                        <RbacWrapper requiredPermission="skill:manage">
                           <Button
                             variant="ghost"
                             size="icon"

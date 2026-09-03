@@ -117,6 +117,7 @@ class TestFormatLLMOutputDomain(unittest.TestCase):
         self.assertEqual(d.get("requery"), "")
         self.assertEqual(d.get("answer"), sql)
         self.assertEqual(d.get("reason_code"), "")
+        self.assertEqual(d.get("reason_detail"), "")
 
     def test_content_as_list_of_text_blocks_sql_fence(self) -> None:
         sql = "SELECT 1 AS one"

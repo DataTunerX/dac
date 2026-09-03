@@ -103,6 +103,14 @@ class RootMembershipReconciler(threading.Thread):
         self._is_registered = False
         self._last_status_sig: Optional[tuple[Optional[bool], Optional[str], bool]] = None
         self._check_count = 0
+        # Consecutive unknown-root failures before fail_close unregister.
+        # Prevents data-services blips from dropping a live card mid-request.
+        raw_streak = os.getenv("ROOT_RECONCILE_FAIL_STREAK", "3").strip() or "3"
+        try:
+            self._fail_streak_threshold = max(1, int(raw_streak))
+        except ValueError:
+            self._fail_streak_threshold = 3
+        self._unknown_fail_streak = 0
 
     def set_registered_state(self, value: bool):
         self._is_registered = value
@@ -172,12 +180,40 @@ class RootMembershipReconciler(threading.Thread):
                     )
 
                 if is_root is None:
-                    # Strict default: if root status is unknown and currently registered, remove it to avoid pollution.
-                    if self.root_check_fail_policy == "fail_close" and self._is_registered:
-                        self._unregister(reason=f"unknown_root_status:{reason}")
-                elif is_root and not self._is_registered and self.register_agent_enabled and self.auto_promote_root:
-                    self._register()
+                    self._unknown_fail_streak += 1
+                    # Strict default: only demote after consecutive unknowns, so a
+                    # single data-services timeout does not unregister a live root.
+                    if (
+                        self.root_check_fail_policy == "fail_close"
+                        and self._is_registered
+                        and self._unknown_fail_streak >= self._fail_streak_threshold
+                    ):
+                        self._unregister(
+                            reason=(
+                                f"unknown_root_status:{reason}"
+                                f"|streak={self._unknown_fail_streak}"
+                            )
+                        )
+                        self._unknown_fail_streak = 0
+                    elif self.root_check_fail_policy == "fail_close" and self._is_registered:
+                        logger.warning(
+                            "[RootReconcile] unknown root status held | streak=%d/%d "
+                            "reason=%s group_id=%s",
+                            self._unknown_fail_streak,
+                            self._fail_streak_threshold,
+                            reason,
+                            self.semantic_group_id,
+                        )
+                elif is_root:
+                    self._unknown_fail_streak = 0
+                    if (
+                        not self._is_registered
+                        and self.register_agent_enabled
+                        and self.auto_promote_root
+                    ):
+                        self._register()
                 elif (not is_root) and self._is_registered:
+                    self._unknown_fail_streak = 0
                     self._unregister(reason=f"group_became_non_root(parent_id={parent_id})")
 
             except Exception as e:
@@ -442,16 +478,27 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
                 reconciler.set_registered_state(registered_now)
                 reconciler.start()
 
-            def _graceful_shutdown():
-                if reconciler is not None:
-                    reconciler.stop()
-                if heartbeat_service is not None:
-                    heartbeat_service.graceful_shutdown(agent_card.url)
-                elif registry is not None:
-                    registry.graceful_shutdown(agent_card.url)
+            def _graceful_shutdown(*_args):
+                """Unregister on exit; stop reconciler/heartbeat before Redis delete."""
+                try:
+                    if reconciler is not None:
+                        reconciler.stop()
+                    if heartbeat_service is not None:
+                        # stop() first inside graceful_shutdown — no recover race
+                        heartbeat_service.graceful_shutdown(agent_card.url)
+                    elif registry is not None:
+                        registry.graceful_shutdown(agent_card.url)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Graceful shutdown error: %s", exc, exc_info=True)
 
-            signal.signal(signal.SIGTERM, lambda s, f: _graceful_shutdown())
-            signal.signal(signal.SIGINT, lambda s, f: _graceful_shutdown())  # Ctrl+C
+            def _signal_handler(signum, frame):
+                logger.info("Received signal %s — unregistering agent then exiting", signum)
+                _graceful_shutdown()
+                # Force process exit so uvicorn does not keep serving after demotion.
+                raise SystemExit(0)
+
+            signal.signal(signal.SIGTERM, _signal_handler)
+            signal.signal(signal.SIGINT, _signal_handler)
             atexit.register(_graceful_shutdown)
 
         httpx_client = httpx.AsyncClient()

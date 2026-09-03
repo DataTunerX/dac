@@ -18,7 +18,7 @@ import {
 import type { DataDescriptorResponse, DataSourceResponse } from "@/lib/api-types"
 import { validateSystemLlmConfigMaps } from "@/lib/system-config-meta"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
-import { useAuthHydrated, useHasRole } from "@/lib/use-user-role"
+import { useAuthHydrated, useIsSuper } from "@/lib/use-user-role"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -265,7 +265,7 @@ function LinkedServiceActions({
 }) {
   const linkedLabel = linkedCount > 0 ? `已关联 · ${linkedCount}` : "已关联"
   const authHydrated = useAuthHydrated()
-  const canAppendAsAdmin = useHasRole("admin")
+  const canAppendAsAdmin = useIsSuper()
   const appendEnabled = authHydrated && canAppendAsAdmin
 
   if (!canAppend) {
@@ -658,7 +658,7 @@ export default function InfraDiscoveryDetailPage() {
               <RefreshCw className={cn("w-4 h-4 mr-2", (isPolling || isValidating) && "animate-spin")} />
               刷新
             </Button>
-            <RbacWrapper requiredRole="admin">
+            <RbacWrapper requiredPermission="discovery:manage">
               <Button variant="outline" onClick={() => setIsDeleteOpen(true)} className="bg-surface hover:bg-red-50 hover:text-red-600 hover:border-red-200">
                 <Trash2 className="w-4 h-4 mr-2" />
                 删除
@@ -837,8 +837,7 @@ export default function InfraDiscoveryDetailPage() {
                                   size="sm"
                                   onClick={() => openCreateFromService(s)}
                                   className="h-8 bg-btn-primary hover:bg-btn-primary-hover text-content-inverse"
-                                  requiredRole="admin"
-                                  fallbackTitle="无权限：仅管理员可创建数据源"
+                                  requiredPermission="descriptor:create"
                                 >
                                   创建数据源
                                 </RbacButton>

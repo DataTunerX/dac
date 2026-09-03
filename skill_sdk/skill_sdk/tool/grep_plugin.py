@@ -1003,7 +1003,7 @@ class GrepPlugin(ToolPlugin):
         inp = GrepInput.model_validate(kwargs)
         pattern = inp.pattern.strip()
         if not pattern:
-            return json.dumps({"error": "pattern is required", "error_code": 1}, ensure_ascii=False)
+            return self._format_error("pattern is required", error_code=1)
 
         cwd = _working_directory()
         path_opt = inp.path
@@ -1025,7 +1025,7 @@ class GrepPlugin(ToolPlugin):
                         f"Path does not exist: {inp.path}. "
                         f"If the path is relative, it resolves against CWD ({cwd})."
                     )
-                    return json.dumps({"error": msg, "error_code": 1}, ensure_ascii=False)
+                    return self._format_error(msg, error_code=1)
                 search_root = str(p.resolve())
 
         om = inp.output_mode or "files_with_matches"
@@ -1057,19 +1057,14 @@ class GrepPlugin(ToolPlugin):
         elif om == "content":
             pattern, pattern_notes = _narrow_content_pattern(pattern)
             if not pattern:
-                return json.dumps(
-                    {
-                        "error": (
-                            "grep content pattern too broad after narrowing "
-                            "(bare short words / short path stubs / short CLI flags). "
-                            "Retry with ≤6 specific tokens: unique symbol names, "
-                            "compound ids, protocol strings — "
-                            "use documentSymbol for language outlines."
-                        ),
-                        "error_code": 1,
-                        "hint": "; ".join(pattern_notes),
-                    },
-                    ensure_ascii=False,
+                return self._format_error(
+                    "grep content pattern too broad after narrowing "
+                    "(bare short words / short path stubs / short CLI flags). "
+                    "Retry with ≤6 specific tokens: unique symbol names, "
+                    "compound ids, protocol strings — "
+                    "use documentSymbol for language outlines.",
+                    error_code=1,
+                    hint="; ".join(pattern_notes),
                 )
 
         glob_eff, file_type_eff, filter_notes = _resolve_grep_filters(
@@ -1101,10 +1096,10 @@ class GrepPlugin(ToolPlugin):
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("grep failed")
-            return json.dumps({"error": f"grep failed: {exc}", "error_code": 3}, ensure_ascii=False)
+            return self._format_error(f"grep failed: {exc}", error_code=3)
 
         if "error" in out:
-            return json.dumps({"error": out["error"], "error_code": 2}, ensure_ascii=False)
+            return self._format_error(str(out["error"]), error_code=2)
 
         out["durationMs"] = int((time.perf_counter() - t0) * 1000)
         if pattern_notes:

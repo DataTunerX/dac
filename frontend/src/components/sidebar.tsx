@@ -13,6 +13,7 @@ import {
   Layers,
   Globe,
   Package,
+  ShieldCheck,
   ChevronRight,
   X,
   Menu,
@@ -26,12 +27,16 @@ import type { ConversationResponse } from "@/lib/api-types"
 import { format, startOfDay, subDays } from "date-fns"
 import { REFRESH_CHAT_LIST_EVENT, NewChatEventDetail } from "@/lib/events"
 import { selectStreamingRunIds, useChatStore } from "@/lib/chat-store"
+import { hasPermissions, hasAnyPermission } from "@/lib/auth"
+import { useAuthHydrated, usePermissionCodes } from "@/lib/use-user-role"
 
 type SidebarLinkItem = {
   type: "link"
   icon: LucideIcon
   label: string
   href: string
+  /** Optional RBAC permission code; when set the item only shows if the user holds it. */
+  requiredPermission?: string
 }
 
 type SidebarGroupItem = {
@@ -40,19 +45,21 @@ type SidebarGroupItem = {
   label: string
   /** Paths that keep this group expanded / in-section (supports multiple route roots). */
   sectionPaths: string[]
-  children: { label: string; href: string; icon?: LucideIcon }[]
+  children: { label: string; href: string; icon?: LucideIcon; requiredPermission?: string }[]
+  /** When set, the whole group (header + children) is hidden unless the user holds it. */
+  requiredPermission?: string
 }
 
 const sidebarNav: Array<SidebarLinkItem | SidebarGroupItem> = [
-  { type: "link", icon: Bot, label: "智能体", href: "/agents" },
+  { type: "link", icon: Bot, label: "智能体", href: "/agents", requiredPermission: "agent:read" },
   {
     type: "group",
     icon: Package,
     label: "技能中心",
     sectionPaths: ["/skills"],
     children: [
-      { label: "技能市场", href: "/skills/marketplace" },
-      { label: "命名空间", href: "/skills/namespaces" },
+      { label: "技能市场", href: "/skills/marketplace", requiredPermission: "" },
+      { label: "技能命名空间", href: "/skills/namespaces", requiredPermission: "skill:namespace:read|skill:namespace:manage" },
     ],
   },
   {
@@ -61,22 +68,36 @@ const sidebarNav: Array<SidebarLinkItem | SidebarGroupItem> = [
     label: "数据管理",
     sectionPaths: ["/datasources", "/tdb-pipeline", "/configmaps?type=prompts"],
     children: [
-      { label: "数据源", href: "/datasources" },
-      { label: "TDB 入库", href: "/tdb-pipeline" },
-      { label: "提示词", href: "/configmaps?type=prompts" },
+      { label: "数据源", href: "/datasources", requiredPermission: "datasource:probe-types" },
+      // No RBAC permission code exists for the TDB pipeline yet; "" keeps it
+      // visible to everyone, matching 技能市场.
+      { label: "TDB 入库", href: "/tdb-pipeline", requiredPermission: "" },
+      { label: "提示词", href: "/configmaps?type=prompts", requiredPermission: "promptconfig:read" },
     ],
   },
-  { type: "link", icon: Layers, label: "语义组", href: "/semantic-groups" },
-  { type: "link", icon: Network, label: "资产探测", href: "/infra" },
-  { type: "link", icon: Settings2, label: "模型管理", href: "/configmaps" },
+  { type: "link", icon: Layers, label: "语义组", href: "/semantic-groups", requiredPermission: "semantic-group:read|semantic-group:manage" },
+  { type: "link", icon: Network, label: "资产探测", href: "/infra", requiredPermission: "discovery:read|discovery:manage" },
+  { type: "link", icon: Settings2, label: "模型管理", href: "/configmaps", requiredPermission: "llmconfig:read" },
   {
     type: "group",
     icon: Globe,
     label: "全局管理",
     sectionPaths: ["/system-config", "/observability"],
     children: [
-      { label: "注册中心", href: "/observability/registry" },
-      { label: "模版中心", href: "/system-config/templates" },
+      { label: "注册中心", href: "/observability/registry", requiredPermission: "observability:read|observability:manage" },
+      { label: "模版中心", href: "/system-config/templates", requiredPermission: "system:config:read|system:config:manage" },
+    ],
+  },
+  {
+    type: "group",
+    icon: ShieldCheck,
+    label: "权限管理",
+    sectionPaths: ["/rbac"],
+    children: [
+      { label: "租户管理", href: "/rbac/tenants", requiredPermission: "tenant:read|tenant:manage" },
+      { label: "角色管理", href: "/rbac/roles", requiredPermission: "platform:role:read|platform:role:manage" },
+      { label: "用户管理", href: "/rbac/users", requiredPermission: "user:read|user:manage" },
+      { label: "权限点", href: "/rbac/permissions", requiredPermission: "permission:read" },
     ],
   },
 ]
@@ -242,8 +263,19 @@ function SidebarNavGroup({
   onNavigate: () => void
 }) {
   const searchParams = useSearchParams()
+  const hydrated = useAuthHydrated()
+  const permissionCodes = usePermissionCodes()
+
+  // A child with a requiredPermission is filtered out unless the user holds it.
+  // Pre-hydration the whole group is hidden to avoid permission flash.
+  const visibleChildren = item.children.filter((child) => {
+    if (!child.requiredPermission) return true
+    const codes = child.requiredPermission.split("|")
+    return hasAnyPermission(codes)
+  })
+
   const inSection = item.sectionPaths.some((p) => isSidebarNavActive(p, pathname, searchParams))
-  const hasActiveChild = item.children.some((child) =>
+  const hasActiveChild = visibleChildren.some((child) =>
     isSidebarNavActive(child.href, pathname, searchParams)
   )
   const [open, setOpen] = useState(inSection)
@@ -251,6 +283,8 @@ function SidebarNavGroup({
   useEffect(() => {
     if (inSection) setOpen(true)
   }, [inSection])
+
+  if (!hydrated || visibleChildren.length === 0) return null
 
   // 子项选中时父级仅展开，不占用选中态（避免双高亮）
   const parentSelected = inSection && !hasActiveChild
@@ -287,7 +321,7 @@ function SidebarNavGroup({
       </button>
       {open ? (
         <div className="space-y-0.5 pt-0.5">
-          {item.children.map((child) => {
+          {visibleChildren.map((child) => {
             const childActive = isSidebarNavActive(child.href, pathname, searchParams)
             return (
               <Link
@@ -417,6 +451,8 @@ export function Sidebar() {
   const searchParams = useSearchParams()
   const [isMobileOpen, setIsMobileOpen] = useState(false)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const hydrated = useAuthHydrated()
+  const permissionCodes = usePermissionCodes()
 
   // Close mobile drawer on route change
   useEffect(() => {
@@ -469,6 +505,9 @@ export function Sidebar() {
         <div className="space-y-1">
           {sidebarNav.map((item) => {
             if (item.type === "link") {
+              if (item.requiredPermission && !hasAnyPermission(item.requiredPermission.split("|"))) {
+                return null
+              }
               const active = isSidebarNavActive(item.href, pathname, searchParams)
               return (
                 <Link

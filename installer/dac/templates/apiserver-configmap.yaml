@@ -52,27 +52,6 @@ data:
     skill_hub:
       timeout: 120s
 
-    # TDB pipeline controller (runs outside DAC, on the fw-worker cluster).
-    # `targets` is DAC's copy of the controller's domain-config allowlist: the
-    # controller exposes no endpoint for it. Each gateway is the same TDB the
-    # matching domain skill agent queries, so ingestion and Q&A share one TDB.
-    # Keys under targets/defaults are snake_case because they are passed to the
-    # apiserver config verbatim.
-    tdb_pipeline:
-      base_url: {{ .Values.apiserver.config.tdbPipeline.baseUrl | quote }}
-      caller_id: {{ .Values.apiserver.config.tdbPipeline.callerId | quote }}
-      timeout: {{ .Values.apiserver.config.tdbPipeline.timeout | quote }}
-      llm_profiles:
-        {{- toYaml .Values.apiserver.config.tdbPipeline.llmProfiles | nindent 8 }}
-      images:
-        {{- toYaml .Values.apiserver.config.tdbPipeline.images | nindent 8 }}
-      skill:
-        {{- toYaml .Values.apiserver.config.tdbPipeline.skill | nindent 8 }}
-      defaults:
-        {{- toYaml .Values.apiserver.config.tdbPipeline.defaults | nindent 8 }}
-      targets:
-        {{- toYaml .Values.apiserver.config.tdbPipeline.targets | nindent 8 }}
-
     database:
       driver: "mysql"
       host: {{ include "dac.mysql.host" . | quote }}
@@ -83,51 +62,4 @@ data:
       max_open_conns: {{ .Values.apiserver.config.database.maxOpenConns }}
       max_idle_conns: {{ .Values.apiserver.config.database.maxIdleConns }}
       conn_max_lifetime: {{ .Values.apiserver.config.database.connMaxLifetime }}
-
-  model.conf: |
-    [request_definition]
-    r = sub, obj, act
-
-    [policy_definition]
-    p = sub, obj, act
-
-    [role_definition]
-    g = _, _
-
-    [policy_effect]
-    e = some(where (p.eft == allow))
-
-    [matchers]
-    m = g(r.sub, p.sub) && keyMatch2(r.obj, p.obj) && (p.act == "*" || r.act == p.act)
-
-  policy.csv: |
-    p, admin, *, *
-    p, user, /api/v1/users/me, GET
-    p, user, /api/v1/chat/conversations, GET
-    p, user, /api/v1/chat/conversations/*, GET
-    p, user, /api/v1/agents, GET
-    p, user, /api/v1/descriptors, GET
-    p, user, /api/v1/namespaces, GET
-    p, user, /api/v1/namespaces/*/agents, GET
-    p, user, /api/v1/namespaces/*/agents/*, GET
-    p, user, /api/v1/namespaces/*/descriptors, GET
-    p, user, /api/v1/namespaces/*/descriptors/*, GET
-    p, user, /api/v1/namespaces/*/configmaps, GET
-    p, user, /api/v1/namespaces/*/configmaps/*, GET
-    p, user, /api/v1/semantic-groups, GET
-    p, user, /api/v1/semantic-groups/*, GET
-    p, user, /api/v1/discovery/scans, GET
-    p, user, /api/v1/discovery/scans/*, GET
-    p, user, /api/v1/knowledge-graph/*, POST
-    p, user, /api/v1/skills/namespaces, GET
-    p, user, /api/v1/skills/namespaces/*/exists, GET
-    p, user, /api/v1/skills/namespaces/*/skills, GET
-    p, user, /api/v1/skills/namespaces/*/skills/*/download, GET
-    p, user, /api/v1/tdb-pipeline/options, GET
-    p, user, /api/v1/tdb-pipeline/runs, GET
-    p, user, /api/v1/tdb-pipeline/runs/*, GET
-    p, user, /v1/chat/completions, POST
-
-    g, admin, admin
-    g, user, user
 {{- end }}

@@ -11,7 +11,7 @@ import (
 // UserRepository user数据访问interface
 type UserRepository interface {
 	// Create createuser
-	Create(ctx context.Context, username, passwordHash string) (*entity.User, error)
+	Create(ctx context.Context, username, passwordHash string, email *string) (*entity.User, error)
 
 	// GetByUsername based onuser名查找（用于登录）
 	GetByUsername(ctx context.Context, username string) (*entity.User, error)
@@ -31,8 +31,8 @@ type UserRepository interface {
 	// UpdateLastLogin 更new最后登录时间
 	UpdateLastLogin(ctx context.Context, userID string) error
 
-	// UpdateRole updates the user's role
-	UpdateRole(ctx context.Context, userID, role string) error
+	// UpdateUser 更新用户信息（邮箱、密码）
+	UpdateUser(ctx context.Context, userID string, email *string, passwordHash *string) error
 }
 
 // ============ Usecase interface ============
@@ -40,7 +40,7 @@ type UserRepository interface {
 // UserUsecase user业务逻辑interface
 type UserUsecase interface {
 	// Register User registration
-	Register(ctx context.Context, username, password string) (*entity.User, error)
+	Register(ctx context.Context, username, password string, email *string) (*entity.User, error)
 
 	// Login User login验证（返回User information）
 	Login(ctx context.Context, username, password string) (*entity.User, error)
@@ -53,6 +53,9 @@ type UserUsecase interface {
 
 	// DeleteUser Delete user
 	DeleteUser(ctx context.Context, userID string) error
+
+	// UpdateUser 更新用户信息（邮箱、密码）
+	UpdateUser(ctx context.Context, userID string, email *string, password *string) (*entity.User, error)
 
 	// SeedAdmin ensures an admin user exists
 	SeedAdmin(ctx context.Context) error

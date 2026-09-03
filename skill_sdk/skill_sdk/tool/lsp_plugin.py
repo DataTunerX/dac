@@ -1414,13 +1414,10 @@ class LspPlugin(ToolPlugin):
         # ---- validate operation ------------------------------------------------
         operation_raw = kwargs.get("operation", "")
         if not _is_valid_operation(operation_raw):
-            return json.dumps(
-                {
-                    "error": f"Invalid operation: {operation_raw!r}. "
-                    f"Valid operations: {', '.join(ALL_OPERATIONS)}",
-                    "error_code": 3,
-                },
-                ensure_ascii=False,
+            return self._format_error(
+                f"Invalid operation: {operation_raw!r}. "
+                f"Valid operations: {', '.join(ALL_OPERATIONS)}",
+                error_code=3,
             )
         operation: Operation = operation_raw  # type: ignore[assignment]
 
@@ -1434,44 +1431,27 @@ class LspPlugin(ToolPlugin):
         if operation == "workspaceSymbol":
             manager = _get_or_create_manager()
             if manager is None:
-                return json.dumps(
-                    {"error": "LSP server manager not initialized", "error_code": 5},
-                    ensure_ascii=False,
-                )
+                return self._format_error("LSP server manager not initialized", error_code=5)
 
             seed = _resolve_workspace_symbol_seed(manager, file_path)
             if seed is None:
-                return json.dumps(
-                    {
-                        "error": (
-                            "workspaceSymbol could not select an LSP server. "
-                            "Pass file_path as the workspace root directory or any source file, "
-                            "or set WORKSPACE_FOLDER / SKILL_SDK_LSP_SERVERS workspaceFolder."
-                        ),
-                        "error_code": 1,
-                    },
-                    ensure_ascii=False,
+                return self._format_error(
+                    "workspaceSymbol could not select an LSP server. "
+                    "Pass file_path as the workspace root directory or any source file, "
+                    "or set WORKSPACE_FOLDER / SKILL_SDK_LSP_SERVERS workspaceFolder.",
+                    error_code=1,
                 )
             if file_path.strip():
                 provided = Path(os.path.abspath(os.path.expanduser(file_path.strip())))
                 if not provided.exists():
-                    return json.dumps(
-                        {"error": f"File does not exist: {file_path}", "error_code": 1},
-                        ensure_ascii=False,
-                    )
+                    return self._format_error(f"File does not exist: {file_path}", error_code=1)
 
             query = (symbol_name or "").strip()
             seed_path = str(seed.resolve())
             server = manager.ensure_server_started(seed_path)
             if server is None:
                 ext = Path(seed_path).suffix
-                return json.dumps(
-                    {
-                        "error": f"No LSP server available for file type: {ext}",
-                        "error_code": 4,
-                    },
-                    ensure_ascii=False,
-                )
+                return self._format_error(f"No LSP server available for file type: {ext}", error_code=4)
 
             method, params = _build_params(
                 operation, seed_path, 1, 1, query=query
@@ -1481,22 +1461,13 @@ class LspPlugin(ToolPlugin):
             except Exception as exc:
                 err_str = str(exc)
                 if "unhandled method" in err_str.lower():
-                    return json.dumps(
-                        {
-                            "error": (
-                                f"LSP server does not support operation "
-                                f"'workspaceSymbol': {err_str}"
-                            ),
-                            "error_code": 7,
-                        },
-                        ensure_ascii=False,
+                    return self._format_error(
+                        f"LSP server does not support operation "
+                        f"'workspaceSymbol': {err_str}",
+                        error_code=7,
                     )
-                return json.dumps(
-                    {
-                        "error": f"Error performing workspaceSymbol: {err_str}",
-                        "error_code": 7,
-                    },
-                    ensure_ascii=False,
+                return self._format_error(
+                    f"Error performing workspaceSymbol: {err_str}", error_code=7
                 )
 
             formatted = _FORMATTERS[operation](result, cwd)
@@ -1516,25 +1487,16 @@ class LspPlugin(ToolPlugin):
 
         # ---- resolve file (other operations) -----------------------------------
         if not file_path:
-            return json.dumps(
-                {"error": "file_path is required", "error_code": 1},
-                ensure_ascii=False,
-            )
+            return self._format_error("file_path is required", error_code=1)
 
         expanded = os.path.expanduser(file_path)
         abs_path = os.path.abspath(expanded)
         fp_path = Path(abs_path)
 
         if not fp_path.exists():
-            return json.dumps(
-                {"error": f"File does not exist: {file_path}", "error_code": 1},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"File does not exist: {file_path}", error_code=1)
         if not fp_path.is_file():
-            return json.dumps(
-                {"error": f"Path is not a file: {file_path}", "error_code": 2},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"Path is not a file: {file_path}", error_code=2)
 
         # documentSymbol does not use cursor position; symbol_name/line are client-side filters.
         # Skip character resolution so symbol_name can filter without a precise line hit.
@@ -1548,31 +1510,20 @@ class LspPlugin(ToolPlugin):
                     with open(str(fp_path), "r", encoding="utf-8") as f:
                         file_lines = f.readlines()
                     if line - 1 >= len(file_lines):
-                        return json.dumps(
-                            {
-                                "error": f"line {line} exceeds file length ({len(file_lines)} lines)",
-                                "error_code": 8,
-                            },
-                            ensure_ascii=False,
+                        return self._format_error(
+                            f"line {line} exceeds file length ({len(file_lines)} lines)",
+                            error_code=8,
                         )
                     line_content = file_lines[line - 1]
                     idx = line_content.find(symbol_name)
                     if idx == -1:
-                        return json.dumps(
-                            {
-                                "error": f"symbol '{symbol_name}' not found on line {line}",
-                                "error_code": 8,
-                            },
-                            ensure_ascii=False,
+                        return self._format_error(
+                            f"symbol '{symbol_name}' not found on line {line}", error_code=8
                         )
                     character = idx + 1  # 1-based
                 except Exception as exc:
-                    return json.dumps(
-                        {
-                            "error": f"Failed to auto-compute character from symbol_name: {exc}",
-                            "error_code": 8,
-                        },
-                        ensure_ascii=False,
+                    return self._format_error(
+                        f"Failed to auto-compute character from symbol_name: {exc}", error_code=8
                     )
             else:
                 raw_char = kwargs.get("character")
@@ -1585,12 +1536,9 @@ class LspPlugin(ToolPlugin):
         # ---- size check --------------------------------------------------------
         file_size = fp_path.stat().st_size
         if file_size > MAX_LSP_FILE_SIZE_BYTES:
-            return json.dumps(
-                {
-                    "error": f"File too large for LSP analysis "
-                    f"({(file_size + 999_999) // 1_000_000}MB exceeds 10MB limit)",
-                },
-                ensure_ascii=False,
+            return self._format_error(
+                f"File too large for LSP analysis "
+                f"({(file_size + 999_999) // 1_000_000}MB exceeds 10MB limit)",
             )
 
         cwd = os.getcwd()
@@ -1599,28 +1547,19 @@ class LspPlugin(ToolPlugin):
         try:
             from skill_sdk.tool.lsp import LSPServerManager, create_lsp_server_manager
         except ImportError as exc:
-            return json.dumps(
-                {"error": f"LSP stack not available: {exc}", "error_code": 5},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"LSP stack not available: {exc}", error_code=5)
 
         # ---- acquire (or create) manager ---------------------------------------
         manager = _get_or_create_manager()
         if manager is None:
-            return json.dumps(
-                {"error": "LSP server manager not initialized", "error_code": 5},
-                ensure_ascii=False,
-            )
+            return self._format_error("LSP server manager not initialized", error_code=5)
 
         # ---- ensure file is open in LSP ----------------------------------------
         try:
             _ensure_file_open(manager, str(fp_path.resolve()))
         except Exception as exc:
             logger.exception("Failed to open file in LSP server")
-            return json.dumps(
-                {"error": f"Failed to open file in LSP server: {exc}", "error_code": 6},
-                ensure_ascii=False,
-            )
+            return self._format_error(f"Failed to open file in LSP server: {exc}", error_code=6)
 
         # ---- build method + params ---------------------------------------------
         # For documentSymbol, line/character are unused by the LSP request.
@@ -1630,13 +1569,7 @@ class LspPlugin(ToolPlugin):
         server = manager.ensure_server_started(str(fp_path.resolve()))
         if server is None:
             ext = fp_path.suffix
-            return json.dumps(
-                {
-                    "error": f"No LSP server available for file type: {ext}",
-                    "error_code": 4,
-                },
-                ensure_ascii=False,
-            )
+            return self._format_error(f"No LSP server available for file type: {ext}", error_code=4)
 
         try:
             result = server.send_request(method, params)
@@ -1646,20 +1579,13 @@ class LspPlugin(ToolPlugin):
             if any(phrase in err_str.lower() for phrase in ["identifier not found", "no identifier found", "no definition found", "no result"]):
                 result = None
             elif "unhandled method" in err_str.lower():
-                return json.dumps(
-                    {
-                        "error": f"LSP server does not support operation '{operation}': {err_str}",
-                        "error_code": 7,
-                    },
-                    ensure_ascii=False,
+                return self._format_error(
+                    f"LSP server does not support operation '{operation}': {err_str}",
+                    error_code=7,
                 )
             else:
-                return json.dumps(
-                    {
-                        "error": f"Error performing {operation}: {err_str}",
-                        "error_code": 7,
-                    },
-                    ensure_ascii=False,
+                return self._format_error(
+                    f"Error performing {operation}: {err_str}", error_code=7
                 )
 
         # ---- two-step for incoming/outgoing calls ------------------------------

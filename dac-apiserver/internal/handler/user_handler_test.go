@@ -54,7 +54,6 @@ func TestLoginResponseDoesNotExposeBearerToken(t *testing.T) {
 	c.Set("user", &entity.User{
 		ID:        "user-1",
 		Username:  "alice",
-		Role:      "admin",
 		CreatedAt: time.Unix(1_700_000_000, 0),
 	})
 

@@ -9,6 +9,7 @@ const AUTH_REQUIRED_PREFIXES = [
   "/system-config",
   "/observability",
   "/infra",
+  "/rbac",
 ] as const
 const PUBLIC_PATH_PREFIXES = [LOGIN_PATH, "/register"] as const
 

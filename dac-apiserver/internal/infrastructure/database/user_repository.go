@@ -25,11 +25,14 @@ func NewUserRepository(client *ent.Client) domain.UserRepository {
 }
 
 // Create createuser
-func (r *userRepository) Create(ctx context.Context, username, passwordHash string) (*entity.User, error) {
-	created, err := r.client.User.Create().
+func (r *userRepository) Create(ctx context.Context, username, passwordHash string, email *string) (*entity.User, error) {
+	create := r.client.User.Create().
 		SetUsername(username).
-		SetPasswordHash(passwordHash).
-		Save(ctx)
+		SetPasswordHash(passwordHash)
+	if email != nil {
+		create.SetEmail(*email)
+	}
+	created, err := create.Save(ctx)
 
 	if err != nil {
 		// 检查is否is唯一约束错误
@@ -164,22 +167,27 @@ func (r *userRepository) UpdateLastLogin(ctx context.Context, userID string) err
 	return nil
 }
 
-// UpdateRole updates the user's role
-func (r *userRepository) UpdateRole(ctx context.Context, userID, role string) error {
+// UpdateUser 更新用户信息（邮箱、密码）
+func (r *userRepository) UpdateUser(ctx context.Context, userID string, email *string, passwordHash *string) error {
 	uid, err := uuid.Parse(userID)
 	if err != nil {
 		return fmt.Errorf("invalid user id: %w", err)
 	}
 
-	err = r.client.User.UpdateOneID(uid).
-		SetRole(role).
-		Exec(ctx)
+	upd := r.client.User.UpdateOneID(uid)
+	if email != nil {
+		upd.SetEmail(*email)
+	}
+	if passwordHash != nil {
+		upd.SetPasswordHash(*passwordHash)
+	}
+	err = upd.Exec(ctx)
 
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return domain.NewNotFoundError("User", userID)
 		}
-		return fmt.Errorf("failed to update user role: %w", err)
+		return fmt.Errorf("failed to update user: %w", err)
 	}
 
 	return nil
