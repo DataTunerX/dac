@@ -4506,18 +4506,32 @@ class SkillAgentExecutor(AgentExecutor):
         planner = self._get_planner()
         plan = await planner.make_plan(query, all_cards, group_memory=group_memory)
 
-        task_lines = "\n".join(
-            f"{i}. {t.description or '(无描述)'}"
-            f"{'  [depends_on: ' + str(t.depends_on) + ']' if t.depends_on else ''}"
-            for i, t in enumerate(plan.tasks, 1)
-        )
+        # Count local vs delegate tasks for display
+        own_tasks = [t for t in plan.tasks if (t.agent or "").strip() in own_names]
+        delegation_tasks = [t for t in plan.tasks if (t.agent or "").strip() in collab_names]
+
+        plan_lines = [
+            f"Plan ready: {len(own_tasks)} local tasks, {len(delegation_tasks)} delegate tasks"
+        ]
+        for t in plan.tasks:
+            agent_nm = (t.agent or "").strip() or "?"
+            desc = ((t.description or "").replace("\n", " ").strip())[:140]
+            deps = (
+                f"(depends on: [{', '.join(str(d) for d in t.depends_on)}]) "
+                if t.depends_on
+                else ""
+            )
+            plan_lines.append(f"  • #{t.id} {deps}agent='{agent_nm}' | {desc}")
+
         await self._emit_progress(
             updater,
             "plan_ready",
-            message=f"Plan ready: {len(plan.tasks)} tasks\n{task_lines}",
+            message="\n".join(plan_lines),
             status="running",
             extra={
                 "task_count": len(plan.tasks),
+                "own_task_count": len(own_tasks),
+                "delegation_count": len(delegation_tasks),
                 "plan_tasks_summary": [
                     {
                         "id": t.id,
