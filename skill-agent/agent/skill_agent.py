@@ -4844,7 +4844,7 @@ class SkillAgentExecutor(AgentExecutor):
             status="running",
         )
 
-        max_mid_exec_rounds = int(os.getenv("CROSS_SG_MID_EXEC_ROUNDS", "3"))
+        max_mid_exec_rounds = int(os.getenv("CROSS_SG_MID_EXEC_ROUNDS", "5"))
         mid_exec_round = 0
         collaborator_cards_list = [
             c for c in all_cards if getattr(c, "name", "") in collab_names

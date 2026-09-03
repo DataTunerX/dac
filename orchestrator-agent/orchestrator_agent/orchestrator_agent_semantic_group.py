@@ -7266,7 +7266,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             return _all_task_results, delegated_results
 
         mid_exec_round = 0
-        max_mid_exec_rounds = int(os.getenv("CROSS_SG_MID_EXEC_ROUNDS", "3"))
+        max_mid_exec_rounds = int(os.getenv("CROSS_SG_MID_EXEC_ROUNDS", "5"))
         await self.emit_progress(
             updater,
             "collaboration-progress",

@@ -499,6 +499,8 @@ executionEngine:
 
   # -- Maximum cross-SG delegation hops for skill agents (env: CROSS_SG_MAX_HOP)
     crossSGMaxHop: "5"
+    # -- Maximum mid-execution rounds for skill agents (env: CROSS_SG_MID_EXEC_ROUNDS)
+    crossSGMidExecRounds: "5"
 
   # -- dd-configuration ConfigMap values (read by DD controller)
   ddConfig:
@@ -721,6 +723,8 @@ bizSkillAgent:
     skillDownloadTimeout: ""
     # -- Maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP)
     crossSGMaxHop: "5"
+    # -- Maximum mid-execution rounds (env: CROSS_SG_MID_EXEC_ROUNDS)
+    crossSGMidExecRounds: "5"
   service:
     type: ClusterIP
     # -- A2A protocol port

@@ -65,6 +65,8 @@ spec:
             {{- include "dac.langfuseEnv" . | nindent 12 }}
             - name: CROSS_SG_MAX_HOP
               value: {{ .Values.bizSkillAgent.config.crossSGMaxHop | default "5" | quote }}
+            - name: CROSS_SG_MID_EXEC_ROUNDS
+              value: {{ .Values.bizSkillAgent.config.crossSGMidExecRounds | default "5" | quote }}
           args:
             {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizSkillAgent.config.redisDb) | nindent 12 }}
             {{- include "dac.llmArgs" . | nindent 12 }}

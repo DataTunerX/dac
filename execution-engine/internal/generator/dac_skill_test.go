@@ -65,6 +65,7 @@ func TestGenerateSkillAgentEnvs_RegisterAndSkills(t *testing.T) {
 		ObservationSecretKey: "sk",
 		ObservationPublicKey: "pk",
 		CrossSGMaxHop:        "5",
+		CrossSGMidExecRounds: "5",
 	})
 	m := map[string]string{}
 	for _, e := range envs {
@@ -87,6 +88,9 @@ func TestGenerateSkillAgentEnvs_RegisterAndSkills(t *testing.T) {
 	}
 	if m["CROSS_SG_MAX_HOP"] != "5" {
 		t.Fatalf("CROSS_SG_MAX_HOP=%q, want %q", m["CROSS_SG_MAX_HOP"], "5")
+	}
+	if m["CROSS_SG_MID_EXEC_ROUNDS"] != "5" {
+		t.Fatalf("CROSS_SG_MID_EXEC_ROUNDS=%q, want %q", m["CROSS_SG_MID_EXEC_ROUNDS"], "5")
 	}
 	args := h.generateSkillAgentArgs(dac, &LLMConfig{Provider: "openai_compatible", APIKey: "k", BaseURL: "u", Model: "m"}, nil)
 	foundDB := false

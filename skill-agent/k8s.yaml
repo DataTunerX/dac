@@ -40,6 +40,8 @@ spec:
           value: "8"
         - name: CROSS_SG_MAX_HOP
           value: "5"
+        - name: CROSS_SG_MID_EXEC_ROUNDS
+          value: "5"
         - name: TAVILY_BASE_URL
           value: "https://api.tavily.com"
         - name: TAVILY_API_KEY

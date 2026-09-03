@@ -433,16 +433,22 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 reason,
                 total_turns,
             )
-            await self._emit_progress(
-                updater,
-                "turn_max_retries",
-                message=(
-                    f"Max turns ({self.max_loops}) reached, "
-                    f"producing final answer"
-                ),
-                status="done",
-                extra={"turns": total_turns, "max_loops": self.max_loops},
-            )
+
+            # Choose the right event name and message based on actual reason
+            if current_hop <= 1:
+                event_name = "turn_hop_exhausted_final"
+                display_msg = (
+                    f"Hop exhausted after {total_turns} turn(s), "
+                    f"producing final answer from accumulated results"
+                )
+
+                await self._emit_progress(
+                    updater,
+                    event_name,
+                    message=display_msg,
+                    status="done",
+                    extra={"turns": total_turns, "max_loops": self.max_loops},
+                )
 
             # --- Data Flow: summary input (forced after max turns) ---
             self._log_summary_input(
