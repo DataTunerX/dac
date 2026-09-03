@@ -1,0 +1,63 @@
+{
+  "current": 1,
+  "started": null,
+  "notes": "Advance with /demo next. Edit `current` by hand to jump.",
+  "cases": [
+    {
+      "n": 1,
+      "file": "cases/01-llm-vs-dac.md",
+      "title": "LLM alone vs. DAC",
+      "scenario": "1.1",
+      "status": "needs-decision"
+    },
+    {
+      "n": 2,
+      "file": "cases/02-multi-domain-answer.md",
+      "title": "4 DACs collaborate (汉代玉器)",
+      "scenario": "1.2",
+      "status": "ready"
+    },
+    {
+      "n": 3,
+      "file": "cases/03-ingest-pipeline.md",
+      "title": "Ingestion changes the answer",
+      "scenario": "2",
+      "status": "needs-decision"
+    },
+    {
+      "n": 4,
+      "file": "cases/04-wwybsj-build.md",
+      "title": "New acquisition (#472)",
+      "scenario": "3",
+      "status": "ready"
+    },
+    {
+      "n": 5,
+      "file": "cases/05-appgen-label.md",
+      "title": "DAC builds a new DAC",
+      "scenario": "4",
+      "status": "rehearse"
+    },
+    {
+      "n": 6,
+      "file": "cases/06-storage-hld.md",
+      "title": "Storage HLD + competitive",
+      "scenario": "5",
+      "status": "blocked"
+    },
+    {
+      "n": 7,
+      "file": "cases/07-architecture.md",
+      "title": "Architecture drawings",
+      "scenario": "6",
+      "status": "blocked"
+    },
+    {
+      "n": 8,
+      "file": "cases/08-circuit.md",
+      "title": "Circuit board data",
+      "scenario": "7",
+      "status": "blocked"
+    }
+  ]
+}
