@@ -627,6 +627,7 @@ export type UserListResponse = {
   page: number
   page_size: number
   total_pages: number
+}
 
 // ----- TDB pipeline (internal/handler/dto/tdb_pipeline.go) -----
 
