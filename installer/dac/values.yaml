@@ -420,6 +420,20 @@ apiserver:
       # named skill_agent queries, so ingestion and Q&A share one database.
       # snake_case: passed to apiserver verbatim.
       targets:
+        # Listed first on purpose: the create dialog defaults to the first
+        # target without `test: true`, and this isolated library is the safe
+        # default. Ingesting into a large production domain makes the wiki
+        # stage walk every existing page in that domain (~50 min for
+        # archeology's ~650k pages), so it must be an explicit choice.
+        - id: "archeology_papers_test"
+          domain: "archeology"
+          label: "考古学（论文测试库，隔离）"
+          gateway_url: "http://10.124.48.91:8996"
+          domain_profile: "pipeline/profiles/archeology.v2.json"
+          # Paper batches keep the papers collection; every other target
+          # defaults its collection to the target domain.
+          collection: "academic_papers"
+          skill_agent: "tdb-archeology-papers-test-qa"
         - id: "archeology"
           domain: "archeology"
           label: "考古学"
@@ -468,15 +482,6 @@ apiserver:
           gateway_url: "http://10.124.48.91:8997"
           domain_profile: "pipeline/profiles/wwybsj.v2.json"
           skill_agent: "tdb-wwybsj-answering"
-        - id: "archeology_papers_test"
-          domain: "archeology"
-          label: "考古学（论文测试库，隔离）"
-          gateway_url: "http://10.124.48.91:8996"
-          domain_profile: "pipeline/profiles/archeology.v2.json"
-          # Paper batches keep the papers collection; every other target
-          # defaults its collection to the target domain.
-          collection: "academic_papers"
-          test: true
   resources:
     requests:
       cpu: 200m
