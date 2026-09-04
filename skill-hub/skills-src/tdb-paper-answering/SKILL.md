@@ -1,6 +1,7 @@
 ---
 name: tdb-paper-answering
 description: Use when answering questions about academic papers grounded in the TDB gateway at 10.124.48.91:8996, especially when paper text, citations, ontology statements, provenance, and retrieval scope must be checked instead of relying on memory.
+  Probe the wiki and ontology layers before concluding anything is missing.
 ---
 
 # TDB Paper Answering
@@ -41,6 +42,17 @@ Rule:
 - confirm bindings with `GET /v2/search/domain-stream/list` whenever scope is
   uncertain
 
+## Runtime Constraints
+
+- **One `plan_cmd` per turn.** Extra calls in the same turn are blocked and
+  wasted. Batch the whole retrieval chain into a single script.
+- Budget: `LOCAL_SKILL_MAX_STEPS=30`, two turn loops, 300s per command. A
+  well-batched probe answers most questions in three or four steps.
+- Print digests, not raw JSON. Truncate long strings and drop fields you are
+  not reading. A hit buried in a 15KB dump is a hit you will miss.
+- Memory may be unavailable and a run can start cold. Re-derive from the probe
+  instead of assuming earlier context survived.
+
 ## How To Call TDB
 
 Call HTTP endpoints directly unless MCP tools for this gateway are already
@@ -64,6 +76,9 @@ Wiki:
 - `GET /v2/wiki/page?domain=archeology&slug=...`
 - `GET /v2/wiki/pages?domain=archeology`
 - `GET /v2/wiki/page/evidence?domain=archeology&slug=<slug>&fact_limit=20&evidence_limit=5`
+- `wiki/page` returns the page under `page`; read `response["page"]["content"]`,
+  not a top-level `content` field. An empty-looking page after `wiki/page`
+  often means the client parsed the response shape incorrectly.
 
 Ontology and statements:
 
@@ -76,36 +91,147 @@ Ontology and statements:
   `GET /v2/ontology/fact/provenance?fact_id=<id>&evidence_limit=5`; for
   statement-first hits with `fact_id: 0`, pass both `fact_id=0` and
   `statement_id=<id>` if needed
+- `GET /v2/ontology/concept/search?q=<short-term>&limit=50` returns
+  `{ concepts }` when a label exists but no wiki page was built
+- `GET /v2/ontology/relation-candidate/list` returns `{ relation_candidates }`;
+  filter on `subject_label` / `object_label` to reach raw extractions carrying
+  `tdb_evidence_id` before any fact was promoted
+
+## Wiki Probe
+
+This is the **first retrieval move** for every question that names a typed,
+coded, or labelled entity: type/subtype codes (`Bb型`, `Aa型`), artifact or
+material names (`酱釉罐`, `青白釉瓶`), sites, kilns, periods, and methods.
+
+The runtime allows **one `plan_cmd` per turn**. Do not emit one call per
+anchor. Run the whole probe chain inside a single script, and print a compact
+digest instead of raw JSON.
+
+```python
+import json, urllib.parse, urllib.request
+
+B, DOMAIN = 'http://10.124.48.91:8996/v2', 'archeology'
+ANCHORS = ['<anchor1>', '<anchor2>', '<anchor3>']   # short, 2-6 chars each
+
+def g(path, **kw):
+    url = B + path + '?' + urllib.parse.urlencode(kw)
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        return {'_err': str(e)[:120]}
+
+seen = set()
+for a in ANCHORS:
+    hits = (g('/wiki/search', domain=DOMAIN, q=a, limit=8) or {}).get('results') or []
+    print(f'\n### ANCHOR {a}  hits={len(hits)}')
+    for h in hits:
+        slug = h.get('slug')
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        print(f'  SLUG {slug} | {h.get("page_type")} | conf={h.get("confidence"):.2f}'
+              f' | {h.get("authority_kind")}')
+        ev = g('/wiki/page/evidence', domain=DOMAIN, slug=slug,
+               fact_limit=60, evidence_limit=3)
+        for it in (ev.get('facts') or []):
+            f = it.get('fact') or {}
+            src = (it.get('evidence') or [{}])[0]
+            print(f'    FACT {f.get("src_concept_label")} -{f.get("predicate")}->'
+                  f' {f.get("dst_concept_label")} | conf={f.get("confidence")}'
+                  f' | {f.get("status")} | ev={it.get("evidence_count")}'
+                  f' | stream={str(src.get("stream_id"))[-28:]}')
+```
+
+Read the digest before deciding anything. A `SLUG` line that exactly matches
+the queried term is a **hit**, and its `FACT` lines are the answer material.
+When `FACT` lines are sparse, still open the matching slug with `wiki/page` and
+read the page body. Many compiled pages preserve useful type hierarchies,
+aliases, and explanatory bullets that have not been promoted to accepted facts.
+
+Escalate only when the probe is empty:
+
+1. `GET /v2/ontology/concept/search?q=<short-term>&limit=50`, then
+   `GET /v2/ontology/concept/evidence?concept_id=<id>&fact_limit=60`
+2. `GET /v2/ontology/relation-candidate/list` filtered on `subject_label` /
+   `object_label`; these carry `tdb_evidence_id` for raw extractions
+3. only then conclude `Not established`
+
+Anchor rules:
+
+- Probe **short** anchors. `酱釉` and `罐` resolve; `闽江流域出土宋元酱釉瓷器`
+  does not.
+- Probe the bare code and the compound: `Bb型`, `Bb型酱釉罐`.
+- When a Chinese term misses, probe the English form the OCR may hold
+  (`brown glazed jar`), and the reverse.
+- Probe the abstract's own category words; they name the material classes the
+  paper actually uses.
 
 ## Retrieval Workflow
 
-Scale effort to the question.
+TDB holds three layers. A miss in one says nothing about the others:
+
+| layer | endpoint | holds |
+| --- | --- | --- |
+| structured | `wiki/*`, `ontology/*` | concepts, typed facts, provenance |
+| source text | `search/query` | chunked paper text and OCR output |
+| candidates | `ontology/relation-candidate/list` | raw extractions with `tdb_evidence_id` |
+
+Typed or coded entities - type and subtype codes, artifact classes, kilns,
+sites, periods - live in the **structured** layer. Prose, argument, and
+narrative live in the **source text** layer. Start where the answer lives.
+
+Typology-heavy or table-heavy papers can be asymmetric: type labels and
+classification notes may be well represented in compiled wiki page bodies while
+source-text search returns only an abstract, bibliography, image placeholders,
+or a small OCR fragment. Do not equate "few accepted facts" with "the paper did
+not establish the typology." For these questions, use page bodies as evidence
+after opening the relevant slugs, then label which details are page-body
+evidence versus accepted fact/provenance.
 
 Fast factual lookup:
 
-1. Search the distinctive title, author, site, method, object, period, or term.
-2. Run a short `ontology/fact/search` for the same anchor.
-3. Follow any `statement_id` to statement and provenance.
-4. Answer from the first solid evidence, with citations and limits.
+1. Run the Wiki Probe on 2-4 short anchors.
+2. If it returns facts, answer from them with provenance.
+3. Use `search/query` only to quote or corroborate.
 
 Full paper interpretation:
 
 1. Split the question into concepts and falsifiable claims: paper identity,
-   authors, publication venue, research problem, method, dataset/material,
-   argument, evidence, conclusion, limitations, and cited comparanda.
-2. Search the full question and each distinctive anchor independently.
-3. Use `qa/evidence-pack` for quick recall, then drive promising hits to
-   statement/provenance where possible.
-4. Verify exact claims with lexical search: DOI, dates, names, quoted terms,
-   table entries, numbered references, sample counts, and section headings.
-5. Expand from retrieved evidence for up to two rounds. Use paper title,
-   author names, cited works, methods, archaeological sites, artifact types,
-   period names, and argument phrases as follow-up anchors.
-6. Reconcile structured statements and source text. Label anything plausible
+   authors, venue, problem, method, material, argument, evidence, conclusion,
+   limitations, and cited comparanda.
+2. Run the Wiki Probe first. Harvest every matching slug and its facts.
+3. Open the paper's `source_summary_*` page. It enumerates the classes and
+   types the paper actually establishes, including sibling types you did not
+   think to ask about.
+4. For taxonomic / typological / table questions, also enumerate
+   `wiki/pages` and filter page titles/slugs for the target material plus
+   type-code terms (`型`, `亚型`, `式`, `Aa`, `Bb`, `Ⅰ式`, etc.). Open those
+   pages with `wiki/page`; their bodies often contain the sibling hierarchy.
+5. Then run `search/query` for prose, and `mode: "lexical"` for exact strings.
+   If scoped search returns only an abstract or image placeholders, say so and
+   rely on wiki page bodies plus accepted facts rather than declaring absence.
+6. Expand for up to two rounds, using retrieved labels as new anchors.
+7. Reconcile structured facts against source text. Label anything plausible
    but unsupported as `Not established`.
 
 ## Evidence Discipline
 
+- A miss in one layer is not absence. `search/query` returning nothing means
+  the phrase is absent from the chunked text - often because those pages are
+  OCR image output - not that the knowledge is missing. Never write
+  `Not established` until the Wiki Probe and the concept / relation-candidate
+  escalation have both come back empty.
+- For table or figure-driven source material, `search/query` may return only
+  image placeholders such as `assets/page_*_image_*.jpeg`. Treat those as a
+  retrieval limitation, not as negative evidence. Check compiled wiki pages and
+  accepted facts before answering.
+- A `wiki/search` hit list is a navigation result, not evidence. Open the slug
+  with `wiki/page/evidence` before judging it.
+- A `wiki/page` body can be evidence for compiled hierarchy/description when
+  it directly contains the relevant bullets, but its evidence grade is weaker
+  than statement provenance. Cite it as page-body evidence and avoid presenting
+  it as statement-provenanced fact unless `wiki/page/evidence` returns a fact.
 - Search hits are not evidence unless the returned text actually supports the
   claim.
 - Relation evidence must be graded:
@@ -170,6 +296,18 @@ Full path:
 
 ## Common Failure Modes
 
+- Concluding `Not established` from `search/query` alone while the concept page
+  exists with accepted facts.
+- Concluding `Not established` from sparse accepted facts while the `wiki/page`
+  body contains the type hierarchy or morphology.
+- Reading `wiki/page` as if `content` were top-level; the content is nested
+  under `page.content`.
+- For typology questions, failing to enumerate `wiki/pages` for sibling type
+  pages after finding one type such as `Bb型酱釉罐`.
+- Stopping at a `wiki/search` hit list without opening the slug.
+- Emitting several `plan_cmd` calls in one turn; only the first runs.
+- Dumping raw JSON so large that the real hit is buried.
+- Probing long descriptive phrases instead of short anchors.
 - Passing `domain: "paper"` before the gateway actually binds that domain.
 - Trusting unscoped hits when `resolved_stream_ids` is empty.
 - Treating a bibliography hit as evidence for an argument in the paper body.
@@ -183,7 +321,11 @@ Full path:
 
 1. Check `GET http://10.124.48.91:8996/v2/search/domain-stream/list`.
 2. Use `domain: "archeology"` unless the live binding list says otherwise.
-3. Run `search/query` and confirm `resolved_stream_ids` is non-empty.
-4. Search distinctive paper anchors, then follow `statement_id` to
-   statement/provenance.
-5. Verify exact claims with lexical search and answer with numeric citations.
+3. Run the Wiki Probe on 2-4 short anchors from the question.
+4. Open every matching slug with `wiki/page/evidence` and read its facts.
+5. Also read `wiki/page` bodies for matching slugs; use `response.page.content`.
+6. For type/table questions, enumerate `wiki/pages` to find sibling type pages.
+7. Escalate to `concept/search` and `relation-candidate/list` before writing
+   `Not established`.
+8. Use `search/query` for prose and lexical mode for exact strings.
+9. Answer with numeric citations and explicit limits.
