@@ -14,6 +14,13 @@ import { REFRESH_CHAT_LIST_EVENT, RUN_ID_RECONCILED_EVENT, type NewChatEventDeta
 
 type Message = ChatMessage
 
+const STREAM_RECOVERY_DELAYS_MS = [0, 2_000, 5_000, 10_000, 20_000, 30_000, 60_000, 60_000, 60_000]
+
+type HistoryFetchResult =
+  | { outcome: "ok"; messages: Message[] }
+  | { outcome: "not_found" }
+  | { outcome: "unauthorized" }
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface SessionState {
@@ -169,6 +176,57 @@ function clearInternalsTimer(s: SessionInternals) {
   }
 }
 
+function assistantOutputCount(messages: Message[]): number {
+  return messages.filter(
+    (message) => message.role === "assistant" && message.content.trim().length > 0
+  ).length
+}
+
+function historyMessagesFromResponse(runId: string, data: ConversationHistoryResponse): Message[] {
+  const rawMessages = Array.isArray(data?.messages) ? data.messages : []
+  return rawMessages
+    .map((m, i): Message | null => {
+      const r = typeof m === "object" && m !== null ? (m as Record<string, unknown>) : {}
+      const role = r.role
+      const content = r.content
+      if ((role !== "user" && role !== "assistant" && role !== "system") || typeof content !== "string")
+        return null
+      const think = typeof r.think === "string" ? r.think : undefined
+      const reasoning = typeof r.reasoning_content === "string" ? r.reasoning_content : undefined
+      const rawProgress = r.progress_list
+      const progressList: ChatProgressPayload[] | undefined =
+        Array.isArray(rawProgress) && rawProgress.length > 0
+          ? (rawProgress as ChatProgressPayload[])
+          : undefined
+      const parsedThink = parseHistoryThink(think)
+      return {
+        id: `${runId}-${i}`,
+        role,
+        content: stripModelLeakTags(content),
+        reasoning_content: parsedThink.reasoning || reasoning || "",
+        ...((progressList && progressList.length > 0)
+          ? { progressList }
+          : (parsedThink.progressList.length > 0 ? { progressList: parsedThink.progressList } : {})),
+      }
+    })
+    .filter((x): x is Message => Boolean(x))
+}
+
+function waitForRecovery(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (delayMs === 0) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new DOMException("Recovery aborted", "AbortError"))
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort)
+      resolve()
+    }, delayMs)
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
 // ── Store ────────────────────────────────────────────────────────────────────
 
 const EMPTY_SESSION: SessionState = {
@@ -322,6 +380,62 @@ export const useChatStore = create<ChatStore>((set, get) => {
     patchSession(runId, { isLoading: false, isStreaming: false, thinkingElapsedSec })
   }
 
+  async function fetchHistory(runId: string, controller: AbortController): Promise<HistoryFetchResult> {
+    const response = await authFetch(`/api/v1/chat/conversations/${runId}`, {
+      signal: controller.signal,
+      skipAuthRedirect: true,
+    })
+    if (response.status === 401) {
+      handleUnauthorized()
+      return { outcome: "unauthorized" }
+    }
+    if (response.status === 404) return { outcome: "not_found" }
+    if (!response.ok) throw new Error(`Failed to load history: ${response.statusText}`)
+    const data = (await response.json()) as ConversationHistoryResponse
+    return { outcome: "ok", messages: historyMessagesFromResponse(runId, data) }
+  }
+
+  async function recoverHistoryAfterStreamFailure(
+    runId: string,
+    requestSeq: number,
+    previousAssistantCount: number
+  ) {
+    const int = getInternals(runId)
+    int.historyAbortController?.abort()
+    const controller = new AbortController()
+    int.historyAbortController = controller
+
+    try {
+      for (const delayMs of STREAM_RECOVERY_DELAYS_MS) {
+        await waitForRecovery(delayMs, controller.signal)
+        if (requestSeq !== getInternals(runId).requestSeq) return
+
+        try {
+          const result = await fetchHistory(runId, controller)
+          if (result.outcome === "unauthorized") return
+          if (
+            result.outcome === "ok" &&
+            assistantOutputCount(result.messages) > previousAssistantCount
+          ) {
+            patchSession(runId, { messages: result.messages })
+            toast.success("已从会话历史恢复回答")
+            return
+          }
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError") return
+          console.warn("Failed to recover chat history; will retry", error)
+        }
+      }
+      toast.error("回答仍在后台处理中，请稍后重新打开此会话")
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "AbortError")) {
+        console.warn("Chat history recovery stopped", error)
+      }
+    } finally {
+      if (int.historyAbortController === controller) int.historyAbortController = null
+    }
+  }
+
   async function loadHistory(runId: string): Promise<"ok" | "not_found" | "skipped"> {
     if (!shouldLoadHistoryForRunId(runId)) return "skipped"
 
@@ -331,56 +445,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
     int.historyAbortController = controller
 
     try {
-      const response = await authFetch(`/api/v1/chat/conversations/${runId}`, {
-        signal: controller.signal,
-        skipAuthRedirect: true,
-      })
-      if (response.status === 401) {
-        handleUnauthorized()
-        return "skipped"
+      const result = await fetchHistory(runId, controller)
+      if (result.outcome === "unauthorized") return "skipped"
+      if (result.outcome === "not_found") {
+        if (optimisticRunIds.has(runId)) return "skipped"
+        console.warn("Conversation not found")
+        return "not_found"
       }
-      if (!response.ok) {
-        if (response.status === 404) {
-          if (optimisticRunIds.has(runId)) return "skipped"
-          console.warn("Conversation not found")
-          return "not_found"
-        }
-        console.error("Failed to load history:", response.statusText)
-        return "skipped"
-      }
-      const data = (await response.json()) as ConversationHistoryResponse
-      if (controller.signal.aborted) return "skipped"
-      const rawMessages = Array.isArray(data?.messages) ? data.messages : []
-      const historyMessages: Message[] = rawMessages
-        .map((m, i): Message | null => {
-          const r = typeof m === "object" && m !== null ? (m as Record<string, unknown>) : {}
-          const role = r.role
-          const content = r.content
-          if ((role !== "user" && role !== "assistant" && role !== "system") || typeof content !== "string")
-            return null
-          const think = typeof r.think === "string" ? r.think : undefined
-          const reasoning = typeof r.reasoning_content === "string" ? r.reasoning_content : undefined
-          const rawProgress = r.progress_list
-          const progressList: ChatProgressPayload[] | undefined =
-            Array.isArray(rawProgress) && rawProgress.length > 0
-              ? (rawProgress as ChatProgressPayload[])
-              : undefined
-          const parsedThink = parseHistoryThink(think)
-          return {
-            id: `${runId}-${i}`,
-            role,
-            content: stripModelLeakTags(content),
-            reasoning_content: parsedThink.reasoning || reasoning || "",
-            ...((progressList && progressList.length > 0)
-              ? { progressList }
-              : (parsedThink.progressList.length > 0 ? { progressList: parsedThink.progressList } : {})),
-          }
-        })
-        .filter((x): x is Message => Boolean(x))
       if (controller.signal.aborted) return "skipped"
       // Do not overwrite if user started streaming while history was in flight.
       if (!shouldLoadHistoryForRunId(runId)) return "skipped"
-      patchSession(runId, { messages: historyMessages })
+      patchSession(runId, { messages: result.messages })
       return "ok"
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") return "skipped"
@@ -449,6 +524,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     let activeRunId = initialRunId
     const int = getInternals(activeRunId)
     const myReqSeq = ++int.requestSeq
+    const previousAssistantCount = assistantOutputCount(messagesPayload)
 
     int.historyAbortController?.abort()
     int.historyAbortController = null
@@ -543,6 +619,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const reader = response.body.getReader()
       const decoder = new TextDecoder("utf-8")
       let done = false
+      let sawDoneMarker = false
       let textBuffer = ""
       let lastEventType = ""
 
@@ -570,6 +647,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             continue
           }
           if (result.kind === "done") {
+            sawDoneMarker = true
             done = true
             break
           }
@@ -583,6 +661,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
         }
       }
+
+      // A closed response without the protocol terminator is an interrupted
+      // stream, even if fetch() itself reports no exception. Treat it as a
+      // failure so the persisted-history recovery path can fill the answer.
+      if (!sawDoneMarker) throw new Error("Chat stream ended before [DONE]")
 
       // Final flush + freeze progress
       clearInternalsTimer(int)
@@ -620,14 +703,33 @@ export const useChatStore = create<ChatStore>((set, get) => {
         return
       }
       console.error("Chat failed", err)
-      toast.error("对话请求失败")
+      flushPending()
+      toast.error("连接中断，正在尝试恢复已保存的回答")
       if (myReqSeq === getInternals(sessionKey()).requestSeq) {
         updateMessages(sessionKey(), (prev) => {
-          if (prev.length > 0 && prev[prev.length - 1].role === "user") {
-            return [...prev, { id: safeUUID(), role: "assistant", content: "⚠️ Error: Failed to get response." }]
+          const last = prev[prev.length - 1]
+          if (last?.role === "assistant" && last.content.trim() === "") {
+            const next = [...prev]
+            next[next.length - 1] = {
+              ...last,
+              content: "⚠️ 连接已中断，正在从会话历史恢复回答…",
+            }
+            return next
+          }
+          if (last?.role === "user") {
+            return [...prev, {
+              id: safeUUID(),
+              role: "assistant",
+              content: "⚠️ 连接已中断，正在从会话历史恢复回答…",
+            }]
           }
           return prev
         })
+        void recoverHistoryAfterStreamFailure(
+          sessionKey(),
+          myReqSeq,
+          previousAssistantCount
+        )
       }
     } finally {
       clearInternalsTimer(int)
