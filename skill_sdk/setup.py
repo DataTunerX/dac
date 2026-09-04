@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="skill_sdk",
-    version="0.3.2",
+    version="0.3.3",
     packages=find_packages(exclude=["tests*"]),  # 排除测试目录
     install_requires=[
         "requests==2.32.5",

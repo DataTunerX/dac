@@ -400,7 +400,7 @@ export default function AgentsPage() {
   const [viewMode, setViewMode] = useState<ListViewMode>("list");
   const [typeFilter, setTypeFilter] = useState<
     "all" | "descriptor" | "semantic-group" | "skill"
-  >("semantic-group");
+  >("all");
   const [namespaceFilter, setNamespaceFilter] = useState<string>("all");
 
   const deferredSearch = useDeferredValue(searchQuery);
@@ -626,12 +626,12 @@ export default function AgentsPage() {
 
   const clearFilters = () => {
     setSearchQuery("");
-    setTypeFilter("semantic-group");
+    setTypeFilter("all");
     setNamespaceFilter("all");
   };
 
   const hasActiveFilters =
-    searchQuery.trim() !== "" || typeFilter !== "semantic-group" || namespaceFilter !== "all";
+    searchQuery.trim() !== "" || typeFilter !== "all" || namespaceFilter !== "all";
 
   const showEmpty = !isLoading && agents.length === 0;
   const showNoMatch = !isLoading && agents.length > 0 && filtered.length === 0;

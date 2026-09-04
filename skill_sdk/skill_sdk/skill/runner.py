@@ -10,7 +10,7 @@ import time as _time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Protocol, Sequence
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts.chat import (
@@ -30,6 +30,24 @@ from skill_sdk.skill.lister import SkillLister
 from skill_sdk.skill.loader import SkillLoader
 from skill_sdk.skill.tool_result import ToolResult
 from skill_sdk.skill.stagnation import StagnationDetector, generate_stagnation_intervention
+
+
+class StepProgressCallback(Protocol):
+    """Progress callback signature — async callable invoked per step.
+
+    Callers (e.g. skill-agent) inject their own progress emitter so that
+    step-level execution details flow into the DAC progress pipeline.
+    """
+
+    async def __call__(
+        self,
+        event: str,
+        *,
+        message: str,
+        status: str = "running",
+        task_id: int | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None: ...
 
 logging.basicConfig(
     level=logging.INFO,
@@ -405,6 +423,8 @@ def _short_tool_result(tool_name: str, result: Any, *, max_len: int = 240) -> st
     else:
         out = meta_s
     return _short(out, max_len=max_len)
+
+
 
 
 def _stderr_head(stderr: str | None) -> str:
@@ -1500,8 +1520,15 @@ class SkillRunner:
         user_id: str,
         run_id: str,
         trace_id: str,
+        progress_callback: StepProgressCallback | None = None,
     ) -> dict[str, Any]:
-        """Run the given skill using a tool-calling loop."""
+        """Run the given skill using a tool-calling loop.
+
+        Args:
+            progress_callback: Optional async callback invoked at each step
+                (start / tool_calls / completed / stagnation / compaction).
+                When None (default), step-level progress is silently skipped.
+        """
         system_text = RUNNER_INSTRUCTIONS_ZH.format(
             skill_name=skill.name,
             skill_description=skill.description,
@@ -1568,6 +1595,16 @@ class SkillRunner:
                                     "step": step_no,
                                 }
                             )
+                            if progress_callback is not None:
+                                try:
+                                    await progress_callback(
+                                        "skill_step_compaction",
+                                        message=f"Step {step_no}/{self.max_steps} compaction threshold",
+                                        status="running",
+                                        extra={"step": step_no},
+                                    )
+                                except Exception:
+                                    logger.debug("progress_callback failed for compaction threshold", exc_info=True)
                     try:
                         ai_msg = await self._ainvoke(
                             llm_with_tools,
@@ -1627,6 +1664,16 @@ class SkillRunner:
                                 "run STEP=%d compaction overflow RETRY",
                                 step_no,
                             )
+                            if progress_callback is not None:
+                                try:
+                                    await progress_callback(
+                                        "skill_step_compaction",
+                                        message=f"Step {step_no}/{self.max_steps} compaction overflow RETRY",
+                                        status="running",
+                                        extra={"step": step_no},
+                                    )
+                                except Exception:
+                                    logger.debug("progress_callback failed for compaction overflow retry", exc_info=True)
                             continue
                         raise
 
@@ -1644,6 +1691,16 @@ class SkillRunner:
                                     "step": step_no,
                                 }
                             )
+                            if progress_callback is not None:
+                                try:
+                                    await progress_callback(
+                                        "skill_step_compaction",
+                                        message=f"Step {step_no}/{self.max_steps} compaction overflow silent",
+                                        status="running",
+                                        extra={"step": step_no},
+                                    )
+                                except Exception:
+                                    logger.debug("progress_callback failed for compaction silent overflow", exc_info=True)
                     break
 
                 assert ai_msg is not None
@@ -1671,6 +1728,20 @@ class SkillRunner:
                         _short(thought_text),
                         _short(reasoning_text),
                     )
+                    if progress_callback is not None:
+                        try:
+                            if reasoning_text:
+                                msg = f"Step {step_no}/{self.max_steps} thought={thought_text!r} reasoning={reasoning_text!r}"
+                            else:
+                                msg = f"Step {step_no}/{self.max_steps} thought={thought_text!r}"
+                            await progress_callback(
+                                "skill_step_thought",
+                                message=msg,
+                                status="running",
+                                extra={"step": step_no},
+                            )
+                        except Exception:
+                            logger.debug("progress_callback failed for thought", exc_info=True)
 
                 tool_calls = getattr(ai_msg, "tool_calls", None) or []
                 logger.info(
@@ -1678,6 +1749,7 @@ class SkillRunner:
                     step_no,
                     [c.get("name") for c in tool_calls],
                 )
+
                 if not tool_calls:
                     logger.warning(
                         "run STEP=%d empty tool_calls, nudging LLM to use tools",
@@ -1816,6 +1888,27 @@ class SkillRunner:
                     if tool_name == "grep":
                         _log_grep_matches(tool_result)
 
+                    # --- Per-tool progress: tool call + result ---
+                    if progress_callback is not None:
+                        try:
+                            await progress_callback(
+                                "skill_step_tool_call",
+                                message=f"Step {step_no}/{self.max_steps} dispatch #{idx+1} tool={tool_name} args={tool_args!r}",
+                                status="running",
+                                extra={"step": step_no, "tool": tool_name, "args": tool_args},
+                            )
+                        except Exception:
+                            logger.debug("progress_callback failed for tool_call", exc_info=True)
+                        try:
+                            await progress_callback(
+                                "skill_step_tool_result",
+                                message=f"Step {step_no}/{self.max_steps} dispatch #{idx+1} tool={tool_name} result={tool_result!r}",
+                                status="running",
+                                extra={"step": step_no, "tool": tool_name},
+                            )
+                        except Exception:
+                            logger.debug("progress_callback failed for tool_result", exc_info=True)
+
                     if tool_name == "finish":
                         result = {
                             "status": "completed",
@@ -1840,6 +1933,16 @@ class SkillRunner:
                         step_no,
                         _short(intervention, max_len=200),
                     )
+                    if progress_callback is not None:
+                        try:
+                            await progress_callback(
+                                "skill_step_stagnation",
+                                message=f"Step {step_no}/{self.max_steps} stagnation intervention: {_short(intervention, max_len=200)!r}",
+                                status="running",
+                                extra={"step": step_no},
+                            )
+                        except Exception:
+                            logger.debug("progress_callback failed for stagnation", exc_info=True)
                     messages.append(
                         HumanMessage(
                             content=(
@@ -2342,6 +2445,7 @@ class SkillRunner:
         user_id: str,
         run_id: str,
         trace_id: str,
+        progress_callback: StepProgressCallback | None = None,
     ) -> dict[str, Any]:
         """Select a skill and run it.
 
@@ -2352,6 +2456,9 @@ class SkillRunner:
           LLM round-trip with no benefit when all skills fit in one batch.
         - ``use_skill_search=False``: Always uses the Planner LLM to select a skill
           via ``make_plan``, with ``plan_and_run_max_attempts`` replans.
+
+        Args:
+            progress_callback: Optional async callback forwarded to ``run()``.
         """
         skill_count = len(self.lister.skills)
         effective_use_skill_search = (
@@ -2379,6 +2486,7 @@ class SkillRunner:
                 user_id=user_id,
                 run_id=run_id,
                 trace_id=trace_id,
+                progress_callback=progress_callback,
             )
 
         return await self._plan_and_run_with_planner(
@@ -2386,6 +2494,7 @@ class SkillRunner:
             user_id=user_id,
             run_id=run_id,
             trace_id=trace_id,
+            progress_callback=progress_callback,
         )
 
     async def _plan_and_run_with_skill_search(
@@ -2395,6 +2504,7 @@ class SkillRunner:
         user_id: str,
         run_id: str,
         trace_id: str,
+        progress_callback: StepProgressCallback | None = None,
     ) -> dict[str, Any]:
         """plan_and_run using skill_search (batch+concurrent) as the entry point."""
         attempts_log: list[dict[str, Any]] = []
@@ -2442,6 +2552,7 @@ class SkillRunner:
             user_id=user_id,
             run_id=run_id,
             trace_id=trace_id,
+            progress_callback=progress_callback,
         )
         run_result["skill_search"] = search_result
         run_result["attempts"] = attempts_log
@@ -2459,6 +2570,7 @@ class SkillRunner:
         user_id: str,
         run_id: str,
         trace_id: str,
+        progress_callback: StepProgressCallback | None = None,
     ) -> dict[str, Any]:
         logger.info(
             "plan_and_run ENTER query=%r user_id=%s run_id=%s trace_id=%s max_attempts=%d",
@@ -2586,6 +2698,7 @@ class SkillRunner:
                 user_id=user_id,
                 run_id=run_id,
                 trace_id=trace_id,
+                progress_callback=progress_callback,
             )
             run_result["planner"] = planner_dump
             last_run_result = run_result

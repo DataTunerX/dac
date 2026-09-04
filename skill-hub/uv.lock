@@ -1778,7 +1778,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.4" },
     { name = "python-dotenv" },
     { name = "setuptools" },
-    { name = "skill-sdk", path = "sdks/skill_sdk-0.3.1-py3-none-any.whl" },
+    { name = "skill-sdk", path = "sdks/skill_sdk-0.3.2-py3-none-any.whl" },
     { name = "uvicorn", extras = ["standard"] },
     { name = "wheel" },
 ]
@@ -1791,8 +1791,8 @@ dev = [
 
 [[package]]
 name = "skill-sdk"
-version = "0.3.1"
-source = { path = "sdks/skill_sdk-0.3.1-py3-none-any.whl" }
+version = "0.3.2"
+source = { path = "sdks/skill_sdk-0.3.2-py3-none-any.whl" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "dashscope" },
@@ -1818,7 +1818,7 @@ dependencies = [
     { name = "setuptools" },
 ]
 wheels = [
-    { filename = "skill_sdk-0.3.1-py3-none-any.whl", hash = "sha256:fc9325280eb7a8be215ab8c108b7e7f0b216ae664981901b569661ef61bb7977" },
+    { filename = "skill_sdk-0.3.2-py3-none-any.whl", hash = "sha256:d8918d577ad9e9e744c9b0561401a57d9efc35b4197dabb8c8807b048e4132e6" },
 ]
 
 [package.metadata]

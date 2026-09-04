@@ -67,6 +67,8 @@ type DACConfig struct {
 	SkillCmdTimeoutSeconds string
 	// CrossSGMaxHop is the maximum cross-SG delegation hops for skill agents.
 	CrossSGMaxHop string
+	// CrossSGMidExecRounds is the maximum mid-execution rounds for skill agents.
+	CrossSGMidExecRounds string
 }
 
 // appendNonEmptyEnv appends env vars whose values are non-empty after trim.
@@ -480,6 +482,8 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 			Name:  "LANGFUSE_PUBLIC_KEY",
 			Value: dacConfig.ObservationPublicKey,
 		})
+		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: dacConfig.CrossSGMaxHop})
+		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MID_EXEC_ROUNDS", Value: dacConfig.CrossSGMidExecRounds})
 	}
 
 	envs = appendEnableThinkingEnv(envs, llmConfig)
@@ -600,6 +604,7 @@ func (h *DataAgentContainerGenerator) getDACConfig(ctx context.Context) (*DACCon
 		SkillAgentImage:                 configMap.Data["skill-agent-image"],
 		SkillCmdTimeoutSeconds:          configMap.Data["skill-cmd-timeout-sec"],
 		CrossSGMaxHop:                   configMap.Data["cross-sg-max-hop"],
+		CrossSGMidExecRounds:            configMap.Data["cross-sg-mid-exec-rounds"],
 	}, nil
 }
 
@@ -1776,6 +1781,7 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 			corev1.EnvVar{Name: "LANGFUSE_PUBLIC_KEY", Value: dacConfig.ObservationPublicKey},
 		)
 		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: dacConfig.CrossSGMaxHop})
+		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MID_EXEC_ROUNDS", Value: dacConfig.CrossSGMidExecRounds})
 	}
 	envs = appendEnableThinkingEnv(envs, llmConfig)
 

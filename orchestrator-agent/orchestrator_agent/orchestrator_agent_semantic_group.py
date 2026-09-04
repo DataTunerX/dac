@@ -7311,11 +7311,12 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
 
         # ---- 构造 own_task_context（用于后续 mid-exec 和 summary） ----
         # 只包含真正已执行完成的任务，不包含尚未执行的未完成占位符
+        _plan_task_lookup = {t.id: t for t in plan.tasks}
         own_task_context = [
             {
                 "task_id": tid,
-                "description": "",
-                "agent": "",
+                "description": _plan_task_lookup.get(tid, PlannerTask(id=tid, description="", agent="")).description or "",
+                "agent": _plan_task_lookup.get(tid, PlannerTask(id=tid, description="", agent="")).agent or "",
                 "status": "completed",
                 "result": res,
             }
@@ -7363,7 +7364,11 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             return _all_task_results, delegated_results
 
         mid_exec_round = 0
-        max_mid_exec_rounds = int(os.getenv("CROSS_SG_MID_EXEC_ROUNDS", "3"))
+        max_mid_exec_rounds = int(os.getenv("CROSS_SG_MID_EXEC_ROUNDS", "5"))
+        # Track SGs that returned empty/bad results — exclude them from
+        # re-delegation in subsequent rounds to avoid infinite ping-pong
+        # between the same pair of agents.
+        _exhausted_sgs: set[str] = set()
         await self.emit_progress(
             updater,
             "collaboration-progress",
@@ -7415,6 +7420,13 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     logger.info(
                         "[Cross-SG][CollabMidExecLoop] no broadcast SG candidates "
                         "in registry; exiting mid-exec loop"
+                    )
+                    await self._emit_collab_mid_round_done(
+                        updater,
+                        round_num=mid_exec_round + 1,
+                        max_rounds=max_mid_exec_rounds,
+                        total_delegated=len(delegated_results),
+                        early_exit="no broadcast SG candidates in registry",
                     )
                     break
                 logger.info(
@@ -7535,6 +7547,31 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 target_sg_names = list(selection.get("target_sg_names") or [])
                 hints_by_sg = dict(selection.get("hints_by_sg") or {})
                 capability_evidence = str(selection.get("evidence_text") or "")
+
+                # ── Re-delegation guard: filter exhausted SGs ──
+                if _exhausted_sgs and target_cards:
+                    _before = len(target_cards)
+                    _filtered_cards = [
+                        c for c in target_cards
+                        if getattr(c, "name", "") not in _exhausted_sgs
+                    ]
+                    if len(_filtered_cards) < _before:
+                        _filtered_names = [
+                            getattr(c, "name", "") for c in _filtered_cards
+                        ]
+                        logger.info(
+                            "[Cross-SG][CollabMidExecLoop] re-delegation guard "
+                            "filtered | round=%d exhausted=%s before=%d after=%d kept=%s",
+                            mid_exec_round + 1,
+                            sorted(_exhausted_sgs),
+                            _before,
+                            len(_filtered_cards),
+                            _filtered_names,
+                        )
+                        target_cards = _filtered_cards
+                        target_sg_names = _filtered_names
+
+                if not target_cards:
                 await self.emit_progress(
                     updater,
                     "collaboration-progress",
@@ -7575,6 +7612,25 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     "legacy name-filter targets=%s",
                     target_sg_names,
                 )
+                # ── Re-delegation guard: filter exhausted SGs (legacy path) ──
+                if _exhausted_sgs and target_cards:
+                    _before = len(target_cards)
+                    target_cards = [
+                        c for c in target_cards
+                        if getattr(c, "name", "") not in _exhausted_sgs
+                    ]
+                    if len(target_cards) < _before:
+                        target_sg_names = [
+                            getattr(c, "name", "") for c in target_cards
+                        ]
+                        logger.info(
+                            "[Cross-SG][CollabMidExecLoop] re-delegation guard "
+                            "filtered (legacy) | round=%d exhausted=%s before=%d after=%d",
+                            mid_exec_round + 1,
+                            sorted(_exhausted_sgs),
+                            _before,
+                            len(target_cards),
+                        )
                 if not target_sg_names or not target_cards:
                     logger.info(
                         "[Cross-SG][CollabMidExecDetect] legacy path empty targets, exiting loop"
@@ -7590,11 +7646,12 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
 
             # Build execution context for this mid-exec round
             # 只包含真正已执行完成的任务
+            _plan_task_lookup = {t.id: t for t in plan.tasks}
             own_task_context = [
                 {
                     "task_id": tid,
-                    "description": "",
-                    "agent": "",
+                    "description": _plan_task_lookup.get(tid, PlannerTask(id=tid, description="", agent="")).description or "",
+                    "agent": _plan_task_lookup.get(tid, PlannerTask(id=tid, description="", agent="")).agent or "",
                     "status": "completed",
                     "result": res,
                 }
@@ -7617,8 +7674,12 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 base_group_memory=group_memory,
                 extra_context={
                     "already_delegated": [
-                        {"target_sg": name, "result": result or ""}
-                        for name, result in delegated_results.items() if result
+                        {
+                            "target_sg": name,
+                            "result": result or "",
+                            "status": "empty" if not result or result == NONE_TASK_DESCRIPTION else "ok",
+                        }
+                        for name, result in delegated_results.items()
                     ],
                     "synthesized_query": synthesized_query,
                     "detection_reason": reason,
@@ -7691,17 +7752,32 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             )
 
             # Step 3: dispatch
+            # ── Detailed handoff logging: planner → dispatch ──
+            _plan_tasks_info = [
+                {"id": t.id, "agent": t.agent, "desc": (t.description or "")[:100]}
+                for t in (mid_plan.tasks or [])
+            ]
+            logger.info(
+                "[MidExec][Handoff] planner → dispatch | "
+                "tasks_count=%d tasks=%s",
+                len(mid_plan.tasks or []),
+                _plan_tasks_info,
+            )
             upstream_ctx: dict[str, Any] = dict(mid_upstream)
             upstream_ctx.update({
                 "already_delegated": [
-                    {"target_sg": name, "result": result or ""}
-                    for name, result in delegated_results.items() if result
+                    {
+                        "target_sg": name,
+                        "result": result or "",
+                        "status": "empty" if not result or result == NONE_TASK_DESCRIPTION else "ok",
+                    }
+                    for name, result in delegated_results.items()
                 ],
                 "mid_exec_round": mid_exec_round + 1,
                 "synthesized_query": synthesized_query,
                 "detection_reason": reason,
             })
-            mid_results = await self._dispatch_mid_exec_delegation(
+            mid_results, current_hop = await self._dispatch_mid_exec_delegation(
                 plan=mid_plan,
                 target_cards=target_cards,
                 user_id=user_id,
@@ -7752,12 +7828,20 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     len(result or ""),
                 )
 
-            # Consume hop for each actual delegation that happened in this round.
-            _actual_mid_delegations = sum(
-                1 for v in mid_results.values()
-                if v and v != NONE_TASK_DESCRIPTION
-            )
-            current_hop -= _actual_mid_delegations
+            # ── Re-delegation guard ──
+            # Mark SGs that returned NONE or empty results as exhausted so
+            # they are excluded from subsequent mid-exec rounds.
+            for sg_name, result in mid_results.items():
+                if not result or result == NONE_TASK_DESCRIPTION:
+                    _exhausted_sgs.add(sg_name)
+                    logger.info(
+                        "[Cross-SG][CollabMidExecLoop] exhausted SG marked | "
+                        "sg=%s round=%d reason=empty_or_none_result",
+                        sg_name, mid_exec_round + 1,
+                    )
+
+            # Hop is consumed inside _dispatch_mid_exec_delegation;
+            # current_hop has already been updated by the returned value.
 
             mid_exec_round += 1
 
@@ -8622,10 +8706,19 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         )
         return cards
 
-    def _mid_exec_soft_hint_fallback_enabled(self) -> bool:
-        return os.getenv(
-            "SG_MID_DELEGATE_SOFT_HINT_FALLBACK", "true"
-        ).strip().lower() not in ("false", "0", "no")
+    def _mid_exec_confidence_threshold(self) -> float:
+        """Minimum confidence score for mid-exec delegation target selection.
+
+        Agents with capability_check confidence below this threshold are
+        excluded from the target pool.  Default 0.5; controlled by the
+        ``SG_MID_DELEGATE_CONFIDENCE_THRESHOLD`` env var.
+        """
+        try:
+            return float(
+                os.getenv("SG_MID_DELEGATE_CONFIDENCE_THRESHOLD", "0.5") or 0.5
+            )
+        except ValueError:
+            return 0.8
 
     def _resolve_mid_exec_soft_hint_cards(
         self,
@@ -8792,35 +8885,31 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 [n for n in hint_names if n in {c.name for c, _ in capable_pairs}][:10],
             )
 
-        if (
-            not capable_pairs
-            and hinted
-            and self._mid_exec_soft_hint_fallback_enabled()
-        ):
-            logger.warning(
-                "[Cross-SG][MidCapSelect] capability_check empty after probing; "
-                "falling back to detect soft_hints | hints=%s probed=%d",
-                [c.name for c in hinted][:10],
-                len(probed_names),
-            )
-            capable_pairs = [
-                (
-                    card,
-                    sg_broadcast.CapabilityCheckResponse(
-                        can_handle=True,
-                        can_contribute=True,
-                        confidence=0.55,
-                        reason=(
-                            "mid-exec soft_hint fallback: detection named this SG "
-                            "for an unresolved data gap, but capability_check "
-                            "returned no capable peer"
-                        ),
-                        agent_name=card.name,
-                        agent_url=str(getattr(card, "url", "") or ""),
-                    ),
-                )
-                for card in hinted
+        # ── Confidence threshold ──
+        # Filter out agents whose capability_check confidence is below the
+        # minimum threshold.  This prevents irrelevant agents (e.g. an LLM
+        # fine-tuning agent for a purchase-history query) from being selected
+        # just because they happened to be the only candidate in the pool.
+        _threshold = self._mid_exec_confidence_threshold()
+        if capable_pairs and _threshold > 0:
+            _before = len(capable_pairs)
+            _filtered = [
+                (card, resp)
+                for card, resp in capable_pairs
+                if float(getattr(resp, "confidence", 0.0) or 0.0) >= _threshold
             ]
+            if len(_filtered) < _before:
+                _dropped = [
+                    f"{card.name}({float(getattr(resp, 'confidence', 0.0) or 0.0):.2f})"
+                    for card, resp in capable_pairs
+                    if float(getattr(resp, "confidence", 0.0) or 0.0) < _threshold
+                ]
+                logger.info(
+                    "[Cross-SG][MidCapSelect] confidence threshold filtered | "
+                    "threshold=%.2f before=%d after=%d dropped=%s",
+                    _threshold, _before, len(_filtered), _dropped,
+                )
+            capable_pairs = _filtered
 
         if not capable_pairs:
             logger.info(
@@ -8944,19 +9033,32 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             f"[Task#{tid}]: {res}" for tid, res in own_results.items() if res
         )
         del_text = "\n".join(
-            f"[{name}]: {res}" for name, res in delegated_results.items() if res
+            f"[{name}]: {res or '[EMPTY — 该 SG 未返回任何数据]'}"
+            for name, res in delegated_results.items()
         )
         # Provide a short description preview for better domain awareness,
         # but authoritative remote selection is still capability_check broadcast.
         if collaborator_cards:
             sg_options = "\n".join(
-                f"- {c.name}（{str(c.description or '')[:100]}）" for c in collaborator_cards
+                f"- {c.name}（{str(c.description or '')[:200]}）" for c in collaborator_cards
             )
+            # Build skill-level info for each collaborator so the detection LLM
+            # can write synthesized_query from the downstream SG's perspective.
+            sg_skills_lines: list[str] = []
+            for c in collaborator_cards:
+                skills = c.skills or []
+                skill_names = [s.name for s in skills if getattr(s, "name", "")]
+                if skill_names:
+                    sg_skills_lines.append(
+                        f"- {c.name} 技能: {', '.join(skill_names)}"
+                    )
+            sg_skills_info = "\n".join(sg_skills_lines) if sg_skills_lines else "(无技能信息)"
         else:
             sg_options = (
                 "(当前 Routing peer 池为空；不要据此判定无法委派。"
                 "最终远程 SG 由后续全量 capability_check 广播决定，target_sgs 可留空。)"
             )
+            sg_skills_info = "(无可用 SG 技能信息)"
 
         prompt = (
             "你是一个多 agent 协作的数据缺口检测器。基于已有的执行结果和原始问题，"
@@ -8983,7 +9085,14 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             "- 当没有关联键时，传递原始问题中的实体信息（姓名、ID、关键词等）作为查询线索；\n"
             "- 禁止复述完整原题；禁止写入其它域目标或整题扩写；\n"
             "- 禁止要求下游去计算本层已有或本层负责的指标；\n"
-            "- 下游拿到这句话应能直接执行并结束，无需理解整题其它部分。\n\n"
+            "- 下游拿到这句话应能直接执行并结束，无需理解整题其它部分。\n"
+            "- 【关键】synthesized_query 必须从下游 SG 的视角编写，而非本层视角：\n"
+            "  本层（delegator）的视角是「我需要什么数据」，下游 SG 的视角是「我能用自己的技能回答什么问题」。\n"
+            "  synthesized_query 必须采用下游 SG 的视角：描述一个下游 SG 能用自己的技能独立完成的子问题。\n"
+            "  自检方法：如果本层自己就能回答 synthesized_query 描述的问题，\n"
+            "  → 说明写错了域，这是本层域内的问题，下游 SG 没有对应的技能。\n"
+            "  正确做法：先看下方「SG 技能列表」中 target_sgs 的技能，确认它们能处理什么类型的问题，\n"
+            "  然后 synthesized_query 只写这些技能能直接处理的内容。\n\n"
             "重要约束：\n"
             "- 不要依据 SG 的自描述文案选择目标；最终远程 SG 由后续标准 "
             "capability_check 全量广播（成员能力证据）决定；\n"
@@ -8991,12 +9100,16 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             "needs_help=true；\n"
             "- 当 needs_help=true 时，target_sgs 应填写你认为可补充数据的 SG 名称。\n"
             "  最终远程 SG 由后续标准 capability_check 全量广播决定，此处的 target_sgs 用于辅助性提示。\n"
-            "- target_sgs 中的名称必须从上方列表中的 SG 名称中精确选取，不得编造不存在的 SG 名称。\n\n"
+            "- target_sgs 中的名称必须从上方列表中的 SG 名称中精确选取，不得编造不存在的 SG 名称。\n"
+            "- 【关键】如果「已完成委托结果」中显示某个 SG 返回了空结果或标记为 EMPTY，"
+            "说明该 SG 无法为此问题提供数据。此时 target_sgs 不要再次包含该 SG 名称，"
+            "应尝试委托给列表中其他不同的 SG（agent）。\n\n"
             "注意: 如果已有结果已经能完整回答原始问题，应返回 needs_help=false。\n\n"
             f"原始问题（仅供判断缺口，勿整段写入 synthesized_query）：{query}\n\n"
             f"本层自身执行结果：\n{own_text}\n\n"
             f"已完成委托结果：\n{del_text}\n\n"
             f"可委托的 SG 名称列表（仅供参考，非选人依据）：\n{sg_options}\n\n"
+            f"SG 技能列表（必须参考，用于编写域正确的 synthesized_query）：\n{sg_skills_info}\n\n"
             "请调用 detect_delegation_needs 工具来输出结果："
         )
 
@@ -9175,14 +9288,14 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         progress_updater: Optional[Any] = None,
         collaboration_original_query: str = "",
         execution_hints_by_sg: Optional[dict[str, dict]] = None,
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], int]:
         """Mid-execution Step 3: dispatch plan tasks to target SGs.
 
         Iterates the plan's tasks, maps each to its target card, and calls
         ``delegate_to_collaborator_sg``.  When capability_check returned an
         ``execution_hint`` for a peer, forward it opaquely on dispatch.
-        Returns ``{sg_name: result}``.
-        """
+        Returns ``(results_dict, remaining_hop)`` where remaining_hop is the
+        hop count after all dispatches in this call.
         results: dict[str, str] = {}
         name_to_card = {c.name: c for c in target_cards}
         hints_by_sg = dict(execution_hints_by_sg or {})
@@ -9311,7 +9424,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     },
                 )
 
-        return results
+        return results, current_hop
 
     async def _summarize_delegated_result(
         self,
@@ -9331,7 +9444,8 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             f"[Task#{tid}] {res}" for tid, res in own_results.items() if res
         )
         del_text = "\n".join(
-            f"[{name}] {res}" for name, res in delegated_results.items() if res
+            f"[{name}] {res or '[EMPTY — 该 SG 未返回任何数据]'}"
+            for name, res in delegated_results.items()
         )
         upstream_text = json.dumps(upstream_context, ensure_ascii=False) if upstream_context else "无"
 
