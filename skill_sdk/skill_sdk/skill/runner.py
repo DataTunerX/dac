@@ -1241,6 +1241,9 @@ class SkillRunner:
                         name,
                     )
                     messages.append(
+                        ToolMessage(content=f"unknown tool: {name}", tool_call_id=call.get("id", ""))
+                    )
+                    messages.append(
                         HumanMessage(
                             content=(
                                 f"你调用了未知工具 `{name}`。请只使用 `select_skill` 或 `no_suitable_skill`。"
@@ -1257,6 +1260,9 @@ class SkillRunner:
                         "make_plan attempt %s/%s: select_skill with empty skill, nudging.",
                         attempt,
                         self.make_plan_max_attempts,
+                    )
+                    messages.append(
+                        ToolMessage(content="skill field was empty", tool_call_id=call.get("id", ""))
                     )
                     messages.append(
                         HumanMessage(
@@ -1281,6 +1287,9 @@ class SkillRunner:
                         raw_skill,
                     )
                     messages.append(
+                        ToolMessage(content=f"skill {raw_skill!r} not found", tool_call_id=call.get("id", ""))
+                    )
+                    messages.append(
                         HumanMessage(
                             content=(
                                 f"你选择的 skill `{raw_skill}` **不在**可用技能列表中。"
@@ -1299,6 +1308,9 @@ class SkillRunner:
                         attempt,
                         self.make_plan_max_attempts,
                         canonical_name,
+                    )
+                    messages.append(
+                        ToolMessage(content=f"skill {canonical_name!r} already excluded", tool_call_id=call.get("id", ""))
                     )
                     messages.append(
                         HumanMessage(
@@ -2543,7 +2555,7 @@ class SkillRunner:
 
         skill_obj = candidates[0]
         logger.info(
-            "plan_and_run skill_search selected skill=%s, handing off to run()",
+            "plan_and_run[skill_search] selected skill=%s, handing off to run()",
             skill_obj.name,
         )
         run_result = await self.run(
@@ -2557,7 +2569,7 @@ class SkillRunner:
         run_result["skill_search"] = search_result
         run_result["attempts"] = attempts_log
         logger.info(
-            "plan_and_run EXIT status=%s skill=%s",
+            "plan_and_run[skill_search] EXIT status=%s skill=%s",
             run_result.get("status"),
             skill_obj.name,
         )
@@ -2573,7 +2585,7 @@ class SkillRunner:
         progress_callback: StepProgressCallback | None = None,
     ) -> dict[str, Any]:
         logger.info(
-            "plan_and_run ENTER query=%r user_id=%s run_id=%s trace_id=%s max_attempts=%d",
+            "plan_and_run[planner] ENTER query=%r user_id=%s run_id=%s trace_id=%s max_attempts=%d",
             _short(query),
             user_id,
             run_id,
@@ -2590,7 +2602,7 @@ class SkillRunner:
         for attempt in range(1, self.plan_and_run_max_attempts + 1):
             failure_notes = "\n".join(failure_notes_parts)
             logger.info(
-                "plan_and_run attempt=%d/%d tried_skills=%s",
+                "plan_and_run[planner] attempt=%d/%d tried_skills=%s",
                 attempt,
                 self.plan_and_run_max_attempts,
                 tried_skills,
@@ -2609,7 +2621,7 @@ class SkillRunner:
 
             if planner_step.declined:
                 logger.warning(
-                    "plan_and_run attempt=%d status=no_suitable_skill reason=%r",
+                    "plan_and_run[planner] attempt=%d status=no_suitable_skill reason=%r",
                     attempt,
                     _short(planner_step.reason),
                 )
@@ -2635,7 +2647,7 @@ class SkillRunner:
 
             if not planner_step.skill:
                 logger.warning(
-                    "plan_and_run attempt=%d status=no_skill_selected reason=%r",
+                    "plan_and_run[planner] attempt=%d status=no_skill_selected reason=%r",
                     attempt,
                     _short(planner_step.reason),
                 )
@@ -2663,7 +2675,7 @@ class SkillRunner:
             )
             if not candidates:
                 logger.warning(
-                    "plan_and_run attempt=%d status=skill_not_found requested=%r",
+                    "plan_and_run[planner] attempt=%d status=skill_not_found requested=%r",
                     attempt,
                     planner_step.skill,
                 )
@@ -2688,7 +2700,7 @@ class SkillRunner:
 
             skill_obj = candidates[0]
             logger.info(
-                "plan_and_run attempt=%d selected skill=%s, handing off to run()",
+                "plan_and_run[planner] attempt=%d selected skill=%s, handing off to run()",
                 attempt,
                 skill_obj.name,
             )
@@ -2715,7 +2727,7 @@ class SkillRunner:
             if status == "completed":
                 run_result["attempts"] = attempts_log
                 logger.info(
-                    "plan_and_run EXIT status=completed attempt=%d skill=%s",
+                    "plan_and_run[planner] EXIT status=completed attempt=%d skill=%s",
                     attempt,
                     skill_obj.name,
                 )
@@ -2737,7 +2749,7 @@ class SkillRunner:
             if attempt >= self.plan_and_run_max_attempts:
                 run_result["attempts"] = attempts_log
                 logger.warning(
-                    "plan_and_run EXIT status=%s skill=%s attempts_exhausted=%d",
+                    "plan_and_run[planner] EXIT status=%s skill=%s attempts_exhausted=%d",
                     status,
                     skill_obj.name,
                     attempt,
@@ -2745,7 +2757,7 @@ class SkillRunner:
                 return run_result
 
             logger.warning(
-                "plan_and_run attempt=%d status=%s skill=%s -> will replan",
+                "plan_and_run[planner] attempt=%d status=%s skill=%s -> will replan",
                 attempt,
                 status,
                 skill_obj.name,

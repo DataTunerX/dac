@@ -61,6 +61,7 @@ from langchain_core.messages import (
     AIMessage,
     HumanMessage,
     SystemMessage,
+    ToolMessage,
 )
 from langchain_core.prompts.chat import (
     ChatPromptTemplate,
@@ -1393,6 +1394,8 @@ class PlannerAgent(BaseAgent):
                 call = next((c for c in tool_calls if c.get("name") == "make_plan_cmd"), None)
                 if call is None:
                     logger.warning("make_plan attempt %s: unknown tool, nudging.", attempt)
+                    for c in tool_calls:
+                        messages.append(ToolMessage(content="unknown tool", tool_call_id=c.get("id", "")))
                     messages.append(HumanMessage(content="你调用了未知工具。请只使用 `make_plan_cmd` 工具。"))
                     continue
 
@@ -1405,11 +1408,15 @@ class PlannerAgent(BaseAgent):
                     )
                 except Exception as e:
                     logger.warning("make_plan attempt %s: failed to parse TaskList: %s, nudging.", attempt, e)
+                    for c in tool_calls:
+                        messages.append(ToolMessage(content=f"parse error: {e}", tool_call_id=c.get("id", "")))
                     messages.append(HumanMessage(content=f"工具调用参数解析失败: {e}。请检查然后重新调用 `make_plan_cmd`。"))
                     continue
 
                 if not tasks.tasks:
                     logger.warning("make_plan attempt %s: empty tasks list, nudging.", attempt)
+                    for c in tool_calls:
+                        messages.append(ToolMessage(content="empty tasks list", tool_call_id=c.get("id", "")))
                     messages.append(HumanMessage(content=f"你返回的 `tasks` 列表为空。如果确实没有合适的智能体，请使用 agent='NONE' 和 description='{NONE_TASK_DESCRIPTION}'。"))
                     continue
 
