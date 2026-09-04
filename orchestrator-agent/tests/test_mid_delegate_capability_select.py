@@ -197,8 +197,8 @@ def test_select_mid_delegate_higher_confidence_beats_soft_hint(monkeypatch):
     assert result["target_sg_names"][0] == "other-sg-bbb"
 
 
-def test_select_mid_delegate_soft_hint_fallback_when_capability_empty(monkeypatch):
-    """Detect named a peer but every capability_check returns false → still select hint."""
+def test_select_mid_delegate_no_fallback_when_capability_empty(monkeypatch):
+    """Detect named a peer but every capability_check returns false → empty targets (no fallback)."""
     executor = object.__new__(sg.OrchestratorAgentExecutorSemanticGroup)
     executor.agent_card = SimpleNamespace(name="order-sg-aaa")
     executor.agent_id = "order-sg-aaa"
@@ -214,7 +214,6 @@ def test_select_mid_delegate_soft_hint_fallback_when_capability_empty(monkeypatc
 
     monkeypatch.setattr(sg.sg_broadcast, "probe_agents_capability_concurrent", _fake_probe)
     monkeypatch.setattr(sg.sg_broadcast, "list_all_orchestrator_agent_cards", _fake_list)
-    monkeypatch.setenv("SG_MID_DELEGATE_SOFT_HINT_FALLBACK", "true")
 
     result = asyncio.run(
         executor._select_mid_delegate_targets_via_capability(
@@ -223,11 +222,8 @@ def test_select_mid_delegate_soft_hint_fallback_when_capability_empty(monkeypatc
             soft_target_hints=["UserAccountPaymentAgent-sg-42627bb7"],
         )
     )
-    assert result["target_sg_names"] == ["UserAccountPaymentAgent-sg-42627bb7"]
-    assert "soft_hint fallback" in (result["evidence_text"] or "").lower() or (
-        result["capable_pairs"]
-        and "soft_hint fallback" in (result["capable_pairs"][0][1].reason or "")
-    )
+    # No soft-hint fallback: capability check returned empty, so targets must be empty
+    assert result["target_sg_names"] == []
 
 
 def test_select_mid_delegate_resolves_soft_hint_from_extra_cards(monkeypatch):

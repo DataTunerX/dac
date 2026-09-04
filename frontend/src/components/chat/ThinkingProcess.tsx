@@ -28,6 +28,32 @@ import { EMPTY_PROGRESS } from "@/components/chat/chat-message-types"
 function chevronIcon(open: boolean, className = "w-4 h-4 text-content-muted shrink-0") {
   return open ? <ChevronDown className={className} /> : <ChevronRight className={className} />
 }
+
+/** 超过 200 字符的 message 默认折叠，点击展开查看全部。 */
+function MessageContent({ text }: { text: string }) {
+  const MAX = 200
+  const [expanded, setExpanded] = useState(false)
+  const needsTruncate = text.length > MAX
+
+  if (!needsTruncate) {
+    return <span className="font-mono text-[12px] text-content leading-relaxed whitespace-pre-wrap break-words">{text}</span>
+  }
+
+  return (
+    <div>
+      <span className="font-mono text-[12px] text-content leading-relaxed whitespace-pre-wrap break-words">
+        {expanded ? text : text.slice(0, MAX) + "…"}
+      </span>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="ml-1 text-[11px] text-content-muted hover:text-content underline underline-offset-2"
+      >
+        {expanded ? "收起" : "展开全部"}
+      </button>
+    </div>
+  )
+}
+
 function CollapsibleSectionInner({
   defaultOpen,
   summary,
@@ -775,9 +801,7 @@ export const ThinkingProcess = ({
                     <AccordionContent className="px-3 pb-3 pt-0">
                       <div className="rounded-b-lg border-t border-line/60 bg-surface-muted/30 py-2 px-2.5">
                         {message ? (
-                          <span className="font-mono text-[12px] text-content leading-relaxed whitespace-pre-wrap break-words">
-                            {message}
-                          </span>
+                          <MessageContent text={message} />
                         ) : (
                           <span className="text-content-muted text-[12px]">—</span>
                         )}

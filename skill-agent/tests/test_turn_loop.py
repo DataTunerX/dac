@@ -72,6 +72,7 @@ class TestSummaryEvaluationResult:
             satisfactory=True,
             missing_info="",
             rationale="All data is available",
+            cot_analysis="步骤1：问题诉求是...步骤2：答案覆盖了...步骤3：实质性结果。步骤4：satisfactory=true。",
         )
         assert r.answer == "答案是42"
         assert r.satisfactory is True
@@ -84,6 +85,7 @@ class TestSummaryEvaluationResult:
             satisfactory=False,
             missing_info="缺少数据库 Y 的日志数据",
             rationale="Missing log data from system Y",
+            cot_analysis="步骤1：问题诉求是...步骤2：答案未覆盖...步骤3：解释说明。步骤4：satisfactory=false。",
         )
         assert not r.satisfactory
         assert "数据库 Y" in r.missing_info
@@ -94,6 +96,7 @@ class TestSummaryEvaluationResult:
             satisfactory=True,
             missing_info="",
             rationale="sufficient",
+            cot_analysis="步骤1：问题诉求是...步骤2：答案覆盖了...步骤3：实质性结果。步骤4：satisfactory=true。",
             unknown_field="should_be_ignored",
         )
         assert r.answer == "ok"
@@ -211,11 +214,11 @@ class TestSummarizeWithEvaluationToolCall:
                                     )
 
         assert result.satisfactory is False
-        assert result.missing_info == ""
+        assert "当前信息不足以" in result.missing_info
 
     @pytest.mark.asyncio
     async def test_llm_did_not_call_tool(self):
-        """invoke_llm_with_tool returns None → fallback satisfactory=True."""
+        """invoke_llm_with_tool returns None → fallback satisfactory=False."""
         ex = self._make()
 
         with patch.object(
@@ -238,12 +241,12 @@ class TestSummarizeWithEvaluationToolCall:
                                         delegate_results={},
                                     )
 
-        assert result.satisfactory is True
+        assert result.satisfactory is False
         assert "LLM 未调用评估工具" in result.answer
 
     @pytest.mark.asyncio
     async def test_exception_returns_satisfactory(self):
-        """invoke_llm_with_tool raises → fallback satisfactory=True."""
+        """invoke_llm_with_tool raises → fallback satisfactory=False."""
         ex = self._make()
 
         with patch.object(
@@ -266,7 +269,7 @@ class TestSummarizeWithEvaluationToolCall:
                                         delegate_results={},
                                     )
 
-        assert result.satisfactory is True
+        assert result.satisfactory is False
         assert "汇总阶段出错" in result.answer
 
 
@@ -306,8 +309,9 @@ class TestTurnLoopWithLLMEval:
         mock_eval = AsyncMock(return_value=SummaryEvaluationResult(
             answer="最终答案", satisfactory=True,
             missing_info="", rationale="sufficient",
+            cot_analysis="步骤1：用户问题核心诉求是...步骤2：答案覆盖了...步骤3：是实质性结果。步骤4：satisfactory=true。",
         ))
-        mock_exec = AsyncMock(return_value=({1: "ok"}, {}))
+        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, []))
         with patch.object(ex, "_summarize_with_evaluation", mock_eval):
             with patch.object(ex, "_execute_plan_and_mid_exec", mock_exec):
 
@@ -318,7 +322,7 @@ class TestTurnLoopWithLLMEval:
 
                 while total < ex.max_loops:
                     total += 1
-                    tr, dr = await ex._execute_plan_and_mid_exec()
+                    tr, dr, _hop, _meta = await ex._execute_plan_and_mid_exec()
                     accumulated_task.update(tr)
                     accumulated_delegate.update(dr)
                     er = await ex._summarize_with_evaluation(
@@ -346,13 +350,15 @@ class TestTurnLoopWithLLMEval:
                 return SummaryEvaluationResult(
                     answer="不够好", satisfactory=False,
                     missing_info="缺少X数据", rationale="missing X data",
+                    cot_analysis="步骤1：问题诉求是...步骤2：答案未覆盖...步骤3：解释说明。步骤4：satisfactory=false。",
                 )
             return SummaryEvaluationResult(
                 answer="完整答案", satisfactory=True,
                 missing_info="", rationale="all data collected",
+                cot_analysis="步骤1：问题诉求是...步骤2：答案覆盖了...步骤3：实质性结果。步骤4：satisfactory=true。",
             )
 
-        mock_exec = AsyncMock(return_value=({1: "ok"}, {}))
+        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, []))
         with patch.object(ex, "_summarize_with_evaluation", mock_eval):
             with patch.object(ex, "_execute_plan_and_mid_exec", mock_exec):
 
@@ -364,7 +370,7 @@ class TestTurnLoopWithLLMEval:
 
                 while total < ex.max_loops:
                     total += 1
-                    tr, dr = await ex._execute_plan_and_mid_exec()
+                    tr, dr, _hop, _meta = await ex._execute_plan_and_mid_exec()
                     accumulated_task.update(tr)
                     accumulated_delegate.update(dr)
                     er = await ex._summarize_with_evaluation(
@@ -389,15 +395,16 @@ class TestTurnLoopWithLLMEval:
         mock_eval = AsyncMock(return_value=SummaryEvaluationResult(
             answer="不够", satisfactory=False,
             missing_info="缺数据", rationale="insufficient",
+            cot_analysis="步骤1：问题诉求是...步骤2：答案未覆盖...步骤3：解释说明。步骤4：satisfactory=false。",
         ))
-        mock_exec = AsyncMock(return_value=({1: "ok"}, {}))
+        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, []))
         with patch.object(ex, "_summarize_with_evaluation", mock_eval):
             with patch.object(ex, "_execute_plan_and_mid_exec", mock_exec):
 
                 total = 0
                 while total < ex.max_loops:
                     total += 1
-                    tr, dr = await ex._execute_plan_and_mid_exec()
+                    tr, dr, _hop, _meta = await ex._execute_plan_and_mid_exec()
                     er = await ex._summarize_with_evaluation(
                         original_query="q",
                         task_results=tr,
@@ -416,15 +423,16 @@ class TestTurnLoopWithLLMEval:
         mock_eval = AsyncMock(return_value=SummaryEvaluationResult(
             answer="不完美", satisfactory=False,
             missing_info="缺", rationale="not enough",
+            cot_analysis="步骤1：问题诉求是...步骤2：答案未覆盖...步骤3：解释说明。步骤4：satisfactory=false。",
         ))
-        mock_exec = AsyncMock(return_value=({1: "ok"}, {}))
+        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, []))
         with patch.object(ex, "_summarize_with_evaluation", mock_eval):
             with patch.object(ex, "_execute_plan_and_mid_exec", mock_exec):
 
                 total = 0
                 while total < ex.max_loops:
                     total += 1
-                    tr, dr = await ex._execute_plan_and_mid_exec()
+                    tr, dr, _hop, _meta = await ex._execute_plan_and_mid_exec()
                     er = await ex._summarize_with_evaluation(
                         original_query="q",
                         task_results=tr,

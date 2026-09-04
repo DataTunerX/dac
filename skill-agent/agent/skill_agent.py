@@ -36,6 +36,7 @@ from typing import (
     Optional,
     Union,
 )
+from collections.abc import Awaitable
 from uuid import uuid4
 
 import httpx
@@ -112,7 +113,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 PROGRESS_FRAME_PREFIX = "[[DAC_PROGRESS]] "
-DAC_PROGRESS_LAYER = "sd_skill"
+DAC_PROGRESS_LAYER = "skill"
 PROGRESS_SCHEMA_VERSION = "v1"
 PROGRESS_BASE_FIELDS = (
     "schema_version", "layer", "event", "run_id", "user_id", "agent_id",
@@ -1453,6 +1454,7 @@ class SkillAgent(BaseAgent):
         metadata: dict | None = None,
         current_task_id: int | None = None,
         agent_id: str = "SkillAgent",
+        progress_callback: Callable[[str], Awaitable[None]] | None = None,
     ):
         super().__init__(
             agent_name="SkillAgent",
@@ -1466,6 +1468,7 @@ class SkillAgent(BaseAgent):
         self.current_task_id = current_task_id
         self.agent_id = agent_id
         self.reason_code: str = ""
+        self.progress_callback = progress_callback
 
     def _log_propagated_history(self) -> None:
         payload = _parse_propagated_history(self.metadata.get(PROPAGATED_HISTORY_KEY))
@@ -1557,7 +1560,7 @@ class SkillAgent(BaseAgent):
         effective_query = self._build_query_with_history(query)
 
         await self.emit_progress(
-            "sd_skill_started",
+            "skill_started",
             message=f"running local skill | query: {query_preview}",
             status="running",
             task_id=self.current_task_id,
@@ -1571,6 +1574,7 @@ class SkillAgent(BaseAgent):
                 user_id=user_id,
                 run_id=run_id,
                 trace_id=trace_id,
+                progress_callback=self.emit_progress,
             )
         except asyncio.CancelledError:
             logger.warning("[LocalSkill][RunCancel] cancelled")
@@ -1595,7 +1599,7 @@ class SkillAgent(BaseAgent):
         )
 
         await self.emit_progress(
-            "sd_skill_finished",
+            "skill_finished",
             message=f"completed skill {skill_name_used or '(unknown)'}" if status_code == "complete"
             else f"skill failed ({reason_code or 'error'})",
             status="done" if status_code == "complete" else "fail",
@@ -2648,7 +2652,8 @@ class SkillAgentExecutor(AgentExecutor):
             f"[Task#{tid}]: {res}" for tid, res in own_results.items() if res
         )
         del_text = "\n".join(
-            f"[{name}]: {res}" for name, res in delegated_results.items() if res
+            f"[{name}]: {res or '[EMPTY — 该 SG 未返回任何数据]'}"
+            for name, res in delegated_results.items()
         )
         if collaborator_cards:
             sg_options = "\n".join(
@@ -2693,7 +2698,10 @@ class SkillAgentExecutor(AgentExecutor):
             "needs_help=true；\n"
             "- 当 needs_help=true 时，target_sgs 应填写你认为可补充数据的 SG 名称。\n"
             "  最终远程 SG 由后续标准 capability_check 全量广播决定，此处的 target_sgs 用于辅助性提示。\n"
-            "- target_sgs 中的名称必须从上方列表中的 SG 名称中精确选取，不得编造不存在的 SG 名称。\n\n"
+            "- target_sgs 中的名称必须从上方列表中的 SG 名称中精确选取，不得编造不存在的 SG 名称。\n"
+            "- 【关键】如果「已完成委托结果」中显示某个 SG 返回了空结果或标记为 EMPTY，"
+            "说明该 SG 无法为此问题提供数据。此时 target_sgs 不要再次包含该 SG 名称，"
+            "应尝试委托给列表中其他不同的 SG（agent）。\n\n"
             "注意: 如果已有结果已经能完整回答原始问题，应返回 needs_help=false。\n\n"
             f"原始问题（仅供判断缺口，勿整段写入 synthesized_query）：{query}\n\n"
             f"本层自身执行结果：\n{own_text}\n\n"
@@ -2874,8 +2882,17 @@ class SkillAgentExecutor(AgentExecutor):
         except ValueError:
             return 3
 
-    def _mid_exec_soft_hint_fallback_enabled(self) -> bool:
-        return os.getenv("SG_MID_DELEGATE_SOFT_HINT_FALLBACK", "true").strip().lower() not in ("false", "0", "no")
+    def _mid_exec_confidence_threshold(self) -> float:
+        """Minimum confidence score for mid-exec delegation target selection.
+
+        Agents with capability_check confidence below this threshold are
+        excluded from the target pool.  Default 0.5; controlled by the
+        ``SG_MID_DELEGATE_CONFIDENCE_THRESHOLD`` env var.
+        """
+        try:
+            return float(os.getenv("SG_MID_DELEGATE_CONFIDENCE_THRESHOLD", "0.5") or 0.5)
+        except ValueError:
+            return 0.8
 
     @staticmethod
     def _mid_exec_capability_probe_query(synthesized_query: str) -> str:
@@ -3001,16 +3018,31 @@ class SkillAgentExecutor(AgentExecutor):
         if capable_pairs:
             capable_pairs = self._rank_mid_exec_capable_pairs(capable_pairs, hint_names)
 
-        if not capable_pairs and hinted and self._mid_exec_soft_hint_fallback_enabled():
-            logger.warning("[MidExec][CapSelect] capability_check empty, falling back to soft_hints")
-            capable_pairs = [
-                (card, sg_broadcast.CapabilityCheckResponse(
-                    can_handle=True, can_contribute=True, confidence=0.55,
-                    reason="mid-exec soft_hint fallback", agent_name=card.name,
-                    agent_url=str(getattr(card, "url", "") or ""),
-                ))
-                for card in hinted
+        # ── Confidence threshold ──
+        # Filter out agents whose capability_check confidence is below the
+        # minimum threshold.  This prevents irrelevant agents (e.g. an LLM
+        # fine-tuning agent for a purchase-history query) from being selected
+        # just because they happened to be the only candidate in the pool.
+        _threshold = self._mid_exec_confidence_threshold()
+        if capable_pairs and _threshold > 0:
+            _before = len(capable_pairs)
+            _filtered = [
+                (card, resp)
+                for card, resp in capable_pairs
+                if float(getattr(resp, "confidence", 0.0) or 0.0) >= _threshold
             ]
+            if len(_filtered) < _before:
+                _dropped = [
+                    f"{card.name}({float(getattr(resp, 'confidence', 0.0) or 0.0):.2f})"
+                    for card, resp in capable_pairs
+                    if float(getattr(resp, "confidence", 0.0) or 0.0) < _threshold
+                ]
+                logger.info(
+                    "[MidExec][CapSelect] confidence threshold filtered | "
+                    "threshold=%.2f before=%d after=%d dropped=%s",
+                    _threshold, _before, len(_filtered), _dropped,
+                )
+            capable_pairs = _filtered
 
         if not capable_pairs:
             return {**empty, "probed_names": probed_names}
@@ -3113,11 +3145,16 @@ class SkillAgentExecutor(AgentExecutor):
         upstream_context: dict,
         hints_by_sg: Optional[dict[str, dict]] = None,
         updater: Optional[Any] = None,
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], int]:
         """Mid-execution Step 3: dispatch plan tasks to target SGs.
 
         Forward progress frames from delegated agents via ``updater`` so the
         delegated agent's DAC progress is visible to the end user.
+
+        Returns:
+            Tuple of (results dict, remaining_hop).
+            remaining_hop reflects the hop count after all dispatches in this
+            call, accounting for each delegation edge consumed.
         """
         results: dict[str, str] = {}
         name_to_card = {c.name: c for c in target_cards}
@@ -3191,7 +3228,7 @@ class SkillAgentExecutor(AgentExecutor):
                         "result_chars": len(result or ""),
                     },
                 )
-        return results
+        return results, current_hop
 
     # ------------------------------------------------------------------
     # Updated _delegate_to_peer with delegation_chain and execution_hint
@@ -3762,11 +3799,15 @@ class SkillAgentExecutor(AgentExecutor):
         Returns a :class:`SummaryEvaluationResult` with the answer text
         and the evaluation outcome.
         """
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        # 构建各部分文本（直接拼接，不截断）
         own_text = "\n".join(
             f"[Task#{tid}] {res}" for tid, res in task_results.items() if res
         )
         del_text = "\n".join(
-            f"[{name}] {res}" for name, res in delegate_results.items() if res
+            f"[{name}]: {res or '[EMPTY — 该 SG 未返回任何数据]'}"
+            for name, res in delegate_results.items()
         )
         upstream_text = (
             json.dumps(upstream_context, ensure_ascii=False)
@@ -3774,7 +3815,8 @@ class SkillAgentExecutor(AgentExecutor):
             else "无"
         )
 
-        system_prompt_text = (
+        # 系统提示词（强化评估标准，由 LLM 独立判断）
+        system_prompt = (
             "你是一位知识分析与总结专家。你的任务是基于提供的执行结果和对话上下文，"
             "通过逻辑严密的分析，回答用户的原始问题。\n\n"
             "**核心原则**\n"
@@ -3799,14 +3841,37 @@ class SkillAgentExecutor(AgentExecutor):
             "- 只有当用户请求的实质性结果已完整获取时，satisfactory 才为 true。\n"
             "- 如果实质性结果缺失，即使执行过程描述得很详细，satisfactory 也必须为 false。\n"
             "- 执行过程描述（包括失败原因、错误说明、状态报告等）不能替代实质性结果。\n\n"
+            "**特别注意：以下情况必须判定 satisfactory=false**\n"
+            "1. 下游结果中出现「没有找到」「未查询到」「不存在」「无法确定」「请提供」「您可以」「建议您」等表示未完成或需要用户补充输入的表述，且原始问题并非确认某事物是否存在。\n"
+            "2. 下游仅返回全量兜底数据，而没有直接回答用户的具体问题（例如用户问“王五买了哪些商品”，下游却列出所有用户的购买记录）。\n"
+            "3. 下游结果以反问用户结束（如“请问您知道……吗？”），说明信息不足以独立完成回答。\n"
+            "4. 下游结果中明确说明缺少某些关键信息，导致无法完成最终答案。\n\n"
+            "**Few-shot 示例**\n"
+            "示例1：\n"
+            "用户问题：王五买了哪些商品，要显示商品名字\n"
+            "下游结果：订单数据中没有找到用户名为“王五”的记录，数据中只有用户ID，没有姓名。以下是所有用户的购买概览：U001买了A、B，U002买了C……请问您知道王五对应的用户ID吗？\n"
+            "正确输出：\n"
+            "answer: 当前订单数据中没有用户名为“王五”的记录，且数据中只有用户ID，无法确定王五对应的用户，因此无法回答王五购买了哪些商品。\n"
+            "satisfactory: false\n"
+            "missing_info: 缺少用户名“王五”到用户ID的映射信息，需要先通过用户查询能力获取王五对应的用户ID，再查询该用户的订单商品。\n"
+            "rationale: 下游未提供王五的实质购买记录，仅给出全量数据并反问用户，实质结果缺失。\n\n"
+            "示例2：\n"
+            "用户问题：查询2024年1月的销售总额\n"
+            "下游结果：已查询数据库，2024年1月销售总额为123456元。\n"
+            "正确输出：\n"
+            "answer: 2024年1月的销售总额为123456元。\n"
+            "satisfactory: true\n"
+            "missing_info: \"\"\n"
+            "rationale: 已获得明确的销售总额数据，足以回答。\n\n"
             "**重要**：你必须调用 evaluate_summary 工具来输出结果，不要直接输出文本。"
         )
 
-        human_prompt_text = (
-            "原始问题：" + original_query + "\n\n"
-            "上游传入上下文：" + upstream_text.replace("{", "{{").replace("}", "}}") + "\n\n"
-            "本层自身执行结果：\n" + own_text.replace("{", "{{").replace("}", "}}") + "\n\n"
-            "委托给下游 SG 的返回结果（可能已包含多级汇总）：\n" + del_text.replace("{", "{{").replace("}", "}}") + "\n\n"
+        # 人类消息（直接拼接，避免花括号问题）
+        human_prompt = (
+            f"原始问题：{original_query}\n\n"
+            f"上游传入上下文：{upstream_text}\n\n"
+            f"本层自身执行结果：\n{own_text}\n\n"
+            f"委托给下游 SG 的返回结果（可能已包含多级汇总）：\n{del_text}\n\n"
             "请调用 evaluate_summary 工具输出结果。"
         )
 
@@ -3814,13 +3879,11 @@ class SkillAgentExecutor(AgentExecutor):
             llm = self._get_orchestration_llm()
             history_messages = await self.get_history()
 
-            # Build the same ChatPromptTemplate used by the planner
-            chat_prompt = ChatPromptTemplate.from_messages([
-                SystemMessagePromptTemplate.from_template(system_prompt_text),
-                *history_messages,
-                HumanMessagePromptTemplate.from_template(human_prompt_text),
-            ])
-            messages = chat_prompt.format_messages()
+            # 直接构建消息列表，避免使用 ChatPromptTemplate
+            messages = [SystemMessage(content=system_prompt)]
+            if history_messages:
+                messages.extend(history_messages)
+            messages.append(HumanMessage(content=human_prompt))
 
             eval_tool = StructuredTool(
                 name="evaluate_summary",
@@ -3830,6 +3893,8 @@ class SkillAgentExecutor(AgentExecutor):
                     "satisfactory: 当前信息是否足以回答问题。"
                     "missing_info: 信息不足时，说明缺少什么信息。"
                     "rationale: 评估决策的一句话理由。"
+                    "cot_analysis: 思维链分析过程，包含对问题诉求的拆解、答案覆盖度的逐条核验、"
+                    "实质性结果 vs 解释说明的区分、以及最终的客观判断结论。"
                 ),
                 args_schema=SummaryEvaluationResult,
                 func=None,
@@ -3849,36 +3914,58 @@ class SkillAgentExecutor(AgentExecutor):
                 span_name="skill-summarize-eval",
             )
 
+            # 处理 LLM 未调用工具的情况（结构性兜底，不基于内容判断）
             if result_data is None:
                 logger.warning(
                     "[SummaryEval] LLM did not call evaluate_summary — falling back to "
-                    "satisfactory=True"
+                    "satisfactory=False"
                 )
                 return SummaryEvaluationResult(
-                    answer="汇总阶段：LLM 未调用评估工具，请重试。",
-                    satisfactory=True,
-                    missing_info="",
-                    rationale="LLM did not call evaluate_summary tool",
-                )
+                    answer="汇总阶段：LLM 未调用评估工具，无法生成有效回答，请重试。",
+satisfactory=False,
+                missing_info="LLM 未调用 evaluate_summary 工具，需要重新执行汇总。",
+                rationale="LLM did not call evaluate_summary tool",
+                cot_analysis="LLM 未调用 evaluate_summary 工具，无法进行思维链分析。",
+            )
 
+            # 提取字段，仅做空值处理，不做任何基于内容的规则判断
+            answer = result_data.get("answer", "").strip()
+            satisfactory = bool(result_data.get("satisfactory", False))
+            missing_info = result_data.get("missing_info", "").strip()
+            rationale = result_data.get("rationale", "").strip()
+
+            # 结构兜底：若 answer 为空，即使 LLM 判为 true 也无法使用，强制改为不充分
+            if not answer:
+                satisfactory = False
+                missing_info = missing_info or "汇总结果为空，缺少实质回答内容。"
+                rationale = rationale or "answer 为空，无法提供有效回答"
+
+            # 结构兜底：若 satisfactory=False 但 missing_info 为空，补充默认说明
+            if not satisfactory and not missing_info:
+                missing_info = "当前信息不足以完整回答用户问题，需要补充获取相关数据。"
+
+            # 直接返回 LLM 的评估结果，不再进行任何一致性修正或内容检查
             return SummaryEvaluationResult(
-                answer=result_data.get("answer", ""),
-                satisfactory=bool(result_data.get("satisfactory", True)),
-                missing_info=result_data.get("missing_info", ""),
-                rationale=result_data.get("rationale", ""),
+                answer=answer,
+                satisfactory=satisfactory,
+                missing_info=missing_info,
+                rationale=rationale,
+                cot_analysis=result_data.get("cot_analysis", ""),
             )
 
         except Exception as e:
             logger.error("[SummaryEval] LLM summarization failed: %s", e)
+            # 异常时也返回 satisfactory=False，避免流程误终止
             return SummaryEvaluationResult(
                 answer=(
                     "由于汇总阶段出错，未能生成综合答案。以下为各协作 SG 返回的原始结果：\n\n"
                     f"{own_text}\n\n"
                     f"{del_text}"
                 ),
-                satisfactory=True,
-                missing_info="",
+                satisfactory=False,
+                missing_info=f"汇总阶段发生异常：{e}，需要重试或人工介入。",
                 rationale=f"LLM call failed: {e}",
+                cot_analysis=f"LLM 调用失败，无法进行思维链分析：{e}",
             )
 
     async def _summarize(
@@ -3899,7 +3986,8 @@ class SkillAgentExecutor(AgentExecutor):
             f"[Task#{tid}] {res}" for tid, res in task_results.items() if res
         )
         del_text = "\n".join(
-            f"[{name}] {res}" for name, res in delegate_results.items() if res
+            f"[{name}]: {res or '[EMPTY — 该 SG 未返回任何数据]'}"
+            for name, res in delegate_results.items()
         )
         upstream_text = (json.dumps(upstream_context, ensure_ascii=False)
                          if upstream_context else "无")
@@ -4337,7 +4425,7 @@ class SkillAgentExecutor(AgentExecutor):
         # ------------------------------------------------------------------
         # Step 3-5: Execute plan and mid-exec loop (extracted method)
         # ------------------------------------------------------------------
-        all_task_results, delegate_results, _remaining_hop = await self._execute_plan_and_mid_exec(
+        all_task_results, delegate_results, _remaining_hop, _plan_meta = await self._execute_plan_and_mid_exec(
             query=query,
             all_cards=all_cards,
             own_names=own_names,
@@ -4447,21 +4535,21 @@ class SkillAgentExecutor(AgentExecutor):
         current_hop: int,
         delegation_chain: list[str],
         failure_context: str = "",
-    ) -> tuple[dict[int, str], dict[str, str], int]:
+        prior_delegate_results: dict[str, str] | None = None,
+    ) -> tuple[dict[int, str], dict[str, str], int, list[dict]]:
         """Execute Steps 3-5 (plan → execute tasks → mid-exec loop).
 
         Extracted from :meth:`execute` so that subclasses can wrap this in a
         turn-based retry loop.  When *failure_context* is non-empty it is
         injected into the planner's ``group_memory`` so the next turn can
-        adjust its decomposition strategy.
+        adjust its decomposition strategy.  When *prior_delegate_results* is
+        provided, it is merged into the mid-exec detection ``delegated_results``
+        so the detection LLM is aware of previous-turn delegation failures.
 
         Returns
         -------
-        tuple[dict[int, str], dict[str, str], int]
-            ``(all_task_results, delegate_results, remaining_hop)``.
-            ``remaining_hop`` is the hop count after all pre-exec and mid-exec
-            delegations have been consumed.  Callers should use this to decide
-            whether further delegation is possible.
+        tuple[dict[int, str], dict[str, str], int, list[dict]]
+            ``(all_task_results, delegate_results, remaining_hop, plan_task_meta)``.
         """
         # ------------------------------------------------------------------
         # Step 3: Plan tasks (with group_memory injection + upstream context)
@@ -4547,6 +4635,16 @@ class SkillAgentExecutor(AgentExecutor):
         # ------------------------------------------------------------------
         # Step 4: Execute tasks sequentially
         # ------------------------------------------------------------------
+        # Extract task metadata for the caller (turn loop) to build
+        # meaningful executed_tasks entries for the next turn's planner.
+        plan_task_meta: list[dict] = [
+            {
+                "id": t.id,
+                "description": t.description or "",
+                "agent": t.agent or "",
+            }
+            for t in plan.tasks
+        ]
         own_results: dict[int, str] = {}
         delegate_results: dict[str, str] = {}
         all_task_results: dict[int, str] = {}
@@ -4647,6 +4745,9 @@ class SkillAgentExecutor(AgentExecutor):
                     metadata=metadata,
                     current_task_id=task_item.id,
                     agent_id=self.agent_id,
+                    progress_callback=lambda frame: updater.add_artifact(
+                        [TextPart(text=frame)], name="progress"
+                    ),
                 )
                 result_parts: list[str] = []
                 async for chunk in local_agent.run():
@@ -4835,7 +4936,7 @@ class SkillAgentExecutor(AgentExecutor):
         # Guard: if hop is already exhausted, skip mid-exec entirely.
         if current_hop <= 1:
             logger.info("[MidExec] hop exhausted (current_hop=%d), skipping mid-exec loop", current_hop)
-            return all_task_results, delegate_results, current_hop
+            return all_task_results, delegate_results, current_hop, plan_task_meta
 
         await self._emit_progress(
             updater,
@@ -4851,6 +4952,7 @@ class SkillAgentExecutor(AgentExecutor):
         ]
 
         # Build upstream context with executed tasks and delegator plan for the mid-exec loop
+        # (delegator_plan is static — it captures the original pre-mid-exec plan)
         own_task_context = [
             {
                 "id": tid,
@@ -4863,15 +4965,11 @@ class SkillAgentExecutor(AgentExecutor):
             for tid, res in own_results.items()
             if tid == task_item.id and res
         ]
-        key_findings_so_far = "\n".join(
-            f"[Task#{tid}] {res[:300]}"
-            for tid, res in all_task_results.items() if res
-        )
 
-        mid_upstream: dict[str, Any] = dict(upstream_context)
-        mid_upstream["delegator_plan"] = [t.dict() for t in plan.tasks]
-        mid_upstream["executed_tasks"] = own_task_context
-        mid_upstream["key_findings_so_far"] = key_findings_so_far
+        # Track SGs that returned empty/bad results — exclude them from
+        # re-delegation in subsequent rounds to avoid infinite ping-pong
+        # between the same pair of agents.
+        _exhausted_sgs: set[str] = set()
 
         while mid_exec_round < max_mid_exec_rounds:
             # Guard: if hop is exhausted, no further delegation is possible.
@@ -4906,15 +5004,32 @@ class SkillAgentExecutor(AgentExecutor):
                 )
                 if not collaborator_cards_list:
                     logger.info("[MidExec] no broadcast SG candidates, exiting loop")
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_no_candidates",
+                        message="Mid-exec: 未找到可用的远程智能体，无法委派补充数据",
+                        status="done",
+                        extra={
+                            "round": mid_exec_round + 1,
+                            "reason": "no_broadcast_candidates",
+                        },
+                    )
                     break
 
             logger.info("[MidExec] round %d / %d started", mid_exec_round + 1, max_mid_exec_rounds)
 
             # Step 1: Detect
+            # Merge prior-turn delegate results into the detection context
+            # so that the detection LLM knows which SGs already failed in
+            # previous turns and does not recommend them again.
+            _detect_delegate_results: dict[str, str] = dict(delegate_results)
+            if prior_delegate_results:
+                _detect_delegate_results.update(prior_delegate_results)
+
             detection = await self._detect_delegation_needs(
                 query=query,
                 own_results=own_results,
-                delegated_results=delegate_results,
+                delegated_results=_detect_delegate_results,
                 collaborator_cards=collaborator_cards_list,
                 user_id=user_id,
                 run_id=run_id,
@@ -4962,6 +5077,16 @@ class SkillAgentExecutor(AgentExecutor):
             synthesized_query = detection.get("synthesized_query", "")
             soft_target_hints = list(detection.get("target_sgs") or [])
             if not synthesized_query:
+                await self._emit_progress(
+                    updater,
+                    "mid_exec_empty_query",
+                    message="Mid-exec: 检测到数据缺口但未能生成有效的子问题，无法委派",
+                    status="done",
+                    extra={
+                        "round": mid_exec_round + 1,
+                        "reason": "empty_synthesized_query",
+                    },
+                )
                 break
 
             # Step 1.5: Select targets via concurrent capability_check
@@ -4982,23 +5107,134 @@ class SkillAgentExecutor(AgentExecutor):
                 target_sg_names = list(selection.get("target_sg_names") or [])
                 hints_by_sg = dict(selection.get("hints_by_sg") or {})
                 capability_evidence = str(selection.get("evidence_text") or "")
+
+                # ── Re-delegation guard: filter exhausted SGs ──
+                if _exhausted_sgs and target_cards_list:
+                    _before = len(target_cards_list)
+                    _filtered_cards = [
+                        c for c in target_cards_list
+                        if getattr(c, "name", "") not in _exhausted_sgs
+                    ]
+                    if len(_filtered_cards) < _before:
+                        _filtered_names = [
+                            getattr(c, "name", "") for c in _filtered_cards
+                        ]
+                        logger.info(
+                            "[MidExec] re-delegation guard filtered | "
+                            "round=%d exhausted=%s before=%d after=%d kept=%s",
+                            mid_exec_round + 1,
+                            sorted(_exhausted_sgs),
+                            _before,
+                            len(_filtered_cards),
+                            _filtered_names,
+                        )
+                        target_cards_list = _filtered_cards
+                        target_sg_names = _filtered_names
+
                 if not target_cards_list:
                     logger.info("[MidExec] no capable remote SG, exiting loop")
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_no_capable_sg",
+                        message="Mid-exec: 能力检测未找到可处理该子任务的智能体，无法委派",
+                        status="done",
+                        extra={
+                            "round": mid_exec_round + 1,
+                            "reason": "no_capable_remote_sg",
+                            "synthesized_query": (synthesized_query or "")[:200],
+                        },
+                    )
                     break
             else:
                 target_sg_names = soft_target_hints
                 target_cards_list = [c for c in collaborator_cards_list if c.name in target_sg_names]
                 if not target_cards_list:
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_no_targets",
+                        message="Mid-exec: 检测到数据缺口但未找到匹配的目标智能体",
+                        status="done",
+                        extra={
+                            "round": mid_exec_round + 1,
+                            "reason": "no_matching_targets",
+                            "target_sgs": target_sg_names,
+                        },
+                    )
+                    break
+
+                # ── Re-delegation guard: filter exhausted SGs (non-capability path) ──
+                if _exhausted_sgs and target_cards_list:
+                    _before = len(target_cards_list)
+                    target_cards_list = [
+                        c for c in target_cards_list
+                        if getattr(c, "name", "") not in _exhausted_sgs
+                    ]
+                    if len(target_cards_list) < _before:
+                        target_sg_names = [
+                            getattr(c, "name", "") for c in target_cards_list
+                        ]
+                        logger.info(
+                            "[MidExec] re-delegation guard filtered (fallback path) | "
+                            "round=%d exhausted=%s before=%d after=%d kept=%s",
+                            mid_exec_round + 1,
+                            sorted(_exhausted_sgs),
+                            _before,
+                            len(target_cards_list),
+                            target_sg_names,
+                        )
+                if not target_cards_list:
+                    logger.info(
+                        "[MidExec] all targets exhausted (fallback path), exiting loop"
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_all_exhausted",
+                        message="Mid-exec: 所有候选智能体均已尝试且返回空结果，无法继续委派",
+                        status="done",
+                        extra={
+                            "round": mid_exec_round + 1,
+                            "reason": "all_targets_exhausted",
+                            "exhausted_sgs": sorted(_exhausted_sgs),
+                        },
+                    )
                     break
 
             # Step 2: Plan
+            # Rebuild mid_upstream each round so the planner and dispatch
+            # context see the latest own_results + delegate_results from
+            # previous rounds, not just the pre-mid-exec snapshot.
+            _round_own_task_context = [
+                {
+                    "id": tid,
+                    "description": (task_item.description or ""),
+                    "agent": (task_item.agent or ""),
+                    "status": "completed",
+                    "result": res,
+                }
+                for task_item in plan.tasks
+                for tid, res in all_task_results.items()
+                if tid == task_item.id and res
+            ]
+            _round_key_findings = "\n".join(
+                f"[Task#{tid}] {res[:300]}"
+                for tid, res in all_task_results.items() if res
+            )
+            mid_upstream: dict[str, Any] = dict(upstream_context)
+            mid_upstream["delegator_plan"] = [t.dict() for t in plan.tasks]
+            mid_upstream["executed_tasks"] = _round_own_task_context
+            mid_upstream["key_findings_so_far"] = _round_key_findings
+
             mid_group_memory = self._enrich_group_memory_with_upstream(
                 upstream_context=mid_upstream,
                 base_group_memory=group_memory,
                 extra_context={
                     "already_delegated": [
-                        {"target_sg": name, "result": result or ""}
-                        for name, result in delegate_results.items() if result
+                        {
+                            "target_sg": name,
+                            "result": result or "",
+                            "status": "empty" if not result or result == NONE_TASK_DESCRIPTION else "ok",
+                        }
+                        for name, result in delegate_results.items()
                     ],
                     "synthesized_query": synthesized_query,
                     "detection_reason": detection.get("reason", ""),
@@ -5015,50 +5251,50 @@ class SkillAgentExecutor(AgentExecutor):
             )
             if mid_plan is None:
                 logger.warning("[MidExec] plan returned None, exiting loop")
+                await self._emit_progress(
+                    updater,
+                    "mid_exec_plan_failed",
+                    message="Mid-exec: 委派规划失败，无法生成委派任务",
+                    status="done",
+                    extra={
+                        "round": mid_exec_round + 1,
+                        "reason": "plan_returned_none",
+                    },
+                )
                 break
 
-            # Fallback: if planner returned all-NONE tasks but capability
-            # check already confirmed capable targets, build a synthetic
-            # plan to dispatch directly to those targets.
+            # If planner returned all-NONE tasks, no capable agent was found — exit
             if mid_plan.tasks and all(
                 (t.agent or "").strip().upper() == "NONE" for t in mid_plan.tasks
-            ) and target_cards_list:
+            ):
                 logger.warning(
                     "[MidExec][Plan] planner returned all-NONE, "
-                    "falling back to capability-checked targets: %s",
-                    [c.name for c in target_cards_list],
+                    "no capable agent available — exiting mid-exec loop"
                 )
-                fallback_tasks = []
-                for i, card in enumerate(target_cards_list, start=1):
-                    fallback_tasks.append(
-                        PlannerTask(
-                            id=i,
-                            description=synthesized_query,
-                            agent=card.name,
-                        )
-                    )
-                mid_plan = TaskList(
-                    thought_process=(
-                        f"Planner returned NONE; "
-                        f"fallback to capability-checked targets: "
-                        f"{[c.name for c in target_cards_list]}"
-                    ),
-                    original_query=synthesized_query,
-                    tasks=fallback_tasks,
+                await self._emit_progress(
+                    updater,
+                    "mid_exec_all_none",
+                    message="Mid-exec: Planner 确认所有可用智能体均无法处理该子任务，无法委派",
+                    status="done",
+                    extra={
+                        "round": mid_exec_round + 1,
+                        "reason": "planner_all_none",
+                        "synthesized_query": (synthesized_query or "")[:200],
+                    },
                 )
-                logger.info(
-                    "[MidExec][Plan] fallback plan built | tasks=%d agents=%s",
-                    len(fallback_tasks),
-                    [c.name for c in target_cards_list],
-                )
+                break
 
             # Step 3: Dispatch
             # Build enriched upstream context for dispatch
             dispatch_ctx: dict[str, Any] = dict(mid_upstream)
             dispatch_ctx.update({
                 "already_delegated": [
-                    {"target_sg": name, "result": result or ""}
-                    for name, result in delegate_results.items() if result
+                    {
+                        "target_sg": name,
+                        "result": result or "",
+                        "status": "empty" if not result or result == NONE_TASK_DESCRIPTION else "ok",
+                    }
+                    for name, result in delegate_results.items()
                 ],
                 "mid_exec_round": mid_exec_round + 1,
                 "synthesized_query": synthesized_query,
@@ -5082,7 +5318,7 @@ class SkillAgentExecutor(AgentExecutor):
                     "delegation_chain": delegation_chain,
                 },
             )
-            mid_results = await self._dispatch_mid_exec_delegation(
+            mid_results, current_hop = await self._dispatch_mid_exec_delegation(
                 plan=mid_plan,
                 target_cards=target_cards_list,
                 user_id=user_id,
@@ -5096,12 +5332,22 @@ class SkillAgentExecutor(AgentExecutor):
             )
             delegate_results.update(mid_results)
 
-            # Consume hop for each actual delegation that happened in this round.
-            _actual_mid_delegations = sum(
-                1 for v in mid_results.values()
-                if v and v != NONE_TASK_DESCRIPTION
-            )
-            current_hop -= _actual_mid_delegations
+            # Hop is consumed inside _dispatch_mid_exec_delegation;
+            # current_hop has already been updated by the returned value.
+
+            # ── Re-delegation guard ──
+            # Mark SGs that returned NONE or empty results as exhausted so
+            # they are excluded from subsequent mid-exec rounds.  This
+            # prevents infinite ping-pong between the same agent pair when
+            # the delegated SG cannot contribute meaningful data.
+            for sg_name, result in mid_results.items():
+                if not result or result == NONE_TASK_DESCRIPTION:
+                    _exhausted_sgs.add(sg_name)
+                    logger.info(
+                        "[MidExec] exhausted SG marked | sg=%s round=%d "
+                        "reason=empty_or_none_result",
+                        sg_name, mid_exec_round + 1,
+                    )
 
             # Merge delegated results into own_results for next round detection
             for sg_name, result in mid_results.items():
@@ -5127,7 +5373,7 @@ class SkillAgentExecutor(AgentExecutor):
             extra={"mid_delegate_count": len(delegate_results), "rounds": mid_exec_round},
         )
 
-        return all_task_results, delegate_results, current_hop
+        return all_task_results, delegate_results, current_hop, plan_task_meta
 
     async def cancel(
         self, context: RequestContext, event_queue: EventQueue

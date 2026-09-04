@@ -413,6 +413,7 @@ class CapabilityCheckResponse(BaseModel):
 MULTI_ROOT_CONFIDENCE_THRESHOLD = float(os.getenv("MULTI_ROOT_CONFIDENCE_THRESHOLD", "0.6"))
 ROOT_SINGLE_FAST_PATH_MIN_CONFIDENCE = float(os.getenv("ROOT_SINGLE_FAST_PATH_MIN_CONFIDENCE", "0.78"))
 ROOT_SINGLE_FAST_PATH_GAP = float(os.getenv("ROOT_SINGLE_FAST_PATH_GAP", "0.15"))
+MIN_BROADCAST_CONFIDENCE = float(os.getenv("MIN_BROADCAST_CONFIDENCE", "0.5"))
 
 
 def _is_non_actionable_contribution_text(text: str) -> bool:
@@ -2139,12 +2140,26 @@ class RoutingAgent(BaseAgent):
                 continue
             result = self._normalize_capability_check_response(result)
             if result.can_handle:
+                if result.confidence < MIN_BROADCAST_CONFIDENCE:
+                    logger.info(
+                        f"Broadcast routing: agent '{result.agent_name}' CAN handle but "
+                        f"confidence too low (%.2f < %.2f), filtered out",
+                        result.confidence, MIN_BROADCAST_CONFIDENCE,
+                    )
+                    continue
                 capable_agents.append((all_agent_cards[i], result))
                 logger.info(
                     f"Broadcast routing: agent '{result.agent_name}' CAN handle "
                     f"(confidence: {result.confidence}, reason: {result.reason})"
                 )
             elif result.can_contribute:
+                if result.confidence < MIN_BROADCAST_CONFIDENCE:
+                    logger.info(
+                        f"Broadcast routing: agent '{result.agent_name}' can_contribute but "
+                        f"confidence too low (%.2f < %.2f), filtered out",
+                        result.confidence, MIN_BROADCAST_CONFIDENCE,
+                    )
+                    continue
                 capable_agents.append((all_agent_cards[i], result))
                 logger.info(
                     f"Broadcast routing: agent '{result.agent_name}' can_contribute=true "

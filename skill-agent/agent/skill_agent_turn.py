@@ -275,7 +275,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
             )
 
             # Execute one turn (Steps 3-5)
-            task_results, delegate_results, remaining_hop = await self._execute_plan_and_mid_exec(
+            task_results, delegate_results, remaining_hop, plan_task_meta = await self._execute_plan_and_mid_exec(
                 query=query,
                 all_cards=all_cards,
                 own_names=own_names,
@@ -291,6 +291,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 current_hop=current_hop,
                 delegation_chain=delegation_chain,
                 failure_context=failure_context,
+                prior_delegate_results=accumulated_delegate_results,
             )
             # Update hop from the execution — this is consumed by pre-exec
             # and mid-exec delegation edges within the turn.
@@ -306,11 +307,15 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
             # from the initial delegation and would not know about Turn 1's
             # discoveries, leading to redundant or misaligned planning.
             upstream_context = dict(upstream_context)
+            # Build a lookup of task_id → (description, agent) from plan metadata
+            _task_meta_by_id: dict[int, dict] = {
+                m["id"]: m for m in plan_task_meta
+            }
             upstream_context["executed_tasks"] = [
                 {
                     "task_id": tid,
-                    "description": "",
-                    "agent": "",
+                    "description": _task_meta_by_id.get(tid, {}).get("description", ""),
+                    "agent": _task_meta_by_id.get(tid, {}).get("agent", ""),
                     "status": "completed",
                     "result": res,
                 }
@@ -321,30 +326,46 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 for tid, res in accumulated_task_results.items() if res
             )
 
-            # ---- Guard: hop exhausted — stop turns immediately ----
-            # When hop is 1 or below, no further delegation is possible
-            # (delegation would give downstream hop_remaining=0, which the
-            # entry guard rejects immediately).  Continuing turns would
-            # only waste LLM calls on plan + evaluation cycles that cannot
-            # produce new data.  Break now and summarize whatever we have.
+            # ---- Guard: hop exhausted — stop turns or reset hop ----
+            # Hop limits the depth of a single delegation chain, not the
+            # total number of delegations from the entry-point agent.
+            #
+            # - Delegated agent (mid-chain): hop exhausted means the chain
+            #   cannot go deeper.  Break now and return whatever we have.
+            # - Entry-point agent (originator): hop exhausted means the
+            #   current chain is done, but the entry agent can start a new
+            #   chain in the next turn.  Reset hop to the initial value and
+            #   continue the loop (evaluation + possibly Turn N+1).
             if current_hop <= 1:
-                logger.info(
-                    "[TurnLoop] hop exhausted after turn %d (current_hop=%d) — "
-                    "breaking loop to produce summary from accumulated results",
-                    total_turns,
-                    current_hop,
-                )
-                await self._emit_progress(
-                    updater,
-                    "turn_hop_exhausted",
-                    message=(
-                        f"Turn {total_turns}: hop exhausted, "
-                        f"stopping turns and proceeding to summary"
-                    ),
-                    status="done",
-                    extra={"turn": total_turns, "hop": current_hop},
-                )
-                break
+                if is_delegated:
+                    logger.info(
+                        "[TurnLoop] hop exhausted after turn %d (current_hop=%d) — "
+                        "breaking loop to produce summary from accumulated results",
+                        total_turns,
+                        current_hop,
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "turn_hop_exhausted",
+                        message=(
+                            f"Turn {total_turns}: hop exhausted, "
+                            f"stopping turns and proceeding to summary"
+                        ),
+                        status="done",
+                        extra={"turn": total_turns, "hop": current_hop},
+                    )
+                    break
+                else:
+                    _initial_hop = int(os.getenv("CROSS_SG_MAX_HOP", "5"))
+                    logger.info(
+                        "[TurnLoop] hop exhausted after turn %d (current_hop=%d) — "
+                        "entry-point agent, resetting hop to %d and continuing",
+                        total_turns,
+                        current_hop,
+                        _initial_hop,
+                    )
+                    current_hop = _initial_hop
+                    # Do NOT break — fall through to evaluation.
 
             # ---- LLM-evaluated summary: is the answer sufficient? ----
             await self._emit_progress(
@@ -423,9 +444,12 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
         if final_answer is None:
             # Loop exhausted: either max turns reached or hop exhausted.
             # Produce a final answer without evaluation (forced output).
+            # - Delegated agent: hop exhausted means the chain is done.
+            # - Entry-point agent: hop is reset every turn, so reaching
+            #   here always means max turns exhausted.
             reason = (
                 "hop exhausted"
-                if current_hop <= 1
+                if is_delegated and current_hop <= 1
                 else f"max turns ({self.max_loops}) reached"
             )
             logger.warning(
@@ -435,7 +459,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
             )
 
             # Choose the right event name and message based on actual reason
-            if current_hop <= 1:
+            if is_delegated and current_hop <= 1:
                 event_name = "turn_hop_exhausted_final"
                 display_msg = (
                     f"Hop exhausted after {total_turns} turn(s), "
