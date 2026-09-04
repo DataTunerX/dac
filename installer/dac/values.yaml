@@ -573,6 +573,18 @@ dataServices:
       maxConnection: "50"
       # -- Graph memory (enable | disable). Requires Neo4j.
       graphEnable: "disable"
+    # -- LLM used by the mem0 memory service (fact-extraction / search).
+    # Falls back to global.llm.* when a field is left empty. Kept separate
+    # on purpose: mem0's own OpenAI client talks to the provider directly and
+    # doesn't go through model_sdk's per-model compatibility shims (dropping
+    # `temperature`, pinning `reasoning_effort`, etc.), so a model that needs
+    # those shims to work against a real OpenAI-style endpoint can break
+    # memory search even though it works fine for the agents via global.llm.
+    llm:
+      provider: ""
+      apiKey: ""
+      baseUrl: ""
+      model: ""
     # -- Neo4j connection (only needed if graphEnable=enable).
     #    When neo4j.external.host is set, boltUrl/neo4jUrl below are ignored
     #    and URLs are derived from neo4j.external.host / boltPort.

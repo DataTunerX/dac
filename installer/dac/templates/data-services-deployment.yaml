@@ -1,4 +1,8 @@
 {{- if .Values.dataServices.enabled }}
+{{- $memLLM := .Values.dataServices.config.llm }}
+{{- $memApiKey := $memLLM.apiKey | default .Values.global.llm.apiKey }}
+{{- $memBaseUrl := $memLLM.baseUrl | default .Values.global.llm.baseUrl }}
+{{- $memModel := $memLLM.model | default .Values.global.llm.model | default "qwen3-32b" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,11 +56,13 @@ spec:
             - name: EMBEDDING_BASE_URL
               value: {{ .Values.global.embedding.baseUrl | quote }}
             {{- end }}
-            # LLM
+            # LLM (dataServices.config.llm, falls back to global.llm -- see values.yaml)
             - name: LLM_API_KEY
-              value: {{ .Values.global.llm.apiKey | quote }}
+              value: {{ $memApiKey | quote }}
             - name: LLM_BASE_URL
-              value: {{ .Values.global.llm.baseUrl | quote }}
+              value: {{ $memBaseUrl | quote }}
+            - name: LLM_MODEL
+              value: {{ $memModel | quote }}
             - name: MEMORY_PGVECTOR_HOST
               value: {{ include "dac.pgvector.host" . | quote }}
             - name: MEMORY_PGVECTOR_PORT
@@ -86,11 +92,11 @@ spec:
             - name: MEMORY_GRAPH_DB_PASSWORD
               value: {{ include "dac.neo4j.password" . | quote }}
             - name: MEMORY_GRAPH_LLM_MODEL
-              value: {{ .Values.global.llm.model | quote }}
+              value: {{ $memModel | quote }}
             - name: MEMORY_GRAPH_LLM_APIKEY
-              value: {{ .Values.global.llm.apiKey | quote }}
+              value: {{ $memApiKey | quote }}
             - name: MEMORY_GRAPH_LLM_BASEURL
-              value: {{ .Values.global.llm.baseUrl | quote }}
+              value: {{ $memBaseUrl | quote }}
             # Knowledge pgvector
             - name: PGVECTOR_HOST
               value: {{ include "dac.pgvector.host" . | quote }}
