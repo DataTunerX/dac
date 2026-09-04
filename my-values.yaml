@@ -4,9 +4,16 @@ global:
 
   llm:
     provider: "openai_compatible"
-    # Real OpenAI key. Shared by biz-routing-agent, biz-skill-agent and
-    # biz-chart-agent via the dac.llmArgs helper.
-    apiKey: "REPLACE_WITH_OPENAI_KEY"
+    # Shared by biz-routing-agent, biz-skill-agent and biz-chart-agent via
+    # dac.llmArgs. Moved from gemma to the same OpenAI gpt-5.6-luna deployment
+    # the per-domain DataAgentContainer agents already use (see the
+    # "gpt-5.6-luna" ConfigMap in the dac namespace for the real key).
+    # apiKey is a placeholder on purpose -- do not commit the real key here.
+    # Pass it at upgrade time instead:
+    #   helm upgrade dac ./installer/dac -n dac -f my-values.yaml \
+    #     --set-string global.llm.apiKey=<real key> \
+    #     --set-string executionEngine.llmConfigs[0].apiKey=<real key>
+    apiKey: "sk-set-via---set-at-upgrade-time"
     baseUrl: "https://api.openai.com/v1"
     model: "gpt-5.6-luna"
 
@@ -26,29 +33,44 @@ global:
 apiserver:
   image:
     repository: "dac-apiserver"
-    tag: "16-amd64"
+    tag: "17-amd64"
+  config:
+    routingAgent:
+      timeout: "60m"
 
 frontend:
   image:
     repository: "frontend"
-    tag: "19-amd64"
+    tag: "21-amd64"
 
 dataServices:
   image:
     repository: "data-services"
     tag: "12-amd64"
+  config:
+    # Decoupled from global.llm on purpose: mem0's memory search talks to
+    # this endpoint directly (no model_sdk compatibility shims), and it broke
+    # ("invalid input type" from OpenAI) once global.llm pointed at real
+    # OpenAI's gpt-5.6-luna while LLM_MODEL was left unset/mismatched. This
+    # reproduces the config that was already known to work for memory search.
+    llm:
+      apiKey: "sk-youre-real-key-123"
+      baseUrl: "http://10.124.48.200:8001/v1"
+      model: "qwen3-32b"
 
 executionEngine:
   image:
     repository: "execution-engine"
-    tag: "17-amd64"
+    tag: "18-amd64"
+  dacConfig:
+    crossSGMaxHop: "1"
   agentImages:
     orchestratorAgent:
       repository: "orchestrator-agent"
-      tag: "13-amd64"
+      tag: "14-amd64"
     expertAgent:
       repository: "expert-agent"
-      tag: "13-amd64"
+      tag: "14-amd64"
     codeAgent:
       repository: "code-agent"
       tag: "12-amd64"
@@ -70,43 +92,49 @@ executionEngine:
     # 14-amd64 carries the model_sdk fix that drops `temperature` for models
     # which only accept the default (gpt-5.6-*, o-series). Without it those
     # models 400 on every call, including the capability check.
+    # 21-amd64 carries the skill_sdk plan_and_run[skill_search]/[planner]
+    # trace-labeling fix (the two internal strategies used to both log an
+    # identical "plan_and_run ENTER" line).
     skillAgent:
       repository: "skill-agent"
-      tag: "19-amd64"
+      tag: "24-amd64"
   llmConfigs:
+    # apiKey is a placeholder -- pass the real key via --set-string at
+    # upgrade time (see the comment on global.llm above).
     - name: "llm-default"
       provider: "openai_compatible"
-      apiKey: "sk-youre-real-key-123"
-      baseUrl: "http://10.124.48.200:8001/v1"
-      model: "google/gemma-4-31B-it"
+      apiKey: "sk-set-via---set-at-upgrade-time"
+      baseUrl: "https://api.openai.com/v1"
+      model: "gpt-5.6-luna"
 
 semanticGrouper:
   image:
     repository: "semantic-grouper"
-    tag: "12-amd64"
+    tag: "13-amd64"
   config:
     llm:
-      model: "google/gemma-4-31B-it"
+      # Reuses global.llm.apiKey / baseUrl; only the model name is separate.
+      model: "gpt-5.6-luna"
 
 orchestratorRegistry:
   image:
     repository: "agent-registry"
-    tag: "12-amd64"
+    tag: "13-amd64"
 
 bizOrchestratorRegistry:
   image:
     repository: "agent-registry"
-    tag: "12-amd64"
+    tag: "13-amd64"
 
 bizRoutingAgent:
   image:
     repository: "routing-agent"
-    tag: "16-amd64"
+    tag: "17-amd64"
 
 bizChartAgent:
   image:
     repository: "chart-agent"
-    tag: "13-amd64"
+    tag: "14-amd64"
 
 bizSkillAgent:
   config:
@@ -116,12 +144,12 @@ bizSkillAgent:
     skillSyncWatchAll: "false"
   image:
     repository: "skill-agent"
-    tag: "19-amd64"
+    tag: "24-amd64"
 
 skillHub:
   image:
     repository: "skill-hub"
-    tag: "12-amd64"
+    tag: "13-amd64"
   # PINNED to hostPath on purpose. The chart default is now "pvc", but this
   # cluster's existing skill zips (incl. TDB-SKILL) live on node dce4 at
   # /var/lib/dac/skill-hub/skills. Switching to a fresh PVC would start empty and
