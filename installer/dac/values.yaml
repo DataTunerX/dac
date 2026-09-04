@@ -348,7 +348,10 @@ apiserver:
       enableTracing: false
     routingAgent:
       # -- Timeout for routing agent calls
-      timeout: "300s"
+      # TDB and cross-domain questions can legitimately run for more than five
+      # minutes. Keep the SSE proxy alive long enough for the agent to emit its
+      # terminal answer instead of abandoning work that later reaches history.
+      timeout: "60m"
       # -- Session timeout for chat sessions
       sessionTimeout: "30m"
     database:
