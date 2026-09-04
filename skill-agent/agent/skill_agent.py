@@ -2657,13 +2657,26 @@ class SkillAgentExecutor(AgentExecutor):
         )
         if collaborator_cards:
             sg_options = "\n".join(
-                f"- {c.name}（{str(c.description or '')[:100]}）" for c in collaborator_cards
+                f"- {c.name}（{str(c.description or '')[:200]}）"
+                for c in collaborator_cards
             )
+            # Build skill-level info for each collaborator so the detection LLM
+            # can write synthesized_query from the downstream SG's perspective.
+            sg_skills_lines: list[str] = []
+            for c in collaborator_cards:
+                skills = c.skills or []
+                skill_names = [s.name for s in skills if getattr(s, "name", "")]
+                if skill_names:
+                    sg_skills_lines.append(
+                        f"- {c.name} 技能: {', '.join(skill_names)}"
+                    )
+            sg_skills_info = "\n".join(sg_skills_lines) if sg_skills_lines else "(无技能信息)"
         else:
             sg_options = (
                 "(当前 Routing peer 池为空；不要据此判定无法委派。"
                 "最终远程 SG 由后续全量 capability_check 广播决定，target_sgs 可留空。)"
             )
+            sg_skills_info = "(无可用 SG 技能信息)"
 
         prompt = (
             "你是一个多 agent 协作的数据缺口检测器。基于已有的执行结果和原始问题，"
@@ -2690,7 +2703,14 @@ class SkillAgentExecutor(AgentExecutor):
             "- 当没有关联键时，传递原始问题中的实体信息（姓名、ID、关键词等）作为查询线索；\n"
             "- 禁止复述完整原题；禁止写入其它域目标或整题扩写；\n"
             "- 禁止要求下游去计算本层已有或本层负责的指标；\n"
-            "- 下游拿到这句话应能直接执行并结束，无需理解整题其它部分。\n\n"
+            "- 下游拿到这句话应能直接执行并结束，无需理解整题其它部分。\n"
+            "- 【关键】synthesized_query 必须从下游 SG 的视角编写，而非本层视角：\n"
+            "  本层（delegator）的视角是「我需要什么数据」，下游 SG 的视角是「我能用自己的技能回答什么问题」。\n"
+            "  synthesized_query 必须采用下游 SG 的视角：描述一个下游 SG 能用自己的技能独立完成的子问题。\n"
+            "  自检方法：如果本层自己就能回答 synthesized_query 描述的问题，\n"
+            "  → 说明写错了域，这是本层域内的问题，下游 SG 没有对应的技能。\n"
+            "  正确做法：先看下方「SG 技能列表」中 target_sgs 的技能，确认它们能处理什么类型的问题，\n"
+            "  然后 synthesized_query 只写这些技能能直接处理的内容。\n\n"
             "重要约束：\n"
             "- 不要依据 SG 的自描述文案选择目标；最终远程 SG 由后续标准 "
             "capability_check 全量广播（成员能力证据）决定；\n"
@@ -2707,6 +2727,7 @@ class SkillAgentExecutor(AgentExecutor):
             f"本层自身执行结果：\n{own_text}\n\n"
             f"已完成委托结果：\n{del_text}\n\n"
             f"可委托的 SG 名称列表（仅供参考，非选人依据）：\n{sg_options}\n\n"
+            f"SG 技能列表（必须参考，用于编写域正确的 synthesized_query）：\n{sg_skills_info}\n\n"
             "请调用 detect_delegation_needs 工具来输出结果。"
             "当 needs_help=true 时，reason 字段必须说明具体缺了什么数据、为什么需要补充。"
         )
