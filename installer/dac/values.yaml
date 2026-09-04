@@ -834,7 +834,7 @@ bizRoutingAgent:
     registryCollection: "biz_orchestrator_agent_cards"
     # -- Routing strategy: "simple" selects one best agent; "broadcast" additionally
     # allows multi-root planning to split a query across several agents.
-    routingMode: "broadcast"
+    routingMode: "simple"
     # -- Max retries for LLM routing calls
     maxRetries: "1"
   service:
