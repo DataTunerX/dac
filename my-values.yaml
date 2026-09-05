@@ -97,7 +97,7 @@ executionEngine:
     # identical "plan_and_run ENTER" line).
     skillAgent:
       repository: "skill-agent"
-      tag: "24-amd64"
+      tag: "25-amd64"
   llmConfigs:
     # apiKey is a placeholder -- pass the real key via --set-string at
     # upgrade time (see the comment on global.llm above).
@@ -144,7 +144,7 @@ bizSkillAgent:
     skillSyncWatchAll: "false"
   image:
     repository: "skill-agent"
-    tag: "24-amd64"
+    tag: "25-amd64"
 
 skillHub:
   image:
