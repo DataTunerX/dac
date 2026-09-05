@@ -169,10 +169,56 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
         delegation_chain = list(metadata.get("delegation_chain", []))
         upstream_context = dict(metadata.get("upstream_context", {}))
 
+        # ── DAG banner: log enforcement status at collaboration entry ──
+        _dag_enabled = self._dag_enforcement_enabled()
+        self_name = self._self_planner_agent_name()
+        if _dag_enabled:
+            _dag_status = "ENABLED" if is_delegated else "ENABLED (root, no chain yet)"
+            _dag_chain_preview = self._format_dag_chain(delegation_chain)
+            _dag_self_label = self_name if self_name not in delegation_chain else f"【{self_name}】⚠️"
+            logger.info(
+                "╔══ DAG  ═══════════════════════════════════════════════════╗\n"
+                "║  [STARTUP] DAG 委派链路约束已开启\n"
+                "║  状态: %s\n"
+                "║  当前 agent: %s\n"
+                "║  当前链路: %s\n"
+                "╚════════════════════════════════════════════════════════════╝",
+                _dag_status,
+                _dag_self_label,
+                _dag_chain_preview,
+            )
+        else:
+            logger.info(
+                "[DAG] DAG enforcement DISABLED (CROSS_SG_ENFORCE_DAG=false) | "
+                "chain=%s self=%s",
+                delegation_chain,
+                self_name,
+            )
+
         if is_delegated:
             current_hop = hop_remaining
         else:
             current_hop = int(os.getenv("CROSS_SG_MAX_HOP", "5"))
+
+        # ── DAG Layer 1: cycle detection — abort if self already in chain ──
+        if _dag_enabled and self_name in delegation_chain:
+            self._log_dag_event(
+                "CYCLE_DETECTED",
+                chain=delegation_chain,
+                self_name=self_name,
+                detail=f"self={self_name} 已存在于委派链中！",
+            )
+            logger.warning(
+                "[Cross-SG][DAG] cycle detected! self=%s already in chain=%s, aborting collaboration",
+                self_name,
+                delegation_chain,
+            )
+            return {
+                "answer": "",
+                "tasks": [],
+                "reason": "dag_cycle_detected",
+                "status": "fail",
+            }
 
         # Guard: hop exhausted — stop immediately, do not execute any tasks.
         if is_delegated and current_hop <= 0:
