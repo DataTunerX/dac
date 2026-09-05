@@ -867,32 +867,6 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 
 ---
 
-## 工具调用要求
-必须调用 `make_plan_cmd` 工具输出规划结果，直接填充工具参数字段。不要直接输出自然语言或 JSON 文本。
-
-工具参数结构：
-   - `thought_process`：必须按以下结构化模板输出：
-     ```
-     [Step1 数据需求] 核心数据需求=...; 过滤维度=...
-     [Step2 本体性质] (A) 静态本体 / (B) 动态行为产物 二选一
-     [Step3 业务能力匹配] 逐个候选 Agent: 是否"业务能力天然产出 / 直接职责覆盖"该数据?
-     [Step4 自检] (1) 本体性质判定与所选 Agent 业务能力是否相容? (2) 是否仅因名词同名/字面相关而路由? (3) 是否存在业务本质更直接对应的另一 Agent?
-     [Step5 上下文/历史] 是否复用先前结果 / 是否需要纠偏 / 历史指代解析（简述）
-     [Step6 跨域] 是否拆分及理由
-     ```
-   - `original_query`：逐字复制原始用户输入。
-   - `tasks`：包含以下字段的对象列表：
-     - `id`：整数（从1开始）。
-     - `description`：转述给智能体的子任务（忠实于用户原始表述）。
-     - `agent`：确切的智能体名称或"NONE"。
-     - `depends_on`：整数列表，标明此任务依赖哪些 task id 必须先完成。
-
-## `make_plan_cmd` 工具参数示例
-{instructions}
-
-或当未找到智能体时：
-{none_instructions}
-
 问题：
 
 """
@@ -1346,7 +1320,7 @@ class PlannerAgent(BaseAgent):
         system_prompt = SystemMessagePromptTemplate.from_template(
             template=system_template,
             input_variables=["history", "agents", "information", "group_memory"],
-            partial_variables={"instructions": json_prompt_instructions_en, "none_instructions": json_prompt_no_agent_en},
+            # partial_variables={"instructions": json_prompt_instructions_en, "none_instructions": json_prompt_no_agent_en},
         )
         human_prompt = HumanMessagePromptTemplate.from_template(human_template)
         chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
@@ -1751,6 +1725,106 @@ class SkillAgentExecutor(AgentExecutor):
         if self.agent_card and getattr(self.agent_card, "name", None):
             return str(self.agent_card.name)
         return (self.agent_id or "").strip()
+
+    # ------------------------------------------------------------------
+    # DAG (Directed Acyclic Graph) enforcement for delegation chains
+    # ------------------------------------------------------------------
+
+    def _dag_enforcement_enabled(self) -> bool:
+        """Whether to enforce DAG constraint on delegation chains.
+
+        Controlled by env ``CROSS_SG_ENFORCE_DAG`` (default ``"true"``).
+        When enabled, any agent that already appears in the delegation chain
+        is excluded from planner pools, mid-exec candidate cards, detection
+        LLM prompts, and dispatch target lists.
+        """
+        return os.getenv("CROSS_SG_ENFORCE_DAG", "true").strip().lower() in ("true", "1", "yes")
+
+    @staticmethod
+    def _format_dag_chain(chain: list[str], *, highlight: str = "") -> str:
+        """Format a delegation chain as a visual DAG edge trail.
+
+        Returns a string like ``agent1 ──▶ agent2 ──▶ agent3``.
+        If *highlight* is provided, that node is wrapped in brackets.
+        """
+        if not chain:
+            return "(empty)"
+        arrow = " ──▶ "
+        parts: list[str] = []
+        for name in chain:
+            if highlight and name == highlight:
+                parts.append(f"【{name}】")
+            else:
+                parts.append(name)
+        return arrow.join(parts)
+
+    @staticmethod
+    def _log_dag_event(
+        event: str,
+        chain: list[str],
+        *,
+        self_name: str = "",
+        detail: str = "",
+        level: str = "info",
+    ) -> None:
+        """Log a DAG-related event with a visual chain representation.
+
+        Produces output like::
+
+            ╔══ DAG  ═══════════════════════════════════════════════════╗
+            ║  [CYCLE_DETECTED] self=agent2 已存在于委派链中！
+            ║  链路: agent1 ──▶ agent2 ──▶【agent2】← 环路！
+            ║  详情: aborting collaboration, returning empty result
+            ╚════════════════════════════════════════════════════════════╝
+        """
+        chain_str = SkillAgentExecutor._format_dag_chain(chain, highlight=self_name)
+        lines: list[str] = []
+        width = 66
+        lines.append(f"╔══ DAG  {'═' * (width - 9)}╗")
+        lines.append(f"║  [{event}] {detail}")
+        lines.append(f"║  链路: {chain_str}")
+        lines.append(f"╚{'═' * width}╝")
+        msg = "\n".join(lines)
+        log_fn = getattr(logger, level, logger.info)
+        log_fn(msg)
+
+    @staticmethod
+    def _log_dag_filter(
+        reason: str,
+        chain: list[str],
+        *,
+        before: int = 0,
+        after: int = 0,
+        removed: list[str] | None = None,
+        kept: list[str] | None = None,
+    ) -> None:
+        """Log a DAG filter event showing what was removed from a pool.
+
+        Produces output like::
+
+            ╔══ DAG  ═══════════════════════════════════════════════════╗
+            ║  [POOL_FILTER] 从 Planner 池中剔除链上 agent
+            ║  链路: agent1 ──▶ agent2
+            ║  剔除: agent1, agent2  |  保留: agent3, agent4
+            ║  池大小: 6 → 3
+            ╚════════════════════════════════════════════════════════════╝
+        """
+        chain_str = SkillAgentExecutor._format_dag_chain(chain)
+        lines: list[str] = []
+        width = 66
+        lines.append(f"╔══ DAG  {'═' * (width - 9)}╗")
+        lines.append(f"║  [{reason}]")
+        lines.append(f"║  链路: {chain_str}")
+        if removed:
+            removed_str = ", ".join(sorted(removed))
+            lines.append(f"║  剔除: {removed_str}")
+        if kept:
+            kept_str = ", ".join(sorted(kept))
+            lines.append(f"║  保留: {kept_str}")
+        if before or after:
+            lines.append(f"║  池大小: {before} → {after}")
+        lines.append(f"╚{'═' * width}╝")
+        logger.info("\n".join(lines))
 
     # ------------------------------------------------------------------
     # LocalSkill (route B) helpers (aligned with orchestrator-agent)
@@ -2646,8 +2720,18 @@ class SkillAgentExecutor(AgentExecutor):
         user_id: str = "",
         run_id: str = "",
         trace_id: str = "",
+        delegation_chain: Optional[list[str]] = None,
     ) -> Optional[dict]:
         """Mid-execution Step 1: detect whether a data gap still exists via LLM reasoning."""
+        # ── Log entry context ──
+        _collab_names = [getattr(c, "name", "?") for c in (collaborator_cards or [])]
+        _chain_preview = SkillAgentExecutor._format_dag_chain(delegation_chain or [])
+        logger.info(
+            "[DetectDelegation] entry | query=%s collaborator_cards=%s delegation_chain=%s",
+            (query or "")[:200],
+            _collab_names,
+            _chain_preview,
+        )
         own_text = "\n".join(
             f"[Task#{tid}]: {res}" for tid, res in own_results.items() if res
         )
@@ -2731,6 +2815,43 @@ class SkillAgentExecutor(AgentExecutor):
             "请调用 detect_delegation_needs 工具来输出结果。"
             "当 needs_help=true 时，reason 字段必须说明具体缺了什么数据、为什么需要补充。"
         )
+
+        # ── Self-execution hint: if self is in the collaborator pool, remind the
+        # detection LLM that it can recommend self when the local agent itself
+        # can now handle the data gap (e.g. after acquiring a user-id mapping).
+        self_name = self._self_planner_agent_name()
+        _collab_names = {getattr(c, "name", "") for c in (collaborator_cards or [])}
+        if self_name and self_name in _collab_names:
+            prompt += (
+                f"\n\n"
+                f"══════════ 本层自执行提示 ══════════\n"
+                f"本层（{self_name}）已出现在可委派列表中。\n"
+                f"如果本层通过委托已获取到新的关键数据（如关联键、ID映射），"
+                f"且本层自身的技能可以基于这些新数据完成补充查询，"
+                f"target_sgs 应优先包含本层名称（{self_name}），"
+                f"让本层自行完成查询，无需再次委托给外部 SG。\n"
+                f"══════════════════════════════════\n"
+            )
+
+        # ── DAG Layer 4: inject chain info into detection LLM prompt ──
+        if self._dag_enforcement_enabled() and delegation_chain:
+            chain_text = self._format_dag_chain(delegation_chain)
+            prompt += (
+                f"\n\n"
+                f"══════════ DAG 约束（有向无环图） ══════════\n"
+                f"当前委派链路: {chain_text}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️ 上述链路中的 SG 已经参与了本次协作，严禁再次推荐为目标！\n"
+                f"target_sgs 中不得包含链路中的任何 SG 名称。\n"
+                f"══════════════════════════════════════════\n"
+            )
+            logger.info(
+                "╔══ DAG  ═══════════════════════════════════════════════════╗\n"
+                "║  [DETECT_PROMPT] 已将委派链路注入检测 LLM prompt\n"
+                "║  链路: %s\n"
+                "╚════════════════════════════════════════════════════════════╝",
+                chain_text,
+            )
 
         try:
             llm = self._get_orchestration_llm()
@@ -2897,6 +3018,16 @@ class SkillAgentExecutor(AgentExecutor):
     def _mid_delegate_capability_select_enabled(self) -> bool:
         return os.getenv("SG_MID_DELEGATE_CAPABILITY_SELECT_ENABLED", "true").strip().lower() not in ("false", "0", "no")
 
+    def _mid_delegate_detect_direct_enabled(self) -> bool:
+        """When enabled, skip broadcast capability check and use detection LLM
+        results directly.  The detection LLM already has full context (original
+        query, own results, delegated results, agent skills, DAG chain) and
+        produces well-reasoned target_sgs recommendations.  Broadcasting a
+        bare query to all agents can override the detection LLM's choice with
+        a higher-confidence but less-informed agent.
+        """
+        return os.getenv("SG_MID_DELEGATE_DETECT_DIRECT_ENABLED", "false").strip().lower() not in ("false", "0", "no")
+
     def _mid_delegate_max_targets(self) -> int:
         try:
             return max(1, int(os.getenv("SG_MID_DELEGATE_MAX_TARGETS", "3") or 3))
@@ -2916,13 +3047,51 @@ class SkillAgentExecutor(AgentExecutor):
             return 0.8
 
     @staticmethod
-    def _mid_exec_capability_probe_query(synthesized_query: str) -> str:
+    def _mid_exec_capability_probe_query(
+        synthesized_query: str,
+        *,
+        original_query: str = "",
+        own_results: dict[int, str] | None = None,
+        delegated_results: dict[str, str] | None = None,
+        detection_reason: str = "",
+    ) -> str:
         scoped = (synthesized_query or "").strip()
         if not scoped:
             return scoped
+
+        # Build context block so the capability-check LLM receives the same
+        # information as the detection LLM, preventing mis-selection caused
+        # by an isolated (context-free) sub-query.
+        context_parts: list[str] = []
+        if original_query:
+            context_parts.append(f"原始问题：{original_query}")
+        if own_results:
+            own_text = "\n".join(
+                f"[Task#{tid}]: {res}" for tid, res in own_results.items() if res
+            )
+            if own_text:
+                context_parts.append(f"本层已执行结果：\n{own_text}")
+        if delegated_results:
+            del_text = "\n".join(
+                f"[{name}]: {res or '[EMPTY]'}"
+                for name, res in delegated_results.items()
+            )
+            if del_text:
+                context_parts.append(f"已完成委托结果：\n{del_text}")
+        if detection_reason:
+            context_parts.append(f"检测理由：{detection_reason}")
+
+        if context_parts:
+            context_block = "\n\n".join(context_parts)
+            return (
+                "请根据下面提供的信息和自身的skill的能力，分析是否可以解答或处理信息中提到的问题。\n\n"
+                "══════════ 上下文（供准确判断） ══════════\n"
+                f"{context_block}\n"
+                "══════════════════════════════════════\n\n"
+                f"子任务：{scoped}"
+            )
         return (
-            "【跨 SG 补数子任务】请仅根据下列子任务判断本智能体是否拥有所需数据域"
-            "（can_handle / can_contribute）。不要按完整原题的其它域目标来否决。\n\n"
+            "请根据下面提供的信息和自身的skill的能力，分析是否可以解答或处理信息中提到的问题。\n\n"
             f"{scoped}"
         )
 
@@ -3006,8 +3175,18 @@ class SkillAgentExecutor(AgentExecutor):
         user_id: str = "",
         run_id: str = "",
         trace_id: str = "",
+        original_query: str = "",
+        own_results: dict[int, str] | None = None,
+        delegated_results: dict[str, str] | None = None,
+        detection_reason: str = "",
     ) -> dict[str, Any]:
-        """Select mid-delegate peer SGs via concurrent standard capability_check."""
+        """Select mid-delegate peer SGs via concurrent standard capability_check.
+
+        When *original_query*, *own_results*, *delegated_results*, or
+        *detection_reason* are provided they are injected into the probe
+        query so the capability-check LLM receives the same context as the
+        detection LLM.
+        """
         empty: dict[str, Any] = {
             "target_cards": [], "target_sg_names": [], "capable_pairs": [],
             "hints_by_sg": {}, "evidence_text": "", "probed_names": [],
@@ -3031,7 +3210,16 @@ class SkillAgentExecutor(AgentExecutor):
         if not candidates:
             return empty
 
-        probe_query = self._mid_exec_capability_probe_query(synthesized_query)
+        probe_query = self._mid_exec_capability_probe_query(
+            synthesized_query,
+            original_query=original_query,
+            own_results=own_results,
+            delegated_results=delegated_results,
+            detection_reason=detection_reason,
+        )
+
+        logger.info("[MidExec][CapSelect] _select_mid_delegate_targets_via_capability probe_query=%s", probe_query)
+
         capable_pairs = await sg_broadcast.probe_agents_capability_concurrent(
             probe_query, candidates, user_id, run_id, trace_id,
         )
@@ -3044,24 +3232,49 @@ class SkillAgentExecutor(AgentExecutor):
         # minimum threshold.  This prevents irrelevant agents (e.g. an LLM
         # fine-tuning agent for a purchase-history query) from being selected
         # just because they happened to be the only candidate in the pool.
+        #
+        # IMPORTANT: the threshold ONLY applies to agents that claim
+        # ``can_handle=True``.  Agents that are ``can_handle=False`` but
+        # ``can_contribute=True`` (e.g. a product-agent that can supplement
+        # product details once order-agent returns product IDs) are NOT
+        # filtered — they are genuinely useful contributors even if their
+        # confidence is below the threshold.
         _threshold = self._mid_exec_confidence_threshold()
         if capable_pairs and _threshold > 0:
             _before = len(capable_pairs)
-            _filtered = [
-                (card, resp)
-                for card, resp in capable_pairs
-                if float(getattr(resp, "confidence", 0.0) or 0.0) >= _threshold
-            ]
+            _filtered: list[tuple[AgentCard, Any]] = []
+            _dropped: list[str] = []
+            _skipped_contributors: list[str] = []
+            for card, resp in capable_pairs:
+                conf = float(getattr(resp, "confidence", 0.0) or 0.0)
+                can_handle = bool(getattr(resp, "can_handle", False))
+                can_contribute = bool(getattr(resp, "can_contribute", False))
+                if can_handle:
+                    # can_handle=True: must pass confidence threshold
+                    if conf >= _threshold:
+                        _filtered.append((card, resp))
+                    else:
+                        _dropped.append(f"{card.name}({conf:.2f})")
+                elif can_contribute:
+                    # can_handle=False but can_contribute=True: skip threshold,
+                    # keep as a contributor
+                    _filtered.append((card, resp))
+                    _skipped_contributors.append(f"{card.name}({conf:.2f})")
+                else:
+                    # neither can_handle nor can_contribute: drop
+                    _dropped.append(f"{card.name}({conf:.2f})")
             if len(_filtered) < _before:
-                _dropped = [
-                    f"{card.name}({float(getattr(resp, 'confidence', 0.0) or 0.0):.2f})"
-                    for card, resp in capable_pairs
-                    if float(getattr(resp, "confidence", 0.0) or 0.0) < _threshold
-                ]
+                if _dropped:
+                    logger.info(
+                        "[MidExec][CapSelect] confidence threshold filtered | "
+                        "threshold=%.2f before=%d after=%d dropped=%s",
+                        _threshold, _before, len(_filtered), _dropped,
+                    )
+            if _skipped_contributors:
                 logger.info(
-                    "[MidExec][CapSelect] confidence threshold filtered | "
-                    "threshold=%.2f before=%d after=%d dropped=%s",
-                    _threshold, _before, len(_filtered), _dropped,
+                    "[MidExec][CapSelect] confidence threshold bypassed for contributors | "
+                    "threshold=%.2f kept=%s",
+                    _threshold, _skipped_contributors,
                 )
             capable_pairs = _filtered
 
@@ -3115,28 +3328,180 @@ class SkillAgentExecutor(AgentExecutor):
             task.description = scoped
         return plan
 
+    @staticmethod
+    def _build_mid_exec_planner_context(
+        *,
+        synthesized_query: str,
+        target_cards: list,
+        original_query: str = "",
+        detection_reason: str = "",
+        own_results: dict[int, str] | None = None,
+        delegated_results: dict[str, str] | None = None,
+        capability_evidence: str = "",
+        upstream_context: dict | None = None,
+        delegation_chain: list[str] | None = None,
+    ) -> str:
+        """Build a clean, markdown-formatted context for the mid-exec Planner.
+
+        Produces a structured, human-readable context block that avoids JSON
+        blobs and confusing separators, making it easy for the Planner LLM
+        to parse and call ``make_plan_cmd`` reliably.
+
+        Returns a string to be used as the Planner's ``group_memory``.
+        """
+        lines: list[str] = []
+
+        # ── Section 1: Core Task ──
+        lines.append("## 1. 本轮子任务")
+        lines.append(f"**子任务**：{synthesized_query}")
+        if original_query:
+            lines.append(f"**原始用户问题**：{original_query}")
+        if detection_reason:
+            lines.append(f"**委派原因**：{detection_reason}")
+        lines.append("")
+
+        # ── Section 2: Available Agents ──
+        if target_cards:
+            lines.append("## 2. 可用智能体")
+            lines.append("")
+            for c in target_cards:
+                name = getattr(c, "name", "?")
+                desc = (getattr(c, "description", "") or "")[:300]
+                skills = getattr(c, "skills", None) or []
+                skill_names = [s.name for s in skills if getattr(s, "name", "")]
+                lines.append(f"### {name}")
+                lines.append(f"- **描述**：{desc}")
+                if skill_names:
+                    lines.append(f"- **技能**：{', '.join(skill_names)}")
+                lines.append("")
+
+        # ── Section 3: Already Executed ──
+        has_own = bool(own_results) and any(v for v in (own_results or {}).values() if v)
+        has_del = bool(delegated_results) and any(v for v in (delegated_results or {}).values() if v)
+        if has_own or has_del:
+            lines.append("## 3. 已执行结果")
+            lines.append("")
+            if has_own:
+                for tid, res in (own_results or {}).items():
+                    if res:
+                        lines.append(f"### 本层 Task #{tid}")
+                        lines.append("```")
+                        lines.append(res)
+                        lines.append("```")
+                        lines.append("")
+            if has_del:
+                for name, res in (delegated_results or {}).items():
+                    if res:
+                        lines.append(f"### 委托 [{name}]")
+                        lines.append("```")
+                        lines.append(res)
+                        lines.append("```")
+                        lines.append("")
+
+        # ── Section 4: Capability Evidence ──
+        if capability_evidence:
+            lines.append("## 4. 能力检测证据")
+            lines.append("")
+            lines.append(capability_evidence)
+            lines.append("")
+
+        # ── Section 5: Upstream Context ──
+        if upstream_context:
+            lines.append("## 5. 上游上下文")
+            lines.append("")
+            delegator_plan = upstream_context.get("delegator_plan")
+            exec_tasks = upstream_context.get("executed_tasks")
+            key_findings = upstream_context.get("key_findings_so_far")
+            if delegator_plan:
+                plan_items = delegator_plan if isinstance(delegator_plan, list) else []
+                lines.append("### 上游原始计划")
+                for t in plan_items:
+                    tid = t.get("id", "?")
+                    tdesc = str(t.get("description", ""))
+                    tagent = str(t.get("agent", ""))
+                    lines.append(f"- **Task #{tid}** → `{tagent}`：{tdesc}")
+                lines.append("")
+            if exec_tasks:
+                exec_items = exec_tasks if isinstance(exec_tasks, list) else []
+                lines.append("### 上游已执行任务")
+                for t in exec_items:
+                    tid = t.get("task_id", t.get("id", "?"))
+                    tdesc = str(t.get("description", ""))
+                    tstatus = str(t.get("status", "?"))
+                    tresult = (str(t.get("result", "")) or "")[:500]
+                    lines.append(f"- **Task #{tid}** [{tstatus}]：{tdesc}")
+                    if tresult:
+                        lines.append(f"  ```\n  {tresult}\n  ```")
+                lines.append("")
+            if key_findings:
+                lines.append("### 上游关键发现")
+                lines.append("```")
+                lines.append(str(key_findings))
+                lines.append("```")
+                lines.append("")
+
+        # ── Section 6: DAG Chain ──
+        if delegation_chain:
+            chain_str = " → ".join(delegation_chain)
+            lines.append("## 6. DAG 委派链路")
+            lines.append(f"当前链路：{chain_str}")
+            lines.append("⚠️ 上述链路中的 Agent 已参与本轮协作，不可再次分配任务。")
+            lines.append("")
+
+        # ── Section 7: Planning Rules ──
+        lines.append("## 7. 规划规则")
+        lines.append("1. `description` 必须忠实于**本轮子任务**，禁止扩写为完整原题")
+        lines.append("2. 每个 task 的 `agent` 必须从「可用智能体」中选取")
+        lines.append("3. 如果所有可用智能体都无法处理该子任务，`agent` 填 `NONE`")
+        lines.append("4. 上游上下文只用于理解关联键，不得写入 `description`")
+        lines.append("5. **必须调用 `make_plan_cmd` 工具输出规划结果**")
+
+        return "\n".join(lines)
+
     async def _plan_mid_exec_delegation(
         self,
         synthesized_query: str,
         target_cards: list[AgentCard],
-        group_memory: str = "",
+        *,
+        original_query: str = "",
+        own_results: dict[int, str] | None = None,
+        delegated_results: dict[str, str] | None = None,
+        detection_reason: str = "",
+        capability_evidence: str = "",
+        upstream_context: dict | None = None,
+        delegation_chain: list[str] | None = None,
     ) -> Optional[TaskList]:
-        """Mid-execution Step 2: plan tasks against capability-selected peers."""
+        """Mid-execution Step 2: plan tasks against capability-selected peers.
+
+        Builds a clean, markdown-formatted planner context via
+        :meth:`_build_mid_exec_planner_context`.
+        """
         if not target_cards or not synthesized_query:
             return None
         try:
+            planner_ctx = self._build_mid_exec_planner_context(
+                original_query=original_query,
+                synthesized_query=synthesized_query,
+                own_results=own_results or {},
+                delegated_results=delegated_results or {},
+                target_cards=target_cards,
+                detection_reason=detection_reason,
+                capability_evidence=capability_evidence,
+                upstream_context=upstream_context,
+                delegation_chain=delegation_chain,
+            )
+            logger.info(
+                "[MidExec][Plan] planner context built | "
+                "chars=%d targets=%d",
+                len(planner_ctx),
+                len(target_cards),
+            )
+
             scoped_plan_query = (
                 "【Mid-exec 子任务】下列内容即远程 SG 的全部工作范围。"
                 "规划时 description 必须忠实于该子任务，"
                 "禁止追加原题中其它域目标或整题扩写。\n\n"
                 f"{synthesized_query}"
-            )
-            mid_memory = (
-                f"{group_memory}\n\n"
-                "【Mid-exec 规划约束】远程任务 description = 上方子任务原文；"
-                "上游上下文只用于理解关联键，不得写入 description。"
-                if group_memory
-                else "【Mid-exec 规划约束】远程任务 description = 上方子任务原文；不得扩写为完整原题。"
             )
             planner = PlannerAgent(
                 provider=self.provider,
@@ -3148,11 +3513,142 @@ class SkillAgentExecutor(AgentExecutor):
                 metadata=self.metadata,
                 agent_id=self.agent_id,
             )
-            plan = await planner.make_plan(scoped_plan_query, target_cards, group_memory=mid_memory)
+            plan = await planner.make_plan(scoped_plan_query, target_cards, group_memory=planner_ctx)
             return self._apply_scoped_mid_exec_task_descriptions(plan, synthesized_query)
         except Exception as e:
             logger.warning("[MidExec][Plan] mid-exec plan failed: %s", e)
             return None
+
+    async def _plan_mid_exec_delegation_with_full_context(
+        self,
+        synthesized_query: str,
+        target_cards: list[AgentCard],
+        *,
+        original_query: str,
+        own_results: dict[int, str],
+        delegated_results: dict[str, str],
+        detection_reason: str = "",
+        capability_evidence: str = "",
+        upstream_context: dict | None = None,
+        delegation_chain: list[str] | None = None,
+    ) -> Optional[TaskList]:
+        """Mid-execution Step 2 (detect-direct path): plan tasks with full detection context.
+
+        Builds a clean, markdown-formatted planner context via
+        :meth:`_build_mid_exec_planner_context` that includes the original
+        query, local execution results, delegated results, target agent
+        skills, detection reason, capability evidence, DAG chain, and
+        upstream context — the same information the detection LLM had.
+        """
+        if not target_cards or not synthesized_query:
+            return None
+        try:
+            planner_ctx = self._build_mid_exec_planner_context(
+                original_query=original_query,
+                synthesized_query=synthesized_query,
+                own_results=own_results,
+                delegated_results=delegated_results,
+                target_cards=target_cards,
+                detection_reason=detection_reason,
+                capability_evidence=capability_evidence,
+                upstream_context=upstream_context,
+                delegation_chain=delegation_chain,
+            )
+            logger.info(
+                "[MidExec][Plan][DetectDirect] planner context built | "
+                "chars=%d targets=%d",
+                len(planner_ctx),
+                len(target_cards),
+            )
+
+            scoped_plan_query = (
+                "【Mid-exec 子任务】下列内容即远程 SG 的全部工作范围。"
+                "规划时 description 必须忠实于该子任务，"
+                "禁止追加原题中其它域目标或整题扩写。\n\n"
+                f"{synthesized_query}"
+            )
+
+            planner = PlannerAgent(
+                provider=self.provider,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
+                temperature=self.temperature,
+                data_services_url=self.data_services_url,
+                metadata=self.metadata,
+                agent_id=self.agent_id,
+            )
+            plan = await planner.make_plan(scoped_plan_query, target_cards, group_memory=planner_ctx)
+            return self._apply_scoped_mid_exec_task_descriptions(plan, synthesized_query)
+        except Exception as e:
+            logger.warning("[MidExec][Plan][DetectDirect] mid-exec plan failed: %s", e)
+            return None
+
+    async def _execute_mid_exec_self_task(
+        self,
+        task_description: str,
+        task_id: int,
+        skill_runner: "SkillRunner | None",
+        metadata: dict,
+        updater: Optional[Any] = None,
+    ) -> str:
+        """Execute a task locally as self during mid-exec delegation.
+
+        Reuses the same :class:`SkillAgent` local execution path as the main
+        task loop, but does not consume a hop or build a delegation chain.
+        """
+        self_name = self._self_planner_agent_name()
+
+        # --- Data Flow: self-exec task start ---
+        self._log_data_flow(
+            direction="MID_SELF_EXEC",
+            description=f"Mid-exec self-execution Task #{task_id} → 本地 {self_name} 执行",
+            source_id=self.agent_id,
+            target_id=f"{self_name} (in-process)",
+            payload_chars=len(task_description or ""),
+            payload_preview=(task_description or "")[:1000],
+            metadata_extra={
+                "task_id": task_id,
+                "task_desc_chars": len(task_description or ""),
+            },
+        )
+
+        local_agent = SkillAgent(
+            skill_runner=skill_runner,
+            query=task_description,
+            metadata=metadata,
+            current_task_id=task_id,
+            agent_id=self.agent_id,
+            progress_callback=(
+                (lambda frame: updater.add_artifact(
+                    [TextPart(text=frame)], name="progress"
+                ))
+                if updater is not None
+                else None
+            ),
+        )
+        result_parts: list[str] = []
+        async for chunk in local_agent.run():
+            if chunk:
+                result_parts.append(chunk)
+        result = "\n".join(result_parts)
+
+        # --- Data Flow: self-exec task result ---
+        is_fail = result.startswith("Delegation failed:") or result.startswith("Execution error:") or not result.strip()
+        self._log_data_flow(
+            direction="MID_SELF_RESULT",
+            description=f"Mid-exec self-execution Task #{task_id} 执行完毕",
+            source_id=self_name,
+            target_id=self.agent_id,
+            payload_chars=len(result or ""),
+            payload_preview=(result or "")[:1000],
+            metadata_extra={
+                "task_id": task_id,
+                "status": "fail" if is_fail else "complete",
+            },
+        )
+
+        return result
 
     async def _dispatch_mid_exec_delegation(
         self,
@@ -3166,18 +3662,26 @@ class SkillAgentExecutor(AgentExecutor):
         upstream_context: dict,
         hints_by_sg: Optional[dict[str, dict]] = None,
         updater: Optional[Any] = None,
-    ) -> tuple[dict[str, str], int]:
+        skill_runner: "SkillRunner | None" = None,
+        metadata: dict | None = None,
+    ) -> tuple[dict[str, str], dict[str, str], int]:
         """Mid-execution Step 3: dispatch plan tasks to target SGs.
 
         Forward progress frames from delegated agents via ``updater`` so the
         delegated agent's DAC progress is visible to the end user.
 
+        When *skill_runner* is provided and the task's agent is self, the
+        task is executed locally (in-process) instead of delegated via A2A.
+
         Returns:
-            Tuple of (results dict, remaining_hop).
-            remaining_hop reflects the hop count after all dispatches in this
-            call, accounting for each delegation edge consumed.
+            Tuple of (delegate_results, self_results, remaining_hop).
+            delegate_results  — remote delegation results (key: SG name)
+            self_results      — in-process self-execution results (key: self agent name)
+            remaining_hop     — reflects the hop count after all dispatches in this
+                                call, accounting for each delegation edge consumed.
         """
-        results: dict[str, str] = {}
+        delegate_results: dict[str, str] = {}
+        self_results: dict[str, str] = {}
         name_to_card = {c.name: c for c in target_cards}
         hints = dict(hints_by_sg or {})
         mid_exec_round = int((upstream_context or {}).get("mid_exec_round") or 0)
@@ -3188,8 +3692,59 @@ class SkillAgentExecutor(AgentExecutor):
             if target_card is None:
                 logger.warning("[MidExec][Dispatch] no card for agent=%s", agent_name)
                 continue
+            # ── Self-execution: run locally when agent is self ──
+            if agent_name == self._self_planner_agent_name() and skill_runner is not None:
+                _mid_self_desc = _short(task.description or "", 120)
+                if updater is not None:
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_self_executing",
+                        message=(
+                            f"Mid-exec self-executing Task #{task.id} "
+                            f"(round {mid_exec_round or '?'}): {_mid_self_desc}"
+                        ),
+                        status="running",
+                        task_id=task.id,
+                        extra={
+                            "target_sg": agent_name,
+                            "task_id": task.id,
+                            "mid_exec_round": mid_exec_round,
+                            "desc_preview": _mid_self_desc,
+                        },
+                    )
+                logger.info(
+                    "[MidExec][SelfExec] executing self task | task=%s round=%s",
+                    _mid_self_desc,
+                    mid_exec_round,
+                )
+                result = await self._execute_mid_exec_self_task(
+                    task_description=task.description or "",
+                    task_id=task.id,
+                    skill_runner=skill_runner,
+                    metadata=metadata,
+                    updater=updater,
+                )
+                self_results[agent_name] = result
+                if updater is not None:
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_self_done",
+                        message=(
+                            f"Mid-exec self Task #{task.id} done: "
+                            f"{_mid_self_desc} ({len(result or '')} chars)"
+                        ),
+                        status="done",
+                        task_id=task.id,
+                        extra={
+                            "target_sg": agent_name,
+                            "task_id": task.id,
+                            "mid_exec_round": mid_exec_round,
+                            "result_chars": len(result or ""),
+                        },
+                    )
+                continue
             if current_hop <= 1:
-                results[agent_name] = NONE_TASK_DESCRIPTION
+                delegate_results[agent_name] = NONE_TASK_DESCRIPTION
                 continue
 
             # Consume 1 hop for this delegation edge.
@@ -3229,7 +3784,7 @@ class SkillAgentExecutor(AgentExecutor):
                 execution_hint=peer_hint,
                 updater=updater,
             )
-            results[agent_name] = result
+            delegate_results[agent_name] = result
 
             if updater is not None:
                 await self._emit_progress(
@@ -3249,7 +3804,7 @@ class SkillAgentExecutor(AgentExecutor):
                         "result_chars": len(result or ""),
                     },
                 )
-        return results, current_hop
+        return delegate_results, self_results, current_hop
 
     # ------------------------------------------------------------------
     # Updated _delegate_to_peer with delegation_chain and execution_hint
@@ -4145,6 +4700,7 @@ satisfactory=False,
                 metadata=md,
                 tool_choice="evaluate_capability",
                 span_name="skill-capability-check-llm",
+                query=query,
             )
             if result_data is None:
                 raise ValueError("LLM did not call evaluate_capability tool")
@@ -4363,10 +4919,56 @@ satisfactory=False,
         delegation_chain = list(metadata.get("delegation_chain", []))
         upstream_context = dict(metadata.get("upstream_context", {}))
 
+        # ── DAG banner: log enforcement status at collaboration entry ──
+        _dag_enabled = self._dag_enforcement_enabled()
+        self_name = self._self_planner_agent_name()
+        if _dag_enabled:
+            _dag_status = "ENABLED" if is_delegated else "ENABLED (root, no chain yet)"
+            _dag_chain_preview = self._format_dag_chain(delegation_chain)
+            _dag_self_label = self_name if self_name not in delegation_chain else f"【{self_name}】⚠️"
+            logger.info(
+                "╔══ DAG  ═══════════════════════════════════════════════════╗\n"
+                "║  [STARTUP] DAG 委派链路约束已开启\n"
+                "║  状态: %s\n"
+                "║  当前 agent: %s\n"
+                "║  当前链路: %s\n"
+                "╚════════════════════════════════════════════════════════════╝",
+                _dag_status,
+                _dag_self_label,
+                _dag_chain_preview,
+            )
+        else:
+            logger.info(
+                "[DAG] DAG enforcement DISABLED (CROSS_SG_ENFORCE_DAG=false) | "
+                "chain=%s self=%s",
+                delegation_chain,
+                self_name,
+            )
+
         if is_delegated:
             current_hop = hop_remaining
         else:
             current_hop = int(os.getenv("CROSS_SG_MAX_HOP", "5"))
+
+        # ── DAG Layer 1: cycle detection — abort if self already in chain ──
+        if _dag_enabled and self_name in delegation_chain:
+            self._log_dag_event(
+                "CYCLE_DETECTED",
+                chain=delegation_chain,
+                self_name=self_name,
+                detail=f"self={self_name} 已存在于委派链中！",
+            )
+            logger.warning(
+                "[Cross-SG][DAG] cycle detected! self=%s already in chain=%s, aborting collaboration",
+                self_name,
+                delegation_chain,
+            )
+            return {
+                "answer": "",
+                "tasks": [],
+                "reason": "dag_cycle_detected",
+                "status": "fail",
+            }
 
         # Guard: hop exhausted — stop immediately, do not execute any tasks.
         if is_delegated and current_hop <= 0:
@@ -4612,6 +5214,31 @@ satisfactory=False,
             len(base_group_memory or ""),
             len(group_memory or ""),
         )
+
+        # ── DAG Layer 2: filter planner agent pool to exclude chain agents ──
+        if self._dag_enforcement_enabled() and delegation_chain:
+            chain_set = set(delegation_chain)
+            _orig_peer_count = len(collab_names)
+            _orig_card_count = len(all_cards)
+            _removed_cards = sorted(
+                getattr(c, "name", "") for c in all_cards
+                if getattr(c, "name", "") in chain_set
+            )
+            all_cards = [
+                c for c in all_cards
+                if getattr(c, "name", "") not in chain_set
+            ]
+            collab_names = {n for n in collab_names if n not in chain_set}
+            if len(collab_names) < _orig_peer_count:
+                self._log_dag_filter(
+                    "PLANNER_POOL",
+                    chain=delegation_chain,
+                    before=_orig_card_count,
+                    after=len(all_cards),
+                    removed=_removed_cards,
+                    kept=sorted(collab_names),
+                )
+
         planner = self._get_planner()
         plan = await planner.make_plan(query, all_cards, group_memory=group_memory)
 
@@ -4972,6 +5599,28 @@ satisfactory=False,
             c for c in all_cards if getattr(c, "name", "") in collab_names
         ]
 
+        # ── DAG Layer 3a: filter initial collaborator cards to exclude chain agents ──
+        if self._dag_enforcement_enabled() and delegation_chain and collaborator_cards_list:
+            _dag_before = len(collaborator_cards_list)
+            _dag_chain_set = set(delegation_chain)
+            _dag_removed = sorted(
+                getattr(c, "name", "") for c in collaborator_cards_list
+                if getattr(c, "name", "") in _dag_chain_set
+            )
+            collaborator_cards_list = [
+                c for c in collaborator_cards_list
+                if getattr(c, "name", "") not in _dag_chain_set
+            ]
+            if _dag_removed:
+                self._log_dag_filter(
+                    "MIDEXEC_CARDS",
+                    chain=delegation_chain,
+                    before=_dag_before,
+                    after=len(collaborator_cards_list),
+                    removed=_dag_removed,
+                    kept=sorted(getattr(c, "name", "") for c in collaborator_cards_list),
+                )
+
         # Build upstream context with executed tasks and delegator plan for the mid-exec loop
         # (delegator_plan is static — it captures the original pre-mid-exec plan)
         own_task_context = [
@@ -5023,6 +5672,27 @@ satisfactory=False,
                 collaborator_cards_list = await self._load_mid_exec_broadcast_candidates(
                     extra_cards=collaborator_cards_list,
                 )
+                # ── DAG Layer 3b: filter broadcast-loaded cards to exclude chain agents ──
+                if self._dag_enforcement_enabled() and delegation_chain and collaborator_cards_list:
+                    _dag_before = len(collaborator_cards_list)
+                    _dag_chain_set = set(delegation_chain)
+                    _dag_removed = sorted(
+                        getattr(c, "name", "") for c in collaborator_cards_list
+                        if getattr(c, "name", "") in _dag_chain_set
+                    )
+                    collaborator_cards_list = [
+                        c for c in collaborator_cards_list
+                        if getattr(c, "name", "") not in _dag_chain_set
+                    ]
+                    if _dag_removed:
+                        self._log_dag_filter(
+                            "MIDEXEC_BROADCAST",
+                            chain=delegation_chain,
+                            before=_dag_before,
+                            after=len(collaborator_cards_list),
+                            removed=_dag_removed,
+                            kept=sorted(getattr(c, "name", "") for c in collaborator_cards_list),
+                        )
                 if not collaborator_cards_list:
                     logger.info("[MidExec] no broadcast SG candidates, exiting loop")
                     await self._emit_progress(
@@ -5036,6 +5706,29 @@ satisfactory=False,
                         },
                     )
                     break
+
+            # ── Include self in collaborator pool so detection LLM can recommend
+            # self-execution when new data (e.g. user-id mapping) is acquired via
+            # delegation, avoiding unnecessary extra rounds/turns.
+            # IMPORTANT: must be AFTER the broadcast-reload block (line ~5593)
+            # so that `if not collaborator_cards_list` correctly triggers the
+            # broadcast to load other agents before self is appended.
+            self_name = self._self_planner_agent_name()
+            _existing_collab_names = {getattr(c, "name", "") for c in collaborator_cards_list}
+            if self_name not in _existing_collab_names:
+                self_card = next(
+                    (c for c in all_cards if getattr(c, "name", "") == self_name), None
+                )
+                if self_card is None:
+                    self_card = self.agent_card
+                if self_card:
+                    collaborator_cards_list.append(self_card)
+                    logger.info(
+                        "[MidExec][SelfInclude] added self to collaborator pool | "
+                        "self=%s pool=%s",
+                        self_name,
+                        [getattr(c, "name", "") for c in collaborator_cards_list],
+                    )
 
             logger.info("[MidExec] round %d / %d started", mid_exec_round + 1, max_mid_exec_rounds)
 
@@ -5055,6 +5748,7 @@ satisfactory=False,
                 user_id=user_id,
                 run_id=run_id,
                 trace_id=trace_id,
+                delegation_chain=delegation_chain,
             )
             if detection is None:
                 await self._emit_progress(
@@ -5115,7 +5809,84 @@ satisfactory=False,
             target_cards_list: list[AgentCard] = []
             hints_by_sg: dict[str, dict] = {}
             capability_evidence = ""
-            if self._mid_delegate_capability_select_enabled():
+            if self._mid_delegate_detect_direct_enabled():
+                # ── Detect-Direct path: use detection LLM results directly ──
+                # The detection LLM already has full context (original query,
+                # own results, delegated results, agent skills, DAG chain) and
+                # produced well-reasoned target_sgs recommendations.  We skip
+                # the broadcast capability check entirely and trust the
+                # detection LLM's choice.
+                target_sg_names = list(target_sgs)
+                target_cards_list = [
+                    c for c in collaborator_cards_list
+                    if getattr(c, "name", "") in target_sg_names
+                ]
+                logger.info(
+                    "[MidExec][DetectDirect] using detection LLM targets directly | "
+                    "round=%d targets=%s matched_cards=%d",
+                    mid_exec_round + 1,
+                    target_sg_names,
+                    len(target_cards_list),
+                )
+                if not target_cards_list:
+                    logger.info(
+                        "[MidExec][DetectDirect] no matching cards for detection targets, "
+                        "exiting loop"
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_no_targets",
+                        message="Mid-exec: 检测到数据缺口但未找到匹配的目标智能体",
+                        status="done",
+                        extra={
+                            "round": mid_exec_round + 1,
+                            "reason": "detect_direct_no_matching_targets",
+                            "target_sgs": target_sg_names,
+                        },
+                    )
+                    break
+
+                # ── Re-delegation guard: filter exhausted SGs ──
+                if _exhausted_sgs and target_cards_list:
+                    _before = len(target_cards_list)
+                    _filtered_cards = [
+                        c for c in target_cards_list
+                        if getattr(c, "name", "") not in _exhausted_sgs
+                    ]
+                    if len(_filtered_cards) < _before:
+                        _filtered_names = [
+                            getattr(c, "name", "") for c in _filtered_cards
+                        ]
+                        logger.info(
+                            "[MidExec][DetectDirect] re-delegation guard filtered | "
+                            "round=%d exhausted=%s before=%d after=%d kept=%s",
+                            mid_exec_round + 1,
+                            sorted(_exhausted_sgs),
+                            _before,
+                            len(_filtered_cards),
+                            _filtered_names,
+                        )
+                        target_cards_list = _filtered_cards
+                        target_sg_names = _filtered_names
+
+                if not target_cards_list:
+                    logger.info(
+                        "[MidExec][DetectDirect] all targets exhausted, exiting loop"
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_all_exhausted",
+                        message="Mid-exec: 所有候选智能体均已尝试且返回空结果，无法继续委派",
+                        status="done",
+                        extra={
+                            "round": mid_exec_round + 1,
+                            "reason": "all_targets_exhausted",
+                            "exhausted_sgs": sorted(_exhausted_sgs),
+                        },
+                    )
+                    break
+
+            elif self._mid_delegate_capability_select_enabled():
                 selection = await self._select_mid_delegate_targets_via_capability(
                     synthesized_query=synthesized_query,
                     collaborator_cards=collaborator_cards_list,
@@ -5123,6 +5894,10 @@ satisfactory=False,
                     user_id=user_id,
                     run_id=run_id,
                     trace_id=trace_id,
+                    original_query=query,
+                    own_results=own_results,
+                    delegated_results=_detect_delegate_results,
+                    detection_reason=reason_text,
                 )
                 target_cards_list = list(selection.get("target_cards") or [])
                 target_sg_names = list(selection.get("target_sg_names") or [])
@@ -5220,6 +5995,56 @@ satisfactory=False,
                     )
                     break
 
+            # ── DAG Layer 5: safety net — filter target_cards against delegation chain ──
+            # This runs after both the capability path and non-capability path have
+            # finalized target_cards_list.  Even if the detection LLM ignored the
+            # DAG prompt (Layer 4) or the capability check returned chain agents,
+            # this hard filter ensures they never reach dispatch.
+            if self._dag_enforcement_enabled() and delegation_chain and target_cards_list:
+                _dag_before = len(target_cards_list)
+                _dag_chain_set = set(delegation_chain)
+                _dag_removed = sorted(
+                    getattr(c, "name", "") for c in target_cards_list
+                    if getattr(c, "name", "") in _dag_chain_set
+                )
+                target_cards_list = [
+                    c for c in target_cards_list
+                    if getattr(c, "name", "") not in _dag_chain_set
+                ]
+                if _dag_removed:
+                    target_sg_names = [getattr(c, "name", "") for c in target_cards_list]
+                    self._log_dag_event(
+                        "SAFETY_NET",
+                        chain=delegation_chain,
+                        self_name="",
+                        detail=f"安全网拦截！剔除链上 agent: {', '.join(_dag_removed)}",
+                        level="warning",
+                    )
+                    logger.warning(
+                        "[MidExec][DAG] safety net fired! removed chain agents from dispatch targets | "
+                        "chain=%s removed=%s before=%d after=%d",
+                        delegation_chain,
+                        _dag_removed,
+                        _dag_before,
+                        len(target_cards_list),
+                    )
+                if not target_cards_list:
+                    logger.warning(
+                        "[MidExec][DAG] all targets were chain agents, exiting mid-exec loop"
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_dag_blocked",
+                        message="Mid-exec: DAG 约束拦截 — 所有候选智能体均在委派链路中，无法继续委派",
+                        status="done",
+                        extra={
+                            "round": mid_exec_round + 1,
+                            "reason": "dag_chain_blocked",
+                            "delegation_chain": delegation_chain,
+                        },
+                    )
+                    break
+
             # Step 2: Plan
             # Rebuild mid_upstream each round so the planner and dispatch
             # context see the latest own_results + delegate_results from
@@ -5245,31 +6070,30 @@ satisfactory=False,
             mid_upstream["executed_tasks"] = _round_own_task_context
             mid_upstream["key_findings_so_far"] = _round_key_findings
 
-            mid_group_memory = self._enrich_group_memory_with_upstream(
-                upstream_context=mid_upstream,
-                base_group_memory=group_memory,
-                extra_context={
-                    "already_delegated": [
-                        {
-                            "target_sg": name,
-                            "result": result or "",
-                            "status": "empty" if not result or result == NONE_TASK_DESCRIPTION else "ok",
-                        }
-                        for name, result in delegate_results.items()
-                    ],
-                    "synthesized_query": synthesized_query,
-                    "detection_reason": detection.get("reason", ""),
-                    "capability_check_evidence": capability_evidence,
-                },
-            )
-            if capability_evidence:
-                mid_group_memory = f"{mid_group_memory}\n\n{capability_evidence}" if mid_group_memory else capability_evidence
-
-            mid_plan = await self._plan_mid_exec_delegation(
-                synthesized_query=synthesized_query,
-                target_cards=target_cards_list,
-                group_memory=mid_group_memory,
-            )
+            if self._mid_delegate_detect_direct_enabled():
+                mid_plan = await self._plan_mid_exec_delegation_with_full_context(
+                    synthesized_query=synthesized_query,
+                    target_cards=target_cards_list,
+                    original_query=query,
+                    own_results=own_results,
+                    delegated_results=delegate_results,
+                    detection_reason=detection.get("reason", ""),
+                    capability_evidence=capability_evidence,
+                    upstream_context=mid_upstream,
+                    delegation_chain=delegation_chain,
+                )
+            else:
+                mid_plan = await self._plan_mid_exec_delegation(
+                    synthesized_query=synthesized_query,
+                    target_cards=target_cards_list,
+                    original_query=query,
+                    own_results=own_results,
+                    delegated_results=delegate_results,
+                    detection_reason=detection.get("reason", ""),
+                    capability_evidence=capability_evidence,
+                    upstream_context=mid_upstream,
+                    delegation_chain=delegation_chain,
+                )
             if mid_plan is None:
                 logger.warning("[MidExec] plan returned None, exiting loop")
                 await self._emit_progress(
@@ -5323,12 +6147,19 @@ satisfactory=False,
             })
             # --- Data Flow: mid-exec round dispatch ---
             _mid_ctx_chars = len(json.dumps(dispatch_ctx, ensure_ascii=False))
-            target_sg_names = list(target_sg_names) if target_sg_names else []
+            # Use planner's actual dispatched agents, not capability check's candidate pool
+            _dispatch_agent_names = sorted(set(
+                (t.agent or "").strip() for t in (mid_plan.tasks or [])
+                if (t.agent or "").strip().upper() != "NONE"
+            ))
             self._log_data_flow(
                 direction="MID_DISPATCH_SEND",
-                description=f"Mid-exec R{mid_exec_round+1} 委派出参 → 目标 SGs {target_sg_names}",
+                description=(
+                    f"Mid-exec R{mid_exec_round+1} planner dispatched → "
+                    f"目标 SGs {_dispatch_agent_names}"
+                ),
                 source_id=self._self_planner_agent_name(),
-                target_id=", ".join(target_sg_names) or "?",
+                target_id=", ".join(_dispatch_agent_names) or "?",
                 payload_chars=_mid_ctx_chars,
                 payload_preview=(
                     f"已委托: {len(delegate_results)} 条, "
@@ -5339,7 +6170,7 @@ satisfactory=False,
                     "delegation_chain": delegation_chain,
                 },
             )
-            mid_results, current_hop = await self._dispatch_mid_exec_delegation(
+            mid_delegate, mid_self, current_hop = await self._dispatch_mid_exec_delegation(
                 plan=mid_plan,
                 target_cards=target_cards_list,
                 user_id=user_id,
@@ -5350,8 +6181,10 @@ satisfactory=False,
                 upstream_context=dispatch_ctx,
                 hints_by_sg=hints_by_sg,
                 updater=updater,
+                skill_runner=skill_runner,
+                metadata=metadata,
             )
-            delegate_results.update(mid_results)
+            delegate_results.update(mid_delegate)
 
             # Hop is consumed inside _dispatch_mid_exec_delegation;
             # current_hop has already been updated by the returned value.
@@ -5361,7 +6194,7 @@ satisfactory=False,
             # they are excluded from subsequent mid-exec rounds.  This
             # prevents infinite ping-pong between the same agent pair when
             # the delegated SG cannot contribute meaningful data.
-            for sg_name, result in mid_results.items():
+            for sg_name, result in mid_delegate.items():
                 if not result or result == NONE_TASK_DESCRIPTION:
                     _exhausted_sgs.add(sg_name)
                     logger.info(
@@ -5370,19 +6203,21 @@ satisfactory=False,
                         sg_name, mid_exec_round + 1,
                     )
 
-            # Merge delegated results into own_results for next round detection
-            for sg_name, result in mid_results.items():
-                # --- Data Flow: mid-exec result received ---
+            # Merge self-execution results into own_results for next round detection.
+            # Delegated results are already in delegate_results — do NOT duplicate
+            # them into own_results to avoid redundant data.
+            self_name = self._self_planner_agent_name()
+            if self_name in mid_self:
                 self._log_data_flow(
-                    direction="MID_DISPATCH_RECV",
-                    description=f"Mid-exec 委派 [{sg_name}] 结果返回 → delegated_results 字典",
-                    source_id=sg_name or "?",
+                    direction="MID_SELF_RECV",
+                    description=f"Mid-exec self-exec [{self_name}] 结果 → own_results",
+                    source_id=self_name or "?",
                     target_id=self._self_planner_agent_name(),
-                    payload_chars=len(result or ""),
-                    payload_preview=(result or "")[:1000],
+                    payload_chars=len(mid_self[self_name] or ""),
+                    payload_preview=(mid_self[self_name] or "")[:1000],
                 )
                 fake_task_id = 10000 + mid_exec_round * 100 + len(delegate_results)
-                own_results[fake_task_id] = f"[从 {sg_name} 获取]: {result}"
+                own_results[fake_task_id] = f"[Self-exec {self_name}]: {mid_self[self_name]}"
 
             mid_exec_round += 1
 

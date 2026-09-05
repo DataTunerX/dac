@@ -2132,7 +2132,7 @@ dependencies = [
     { name = "setuptools" },
 ]
 wheels = [
-    { filename = "skill_sdk-0.3.3-py3-none-any.whl", hash = "sha256:131407e63581bee7d273588f596dde1c5fbcf06eecb45d788ce41fe7ce4391e8" },
+    { filename = "skill_sdk-0.3.3-py3-none-any.whl", hash = "sha256:c7d00c0be22eee473b25f2b57263fc7561b96a49a0dcbac543bc1bf29e94dfc2" },
 ]
 
 [package.metadata]

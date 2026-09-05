@@ -72,6 +72,7 @@ async def invoke_llm_with_tool(
     tool_choice: Optional[str] = None,
     span_name: str = "skill-tool-call",
     span_input: Optional[dict] = None,
+    query: Optional[str] = None,
 ) -> Optional[dict]:
     """使用 tool call 机制调用 LLM 并提取结构化输出。
 
@@ -145,6 +146,9 @@ async def invoke_llm_with_tool(
 
     result = extract_tool_call_result(answer, tool.name)
     ok = result is not None
+
+    _query_preview = (query or "")[:200] if query else ""
+
     logger.info(
         " === tool_call_utils.invoke_llm_with_tool (%s) tool=%s ok=%s elapsed_ms=%s result=%s",
         span_name, tool.name, ok, _elapsed,

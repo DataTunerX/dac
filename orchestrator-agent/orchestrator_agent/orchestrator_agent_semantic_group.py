@@ -5959,6 +5959,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 tool_choice="evaluate_capability",
                 span_name="group-capability-check-llm",
                 span_input={"query": query, "agent_name": agent_name},
+                query=query,
             )
             if result_data is None:
                 raise ValueError("LLM did not call evaluate_capability tool")
@@ -7445,6 +7446,10 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     run_id=run_id,
                     trace_id=trace_id,
                     get_response_text=getattr(agent, "get_response_text", None),
+                    original_query=query,
+                    own_results=own_results,
+                    delegated_results=delegated_results,
+                    detection_reason=reason,
                 )
                 target_cards = list(selection.get("target_cards") or [])
                 target_sg_names = list(selection.get("target_sg_names") or [])
@@ -7697,11 +7702,19 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             )
             # --- Data Flow: mid-exec round dispatch ---
             _mid_ctx_chars = len(json.dumps(upstream_ctx, ensure_ascii=False))
+            # Use planner's actual dispatched agents, not capability check's candidate pool
+            _dispatch_agent_names = sorted(set(
+                (t.agent or "").strip() for t in (mid_plan.tasks or [])
+                if (t.agent or "").strip().upper() != "NONE"
+            ))
             self._log_data_flow(
                 direction="MID_DISPATCH_SEND",
-                description=f"Mid-exec R{mid_exec_round+1} 委派出参 → 目标 SGs {target_sg_names}",
+                description=(
+                    f"Mid-exec R{mid_exec_round+1} planner dispatched → "
+                    f"目标 SGs {_dispatch_agent_names}"
+                ),
                 source_id=agent.agent_name or "?",
-                target_id=", ".join(target_sg_names) or "?",
+                target_id=", ".join(_dispatch_agent_names) or "?",
                 payload_chars=_mid_ctx_chars,
                 payload_preview=(
                     f"已委托: {len(delegated_results)} 条, "
@@ -8657,11 +8670,53 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         return hinted, missing
 
     @staticmethod
-    def _mid_exec_capability_probe_query(synthesized_query: str) -> str:
-        """Frame mid-exec sub-task so capability judges scope the ask, not the full original question."""
+    def _mid_exec_capability_probe_query(
+        synthesized_query: str,
+        *,
+        original_query: str = "",
+        own_results: dict[int, str] | None = None,
+        delegated_results: dict[str, str] | None = None,
+        detection_reason: str = "",
+    ) -> str:
+        """Frame mid-exec sub-task so capability judges scope the ask, not the full original question.
+
+        When *original_query*, *own_results*, *delegated_results*, or
+        *detection_reason* are provided, they are injected so the capability-
+        check LLM receives the same context as the detection LLM.
+        """
         scoped = (synthesized_query or "").strip()
         if not scoped:
             return scoped
+
+        context_parts: list[str] = []
+        if original_query:
+            context_parts.append(f"原始问题：{original_query}")
+        if own_results:
+            own_text = "\n".join(
+                f"[Task#{tid}]: {res}" for tid, res in own_results.items() if res
+            )
+            if own_text:
+                context_parts.append(f"本层已执行结果：\n{own_text}")
+        if delegated_results:
+            del_text = "\n".join(
+                f"[{name}]: {res or '[EMPTY]'}"
+                for name, res in delegated_results.items()
+            )
+            if del_text:
+                context_parts.append(f"已完成委托结果：\n{del_text}")
+        if detection_reason:
+            context_parts.append(f"检测理由：{detection_reason}")
+
+        if context_parts:
+            context_block = "\n\n".join(context_parts)
+            return (
+                "【跨 SG 补数子任务】请仅根据下列子任务判断本智能体是否拥有所需数据域"
+                "（can_handle / can_contribute）。不要按完整原题的其它域目标来否决。\n\n"
+                "══════════ 上下文（供准确判断） ══════════\n"
+                f"{context_block}\n"
+                "══════════════════════════════════════\n\n"
+                f"子任务：{scoped}"
+            )
         return (
             "【跨 SG 补数子任务】请仅根据下列子任务判断本智能体是否拥有所需数据域"
             "（can_handle / can_contribute）。不要按完整原题的其它域目标来否决。\n\n"
@@ -8700,6 +8755,10 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         run_id: str = "",
         trace_id: str = "",
         get_response_text: Optional[Any] = None,
+        original_query: str = "",
+        own_results: dict[int, str] | None = None,
+        delegated_results: dict[str, str] | None = None,
+        detection_reason: str = "",
     ) -> dict[str, Any]:
         """Select mid-delegate peer SGs via concurrent standard ``capability_check``.
 
@@ -8755,7 +8814,13 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             )
             return empty
 
-        probe_query = self._mid_exec_capability_probe_query(synthesized_query)
+        probe_query = self._mid_exec_capability_probe_query(
+            synthesized_query,
+            original_query=original_query,
+            own_results=own_results,
+            delegated_results=delegated_results,
+            detection_reason=detection_reason,
+        )
         logger.info(
             "[Cross-SG][MidCapSelect] concurrent capability_check | set=broadcast_pool "
             "candidates=%d soft_hints=%s names=%s synth_query_preview=%s",

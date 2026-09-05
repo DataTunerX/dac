@@ -34,6 +34,22 @@ _CONTRIBUTION_TRUNC = 300
 _REASON_TRUNC = 200
 
 
+def _confidence_threshold() -> float:
+    """Minimum confidence score for routing pool selection.
+
+    Agents with ``can_handle=True`` must pass this threshold.
+    Agents with ``can_handle=False`` but ``can_contribute=True``
+    bypass the threshold.
+
+    Controlled by ``SG_MID_DELEGATE_CONFIDENCE_THRESHOLD`` (same env
+    as the mid-exec threshold, for consistency).
+    """
+    try:
+        return float(os.getenv("SG_MID_DELEGATE_CONFIDENCE_THRESHOLD", "0.5") or 0.5)
+    except ValueError:
+        return 0.8
+
+
 def default_get_response_text(chunk: Any) -> str:
     """Extract text from A2A streaming chunk."""
     data = chunk.model_dump(mode="json", exclude_none=True)
@@ -373,8 +389,9 @@ async def broadcast_capability_check(
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error(
-                "SkillAgent broadcast: exception for agent %s: %s",
+                "SkillAgent broadcast: exception for agent %s query=%s: %s",
                 all_agent_cards[i].name,
+                (query or "")[:100],
                 result,
             )
             continue
@@ -384,14 +401,54 @@ async def broadcast_capability_check(
         if result.can_handle or result.can_contribute:
             capable_agents.append((all_agent_cards[i], result))
 
+    # ── Confidence threshold ──
+    # Same logic as mid-exec _select_mid_delegate_targets_via_capability:
+    #   - can_handle=True: must pass confidence threshold
+    #   - can_handle=False + can_contribute=True: skip threshold, keep as contributor
+    #   - both false: already excluded above
+    _threshold = _confidence_threshold()
+    if _threshold > 0:
+        _before = len(capable_agents)
+        _filtered: list[tuple[AgentCard, CapabilityCheckResponse]] = []
+        _dropped: list[str] = []
+        _skipped_contributors: list[str] = []
+        for card, resp in capable_agents:
+            conf = float(getattr(resp, "confidence", 0.0) or 0.0)
+            can_handle = bool(getattr(resp, "can_handle", False))
+            can_contribute = bool(getattr(resp, "can_contribute", False))
+            if can_handle:
+                if conf >= _threshold:
+                    _filtered.append((card, resp))
+                else:
+                    _dropped.append(f"{card.name}({conf:.2f})")
+            elif can_contribute:
+                _filtered.append((card, resp))
+                _skipped_contributors.append(f"{card.name}({conf:.2f})")
+            # else: both false — already excluded above
+        if len(_filtered) < _before:
+            if _dropped:
+                logger.info(
+                    "[RoutingPool][CapSelect] confidence threshold filtered | "
+                    "threshold=%.2f before=%d after=%d dropped=%s",
+                    _threshold, _before, len(_filtered), _dropped,
+                )
+        if _skipped_contributors:
+            logger.info(
+                "[RoutingPool][CapSelect] confidence threshold bypassed for contributors | "
+                "threshold=%.2f kept=%s",
+                _threshold, _skipped_contributors,
+            )
+        capable_agents = _filtered
+
     capable_agents.sort(
         key=lambda x: (1 if x[1].can_handle else 0, x[1].confidence),
         reverse=True,
     )
     logger.info(
-        "SkillAgent broadcast: capable_count=%d names=%s",
+        "SkillAgent broadcast: capable_count=%d names=%s query=%s",
         len(capable_agents),
         [c.name for c, _ in capable_agents[:8]],
+        (query or "")[:100],
     )
     return capable_agents
 
@@ -551,11 +608,10 @@ async def probe_agents_capability_concurrent(
     semaphore = asyncio.Semaphore(concurrency)
     logger.info(
         "[CapabilityProbe] start concurrent probes | candidates=%d concurrency=%d "
-        "names=%s query_preview=%s",
+        "names=%s",
         len(cards),
         concurrency,
         [getattr(c, "name", "") for c in cards[:12]],
-        (query or "")[:120],
     )
 
     async def _one(card: AgentCard) -> Optional[tuple[AgentCard, CapabilityCheckResponse]]:
@@ -571,20 +627,22 @@ async def probe_agents_capability_concurrent(
             )
             if resp is None:
                 logger.info(
-                    "[CapabilityProbe] no_response | agent=%s url=%s",
+                    "[CapabilityProbe] no_response | agent=%s url=%s query=%s",
                     getattr(card, "name", ""),
                     getattr(card, "url", ""),
+                    (query or "")[:120],
                 )
                 return None
             resp = normalize_capability_check_response(resp)
             logger.info(
                 "[CapabilityProbe] result | agent=%s can_handle=%s can_contribute=%s "
-                "confidence=%.2f degraded=%s reason=%s",
+                "confidence=%.2f degraded=%s query=%s reason=%s",
                 getattr(card, "name", "") or resp.agent_name,
                 resp.can_handle,
                 resp.can_contribute,
                 float(resp.confidence or 0.0),
                 resp.degraded,
+                (query or "")[:120],
                 (resp.reason or "")[:160],
             )
             return card, resp

@@ -358,8 +358,9 @@ async def broadcast_capability_check(
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error(
-                "SG broadcast: exception for agent %s: %s",
+                "SG broadcast: exception for agent %s query=%s: %s",
                 all_agent_cards[i].name,
+                (query or "")[:100],
                 result,
             )
             continue
@@ -374,9 +375,10 @@ async def broadcast_capability_check(
         reverse=True,
     )
     logger.info(
-        "SG broadcast: capable_count=%d names=%s",
+        "SG broadcast: capable_count=%d names=%s query=%s",
         len(capable_agents),
         [c.name for c, _ in capable_agents[:8]],
+        (query or "")[:100],
     )
     return capable_agents
 
@@ -560,20 +562,22 @@ async def probe_agents_capability_concurrent(
             )
             if resp is None:
                 logger.info(
-                    "[CapabilityProbe] no_response | agent=%s url=%s",
+                    "[CapabilityProbe] no_response | agent=%s url=%s query=%s",
                     getattr(card, "name", ""),
                     getattr(card, "url", ""),
+                    (query or "")[:120],
                 )
                 return None
             resp = normalize_capability_check_response(resp)
             logger.info(
                 "[CapabilityProbe] result | agent=%s can_handle=%s can_contribute=%s "
-                "confidence=%.2f degraded=%s reason=%s",
+                "confidence=%.2f degraded=%s query=%s reason=%s",
                 getattr(card, "name", "") or resp.agent_name,
                 resp.can_handle,
                 resp.can_contribute,
                 float(resp.confidence or 0.0),
                 resp.degraded,
+                (query or "")[:120],
                 (resp.reason or "")[:160],
             )
             return card, resp
