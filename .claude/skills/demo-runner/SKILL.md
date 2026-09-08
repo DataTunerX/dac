@@ -75,44 +75,66 @@ Earlier attempts failed for reasons worth not rediscovering:
 
    If the GUI shows a login form: `admin` / `changeme`.
 
-## Arm the bridge (one case per arming)
+## Arm the bridge (serves clicks in a loop)
 
-Run this and it blocks until the operator clicks a case, then submits it:
+This blocks and keeps serving every click for ~9 minutes, so the operator can
+run case after case without anyone re-arming between them. It returns when the
+budget expires with no further click — just run it again to continue.
+
+Do **not** use a single-shot `waitForFunction`: only the operator's first click
+would reach the GUI and every later click would silently do nothing.
 
 ```js
 async (page) => {
-  const demo = page.context().pages().find(p => p.url().includes('8777'));
-  const gui  = page.context().pages().find(p => p.url().includes('32002'));
-  if (!demo || !gui) return { error: 'missing window', urls: page.context().pages().map(p => p.url()) };
+  const ctx = page.context();
+  const demo = ctx.pages().find(p => p.url().includes('8777'));
+  const gui  = ctx.pages().find(p => p.url().includes('32002'));
+  if (!demo || !gui) return { error: 'missing window', urls: ctx.pages().map(p => p.url()) };
 
-  await demo.waitForFunction(() => window.__DEMO_PENDING !== null, null, { timeout: 600000 });
-  const job = await demo.evaluate(() => {
-    const j = window.__DEMO_PENDING;
-    window.__DEMO_PENDING = null;
-    window.__DEMO_LAST_SENT = j;
-    return j;
-  });
+  const BUDGET_MS = 9 * 60 * 1000;
+  const started = Date.now();
+  const fired = [];
 
-  await gui.bringToFront();
-  await gui.goto('http://10.124.48.126:32002/');   // fresh chat
-  const box = gui.getByRole('textbox', { name: '给 DAC 发送消息' });
-  await box.waitFor({ timeout: 30000 });
-  await box.fill(job.prompt);
-  await box.press('Enter');
-  await gui.waitForTimeout(1500);
-  return { ran: job.title, id: job.id, url: gui.url() };
+  while (true) {
+    const left = BUDGET_MS - (Date.now() - started);
+    if (left < 5000) break;
+    try {
+      await demo.waitForFunction(() => window.__DEMO_PENDING !== null, null, { timeout: left });
+    } catch { break; }                  // budget expired with no further click
+
+    const job = await demo.evaluate(() => {
+      const j = window.__DEMO_PENDING;
+      window.__DEMO_PENDING = null;
+      window.__DEMO_LAST_SENT = j;
+      return j;
+    });
+    if (!job || !job.prompt) continue;
+
+    await gui.bringToFront();
+    await gui.goto('http://10.124.48.126:32002/');   // fresh chat
+    const box = gui.getByRole('textbox', { name: '给 DAC 发送消息' });
+    await box.waitFor({ timeout: 30000 });
+    await box.fill(job.prompt);
+    await box.press('Enter');
+    await gui.waitForTimeout(1200);
+    fired.push({ id: job.id, title: job.title, url: gui.url() });
+  }
+  return { servedFor: `${Math.round((Date.now()-started)/1000)}s`, count: fired.length, fired };
 }
 ```
 
-Report only: which case ran and its `run_id`. The operator watches the answer in
-the real GUI window. **Re-arm when the operator says "next"** — the watcher is
-one-shot by design, so a stray click can never fire an unexpected query.
+Report each case that fired and its `run_id`. The operator reads the answers in
+the real GUI window themselves — don't poll logs and narrate.
+
+Re-run the block when it returns (or when the operator says **next**) to keep
+serving.
 
 ## Rules
 
-- **One case per arming.** Never batch.
-- **Never navigate or reload the real GUI while an answer is streaming** — an
-  interrupted run is lost entirely and never reaches history.
+- **Let an answer finish before the next click, and never navigate or reload the
+  real GUI while one is streaming.** Each submission navigates the GUI to a
+  fresh chat, so firing early abandons the running answer — an interrupted run
+  is lost entirely and never reaches history.
 - Paste prompts **verbatim** from the case data; never paraphrase or fix typos.
 - Blocked cases render a disabled button and cannot be fired.
 - Case 3 (`场景 3`, wwybsj-build) permanently inserts its registration number.
