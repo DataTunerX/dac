@@ -45,11 +45,21 @@ Earlier attempts failed for reasons worth not rediscovering:
    node .claude/skills/demo-runner/scripts/build-scenarios.mjs "$PWD" "$D"
    ```
 
-2. Serve it (skip if `curl -s -o /dev/null http://127.0.0.1:8777/index.html`
-   already returns 200):
+2. Serve it. **Do not decide to skip this because port 8777 answers 200** — a
+   server left over from an earlier session may be serving a different
+   directory, so a regenerated case list silently never reaches the page. Check
+   what is actually being served, and restart if it disagrees with disk:
 
    ```bash
-   cd /tmp/dac-demo-runner && nohup python3 -m http.server 8777 > /tmp/demo-http.log 2>&1 &
+   served=$(curl -s http://127.0.0.1:8777/scenarios.json | python3 -c \
+     "import json,sys; print(sum(len(s['steps']) for s in json.load(sys.stdin)))" 2>/dev/null)
+   ondisk=$(python3 -c \
+     "import json; print(sum(len(s['steps']) for s in json.load(open('/tmp/dac-demo-runner/scenarios.json'))))")
+   echo "served=$served ondisk=$ondisk"
+   if [ "$served" != "$ondisk" ]; then
+     pkill -f "http.server 8777"
+     cd /tmp/dac-demo-runner && nohup python3 -m http.server 8777 > /tmp/demo-http.log 2>&1 &
+   fi
    ```
 
 3. Open the demo window, then pop the real GUI as a genuinely separate window
@@ -143,11 +153,26 @@ serving.
   `POST 10.124.48.91:8997/v2/search/query {"query":"藏品总登记号 0<n>","mode":"lexical"}`
 - Answers take 40 s - 4 min. That silence is normal.
 
+## Changing the case list
+
+Cases live in `frontend/src/lib/demo-scenarios.ts` — that is the source of
+truth. To add or remove one, edit there, then re-run `build-scenarios.mjs` and
+reload the demo window with a fresh query string
+(`http://127.0.0.1:8777/index.html?r=<timestamp>`).
+
+`location.reload()` alone is **not** enough: it does not reliably bypass the
+cached `scenarios.json` fetch response, so the page keeps rendering the old case
+count. The page requests `scenarios.json?v=<Date.now()>` with `cache: no-store`
+for this reason — don't remove that.
+
 ## Files
 
 - `assets/index.html` — the standalone demo page. Click handler sets
   `window.__DEMO_PENDING = {id, title, prompt}`; progress persists in
   `localStorage` under `dac_demo_runner_state_v1`. The 重置 button clears it.
+  Note the localStorage progress counter is keyed by step id, so removing a
+  case can leave the counter reading e.g. `4/23` from earlier runs — 重置
+  clears it.
 - `scripts/build-scenarios.mjs` — strips the TS types from
   `frontend/src/lib/demo-scenarios.ts` and emits `scenarios.json` next to the
   HTML. Re-run whenever the scenario list changes.

@@ -78,7 +78,10 @@ try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) {
 
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
 
-fetch("scenarios.json").then(r=>r.json()).then(render);
+// Cache-bust: the case list is regenerated from demo-scenarios.ts between
+// runs, and a cached response silently shows a stale set of cases.
+fetch("scenarios.json?v=" + Date.now(), { cache: "no-store" })
+  .then(r=>r.json()).then(render);
 
 function render(scenarios){
   const root = document.getElementById("root");
