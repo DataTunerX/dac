@@ -65,7 +65,10 @@ Earlier attempts failed for reasons worth not rediscovering:
 3. Open the demo window, then pop the real GUI as a genuinely separate window
    (`window.open` with explicit size — `context.newPage()` only makes a tab):
 
-   - `browser_navigate` to `http://127.0.0.1:8777/index.html`
+   - `browser_navigate` to `http://127.0.0.1:8777/index.html?r=<timestamp>`.
+     **Always include the query string** — the browser caches the HTML itself,
+     and a cached copy will render a stale case list (this bites every time a
+     case is added or removed).
    - then `browser_run_code_unsafe`:
 
    ```js
@@ -160,10 +163,17 @@ truth. To add or remove one, edit there, then re-run `build-scenarios.mjs` and
 reload the demo window with a fresh query string
 (`http://127.0.0.1:8777/index.html?r=<timestamp>`).
 
-`location.reload()` alone is **not** enough: it does not reliably bypass the
-cached `scenarios.json` fetch response, so the page keeps rendering the old case
-count. The page requests `scenarios.json?v=<Date.now()>` with `cache: no-store`
-for this reason — don't remove that.
+Caching bites at **two** levels, and both must be defeated or the page silently
+renders the old case list:
+
+1. `scenarios.json` — the page already requests it as `scenarios.json?v=<Date.now()>`
+   with `cache: no-store`. Don't remove that.
+2. `index.html` itself — always open/reload it as `index.html?r=<timestamp>`.
+   `location.reload()` is not enough.
+
+After any change, verify rather than assume:
+`await demo.evaluate(() => document.querySelectorAll('.step').length)` should
+match the step count `build-scenarios.mjs` printed.
 
 ## Files
 
