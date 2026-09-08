@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DAC 测试用例</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212a; --line:#2a2f3a;
+    --text:#e8eaed; --muted:#9aa3b2; --brand:#4f8cff; --ok:#3ecf8e;
+    --warn:#f0b429; --blocked:#7a8393; --run:#4f8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif}
+  header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);
+    padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+  h1{margin:0;font-size:17px;font-weight:650;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
+  .progress{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted)}
+  .bar{width:160px;height:6px;border-radius:99px;background:var(--panel2);overflow:hidden}
+  .bar>i{display:block;height:100%;background:var(--brand);width:0%}
+  button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel2);color:var(--text);padding:7px 13px}
+  button:hover{border-color:#3a4050}
+  .ghost{background:transparent}
+  main{padding:20px 24px 60px;max-width:1000px;margin:0 auto}
+  .scenario{border:1px solid var(--line);border-radius:12px;margin-bottom:18px;overflow:hidden;background:var(--panel)}
+  .scenario>.head{padding:13px 16px;display:flex;align-items:center;gap:10px;
+    border-bottom:1px solid var(--line);background:var(--panel2)}
+  .scenario .label{font-weight:650}
+  .scenario .title{color:var(--muted)}
+  .pill{margin-left:auto;font-size:11.5px;padding:2px 9px;border-radius:99px;border:1px solid var(--line)}
+  .pill.ready{color:var(--ok);border-color:#1f5c44}
+  .pill.partial{color:var(--warn);border-color:#5c4a1f}
+  .pill.blocked{color:var(--blocked)}
+  .purpose{padding:10px 16px;color:var(--muted);font-size:12.5px;border-bottom:1px solid var(--line)}
+  .step{padding:14px 16px;border-bottom:1px solid var(--line)}
+  .step:last-child{border-bottom:0}
+  .step .row{display:flex;align-items:flex-start;gap:12px}
+  .step .name{font-weight:600}
+  .step .meta{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .step .actions{margin-left:auto;display:flex;gap:8px;align-items:center;flex-shrink:0}
+  .prompt{margin-top:10px;background:#12151b;border:1px solid var(--line);border-radius:8px;
+    padding:10px 12px;color:#cfd6e4;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
+  .expect{margin:10px 0 0;padding-left:18px;color:var(--muted);font-size:12.5px}
+  .expect li{margin:2px 0}
+  .tag{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+  .state{font-size:12px;padding:3px 10px;border-radius:99px}
+  .state.idle{color:var(--muted)}
+  .state.running{color:var(--run);border:1px solid #234; background:#12203a}
+  .state.done{color:var(--ok)}
+  .runbtn{background:var(--brand);border-color:var(--brand);color:#0b1220;font-weight:650}
+  .runbtn:disabled{opacity:.45;cursor:not-allowed}
+  .blockedtxt{color:var(--blocked);font-size:12.5px;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>DAC 测试用例</h1>
+    <div class="sub">点击「运行此用例」→ 问题会被自动输入到右侧真实 GUI 窗口执行。本页面不包含任何真实 GUI 组件。</div>
+  </div>
+  <div class="progress">
+    <span id="count">0/24</span>
+    <span class="bar"><i id="barfill"></i></span>
+    <button class="ghost" id="reset">重置</button>
+  </div>
+</header>
+<main id="root"></main>
+
+<script>
+window.__DEMO_PENDING = null;      // Playwright polls this
+window.__DEMO_LAST_SENT = null;
+const KEY = "dac_demo_runner_state_v1";
+let state = {};
+try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+
+fetch("scenarios.json").then(r=>r.json()).then(render);
+
+function render(scenarios){
+  const root = document.getElementById("root");
+  root.innerHTML = "";
+  let total = 0;
+  scenarios.forEach(sc=>{
+    const box = document.createElement("section");
+    box.className = "scenario";
+    const statusText = sc.status==="ready"?"可运行":sc.status==="partial"?"部分就绪":"阻塞";
+    box.innerHTML = `<div class="head">
+        <span class="label">${sc.label}</span>
+        <span class="title">${sc.title}</span>
+        <span class="pill ${sc.status}">${statusText}</span>
+      </div>
+      <div class="purpose">${sc.purpose}</div>`;
+    sc.steps.forEach(st=>{
+      total++;
+      const el = document.createElement("div");
+      el.className = "step";
+      const kindTag = st.kind==="chat"?"自动查询":st.kind==="navigate"?"控制台操作":"环境阻塞";
+      const st8 = state[st.id];
+      el.innerHTML = `
+        <div class="row">
+          <div>
+            <div class="name">${st.title}</div>
+            <div class="meta">${st.purpose}</div>
+          </div>
+          <div class="actions">
+            <span class="tag">${kindTag}</span>
+            <span class="tag">${st.estimatedTime}</span>
+            <span class="state ${st8?'done':'idle'}" data-state="${st.id}">${st8?'已发送':'未运行'}</span>
+            ${st.kind==="chat"
+              ? `<button class="runbtn" data-run="${st.id}">运行此用例</button>`
+              : `<button class="runbtn" disabled>不可自动运行</button>`}
+          </div>
+        </div>
+        ${st.prompt?`<div class="prompt">${escapeHtml(st.prompt)}</div>`:""}
+        ${st.blockedReason?`<div class="blockedtxt">阻塞原因：${st.blockedReason}</div>`:""}
+        ${st.expected&&st.expected.length?`<ul class="expect">${st.expected.map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul>`:""}
+      `;
+      const btn = el.querySelector("[data-run]");
+      if(btn){
+        btn.addEventListener("click", ()=>{
+          window.__DEMO_PENDING = { id: st.id, title: st.title, prompt: st.prompt };
+          const badge = el.querySelector(`[data-state="${st.id}"]`);
+          badge.textContent = "已发送到真实 GUI";
+          badge.className = "state running";
+          state[st.id] = { sentAt: new Date().toISOString() };
+          save(); updateCount(total);
+        });
+      }
+      box.appendChild(el);
+    });
+    root.appendChild(box);
+  });
+  window.__DEMO_TOTAL = total;
+  updateCount(total);
+  document.getElementById("reset").addEventListener("click", ()=>{
+    state = {}; save(); location.reload();
+  });
+}
+function updateCount(total){
+  const n = Object.keys(state).length;
+  document.getElementById("count").textContent = `${n}/${total}`;
+  document.getElementById("barfill").style.width = `${Math.round(n/total*100)}%`;
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+</script>
+</body>
+</html>
