@@ -92,6 +92,39 @@ func TestGenerateSkillAgentEnvs_RegisterAndSkills(t *testing.T) {
 	if m["CROSS_SG_MID_EXEC_ROUNDS"] != "5" {
 		t.Fatalf("CROSS_SG_MID_EXEC_ROUNDS=%q, want %q", m["CROSS_SG_MID_EXEC_ROUNDS"], "5")
 	}
+	dac.Spec.CrossSGMaxHop = "1"
+	envsSingle := h.generateSkillAgentEnvs(dac, "dac-demo", `[]`, &DACConfig{CrossSGMaxHop: "5", CrossSGMidExecRounds: "5"})
+	mSingle := map[string]string{}
+	for _, e := range envsSingle {
+		mSingle[e.Name] = e.Value
+	}
+	if mSingle["CROSS_SG_MAX_HOP"] != "1" {
+		t.Fatalf("spec CrossSGMaxHop should win: CROSS_SG_MAX_HOP=%q", mSingle["CROSS_SG_MAX_HOP"])
+	}
+	if mSingle["CROSS_SG_MID_EXEC_ROUNDS"] != "5" {
+		t.Fatalf("CROSS_SG_MID_EXEC_ROUNDS should stay from dac-configuration, got %q", mSingle["CROSS_SG_MID_EXEC_ROUNDS"])
+	}
+	dac.Spec.CrossSGMaxHop = "3"
+	envsHop3 := h.generateSkillAgentEnvs(dac, "dac-demo", `[]`, &DACConfig{CrossSGMaxHop: "5", CrossSGMidExecRounds: "5"})
+	mHop3 := map[string]string{}
+	for _, e := range envsHop3 {
+		mHop3[e.Name] = e.Value
+	}
+	if mHop3["CROSS_SG_MAX_HOP"] != "3" {
+		t.Fatalf("want CROSS_SG_MAX_HOP=3, got %q", mHop3["CROSS_SG_MAX_HOP"])
+	}
+	if mHop3["CROSS_SG_MID_EXEC_ROUNDS"] != "5" {
+		t.Fatalf("CROSS_SG_MID_EXEC_ROUNDS should stay 5 from config, got %q", mHop3["CROSS_SG_MID_EXEC_ROUNDS"])
+	}
+	dac.Spec.CrossSGMaxHop = ""
+	envsDefault := h.generateSkillAgentEnvs(dac, "dac-demo", `[]`, nil)
+	mDefault := map[string]string{}
+	for _, e := range envsDefault {
+		mDefault[e.Name] = e.Value
+	}
+	if mDefault["CROSS_SG_MAX_HOP"] != "5" {
+		t.Fatalf("empty spec+config should default to 5, got %q", mDefault["CROSS_SG_MAX_HOP"])
+	}
 	args := h.generateSkillAgentArgs(dac, &LLMConfig{Provider: "openai_compatible", APIKey: "k", BaseURL: "u", Model: "m"}, nil)
 	foundDB := false
 	for i := 0; i+1 < len(args); i++ {
@@ -104,6 +137,21 @@ func TestGenerateSkillAgentEnvs_RegisterAndSkills(t *testing.T) {
 	}
 	if !foundDB {
 		t.Fatalf("expected --redis-db 2 in %v", args)
+	}
+}
+
+func TestResolveCrossSGMaxHop(t *testing.T) {
+	dac := &dacv1alpha1.DataAgentContainer{}
+	dac.Spec.CrossSGMaxHop = "1"
+	if got := resolveCrossSGMaxHop(dac, &DACConfig{CrossSGMaxHop: "9"}); got != "1" {
+		t.Fatalf("spec should win, got %q", got)
+	}
+	dac.Spec.CrossSGMaxHop = "  "
+	if got := resolveCrossSGMaxHop(dac, &DACConfig{CrossSGMaxHop: "9"}); got != "9" {
+		t.Fatalf("config fallback, got %q", got)
+	}
+	if got := resolveCrossSGMaxHop(dac, nil); got != "5" {
+		t.Fatalf("default, got %q", got)
 	}
 }
 

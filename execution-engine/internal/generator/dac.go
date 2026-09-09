@@ -58,10 +58,28 @@ type DACConfig struct {
 	SGMemberCapabilityTotalTimeout  string
 	// SkillAgentImage is used by dacType=skill single-container Deployments.
 	SkillAgentImage string
-	// CrossSGMaxHop is the maximum cross-SG delegation hops for skill agents.
+	// CrossSGMaxHop is the cluster-wide fallback for CROSS_SG_MAX_HOP when a DAC
+	// spec does not set crossSGMaxHop (legacy CRs and orchestrator agents).
 	CrossSGMaxHop string
 	// CrossSGMidExecRounds is the maximum mid-execution rounds for skill agents.
 	CrossSGMidExecRounds string
+}
+
+const defaultCrossSGMaxHop = "5"
+
+// resolveCrossSGMaxHop prefers the per-DAC spec, then dac-configuration, then 5.
+func resolveCrossSGMaxHop(dac *dacv1alpha1.DataAgentContainer, dacConfig *DACConfig) string {
+	if dac != nil {
+		if hop := strings.TrimSpace(dac.Spec.CrossSGMaxHop); hop != "" {
+			return hop
+		}
+	}
+	if dacConfig != nil {
+		if hop := strings.TrimSpace(dacConfig.CrossSGMaxHop); hop != "" {
+			return hop
+		}
+	}
+	return defaultCrossSGMaxHop
 }
 
 // appendNonEmptyEnv appends env vars whose values are non-empty after trim.
@@ -476,9 +494,9 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 			Name:  "LANGFUSE_PUBLIC_KEY",
 			Value: dacConfig.ObservationPublicKey,
 		})
-		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: dacConfig.CrossSGMaxHop})
 		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MID_EXEC_ROUNDS", Value: dacConfig.CrossSGMidExecRounds})
 	}
+	envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: resolveCrossSGMaxHop(dac, dacConfig)})
 
 	return envs
 }
@@ -1645,9 +1663,9 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 			corev1.EnvVar{Name: "LANGFUSE_SECRET_KEY", Value: dacConfig.ObservationSecretKey},
 			corev1.EnvVar{Name: "LANGFUSE_PUBLIC_KEY", Value: dacConfig.ObservationPublicKey},
 		)
-		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: dacConfig.CrossSGMaxHop})
 		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MID_EXEC_ROUNDS", Value: dacConfig.CrossSGMidExecRounds})
 	}
+	envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: resolveCrossSGMaxHop(dac, dacConfig)})
 	return envs
 }
 

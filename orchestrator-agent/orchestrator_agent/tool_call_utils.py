@@ -26,15 +26,71 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
+import threading
 import time as _time
 from typing import Any, Optional
 
 from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
+
+
+def _langfuse_flush_timeout_sec() -> float:
+    """Max seconds to wait for Langfuse flush. 0 disables flush. Default 30s."""
+    raw = os.getenv("LANGFUSE_FLUSH_TIMEOUT_SEC", "30")
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def safe_langfuse_flush_sync(client: Any, *, timeout: float | None = None) -> None:
+    """Best-effort Langfuse flush. Never raises, never blocks beyond timeout.
+
+    ``client.flush()`` is a synchronous HTTP call. Invoking it on the asyncio
+    event loop can stall the whole agent after the LLM has already returned.
+
+    ``LANGFUSE_FLUSH_TIMEOUT_SEC=0`` skips flush entirely.
+    """
+    if client is None or not hasattr(client, "flush"):
+        return
+    limit = _langfuse_flush_timeout_sec() if timeout is None else float(timeout)
+    if limit <= 0:
+        return
+
+    done = threading.Event()
+    error: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            client.flush()
+        except BaseException as exc:  # noqa: BLE001 — tracing must never break the agent
+            error.append(exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=_run, name="langfuse-flush", daemon=True).start()
+    if not done.wait(timeout=limit):
+        logger.warning(
+            "[Langfuse] flush timed out after %.1fs — ignored (tracing is best-effort)",
+            limit,
+        )
+        return
+    if error:
+        logger.warning(
+            "[Langfuse] flush failed — ignored: %s",
+            error[0],
+        )
+
+
+async def safe_langfuse_flush(client: Any, *, timeout: float | None = None) -> None:
+    """Async wrapper: do not block the event loop while waiting for flush."""
+    await asyncio.to_thread(safe_langfuse_flush_sync, client, timeout=timeout)
 
 
 def extract_tool_call_result(ai_msg: Any, tool_name: str) -> Optional[dict]:
@@ -74,6 +130,7 @@ async def invoke_llm_with_tool(
     span_name: str = "orchestrator-tool-call",
     span_input: Optional[dict] = None,
     query: Optional[str] = None,
+    agent_name: str = "",
 ) -> Optional[dict]:
     """使用 tool call 机制调用 LLM 并提取结构化输出。
 
@@ -126,8 +183,9 @@ async def invoke_llm_with_tool(
         trace_id = ""
 
     _t0 = _time.monotonic()
+    _span_name = f"{span_name} [{agent_name}]" if agent_name else span_name
     with _langfuse_client.start_as_current_span(
-        name=span_name,
+        name=_span_name,
         trace_context={"trace_id": trace_id} if trace_id else {},
     ) as span:
         span.update_trace(
@@ -146,7 +204,7 @@ async def invoke_llm_with_tool(
                 else str(answer)[:2000]
             }
         )
-    _langfuse_client.flush()
+    await safe_langfuse_flush(_langfuse_client)
     _elapsed = round((_time.monotonic() - _t0) * 1000)
 
     result = extract_tool_call_result(answer, tool.name)

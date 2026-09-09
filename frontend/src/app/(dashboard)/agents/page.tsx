@@ -541,6 +541,7 @@ export default function AgentsPage() {
           expertAgentMaxSteps: data.expertAgentMaxSteps || "10",
           orchestratorAgentMaxLoops: data.orchestratorAgentMaxLoops || "2",
           skillAgentMaxLoops: data.skillAgentMaxLoops || "2",
+          crossSGMaxHop: data.crossSGMaxHop || "5",
         };
         await api.post(`/namespaces/${data.namespace}/agents`, payload);
         toast.success("智能体创建成功");

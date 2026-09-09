@@ -799,6 +799,7 @@ class DocAgent(BaseAgent):
             span_input={"query": self.query},
             retry=2,
             validate=validate_pydantic(LLMResult),
+            agent_name=self.agent_name,
         )
 
         logger.info(f" === ExpertAgent.invoke_unstructured, result = {result}")
@@ -878,6 +879,7 @@ class DocAgent(BaseAgent):
             span_input={"query": self.query},
             retry=2,
             validate=validate_pydantic(RequeryResult),
+            agent_name=self.agent_name,
         )
 
         logger.info(f" === ExpertAgent.invoke_requery, result = {result}")
@@ -947,6 +949,7 @@ class DocAgent(BaseAgent):
             span_input={"query": query},
             retry=2,
             validate=validate_pydantic(ObserveResult),
+            agent_name=self.agent_name,
         )
 
         logger.info(f" === ExpertAgent.observe_unstructured, result = {result}")
@@ -1139,6 +1142,7 @@ class DocAgent(BaseAgent):
             span_input={"query": self.query},
             retry=2,
             validate=validate_pydantic(KnowledgeSelectionResult),
+            agent_name=self.agent_name,
         )
 
         logger.info(f" === DocAgent.select_relevant_knowledge, result = {result}")

@@ -969,6 +969,7 @@ async def routing_resolve_task_query_for_multi_root(
             metadata=None,
             tool_choice="resolve_task",
             span_name="routing-resolve-task",
+            agent_name="RoutingAgent",
         )
         if not isinstance(data, dict):
             raise ValueError("resolve_task tool call returned no structured args")
@@ -1273,7 +1274,7 @@ class PlannerAgent(BaseAgent):
 
         # Use the predefined trace ID with trace_context
         with langfuse.start_as_current_span(
-            name="routingagent-make_plan",
+            name=f"routingagent-make_plan [{self.agent_name}]",
             trace_context={"trace_id": trace_id}
         ) as span:
             span.update_trace(
@@ -1292,6 +1293,7 @@ class PlannerAgent(BaseAgent):
                     tool_choice="make_plan_cmd",
                     span_name="routingagent-make_plan-step",
                     span_input={"query": query, "attempt": attempt},
+                    agent_name=self.agent_name,
                 )
                 if not isinstance(data_dict, dict):
                     logger.warning(
@@ -2309,7 +2311,7 @@ class RoutingAgent(BaseAgent):
         votes = max(1, int(os.getenv("SPLIT_JUDGE_VOTES", "3")))
         try:
             with langfuse.start_as_current_span(
-                name="routing-split-judge-root",
+                name=f"routing-split-judge-root [{self.agent_name}]",
                 trace_context={"trace_id": trace_id} if trace_id else {},
             ) as span:
                 span.update_trace(
@@ -2335,6 +2337,7 @@ class RoutingAgent(BaseAgent):
                         tool_choice="judge_split",
                         span_name="routing-split-judge-vote",
                         span_input={"query": query},
+                        agent_name=self.agent_name,
                     )
                     if not isinstance(data, dict):
                         return False
@@ -2780,6 +2783,7 @@ class RoutingAgent(BaseAgent):
                 metadata={"user_id": user_id, "run_id": run_id, "trace_id": trace_id},
                 tool_choice="select_best_plan",
                 span_name="routing-select-best-plan",
+                agent_name=self.agent_name,
             )
         except Exception as e:
             logger.error(
@@ -2819,108 +2823,129 @@ class RoutingAgent(BaseAgent):
         Minimal version of get_plan_by_broadcast: always returns a single-root
         decision, never enters multi-root task planning.
         """
-        logger.info("[RoutePlan] ========== Simple Route Planning Start ==========")
-
-        history_payload = {}
-        if os.getenv('Enable_History', "enable") == "enable":
-            history_payload = await self.planner_agent.get_history_payload(
+        # ── Langfuse span for simple-mode routing ──
+        with langfuse.start_as_current_span(
+            name=f"routingagent-make_plan [{self.agent_name}]",
+            trace_context={"trace_id": trace_id}
+        ) as span:
+            span.update_trace(
                 user_id=user_id,
-                run_id=run_id,
-                propagated_history=propagated_history,
+                session_id=run_id,
+                input={"query": query, "mode": "simple"},
             )
 
-        capable_agents = await self.broadcast_capability_check(
-            query,
-            user_id,
-            run_id,
-            trace_id,
-            propagated_history=history_payload,
-        )
+            logger.info("[RoutePlan] ========== Simple Route Planning Start ==========")
 
-        if not capable_agents:
-            logger.info("[RoutePlan] Simple route: no capable agent found")
-            return None, None, {}
-
-        # ── Pre-Make-Plan selection (enabled by default) ──
-        if (
-            os.getenv("ENABLE_PRE_MAKE_PLAN_SELECTION", "true").strip().lower()
-            in ("true", "1", "yes")
-            and len(capable_agents) >= 2
-        ):
-            candidate_names = [c[0].name for c in capable_agents[:int(os.getenv("PRE_MAKE_PLAN_TOP_N", "3"))]]
-            if on_pre_make_plan_progress:
-                await on_pre_make_plan_progress(
-                    "pre_make_plan",
-                    f"检测到 {len(capable_agents)} 个候选 Agent，启动 Pre-Make-Plan 评估：{', '.join(candidate_names)}",
-                    "running",
-                    {"candidate_count": len(capable_agents), "candidates": candidate_names},
+            history_payload = {}
+            if os.getenv('Enable_History', "enable") == "enable":
+                history_payload = await self.planner_agent.get_history_payload(
+                    user_id=user_id,
+                    run_id=run_id,
+                    propagated_history=propagated_history,
                 )
-            pre_select_result = await self._select_by_pre_make_plan(
-                query, capable_agents, user_id, run_id, trace_id,
+
+            capable_agents = await self.broadcast_capability_check(
+                query,
+                user_id,
+                run_id,
+                trace_id,
+                propagated_history=history_payload,
             )
-            if pre_select_result is not None:
-                selected_card, selected_resp = pre_select_result
+
+            if not capable_agents:
+                logger.info("[RoutePlan] Simple route: no capable agent found")
+                span.update_trace(output={"selected_agent": None, "capable_count": 0})
+                result: tuple[Optional[PlannerStep], Optional[list[dict]], dict] = (None, None, {})
             else:
-                selected_card, selected_resp = capable_agents[0]
-            # Emit pre-make-plan done progress with the selected agent
-            if on_pre_make_plan_progress:
-                await on_pre_make_plan_progress(
-                    "pre_make_plan",
-                    f"Pre-Make-Plan 完成：评估了 {len(candidate_names)} 个候选 Agent，选定 {selected_card.name}",
-                    "done",
-                    {
-                        "candidate_count": len(capable_agents),
-                        "candidates": candidate_names,
-                        "selected": selected_card.name,
-                        "plan_count": len(candidate_names),
-                        "message": f"选定 {selected_card.name} 作为最佳路由目标",
-                    },
+                # ── Pre-Make-Plan selection (enabled by default) ──
+                if (
+                    os.getenv("ENABLE_PRE_MAKE_PLAN_SELECTION", "true").strip().lower()
+                    in ("true", "1", "yes")
+                    and len(capable_agents) >= 2
+                ):
+                    candidate_names = [c[0].name for c in capable_agents[:int(os.getenv("PRE_MAKE_PLAN_TOP_N", "3"))]]
+                    if on_pre_make_plan_progress:
+                        await on_pre_make_plan_progress(
+                            "pre_make_plan",
+                            f"检测到 {len(capable_agents)} 个候选 Agent，启动 Pre-Make-Plan 评估：{', '.join(candidate_names)}",
+                            "running",
+                            {"candidate_count": len(capable_agents), "candidates": candidate_names},
+                        )
+                    pre_select_result = await self._select_by_pre_make_plan(
+                        query, capable_agents, user_id, run_id, trace_id,
+                    )
+                    if pre_select_result is not None:
+                        selected_card, selected_resp = pre_select_result
+                    else:
+                        selected_card, selected_resp = capable_agents[0]
+                    # Emit pre-make-plan done progress with the selected agent
+                    if on_pre_make_plan_progress:
+                        await on_pre_make_plan_progress(
+                            "pre_make_plan",
+                            f"Pre-Make-Plan 完成：评估了 {len(candidate_names)} 个候选 Agent，选定 {selected_card.name}",
+                            "done",
+                            {
+                                "candidate_count": len(capable_agents),
+                                "candidates": candidate_names,
+                                "selected": selected_card.name,
+                                "plan_count": len(candidate_names),
+                                "message": f"选定 {selected_card.name} 作为最佳路由目标",
+                            },
+                        )
+                else:
+                    if len(capable_agents) >= 2:
+                        logger.info(
+                            "[PreMakePlan] skipped (ENABLE_PRE_MAKE_PLAN_SELECTION=%s) — "
+                            "falling back to simple first-pick",
+                            os.getenv("ENABLE_PRE_MAKE_PLAN_SELECTION", "true"),
+                        )
+                    selected_card, selected_resp = capable_agents[0]
+                # ── End Pre-Make-Plan ──
+
+                self.agent_cards = [selected_card]
+
+                step = PlannerStep(original_query=query, agent=selected_card.name)
+
+                rps = getattr(selected_resp, "route_paths", None) or []
+                if not rps and selected_resp.route_path:
+                    rps = [{"path": selected_resp.route_path, "confidence": selected_resp.confidence}]
+
+                exec_meta = {
+                    "execution_strategy": "single",
+                    PROPAGATED_HISTORY_KEY: history_payload,
+                    ROUTING_AGENT_POOL_KEY: _build_routing_agent_pool_from_capable(capable_agents),
+                    ROUTING_SELECTED_ROOT_KEY: selected_card.name,
+                }
+                if isinstance(selected_resp.execution_hint, dict) and selected_resp.execution_hint:
+                    exec_meta[SG_EXECUTION_HINT_KEY] = selected_resp.execution_hint
+
+                path_str = (
+                    " -> ".join(selected_resp.route_path)
+                    if selected_resp.route_path
+                    else selected_card.name
                 )
-        else:
-            if len(capable_agents) >= 2:
                 logger.info(
-                    "[PreMakePlan] skipped (ENABLE_PRE_MAKE_PLAN_SELECTION=%s) — "
-                    "falling back to simple first-pick",
-                    os.getenv("ENABLE_PRE_MAKE_PLAN_SELECTION", "true"),
+                    "[RoutePlan] ========== Simple Route Result ==========\n"
+                    "  Selected: %s | can_handle=%s | confidence=%.2f | path=%s\n"
+                    "  routing_agent_pool size=%d\n"
+                    "==========================================",
+                    selected_card.name,
+                    selected_resp.can_handle,
+                    selected_resp.confidence,
+                    path_str,
+                    len(exec_meta.get(ROUTING_AGENT_POOL_KEY) or []),
                 )
-            selected_card, selected_resp = capable_agents[0]
-        # ── End Pre-Make-Plan ──
 
-        self.agent_cards = [selected_card]
+                span.update_trace(output={
+                    "selected_agent": selected_card.name,
+                    "selected_confidence": selected_resp.confidence,
+                    "capable_count": len(capable_agents),
+                    "mode": "simple",
+                })
+                result = (step, (rps if rps else None), exec_meta)
 
-        step = PlannerStep(original_query=query, agent=selected_card.name)
-
-        rps = getattr(selected_resp, "route_paths", None) or []
-        if not rps and selected_resp.route_path:
-            rps = [{"path": selected_resp.route_path, "confidence": selected_resp.confidence}]
-
-        exec_meta = {
-            "execution_strategy": "single",
-            PROPAGATED_HISTORY_KEY: history_payload,
-            ROUTING_AGENT_POOL_KEY: _build_routing_agent_pool_from_capable(capable_agents),
-            ROUTING_SELECTED_ROOT_KEY: selected_card.name,
-        }
-        if isinstance(selected_resp.execution_hint, dict) and selected_resp.execution_hint:
-            exec_meta[SG_EXECUTION_HINT_KEY] = selected_resp.execution_hint
-
-        path_str = (
-            " -> ".join(selected_resp.route_path)
-            if selected_resp.route_path
-            else selected_card.name
-        )
-        logger.info(
-            "[RoutePlan] ========== Simple Route Result ==========\n"
-            "  Selected: %s | can_handle=%s | confidence=%.2f | path=%s\n"
-            "  routing_agent_pool size=%d\n"
-            "==========================================",
-            selected_card.name,
-            selected_resp.can_handle,
-            selected_resp.confidence,
-            path_str,
-            len(exec_meta.get(ROUTING_AGENT_POOL_KEY) or []),
-        )
-
-        return step, (rps if rps else None), exec_meta
+        langfuse.flush()
+        return result
 
     async def _pick_best_root_for_fallback(
         self,
@@ -2945,7 +2970,7 @@ class RoutingAgent(BaseAgent):
         handle_names = {c.name for c, _ in handle_candidates}
         try:
             with langfuse.start_as_current_span(
-                name="routing-single-root-fallback-rank",
+                name=f"routing-single-root-fallback-rank [{self.agent_name}]",
                 trace_context={"trace_id": trace_id} if trace_id else {},
             ) as span:
                 span.update_trace(
@@ -2968,6 +2993,7 @@ class RoutingAgent(BaseAgent):
                     tool_choice="rank_agent",
                     span_name="routing-single-root-fallback-rank",
                     span_input={"query": query, "handle_agents": list(handle_names)},
+                    agent_name=self.agent_name,
                 )
                 if not isinstance(data, dict):
                     raise ValueError("rank_agent tool call returned no structured args")
@@ -3051,7 +3077,7 @@ class RoutingAgent(BaseAgent):
                 )
 
                 with langfuse.start_as_current_span(
-                    name="routing-multiroot-plan-attempt",
+                    name=f"routing-multiroot-plan-attempt [{self.agent_name}]",
                     trace_context={"trace_id": trace_id} if trace_id else {},
                 ) as span:
                     span.update_trace(
@@ -3067,6 +3093,7 @@ class RoutingAgent(BaseAgent):
                         tool_choice="plan_multi_root",
                         span_name="routing-multiroot-plan-toolcall",
                         span_input={"query": query, "attempt": attempt + 1},
+                        agent_name=self.agent_name,
                     )
                     span.update_trace(output={"attempt": attempt + 1})
 
@@ -3398,7 +3425,7 @@ class RoutingAgent(BaseAgent):
 
         try:
             with langfuse.start_as_current_span(
-                name="routing-multiroot-aggregate",
+                name=f"routing-multiroot-aggregate [{self.agent_name}]",
                 trace_context={"trace_id": trace_id} if trace_id else {},
             ) as span:
                 span.update_trace(
@@ -3439,7 +3466,7 @@ class RoutingAgent(BaseAgent):
 
         try:
             with langfuse.start_as_current_span(
-                name="routing-multiroot-aggregate",
+                name=f"routing-multiroot-aggregate [{self.agent_name}]",
                 trace_context={"trace_id": trace_id} if trace_id else {},
             ) as span:
                 span.update_trace(
@@ -3629,7 +3656,7 @@ class RoutingAgentExecutor(AgentExecutor):
 
         try:
             with langfuse.start_as_current_span(
-                name="routing-single-root-history-aggregate",
+                name=f"routing-single-root-history-aggregate [{self.agent.agent_name}]",
                 trace_context={"trace_id": trace_id} if trace_id else {},
             ) as span:
                 span.update_trace(

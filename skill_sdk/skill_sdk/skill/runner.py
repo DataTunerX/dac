@@ -905,6 +905,7 @@ class SkillRunner:
         skill_search_max_concurrent: int = 5,
         skill_search_max_steps: int = 5,
         skill_search_max_retries: int = 3,
+        agent_name: str = "",
         compaction: CompactionConfig | None = _UNSET,
     ) -> None:
         """Create a skill planner/executor.
@@ -945,6 +946,7 @@ class SkillRunner:
         self.skill_search_max_concurrent = max(1, int(skill_search_max_concurrent))
         self.skill_search_max_steps = max(1, int(skill_search_max_steps))
         self.skill_search_max_retries = max(0, int(skill_search_max_retries))
+        self._agent_name = agent_name.strip()
         self._loader = SkillLoader()
         self.lister = SkillLister(skills or [])
         self._planner_tools = [select_skill_tool, no_suitable_skill_tool]
@@ -1180,7 +1182,7 @@ class SkillRunner:
         declined = False
 
         with langfuse.start_as_current_span(
-            name="skill_sdk-make_plan",
+            name=f"skill_sdk-make_plan [{self._agent_name}]" if self._agent_name else "skill_sdk-make_plan",
             trace_context={"trace_id": trace_id} if trace_id else None,
         ) as span:
             span.update_trace(
@@ -1192,7 +1194,8 @@ class SkillRunner:
                     "failure_notes": failure_notes,
                 },
             )
-
+            if self._agent_name:
+                span.update(metadata={"agent_name": self._agent_name})
             for attempt in range(1, self.make_plan_max_attempts + 1):
                 logger.info(
                     "make_plan llm_invoke attempt=%d/%d messages=%d",
@@ -1578,7 +1581,7 @@ class SkillRunner:
         )
 
         with langfuse.start_as_current_span(
-            name="skill_sdk-run_skill",
+            name=f"skill_sdk-run_skill [{self._agent_name}]" if self._agent_name else "skill_sdk-run_skill",
             trace_context={"trace_id": trace_id} if trace_id else None,
         ) as span:
             span.update_trace(
@@ -1586,6 +1589,8 @@ class SkillRunner:
                 session_id=run_id,
                 input={"query": query, "skill": skill.name},
             )
+            if self._agent_name:
+                span.update(metadata={"agent_name": self._agent_name})
 
             for step_idx in range(self.max_steps):
                 step_no = step_idx + 1
@@ -2000,7 +2005,7 @@ class SkillRunner:
         run_id: str,
         trace_id: str,
     ) -> str:
-        """Dispatch LLM tool calls — three-phase pipeline (Pi Agent Loop pattern).
+        """Dispatch LLM tool calls — three-phase pipeline.
 
         Phase 1 – prepare: validate args, security checks, block if needed.
         Phase 2 – execute: run the actual tool, catch exceptions.
@@ -2198,8 +2203,8 @@ class SkillRunner:
     ) -> ToolResult:
         """Phase 3: wrap execution result in unified ToolResult.
 
-        Mirrors Pi Agent Loop's finalizeExecutedToolCall — the output always
-        has the same structure, regardless of success, error, or block.
+        The output always has the same structure, regardless of
+        success, error, or block.
         """
         tool_name = prepared["tool_name"]
 

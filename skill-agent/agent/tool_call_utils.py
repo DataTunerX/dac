@@ -26,14 +26,76 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import threading
 import time as _time
 from typing import Any, Optional
 
 from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
+
+
+def _langfuse_flush_timeout_sec() -> float:
+    """Max seconds to wait for Langfuse flush. 0 disables flush. Default 30s."""
+    raw = os.getenv("LANGFUSE_FLUSH_TIMEOUT_SEC", "30")
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def safe_langfuse_flush_sync(client: Any, *, timeout: float | None = None) -> None:
+    """Best-effort Langfuse flush. Never raises, never blocks beyond timeout.
+
+    ``client.flush()`` is a synchronous HTTP call. Invoking it on the asyncio
+    event loop can stall the whole agent after the LLM has already returned
+    (make_plan looks hung; Langfuse span output stays undefined).
+
+    Implementation: run flush on a daemon thread and wait at most ``timeout``
+    seconds. On timeout the thread is abandoned — tracing may lose the last
+    batch, which is acceptable.
+
+    ``LANGFUSE_FLUSH_TIMEOUT_SEC=0`` skips flush entirely (background exporter
+    still sends spans later).
+    """
+    if client is None or not hasattr(client, "flush"):
+        return
+    limit = _langfuse_flush_timeout_sec() if timeout is None else float(timeout)
+    if limit <= 0:
+        return
+
+    done = threading.Event()
+    error: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            client.flush()
+        except BaseException as exc:  # noqa: BLE001 — tracing must never break the agent
+            error.append(exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=_run, name="langfuse-flush", daemon=True).start()
+    if not done.wait(timeout=limit):
+        logger.warning(
+            "[Langfuse] flush timed out after %.1fs — ignored (tracing is best-effort)",
+            limit,
+        )
+        return
+    if error:
+        logger.warning(
+            "[Langfuse] flush failed — ignored: %s",
+            error[0],
+        )
+
+
+async def safe_langfuse_flush(client: Any, *, timeout: float | None = None) -> None:
+    """Async wrapper: do not block the event loop while waiting for flush."""
+    await asyncio.to_thread(safe_langfuse_flush_sync, client, timeout=timeout)
 
 
 def extract_tool_call_result(ai_msg: Any, tool_name: str) -> Optional[dict]:
@@ -73,6 +135,7 @@ async def invoke_llm_with_tool(
     span_name: str = "skill-tool-call",
     span_input: Optional[dict] = None,
     query: Optional[str] = None,
+    agent_name: str = "",
 ) -> Optional[dict]:
     """使用 tool call 机制调用 LLM 并提取结构化输出。
 
@@ -119,32 +182,42 @@ async def invoke_llm_with_tool(
     trace_id = _md.get("trace_id", "")
     user_id = _md.get("user_id", "")
     run_id = _md.get("run_id", "")
+    _obs_input = span_input if span_input is not None else (
+        {"query": (query or "")[:500]} if query else None
+    )
 
     _t0 = _time.monotonic()
+    _span_name = f"{span_name} [{agent_name}]" if agent_name else span_name
+    # Keep the caller's trace_id so make_plan / mid-exec / summarize stay on
+    # one chain. Write I/O on this span only — tool-call content is empty, so
+    # update_trace(input/output) would wipe the shared trace header.
     with _langfuse_client.start_as_current_span(
-        name=span_name,
+        name=_span_name,
         trace_context={"trace_id": trace_id} if trace_id else {},
+        input=_obs_input,
     ) as span:
-        span.update_trace(
-            user_id=user_id,
-            session_id=run_id,
-            input=span_input or {},
-        )
+        if user_id or run_id:
+            span.update_trace(
+                user_id=user_id or None,
+                session_id=run_id or None,
+            )
         answer = await llm_with_tool.ainvoke(
             messages,
             config={"callbacks": [_handler]},
         )
-        span.update_trace(
-            output={
-                "answer": str(answer.content)[:2000]
-                if hasattr(answer, "content")
-                else str(answer)[:2000]
-            }
-        )
-    _langfuse_client.flush()
+        result = extract_tool_call_result(answer, tool.name)
+        if result is not None:
+            span.update(output=result)
+        else:
+            span.update(
+                output={
+                    "error": "no_tool_call",
+                    "content": str(getattr(answer, "content", "") or "")[:2000],
+                }
+            )
+    await safe_langfuse_flush(_langfuse_client)
     _elapsed = round((_time.monotonic() - _t0) * 1000)
 
-    result = extract_tool_call_result(answer, tool.name)
     ok = result is not None
 
     _query_preview = (query or "")[:200] if query else ""

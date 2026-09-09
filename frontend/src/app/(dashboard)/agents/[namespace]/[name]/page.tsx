@@ -319,6 +319,30 @@ export default function AgentDetailPage() {
                     value={<span>{displayLimitValue(agent?.skillAgentMaxLoops)}</span>}
                   />
                 )}
+                {isSkillAgent && (
+                  <>
+                    <InfoItem
+                      label="智能体模式"
+                      value={
+                        <span>
+                          {(agent?.crossSGMaxHop || "5").trim() === "1" ? "单智能体" : "多智能体"}
+                        </span>
+                      }
+                    />
+                    {(agent?.crossSGMaxHop || "5").trim() !== "1" && (
+                      <InfoItem
+                        label="跨智能体最大跳数"
+                        value={
+                          <span>
+                            {displayLimitValue(agent?.crossSGMaxHop) === "-"
+                              ? "5"
+                              : displayLimitValue(agent?.crossSGMaxHop)}
+                          </span>
+                        }
+                      />
+                    )}
+                  </>
+                )}
                 <InfoItem
                   label={isSkillAgent ? "最大步数" : "专家最大步数"}
                   value={<span>{displayLimitValue(agent?.expertAgentMaxSteps)}</span>}

@@ -636,13 +636,12 @@ async def probe_agents_capability_concurrent(
             resp = normalize_capability_check_response(resp)
             logger.info(
                 "[CapabilityProbe] result | agent=%s can_handle=%s can_contribute=%s "
-                "confidence=%.2f degraded=%s query=%s reason=%s",
+                "confidence=%.2f degraded=%s reason=%s",
                 getattr(card, "name", "") or resp.agent_name,
                 resp.can_handle,
                 resp.can_contribute,
                 float(resp.confidence or 0.0),
                 resp.degraded,
-                (query or "")[:120],
                 (resp.reason or "")[:160],
             )
             return card, resp

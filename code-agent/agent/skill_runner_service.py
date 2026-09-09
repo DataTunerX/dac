@@ -149,12 +149,14 @@ class CodeAgentSkillRunnerService:
         base_url: str,
         model: str,
         temperature: float,
+        agent_name: str = "",
     ):
         self.provider = provider
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
         self.temperature = temperature
+        self._agent_name = agent_name.strip()
         self._runner: Optional["SkillRunner"] = None
         self._initialised = False
         self._lock = asyncio.Lock()
@@ -184,7 +186,7 @@ class CodeAgentSkillRunnerService:
     def _build_code_execution(self, llm: Any) -> Any | None:
         if not ENABLE_CODE_EXEC or CodeExecution is None:
             return None
-        return CodeExecution(llm=llm, max_retries=CODE_EXEC_MAX_RETRIES)
+        return CodeExecution(llm=llm, max_retries=CODE_EXEC_MAX_RETRIES, agent_name=self._agent_name)
 
     def _init_sync(self) -> Optional["SkillRunner"]:
         if not LOCAL_SKILLS_ENABLED:
@@ -213,6 +215,7 @@ class CodeAgentSkillRunnerService:
                     cmd_timeout_sec=LOCAL_SKILL_CMD_TIMEOUT_SEC,
                     max_concurrency=LOCAL_SKILL_MAX_CONCURRENCY,
                     code_execution=code_execution,
+                    agent_name=self._agent_name,
                 )
             except TypeError:
                 runner = SkillRunner(
@@ -220,6 +223,7 @@ class CodeAgentSkillRunnerService:
                     max_steps=LOCAL_SKILL_MAX_STEPS,
                     cmd_timeout_sec=LOCAL_SKILL_CMD_TIMEOUT_SEC,
                     code_execution=code_execution,
+                    agent_name=self._agent_name,
                 )
 
             if LOCAL_SKILLS_DIR:

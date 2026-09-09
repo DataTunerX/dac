@@ -60,7 +60,15 @@ from .agent_card_resolve import resolve_agent_card_by_planner_name
 from . import broadcast_capability_check as sg_broadcast
 from .orchestrator_agent_semantic_domain import SUMMARY_FRAME_PREFIX
 from langchain_core.tools import tool, StructuredTool
-from .tool_call_utils import invoke_llm_with_tool
+from .tool_call_utils import invoke_llm_with_tool, safe_langfuse_flush
+
+# ── Execution Flow ──
+# 与 skill-agent 使用相同的 EF 协议（[[DAC_EXECUTION_FLOW]] 帧 + A2A artifact）。
+# SG Orchestrator 和 skill-agent 是同一注册中心中的对等智能体，双向协作，
+# 通过 A2A 协议传输 Execution Flow 状态地图。
+from .execution_flow import (
+    ExecutionTask, is_execution_flow_frame, render_execution_flow_md,
+)
 
 try:
     from skill_sdk.skill.runner import SkillRunner  # noqa: F401  (used when local skills enabled)
@@ -1284,6 +1292,8 @@ failure_reason_code 只能从以下白名单中选择（严格二选一风格，
 
 # Fixed description when no agent is relevant (agent=NONE)
 NONE_TASK_DESCRIPTION = "No available agent can do this task. "
+NONE_TASK_REASON_CODE = "no_capable_agent"
+NONE_TASK_UNASSIGNED_RESULT = "未派发：当前可用智能体中无人可执行此任务。"
 DEPENDENT_TASK_SKIP_MARKER = "__SG_SKIP_UPSTREAM_NO_DATA__"
 DEPENDENT_TASK_SKIP_DESCRIPTION = (
     DEPENDENT_TASK_SKIP_MARKER + "上游依赖任务未返回有效数据，当前子任务无输入来源，已自动跳过。"
@@ -1768,8 +1778,9 @@ class PlannerAgent(BaseAgent):
 
         tasks = None
 
+        agent_name = (self.agent_id or self.semantic_group_id or "Unknown").strip()
         with langfuse.start_as_current_span(
-            name="biz-orchestrator-make_plan",
+            name=f"biz-orchestrator-make_plan [{agent_name}]",
             trace_context={"trace_id": trace_id}
         ) as span:
             span.update_trace(
@@ -1905,7 +1916,7 @@ class PlannerAgent(BaseAgent):
                 }
             )
 
-        langfuse.flush()
+        await safe_langfuse_flush(langfuse)
 
         if tasks is None:
             logger.warning(
@@ -2024,6 +2035,8 @@ class OrchestratorAgent(BaseAgent):
         self._last_retry_action = ""
         self._task_eval_results: Dict[int, TaskOutcomeEval] = {}
         self._last_split_decision_trace: Dict[str, Any] = {}
+        # ── Execution Flow (Legacy 路径) ──
+        self.execution_flow_tasks: list[ExecutionTask] = []
         # LocalSkill (route B) binding. When non-None, the orchestrator exposes
         # a synthetic AgentCard named ``LOCAL_SKILL_AGENT_NAME`` to the planner
         # and intercepts tasks routed to it in ``a2a_tasks``.
@@ -2610,6 +2623,7 @@ class OrchestratorAgent(BaseAgent):
                     tool_choice="evaluate_agent_batch",
                     span_name="group-batch-agent-eval",
                     span_input={"query": query, "batch_size": len(batch_cards)},
+                    agent_name=self.current_agent_label(),
                 )
                 items = result.get("result", []) if result else []
                 return items
@@ -2985,13 +2999,18 @@ class OrchestratorAgent(BaseAgent):
         progress_updater: Optional[Any] = None,
         progress_artifact_name: str = "collaboration-progress",
         execution_hint: Optional[Dict[str, Any]] = None,
-    ) -> str:
+    ) -> tuple[str, list["ExecutionTask"]]:
         """Send a structured delegation request to another SG Orchestrator.
 
         Uses A2A SendStreamingMessage with metadata so the downstream SG
         can recognise the request as a collaboration delegation.
         When ``execution_hint`` is present (from that peer's capability_check),
         it is transported opaquely so the peer can reuse member evidence.
+
+        Returns:
+            ``(result_text, peer_execution_flow_tasks)`` — the peer's Execution
+            Flow frames collected from the A2A response.  The caller must merge
+            them into the local execution state map.
         """
         chain = list(delegation_chain or [])
         ctx = dict(upstream_context or {})
@@ -3034,18 +3053,19 @@ class OrchestratorAgent(BaseAgent):
                 params=MessageSendParams(**send_payload),
             )
             stream = client.send_message_streaming(streaming_req)
-            result = await self.stream_a2a_collect_forward_progress_frames(
+            result, peer_ef_tasks = await self.stream_a2a_collect_forward_progress_frames(
                 stream,
                 self.get_response_text,
                 progress_updater,
                 progress_artifact_name,
             )
         logger.info(
-            "Cross-SG: delegation to %s done, result_chars=%d",
+            "Cross-SG: delegation to %s done, result_chars=%d ef_tasks=%d",
             target_card.name,
             len(result),
+            len(peer_ef_tasks),
         )
-        return result
+        return result, peer_ef_tasks
 
     async def list_agent_cards(self, query, *, for_collaboration: bool = False) -> list[AgentCard]:
         """Reads agent cards from registry.
@@ -3158,6 +3178,17 @@ class OrchestratorAgent(BaseAgent):
         return isinstance(text, str) and text.lstrip().startswith("[[DAC_PROGRESS]] ")
 
     @staticmethod
+    def is_execution_flow_frame(text: str) -> bool:
+        """Check if a text line is an Execution Flow frame.
+
+        Execution Flow frames use the ``[[DAC_EXECUTION_FLOW]]`` prefix,
+        same convention as DAC Progress frames.  Reuses the canonical
+        ``is_execution_flow_frame`` from the local ``execution_flow`` module
+        so the two peers (SG Orchestrator and skill-agent) stay in sync.
+        """
+        return is_execution_flow_frame(text)
+
+    @staticmethod
     def build_answer_frame(
         event: str,
         *,
@@ -3249,15 +3280,21 @@ class OrchestratorAgent(BaseAgent):
         get_text_fn: Callable[[Any], str],
         updater: Optional[Any],
         progress_artifact_name: str,
-    ) -> str:
-        """Consume A2A streaming chunks: relay DAC progress/answer frames to ``updater`` (same artifact name as ``a2a_tasks`` path) and return body text for summaries.
+    ) -> tuple[str, list["ExecutionTask"]]:
+        """Consume A2A streaming chunks.
 
-        Collaborative mode previously concatenated Expert streams verbatim, hiding
-        ``[[DAC_PROGRESS]]`` from RoutingAgent and poisoning downstream LLM prompts.
+        Relays DAC progress/answer frames to ``updater`` and returns both
+        the body text (for summaries) and any Execution Flow frames collected
+        from the peer agent's response.
+
+        Returns:
+            ``(body_text, peer_execution_flow_tasks)``.
         """
         line_buf = ""
         result_segments: list[str] = []
         summary_text: Optional[str] = None
+        # ── Execution Flow: collect peer's [[DAC_EXECUTION_FLOW]] frames ──
+        peer_execution_flow_tasks: list[ExecutionTask] = []
 
         async def handle_line(raw_line: str) -> None:
             nonlocal summary_text
@@ -3289,6 +3326,29 @@ class OrchestratorAgent(BaseAgent):
                     if ft:
                         result_segments.append(ft)
                 return
+            # ── Execution Flow: collect peer's EF frames ──
+            # Peer agents emit [[DAC_EXECUTION_FLOW]] frames via A2A artifact.
+            # We collect them here so the caller can merge them into the local
+            # execution state map.  These frames are NOT forwarded to the
+            # progress updater to avoid polluting the UI stream.
+            if OrchestratorAgent.is_execution_flow_frame(s):
+                ef_task = ExecutionTask.from_frame(s)
+                if ef_task is not None:
+                    peer_execution_flow_tasks.append(ef_task)
+                return
+            # Handle inline EF frames: [[DAC_EXECUTION_FLOW]] may appear mid-line
+            # when the peer agent doesn't emit a newline before the frame.  Strip
+            # the frame, parse it, and keep only the clean text.
+            ef_idx = s.find("[[DAC_EXECUTION_FLOW]] ")
+            if ef_idx >= 0:
+                ef_line = s[ef_idx:]
+                ef_task = ExecutionTask.from_frame(ef_line)
+                if ef_task is not None:
+                    peer_execution_flow_tasks.append(ef_task)
+                clean_text = s[:ef_idx].strip()
+                if clean_text:
+                    result_segments.append(clean_text)
+                return
             result_segments.append(s)
 
         async for chunk in stream_chunks:
@@ -3309,7 +3369,7 @@ class OrchestratorAgent(BaseAgent):
             await handle_line(line_buf)
 
         body = OrchestratorAgent._finalize_a2a_collected_text(result_segments, summary_text)
-        return OrchestratorAgent.strip_progress_lines(body)
+        return OrchestratorAgent.strip_progress_lines(body), peer_execution_flow_tasks
 
     def current_agent_label(self) -> str:
         return (self.agent_id or self.semantic_group_id or self.agent_name or "sg_orchestrator").strip()
@@ -3959,6 +4019,7 @@ class OrchestratorAgent(BaseAgent):
                 tool_choice="evaluate_task_outcome",
                 span_name="group-task-outcome-eval-llm",
                 span_input={"task_id": task.id, "task_description": task.description, "agent": task.agent},
+                agent_name=self.current_agent_label(),
             )
             if result is None:
                 raise ValueError("LLM did not call evaluate_task_outcome tool")
@@ -4755,6 +4816,31 @@ class OrchestratorAgent(BaseAgent):
 
             # 用本轮结果覆盖，保证交给总结 LLM 的始终是「最后一轮」
             last_round_knowledge = list(current_agents_knowledge)
+
+            # ── Point G: Legacy 路径 task 完成记录 ──
+            # 在每轮所有 task 执行完后，统一记录 EF。
+            for ts in self.tasks_status:
+                exec_id = f"t{execution_rounds}-{ts.agent or 'NONE'}-{ts.id}"
+                legacy_ef_task = ExecutionTask(
+                    execution_id=exec_id,
+                    turn=execution_rounds,
+                    stage="pre_exec",
+                    agent=ts.agent or "NONE",
+                    role="initiator",
+                    task=ts.description or "",
+                    result=ts.answer or "",
+                    reason="本层 Planner 规划",
+                    parent_execution_id=None,
+                    delegated_by=None,
+                    run_id=(self.metadata or {}).get("run_id", ""),
+                    trace_id=(self.metadata or {}).get("trace_id", ""),
+                    user_id=(self.metadata or {}).get("user_id", ""),
+                )
+                self.execution_flow_tasks.append(legacy_ef_task)
+            logger.info(
+                "[ExecutionFlow] legacy round recorded | round=%d task_count=%d",
+                execution_rounds, len(self.tasks_status),
+            )
             
             if await self.should_retry_planning(self.tasks_status):
                 retry_decisions += 1
@@ -4912,6 +4998,21 @@ class OrchestratorAgent(BaseAgent):
                         max_retry_msg = f"\n⚠️ 已达到最大重试次数 {self.max_loop_count}，停止重试\n"
                         # max_retry_msg = f"\n⚠️ Maximum retry count {self.max_loop_count} reached, stopping retries\n"
                         think.append(max_retry_msg)
+                    # ── Point H: Legacy Turn Summary (fail) ──
+                    self.execution_flow_tasks.append(ExecutionTask(
+                        execution_id=f"t{execution_rounds}-summary",
+                        turn=execution_rounds,
+                        stage="turn_summary",
+                        agent=self.agent_name or "?",
+                        role="initiator",
+                        task=f"Turn {execution_rounds} 执行结果",
+                        result="fail",
+                        reason="部分任务未完成",
+                        parent_execution_id=None, delegated_by=None,
+                        run_id=(self.metadata or {}).get("run_id", ""),
+                        trace_id=(self.metadata or {}).get("trace_id", ""),
+                        user_id=(self.metadata or {}).get("user_id", ""),
+                    ))
                     break
             else:
                 logger.info("All tasks completed successfully")
@@ -4927,6 +5028,21 @@ class OrchestratorAgent(BaseAgent):
                     success_msg = f"\n✅ 所有任务执行成功完成\n"
                     # success_msg = f"\n✅ All tasks executed successfully\n"
                     think.append(success_msg)
+                # ── Point H: Legacy Turn Summary (success) ──
+                self.execution_flow_tasks.append(ExecutionTask(
+                    execution_id=f"t{execution_rounds}-summary",
+                    turn=execution_rounds,
+                    stage="turn_summary",
+                    agent=self.agent_name or "?",
+                    role="initiator",
+                    task=f"Turn {execution_rounds} 执行结果",
+                    result="success",
+                    reason="所有任务已成功完成",
+                    parent_execution_id=None, delegated_by=None,
+                    run_id=(self.metadata or {}).get("run_id", ""),
+                    trace_id=(self.metadata or {}).get("trace_id", ""),
+                    user_id=(self.metadata or {}).get("user_id", ""),
+                ))
                 break
                 
         logger.info(
@@ -5184,8 +5300,9 @@ class OrchestratorAgent(BaseAgent):
 
         chain = chat_prompt | self.llm
 
+        agent_name = (self.agent_card.name if self.agent_card else self.agent_id or self.semantic_group_id or "Unknown").strip()
         with langfuse.start_as_current_span(
-            name="biz-orchestrator-stream",
+            name=f"biz-orchestrator-stream [{agent_name}]",
             trace_context={"trace_id": trace_id}
         ) as span:
             span.update_trace(
@@ -5202,7 +5319,7 @@ class OrchestratorAgent(BaseAgent):
 
             span.update_trace(output={"answer": "".join(final_answer)})
 
-        langfuse.flush()
+        await safe_langfuse_flush(langfuse)
 
         yield {'content': '', 'is_task_complete': True}
 
@@ -5223,6 +5340,163 @@ class OrchestratorAgent(BaseAgent):
                 # add memory — fire-and-forget so a slow/failing upstream never
                 # blocks the stream close or surfaces an exception to the caller.
                 self.schedule_add_memory(query, final_answer)
+
+
+# ---------------------------------------------------------------------------
+# Summary prompt builders
+# Mirrors skill-agent ``_build_agent_summarize_prompt``: one document,
+# Execution Flow as the single source of truth.  Do not dump
+# ``upstream_context`` as JSON and do not repeat own/delegate results when
+# EF is present.
+# ---------------------------------------------------------------------------
+
+SUMMARIZE_CORE_PRINCIPLES = (
+    "你是一位知识分析与总结专家。你的任务是基于提供的执行结果和对话上下文，"
+    "通过逻辑严密的分析，回答用户的原始问题。\n\n"
+    "**核心原则**\n"
+    "1. 直接输出答案正文，从实质内容开始。\n"
+    "2. 不要自我介绍，不要说明你是汇总器或 agent，不要描述协作/整合过程。\n"
+    "3. 不要使用「好的，作为…」「我已收到/整合了…」「以下是针对…的完整/综合回答」等开场白。\n"
+    "4. 下游结果中若含类似套话，请忽略并只提取实质信息，不要在输出中重复。\n"
+    "5. 信息冲突时简要说明；缺信息时说明缺什么，勿编造。\n"
+    "6. 对话历史仅用于理解当前问题的指代和语境，不要将历史中的旧结论当作当前事实。\n"
+)
+
+SUMMARIZE_DELEGATED_SYSTEM_PROMPT = SUMMARIZE_CORE_PRINCIPLES
+
+
+def _format_own_and_delegate_text(
+    task_results: dict[int, str] | None,
+    delegate_results: dict[str, str] | None,
+) -> tuple[str, str]:
+    """Format own / delegate result slices (fallback and error messages only)."""
+    own_text = "\n".join(
+        f"[Task#{tid}] {res}" for tid, res in (task_results or {}).items() if res
+    )
+    del_text = "\n".join(
+        f"[{name}]: {res or '[EMPTY — 该 SG 未返回任何数据]'}"
+        for name, res in (delegate_results or {}).items()
+    )
+    return own_text, del_text
+
+
+def _render_summary_execution_context(
+    original_query: str,
+    *,
+    execution_flow_tasks: list | None = None,
+    task_results: dict[int, str] | None = None,
+    delegate_results: dict[str, str] | None = None,
+    current_agent: str = "",
+    agent_role: str = "initiator",
+) -> str:
+    """Build the factual context block for SG collaborative summary.
+
+    Prefers Execution Flow markdown (same source of truth as
+    ``_enrich_group_memory_with_upstream``).  Falls back to own/delegate
+    slices only when no EF records are available — never dumps
+    ``upstream_context`` JSON.
+    """
+    sections: list[str] = [f"原始问题：{original_query}"]
+
+    ef_md = ""
+    if execution_flow_tasks:
+        ef_md = render_execution_flow_md(
+            execution_flow_tasks,
+            agent=current_agent,
+            role=agent_role,
+            current_agent=current_agent,
+            show_children=False,
+        )
+    if ef_md and ef_md.strip():
+        sections.append(ef_md)
+    else:
+        own_text, del_text = _format_own_and_delegate_text(
+            task_results, delegate_results,
+        )
+        if own_text:
+            sections.append(f"## 本层执行结果\n{own_text}")
+        if del_text:
+            sections.append(f"## 下游返回结果\n{del_text}")
+        if not own_text and not del_text:
+            sections.append("（暂无执行结果）")
+
+    return "\n\n".join(sections)
+
+
+_SUMMARY_PROMPT_RULE_WIDTH = 72
+
+
+def _summary_prompt_rule(corner: str, label: str = "") -> str:
+    """Single-line box rule (─), never double-line (═)."""
+    fill = _SUMMARY_PROMPT_RULE_WIDTH - len(corner) - len(label)
+    if fill < 0:
+        fill = 0
+    return f"{corner}{label}{'─' * fill}"
+
+
+def _log_built_summary_prompt(
+    kind: str,
+    *,
+    system_prompt: str,
+    human_prompt: str,
+    current_agent: str = "",
+    agent_role: str = "",
+) -> None:
+    """Print the constructed summary prompt in a readable single-line box."""
+    header = _summary_prompt_rule("┌", f"─ [SummaryPrompt] {kind} ")
+    mid = _summary_prompt_rule("├", "─ human prompt ")
+    footer = _summary_prompt_rule("└")
+    meta = (
+        f"│ agent={current_agent or '-'}    role={agent_role or '-'}\n"
+        f"│ system={len(system_prompt or '')} chars    "
+        f"human={len(human_prompt or '')} chars"
+    )
+    body = (human_prompt or "").rstrip() or "(空)"
+    body_block = "\n".join(
+        f"│ {line}" if line else "│" for line in body.splitlines()
+    )
+    logger.info(
+        "\n%s\n%s\n%s\n%s\n%s",
+        header,
+        meta,
+        mid,
+        body_block,
+        footer,
+    )
+
+
+def _build_summarize_delegated_prompt(
+    original_query: str,
+    *,
+    execution_flow_tasks: list | None = None,
+    task_results: dict[int, str] | None = None,
+    delegate_results: dict[str, str] | None = None,
+    current_agent: str = "",
+    agent_role: str = "initiator",
+) -> tuple[str, str]:
+    """Build (system, human) prompts for ``_summarize_delegated_result``.
+
+    Mirrors skill-agent ``_build_agent_summarize_prompt``: one Execution
+    Flow document plus the original question.  The human message asks for
+    a direct answer.
+    """
+    context = _render_summary_execution_context(
+        original_query,
+        execution_flow_tasks=execution_flow_tasks,
+        task_results=task_results,
+        delegate_results=delegate_results,
+        current_agent=current_agent,
+        agent_role=agent_role,
+    )
+    human_prompt = context + "\n\n请直接输出答案："
+    _log_built_summary_prompt(
+        "sg-summarize",
+        system_prompt=SUMMARIZE_DELEGATED_SYSTEM_PROMPT,
+        human_prompt=human_prompt,
+        current_agent=current_agent,
+        agent_role=agent_role,
+    )
+    return SUMMARIZE_DELEGATED_SYSTEM_PROMPT, human_prompt
 
 
 class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
@@ -5646,7 +5920,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 "``code_exec`` will be missing; model may fall back to plan_cmd/python."
             )
             return None
-        inst = CodeExecution(llm=llm, max_retries=CODE_EXEC_MAX_RETRIES)
+        inst = CodeExecution(llm=llm, max_retries=CODE_EXEC_MAX_RETRIES, agent_name=LOCAL_SKILL_AGENT_NAME)
         logger.info(
             "[LocalSkill][Init] CodeExecution enabled (max_retries=%s) — ReAct exposes code_exec",
             CODE_EXEC_MAX_RETRIES,
@@ -5694,6 +5968,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     cmd_timeout_sec=LOCAL_SKILL_CMD_TIMEOUT_SEC,
                     max_concurrency=LOCAL_SKILL_MAX_CONCURRENCY,
                     code_execution=code_execution,
+                    agent_name=LOCAL_SKILL_AGENT_NAME,
                 )
             except TypeError:
                 logger.warning(
@@ -5706,6 +5981,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     max_steps=LOCAL_SKILL_MAX_STEPS,
                     cmd_timeout_sec=LOCAL_SKILL_CMD_TIMEOUT_SEC,
                     code_execution=code_execution,
+                    agent_name=LOCAL_SKILL_AGENT_NAME,
                 )
             if LOCAL_SKILLS_DIR:
                 load_t0 = _time.perf_counter()
@@ -5877,6 +6153,29 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             name=task_name,
         )
 
+    async def _emit_execution_flow(
+        self,
+        updater: TaskUpdater,
+        task: "ExecutionTask",
+    ) -> None:
+        """Send an Execution Flow frame via A2A artifact.
+
+        Uses the same artifact name ``"execution-flow"`` as skill-agent so
+        upstream/downstream agents can collect and merge the distributed
+        execution state map consistently.
+
+        Args:
+            updater: The TaskUpdater for the current A2A stream.
+            task: The ExecutionTask to emit as a frame.
+        """
+        if updater is None:
+            return
+        frame = task.to_frame()
+        await updater.add_artifact(
+            [TextPart(text=frame)],
+            name="execution-flow",
+        )
+
     @staticmethod
     def _member_capability_flag(name: str, *, default: bool = False) -> bool:
         default_value = "true" if default else "false"
@@ -5960,6 +6259,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 span_name="group-capability-check-llm",
                 span_input={"query": query, "agent_name": agent_name},
                 query=query,
+                agent_name=self.current_agent_label(),
             )
             if result_data is None:
                 raise ValueError("LLM did not call evaluate_capability tool")
@@ -6254,7 +6554,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             if isinstance(e, dict)
         )
         logger.info(
-            "[Capability] ========== Result for '%s' ==========\n"
+            "[Capability] = Result for Capability Check '%s' =\n"
             "  can_handle=%s | confidence=%.2f | strategy=%s | paths=%d\n"
             "  best_path: %s%s\n"
             "%s"
@@ -6389,32 +6689,52 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
     ) -> str:
         """Enrich group_memory with upstream delegation context.
 
-        Injects the upstream's executed_tasks, key_findings, delegator_plan,
-        and (in mid-exec rounds) already_delegated / synthesized_query /
-        detection_reason into the group_memory string so the Planner can
-        produce more precise task descriptions that reference prior work.
+        Injects the upstream Execution Flow and (in mid-exec rounds)
+        already_delegated / synthesized_query / detection_reason into the
+        group_memory string so the Planner can produce more precise task
+        descriptions that reference prior work.
+
+        NOTE: exec_tasks, key_findings_so_far, delegator_plan, upstream_inner
+        have been commented out — Execution Flow now covers all of their
+        information.
         """
         parts: list[str] = []
         if base_group_memory:
             parts.append(base_group_memory)
 
-        exec_tasks = upstream_context.get("executed_tasks")
-        key_findings = upstream_context.get("key_findings_so_far")
-        delegator_plan = upstream_context.get("delegator_plan")
-        upstream_inner = upstream_context.get("upstream_context")
+        # NOTE: 以下字段已被 Execution Flow 覆盖，注释掉以精简上下文。
+        # exec_tasks = upstream_context.get("executed_tasks")
+        # key_findings = upstream_context.get("key_findings_so_far")
+        # delegator_plan = upstream_context.get("delegator_plan")
+        # upstream_inner = upstream_context.get("upstream_context")
 
         upstream_info_parts: list[str] = []
-        if delegator_plan:
-            plan_text = json.dumps(delegator_plan, ensure_ascii=False)
-            upstream_info_parts.append(f"上游原始计划: {plan_text}")
-        if exec_tasks:
-            tasks_text = json.dumps(exec_tasks, ensure_ascii=False)
-            upstream_info_parts.append(f"上游已执行任务及结果: {tasks_text}")
-        if key_findings:
-            upstream_info_parts.append(f"上游关键发现: {key_findings}")
-        if upstream_inner:
-            inner_text = json.dumps(upstream_inner, ensure_ascii=False)
-            upstream_info_parts.append(f"更上层上下文: {inner_text}")
+
+        # ── 上游 Execution Flow ──
+        # 被委派 agent 在 Turn 1 时没有自己的 turn_records，
+        # 通过 upstream_context["execution_flow"] 将上游的完整执行轨迹
+        # 注入到 Planner 上下文中，让被委派 agent 的 Planner 能够看到
+        # 完整的执行历史（谁委派了我、为什么委派、之前做了什么）。
+        upstream_ef = upstream_context.get("execution_flow")
+        if upstream_ef and isinstance(upstream_ef, list):
+            ef_dicts: list[dict] = []
+            for ef_item in upstream_ef:
+                if isinstance(ef_item, ExecutionTask):
+                    ef_dicts.append(ef_item.to_dict())
+                elif isinstance(ef_item, dict):
+                    ef_dicts.append(ef_item)
+            if ef_dicts:
+                # 从上游 EF 中提取委托方 agent 名称
+                _upstream_agent = ef_dicts[0].get("agent", "") if ef_dicts else ""
+                ef_md = render_execution_flow_md(
+                    ef_dicts,
+                    agent=_upstream_agent,
+                    role="initiator",
+                )
+                if ef_md:
+                    upstream_info_parts.append(
+                        "上游执行流水账（以下为委托方已完成的执行轨迹，描述了谁做了什么、为什么委派当前任务）:\n\n" + ef_md
+                    )
 
         if extra_context:
             ctx_parts: list[str] = []
@@ -6435,42 +6755,59 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 )
 
         if upstream_info_parts:
-            banner = (
-                "=== 上游委托上下文（仅供理解关联键来源；规划远程任务时"
-                "禁止把其它域目标或整题扩写写进 description） ===\n"
-            )
+            # ── 动态 banner：根据注入内容类型选择合适的标题 ──
+            # 上游 EF 和 extra_context 是两种不同的注入场景：
+            #   - 上游 EF：被委派方的 Pre-Exec，看到委托方的执行历史
+            #   - extra_context：Mid-Exec 重新规划，看到当前轮次的委派状态
+            has_upstream = upstream_context.get("execution_flow")
+            has_extra = bool(extra_context)
+            if has_upstream and has_extra:
+                banner = "=== 上游执行流水账 & 当前轮次补充上下文 ===\n"
+            elif has_extra:
+                banner = "=== 当前轮次补充上下文（规划远程任务时禁止把其它域目标或整题扩写写进 description） ===\n"
+            else:
+                banner = (
+                    "=== 上游委托上下文（仅供理解关联键来源；规划远程任务时"
+                    "禁止把其它域目标或整题扩写写进 description） ===\n"
+                )
             parts.append(banner + "\n\n".join(upstream_info_parts))
 
         result = "\n\n".join(parts)
         # Build a compact preview of upstream content for INFO-level visibility
         _preview_parts: list[str] = []
-        if delegator_plan:
-            _task_descs = ", ".join(
-                f"#{t.get('id', '?')}:{str(t.get('description', ''))}"
-                for t in (delegator_plan if isinstance(delegator_plan, list) else [])
-            )
-            _preview_parts.append(f"plan=[{_task_descs}]")
-        if exec_tasks:
-            _exec_descs = ", ".join(
-                f"#{t.get('task_id', '?')}:{str(t.get('result', ''))}"
-                for t in (exec_tasks if isinstance(exec_tasks, list) else [])
-            )
-            _preview_parts.append(f"executed=[{_exec_descs}]")
-        if key_findings:
-            _preview_parts.append(f"findings='{str(key_findings)[:200]}'")
-        if upstream_inner:
-            _preview_parts.append("hasUpstreamChain")
+        if upstream_ef:
+            _preview_parts.append(f"ef_tasks={len(upstream_ef)}")
+        if extra_context:
+            if extra_context.get("already_delegated"):
+                _preview_parts.append(f"already_delegated={len(extra_context['already_delegated'])}")
+            if extra_context.get("synthesized_query"):
+                _preview_parts.append(f"synth='{str(extra_context.get('synthesized_query',''))[:100]}'")
+            reason = extra_context.get("detection_reason")
+            if reason:
+                _preview_parts.append(f"reason='{str(reason)[:80]}'")
         _preview = " | ".join(_preview_parts) if _preview_parts else "(none)"
+
+        # ── 日志: 打印 _enrich_group_memory_with_upstream 构建的完整上下文 ──
+        # 提取上游注入部分（不含 base_group_memory）以便重点审查
+        enriched_part = result[len(base_group_memory or ""):].lstrip("\n")
+        # 构建清晰的 fields 列表
+        _active_fields: list[str] = []
+        if upstream_ef:
+            _active_fields.append("execution_flow")
+        if extra_context:
+            _active_fields.append("extra_context")
         logger.info(
-            "[Cross-SG][CollabEnrichMem] upstream_context injection | base_chars=%d enriched_chars=%d fields=%s preview=%s",
+            "\n╔══ [SG-EnrichMem] group_memory 构建结果 ═══════════════════════════════════════════════\n"
+            "base_chars=%d enriched_chars=%d total_chars=%d fields=%s preview=%s\n"
+            "══════════════════ 上游注入部分（不含 base_group_memory） ═══════════════════\n"
+            "%s\n"
+            "══════════════════════════════════════════════════════════════════════════════════════",
             len(base_group_memory or ""),
+            len(result) - len(base_group_memory or ""),
             len(result),
-            [
-                k
-                for k in ("delegator_plan", "executed_tasks", "key_findings_so_far", "upstream_context")
-                if upstream_context.get(k)
-            ],
+            _active_fields,
             _preview,
+            enriched_part or "(无上游注入)",
         )
         return result
 
@@ -6478,24 +6815,15 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
     def _format_upstream_context_summary(upstream_context: dict | None) -> str:
         """Produce a compact, human-readable summary of upstream_context for logging.
 
-        Example output: ``plan=3tasks executed=2tasks findings=450chars chain=1``
+        Example output: ``ef_tasks=5``
         If upstream_context is empty or None, returns ``(none)``.
         """
         if not upstream_context:
             return "(none)"
         parts: list[str] = []
-        _plan = upstream_context.get("delegator_plan")
-        _exec = upstream_context.get("executed_tasks")
-        _findings = upstream_context.get("key_findings_so_far")
-        _inner = upstream_context.get("upstream_context")
-        if _plan:
-            parts.append(f"plan={len(_plan)}tasks")
-        if _exec:
-            parts.append(f"executed={len(_exec)}tasks")
-        if _findings:
-            parts.append(f"findings={len(_findings)}chars")
-        if _inner:
-            parts.append(f"upstreamChain=depth+1")
+        _ef = upstream_context.get("execution_flow")
+        if _ef:
+            parts.append(f"ef_tasks={len(_ef)}")
         return " ".join(parts) if parts else "(empty)"
 
     async def _emit_collab_mid_round_done(
@@ -6571,6 +6899,30 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             "agent_id": self.agent_id or self.current_agent_label(),
         }
 
+        # ── 接收上游 Execution Flow 状态地图 ──
+        # 被委派 SG 需要看到上游的完整执行流水账，以便理解上下文和关联键来源。
+        # 上游的 Execution Flow 以 dict 列表形式通过 upstream_context["execution_flow"] 传入。
+        execution_flow_tasks: list[ExecutionTask] = []
+        upstream_ef_count = 0  # 记录上游 EF 数量，用于最终日志分离渲染
+        upstream_ef = upstream_context.get("execution_flow")
+        if upstream_ef and isinstance(upstream_ef, list):
+            for ef_dict in upstream_ef:
+                if isinstance(ef_dict, dict):
+                    try:
+                        execution_flow_tasks.append(ExecutionTask.from_dict(ef_dict))
+                    except Exception:
+                        logger.warning(
+                            "[ExecutionFlow] failed to parse upstream EF task: %s",
+                            ef_dict.get("execution_id", "?"),
+                        )
+            if execution_flow_tasks:
+                upstream_ef_count = len(execution_flow_tasks)
+                logger.info(
+                    "[ExecutionFlow] received upstream state map | agent_id=%s count=%d",
+                    self.agent_id or "?",
+                    upstream_ef_count,
+                )
+
         task = context.current_task
         if not task:
             task = new_task(context.message)
@@ -6584,6 +6936,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             current_hop = int(os.getenv("CROSS_SG_MAX_HOP", "5"))
 
         # Guard: hop exhausted — stop immediately, do not execute any tasks.
+        sg_label = self.agent_card.name if self.agent_card else (self.agent_id or self.semantic_group_id or "?")
         if is_delegated and current_hop <= 0:
             await self.emit_progress(
                 updater,
@@ -6608,8 +6961,6 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 "reason": "hop_exhausted",
                 "status": "fail",
             }
-
-        sg_label = self.agent_card.name if self.agent_card else (self.agent_id or self.semantic_group_id or "?")
 
         # --- Data Flow: log upstream context at entry ---
         _upstream_summary = self._format_upstream_context_summary(upstream_context)
@@ -6887,14 +7238,37 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         _delegation_executed_count = 0
         for plan_idx, t in enumerate(plan.tasks):
             agent_name = (t.agent or "").strip()
-            # --- Route A (NONE): 跳过 ---
+            # --- Route A (NONE): 规划结论，未派发但仍记入 Execution Flow ---
             if agent_name.upper() == "NONE":
+                none_ef = ExecutionTask(
+                    execution_id=f"none-{t.id}-t1-pre_exec",
+                    turn=1,
+                    stage="pre_exec",
+                    agent="NONE",
+                    role="initiator",
+                    task=t.description or "",
+                    result=NONE_TASK_UNASSIGNED_RESULT,
+                    reason=f"{NONE_TASK_REASON_CODE}: 当前可用智能体中无人可执行此任务",
+                    parent_execution_id=None,
+                    delegated_by=None,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                )
+                execution_flow_tasks.append(none_ef)
+                _all_task_results[t.id] = NONE_TASK_UNASSIGNED_RESULT
+                await self._emit_execution_flow(updater, none_ef)
                 self._log_data_flow(
-                    direction="TASK_SKIPPED",
-                    description=f"Task #{t.id} agent=NONE, skip",
+                    direction="TASK_UNASSIGNED",
+                    description=f"Task #{t.id} agent=NONE, not dispatched",
                     source_id="planner",
                     target_id=agent.agent_name or "?",
-                    metadata_extra={"task_id": t.id, "reason": "agent_is_none"},
+                    payload_chars=len(t.description or ""),
+                    payload_preview=(t.description or "")[:1000],
+                    metadata_extra={
+                        "task_id": t.id,
+                        "reason": NONE_TASK_REASON_CODE,
+                    },
                 )
                 continue
 
@@ -6923,15 +7297,47 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     agent_name,
                     (t.description or "")[:100],
                 )
-                result = await self._execute_own_task_via_expert(
+                result, expert_ef_tasks = await self._execute_own_task_via_expert(
                     t, user_id, run_id, trace_id, updater, agent,
                     prior_task_results=_all_task_results,
                     collaboration_original_query=query,
+                    execution_flow_tasks=execution_flow_tasks,
                 )
                 own_results.setdefault(t.id, "")
                 own_results[t.id] = result
                 _all_task_results.setdefault(t.id, "")
                 _all_task_results[t.id] = result
+                # ── Point A: own task EF 记录 ──
+                # 记录本层 Planner 规划的 own task 执行结果。
+                exec_id = f"t1-pre-{agent_name}-{t.id}"
+                own_ef_task = ExecutionTask(
+                    execution_id=exec_id,
+                    turn=1,
+                    stage="pre_exec",
+                    agent=agent_name,
+                    role="initiator",
+                    task=t.description or "",
+                    result=result,
+                    reason="本层 Planner 规划",
+                    parent_execution_id=None,
+                    delegated_by=None,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                )
+                execution_flow_tasks.append(own_ef_task)
+                await self._emit_execution_flow(updater, own_ef_task)
+                # 将 expert 的根任务链接到当前 own task
+                for et in expert_ef_tasks:
+                    if et.parent_execution_id is None:
+                        et.parent_execution_id = exec_id
+                        et.delegated_by = agent_name
+                    execution_flow_tasks.append(et)
+                logger.info(
+                    "[ExecutionFlow] recorded | agent=%s turn=1 stage=pre_exec "
+                    "role=initiator task_preview=%s expert_ef_tasks=%d",
+                    agent_name, (t.description or "")[:80], len(expert_ef_tasks),
+                )
                 # --- Data Flow: task execution complete ---
                 self._log_data_flow(
                     direction="A2A_RESULT",
@@ -7061,6 +7467,11 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                         ),
                         "remaining_tasks": [dt.model_dump() for dt in delegation_tasks],
                         "upstream_context": upstream_context,
+                        # ── Execution Flow: 传递当前状态地图给下游 agent ──
+                        "execution_flow": [
+                            t.to_dict() if isinstance(t, ExecutionTask) else t
+                            for t in execution_flow_tasks
+                        ],
                     }
                     # --- Data Flow: upstream context being packed for delegation ---
                     _ctx_chars = len(json.dumps(_ctx, ensure_ascii=False))
@@ -7115,7 +7526,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                         _new_chain,
                         _task_desc_for_delegate[:100] if _task_desc_for_delegate else "",
                     )
-                    result = await agent.delegate_to_collaborator_sg(
+                    result, peer_ef_tasks = await agent.delegate_to_collaborator_sg(
                         target_card=_target_card,
                         task_description=_task_desc_for_delegate,
                         user_id=user_id,
@@ -7131,6 +7542,40 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     # 写入 _all_task_results，使得后续依赖此 delegation task 的 own 任务能访问到结果
                     _all_task_results.setdefault(t.id, "")
                     _all_task_results[t.id] = result
+                    # ── Point B: delegate task EF 记录 + merge peer EF ──
+                    # Step 1: 委派已经完成，result 和 peer_ef_tasks 已拿到
+                    # Step 2: 创建本层的 delegate task EF 记录
+                    exec_id = f"t1-pre-{agent_name}-{t.id}"
+                    delegate_ef_task = ExecutionTask(
+                        execution_id=exec_id,
+                        turn=1,
+                        stage="pre_exec",
+                        agent=agent_name,
+                        role="delegatee",
+                        task=_task_desc_for_delegate or t.description or "",
+                        result=result,
+                        reason="Pre-exec delegation",
+                        parent_execution_id=None,
+                        delegated_by=agent.agent_name,
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        user_id=user_id,
+                    )
+                    execution_flow_tasks.append(delegate_ef_task)
+                    await self._emit_execution_flow(updater, delegate_ef_task)
+                    # Step 3: 给 peer 的根任务设置 parent_execution_id，然后合并
+                    for pt in peer_ef_tasks:
+                        if pt.parent_execution_id is None:
+                            pt.parent_execution_id = exec_id
+                            pt.delegated_by = agent.agent_name
+                        execution_flow_tasks.append(pt)
+                    logger.info(
+                        "[ExecutionFlow] recorded | agent=%s turn=1 stage=pre_exec "
+                        "role=delegatee task_preview=%s peer_ef_tasks=%d",
+                        agent_name,
+                        (_task_desc_for_delegate or "")[:80],
+                        len(peer_ef_tasks),
+                    )
                     # --- Data Flow: delegation result received ---
                     self._log_data_flow(
                         direction="PRE_DELEGATE_RECV",
@@ -7479,7 +7924,6 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                         target_cards = _filtered_cards
                         target_sg_names = _filtered_names
 
-                if not target_cards:
                 await self.emit_progress(
                     updater,
                     "collaboration-progress",
@@ -7685,7 +8129,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 "synthesized_query": synthesized_query,
                 "detection_reason": reason,
             })
-            mid_results, current_hop = await self._dispatch_mid_exec_delegation(
+            mid_results, current_hop, mid_ef_tasks = await self._dispatch_mid_exec_delegation(
                 plan=mid_plan,
                 target_cards=target_cards,
                 user_id=user_id,
@@ -7699,7 +8143,15 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 progress_updater=updater,
                 collaboration_original_query=query,
                 execution_hints_by_sg=hints_by_sg,
+                execution_flow_tasks=execution_flow_tasks,
             )
+            # ── Merge mid-exec EF delta into the main execution state map ──
+            if mid_ef_tasks:
+                execution_flow_tasks.extend(mid_ef_tasks)
+                logger.info(
+                    "[ExecutionFlow] merged mid-exec delta | round=%d delta_count=%d total=%d",
+                    mid_exec_round + 1, len(mid_ef_tasks), len(execution_flow_tasks),
+                )
             # --- Data Flow: mid-exec round dispatch ---
             _mid_ctx_chars = len(json.dumps(upstream_ctx, ensure_ascii=False))
             # Use planner's actual dispatched agents, not capability check's candidate pool
@@ -7837,6 +8289,8 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             user_id=user_id,
             run_id=run_id,
             trace_id=trace_id,
+            execution_flow_tasks=execution_flow_tasks,
+            agent_role="delegatee" if is_delegated else "initiator",
         )
 
         await self.emit_progress(
@@ -7867,6 +8321,79 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             [TextPart(text=summary)],
             name="collaborative-result",
         )
+        # ── Point E: Turn Summary ──
+        # SG Orchestrator 是单 Turn 执行，summary 生成即表示本轮完成。
+        # execution_id 使用 agent 名称前缀，避免与 peer 的 t1-summary 冲突。
+        turn_summary_task = ExecutionTask(
+            execution_id=f"t1-summary-{sg_label}",
+            turn=1,
+            stage="turn_summary",
+            agent=sg_label,
+            role="initiator",
+            task="Turn 1 执行结果",
+            result="success",
+            reason="单轮执行完成",
+            parent_execution_id=None,
+            delegated_by=None,
+            run_id=run_id,
+            trace_id=trace_id,
+            user_id=user_id,
+        )
+        execution_flow_tasks.append(turn_summary_task)
+        await self._emit_execution_flow(updater, turn_summary_task)
+        # ── Point F: Final Answer ──
+        final_answer_task = ExecutionTask(
+            execution_id=f"final-answer-{sg_label}",
+            turn=1,
+            stage="final_answer",
+            agent=sg_label,
+            role="initiator",
+            task="最终答案",
+            result=summary or "",
+            reason="",
+            parent_execution_id=None,
+            delegated_by=None,
+            run_id=run_id,
+            trace_id=trace_id,
+            user_id=user_id,
+        )
+        execution_flow_tasks.append(final_answer_task)
+        await self._emit_execution_flow(updater, final_answer_task)
+        # ── 最终 EF 日志输出 ──
+        # 将上游 EF 和本层 EF 分开渲染，避免混合导致层级混淆。
+        if execution_flow_tasks:
+            role = "delegatee" if is_delegated else "initiator"
+            local_ef = list(execution_flow_tasks[upstream_ef_count:])
+            upstream_ef_for_log = list(execution_flow_tasks[:upstream_ef_count])
+
+            if upstream_ef_for_log:
+                _upstream_agent = upstream_ef_for_log[0].agent if upstream_ef_for_log else ""
+                upstream_md = render_execution_flow_md(
+                    upstream_ef_for_log,
+                    agent=_upstream_agent,
+                    role="initiator",
+                )
+                logger.info(
+                    "[ExecutionFlow] run_id=%s trace_id=%s user_id=%s\n"
+                    "─── 上游执行流水账 ───\n%s",
+                    run_id, trace_id, user_id, upstream_md,
+                )
+
+            if local_ef:
+                local_md = render_execution_flow_md(
+                    local_ef,
+                    agent=sg_label,
+                    role=role,
+                    current_agent=sg_label,
+                )
+                logger.info(
+                    "[ExecutionFlow] run_id=%s trace_id=%s user_id=%s\n"
+                    "─── 本层执行流水账 ───\n%s",
+                    run_id, trace_id, user_id, local_md,
+                )
+
+            if not upstream_ef_for_log and not local_ef:
+                logger.info("[ExecutionFlow] no execution flow tasks recorded (run_id=%s)", run_id)
         await updater.complete(
             message=new_agent_text_message("", context_id=task.context_id),
         )
@@ -7881,7 +8408,8 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         agent,
         prior_task_results: dict[int, str] | None = None,
         collaboration_original_query: str = "",
-    ) -> str:
+        execution_flow_tasks: list["ExecutionTask"] | None = None,
+    ) -> tuple[str, list["ExecutionTask"]]:
         """Execute a single own task by forwarding it to the matching Expert Agent.
 
         Pure A2A dispatch — no SQL generation, DB queries, or knowledge retrieval.
@@ -7892,17 +8420,26 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         complete before this one.  Their text is prepended to the task description
         so the downstream Expert Agent can use upstream data (user IDs, token lists,
         etc.) without guessing.
+
+        ``execution_flow_tasks`` is the current execution state map.  It is
+        serialized into the A2A metadata so the downstream expert agent can
+        see the complete execution history.
+
+        Returns:
+            ``(result_text, expert_execution_flow_tasks)`` — the expert's Execution
+            Flow frames collected from the A2A response.
         """
         if (task.agent or "").strip().upper() == "NONE":
-            return NONE_TASK_DESCRIPTION
+            return NONE_TASK_DESCRIPTION, []
 
         # Route B: local skill execution (in-process, no A2A).
         if agent._is_local_skill_task(task):
-            return await self._execute_local_skill_task(
+            result = await self._execute_local_skill_task(
                 task, user_id, run_id, trace_id, updater, agent,
                 prior_task_results=prior_task_results,
                 collaboration_original_query=collaboration_original_query,
             )
+            return result, []
 
         agent_card = next(
             (c for c in (agent.agent_cards or []) if c.name == task.agent),
@@ -7912,7 +8449,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             logger.warning(
                 "[Cross-SG][CollabExecuteOwn] no card for agent=%s, returning empty", task.agent,
             )
-            return ""
+            return "", []
 
         logger.info(
             "[Cross-SG][CollabExecuteOwn] A2A call to agent | agent=%s url=%s",
@@ -8033,6 +8570,23 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         if _upstream_executed_tasks:
             _a2a_upstream_context = {"executed_tasks": _upstream_executed_tasks}
 
+        # ── Execution Flow: pass the current state map to the downstream expert ──
+        # This allows the expert (e.g. skill-agent) to see the complete execution
+        # history and make better decisions.
+        if execution_flow_tasks:
+            _ef_for_ctx = [
+                t.to_dict() if isinstance(t, ExecutionTask) else t
+                for t in execution_flow_tasks
+            ]
+            _a2a_upstream_context["execution_flow"] = _ef_for_ctx
+            logger.info(
+                "[ExecutionFlow] passing state map to expert | agent=%s "
+                "target=%s ef_tasks=%d",
+                agent.agent_name if hasattr(agent, "agent_name") else "?",
+                task.agent or "?",
+                len(_ef_for_ctx),
+            )
+
         send_payload = {
             "message": {
                 "role": "user",
@@ -8102,12 +8656,22 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 params=MessageSendParams(**send_payload),
             )
             stream = client.send_message_streaming(req)
-            return await OrchestratorAgent.stream_a2a_collect_forward_progress_frames(
+            result, expert_ef_tasks = await OrchestratorAgent.stream_a2a_collect_forward_progress_frames(
                 stream,
                 agent.get_response_text,
                 updater,
                 task_progress_name,
             )
+            logger.info(
+                "[ExecutionFlow] expert returned | agent=%s target=%s task_id=%s "
+                "result_chars=%d ef_tasks=%d",
+                agent.agent_name if hasattr(agent, "agent_name") else "?",
+                task.agent or "?",
+                task.id,
+                len(result or ""),
+                len(expert_ef_tasks),
+            )
+            return result, expert_ef_tasks
 
     async def _execute_local_skill_task(
         self,
@@ -8309,6 +8873,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     "downstream_agent": downstream_agent_name,
                     "upstream_chars": len(_prior),
                 },
+                agent_name=self.current_agent_label(),
             )
             if result is None:
                 logger.warning(
@@ -9108,6 +9673,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 tool_choice="detect_delegation_needs",
                 span_name="cross-sg-detect-delegation-needs",
                 span_input={"query": query, "own_task_count": len(own_results)},
+                agent_name=self.current_agent_label(),
             )
             if data_dict is None or not isinstance(data_dict, dict):
                 logger.warning(
@@ -9256,18 +9822,29 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         progress_updater: Optional[Any] = None,
         collaboration_original_query: str = "",
         execution_hints_by_sg: Optional[dict[str, dict]] = None,
-    ) -> tuple[dict[str, str], int]:
+        execution_flow_tasks: list["ExecutionTask"] | None = None,
+    ) -> tuple[dict[str, str], int, list["ExecutionTask"]]:
         """Mid-execution Step 3: dispatch plan tasks to target SGs.
 
         Iterates the plan's tasks, maps each to its target card, and calls
         ``delegate_to_collaborator_sg``.  When capability_check returned an
         ``execution_hint`` for a peer, forward it opaquely on dispatch.
-        Returns ``(results_dict, remaining_hop)`` where remaining_hop is the
-        hop count after all dispatches in this call.
+
+        ``execution_flow_tasks`` is the current execution state map.  It is
+        injected into the upstream context so the downstream peer can see the
+        complete execution history.
+
+        Returns:
+            ``(results_dict, remaining_hop, execution_flow_tasks_delta)``.
+            ``execution_flow_tasks_delta`` is the list of EF records added
+            within this method (delegate tasks + merged peer frames).
+        """
         results: dict[str, str] = {}
         name_to_card = {c.name: c for c in target_cards}
         hints_by_sg = dict(execution_hints_by_sg or {})
         mid_exec_round = int((upstream_context or {}).get("mid_exec_round") or 0)
+        # ── Execution Flow: delta for this dispatch call ──
+        _delta_ef_tasks: list[ExecutionTask] = []
 
         logger.info(
             "[Cross-SG][CollabMidExecDispatch] dispatching mid-exec tasks | "
@@ -9298,6 +9875,13 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             next_hop = current_hop
             new_chain = delegation_chain + [agent.agent_name]
             ctx = dict(upstream_context or {})
+            # ── Execution Flow: inject current state map into mid-exec context ──
+            if execution_flow_tasks:
+                _ef_for_ctx = [
+                    t.to_dict() if isinstance(t, ExecutionTask) else t
+                    for t in execution_flow_tasks
+                ]
+                ctx["execution_flow"] = _ef_for_ctx
             tid_map = self._task_results_from_upstream_ctx(ctx)
 
             task_desc_for_delegate = task.description or ""
@@ -9358,7 +9942,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     },
                 )
 
-            result = await agent.delegate_to_collaborator_sg(
+            result, peer_ef_tasks = await agent.delegate_to_collaborator_sg(
                 target_card=target_card,
                 task_description=task_desc_for_delegate,
                 user_id=user_id,
@@ -9372,6 +9956,32 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 execution_hint=peer_hint or None,
             )
             results[agent_name] = result
+            # ── Point D: mid-exec delegate task EF 记录 + merge peer EF ──
+            # 三步模式，与 Point B 完全一致。
+            exec_id = f"t1-mid{mid_exec_round}-{agent_name}-{task.id}"
+            delegate_ef_task = ExecutionTask(
+                execution_id=exec_id,
+                turn=1,
+                stage=f"mid_exec_round_{mid_exec_round}",
+                agent=agent_name,
+                role="delegatee",
+                task=task_desc_for_delegate or "",
+                result=result,
+                reason=(upstream_context or {}).get("detection_reason", ""),
+                parent_execution_id=None,
+                delegated_by=agent.agent_name,
+                run_id=run_id,
+                trace_id=trace_id,
+                user_id=user_id,
+            )
+            _delta_ef_tasks.append(delegate_ef_task)
+            if progress_updater is not None:
+                await self._emit_execution_flow(progress_updater, delegate_ef_task)
+            for pt in peer_ef_tasks:
+                if pt.parent_execution_id is None:
+                    pt.parent_execution_id = exec_id
+                    pt.delegated_by = agent.agent_name
+                _delta_ef_tasks.append(pt)
             if progress_updater is not None:
                 await self.emit_progress(
                     progress_updater,
@@ -9392,7 +10002,21 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     },
                 )
 
-        return results, current_hop
+        return results, current_hop, _delta_ef_tasks
+
+    def _resolve_execution_flow_for_summary(
+        self,
+        execution_flow_tasks: list | None,
+        upstream_context: dict | None,
+    ) -> list | None:
+        """Prefer explicit EF; fall back to ``upstream_context['execution_flow']``."""
+        if execution_flow_tasks:
+            return execution_flow_tasks
+        if isinstance(upstream_context, dict):
+            upstream_ef = upstream_context.get("execution_flow")
+            if upstream_ef:
+                return upstream_ef
+        return None
 
     async def _summarize_delegated_result(
         self,
@@ -9403,46 +10027,48 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         user_id: str = "",
         run_id: str = "",
         trace_id: str = "",
+        execution_flow_tasks: list | None = None,
+        agent_role: str = "",
     ) -> str:
-        """Summarise own results + downstream delegated results + upstream context.
+        """Summarise own results + downstream delegated results via Execution Flow.
 
-        Pure LLM summarisation — no data processing.
+        Prompt context is built by :func:`_build_summarize_delegated_prompt`
+        (Execution Flow markdown, not a JSON dump of ``upstream_context``).
+        Mirrors skill-agent ``_summarize``.
         """
-        own_text = "\n".join(
-            f"[Task#{tid}] {res}" for tid, res in own_results.items() if res
+        own_text, del_text = _format_own_and_delegate_text(
+            own_results, delegated_results,
         )
-        del_text = "\n".join(
-            f"[{name}] {res or '[EMPTY — 该 SG 未返回任何数据]'}"
-            for name, res in delegated_results.items()
-        )
-        upstream_text = json.dumps(upstream_context, ensure_ascii=False) if upstream_context else "无"
+        try:
+            current_agent = (
+                self.agent_card.name if self.agent_card
+                else self.agent_id or self.semantic_group_id or "Unknown"
+            ).strip()
+        except Exception:
+            current_agent = str(getattr(self, "agent_id", "") or "")
 
-        prompt = (
-            "请基于以下各层执行结果，综合回答用户的原始问题。\n\n"
-            "输出要求：\n"
-            "1. 直接输出答案正文，从实质内容开始。\n"
-            "2. 不要自我介绍，不要说明你是汇总器或 agent，不要描述协作/整合过程。\n"
-            "3. 不要使用「好的，作为…」「我已收到/整合了…」「以下是针对…的完整/综合回答」等开场白。\n"
-            "4. 下游结果中若含类似套话，请忽略并只提取实质信息，不要在输出中重复。\n"
-            "5. 信息冲突时简要说明；缺信息时说明缺什么，勿编造。\n\n"
-            f"原始问题：{query}\n\n"
-            f"上游传入上下文：{upstream_text}\n\n"
-            f"本层自身执行结果：\n{own_text}\n\n"
-            f"委托给下游 SG 的返回结果（可能已包含多级汇总）：\n{del_text}\n\n"
-            "请直接输出答案："
+        system_prompt, human_prompt = _build_summarize_delegated_prompt(
+            query,
+            execution_flow_tasks=self._resolve_execution_flow_for_summary(
+                execution_flow_tasks, upstream_context,
+            ),
+            task_results=own_results,
+            delegate_results=delegated_results,
+            current_agent=current_agent,
+            agent_role=agent_role or "initiator",
         )
 
         logger.info(
             "[Cross-SG][CollabSummary] invoking summary LLM | own_results=%d delegated_results=%d prompt_chars=%d",
             len(own_results),
             len(delegated_results),
-            len(prompt),
+            len(human_prompt),
         )
 
         try:
             with langfuse.start_as_current_span(
-                name="cross-sg-summarize-delegated-result",
-                trace_context={"trace_id": trace_id},
+                name=f"cross-sg-summarize [{current_agent}]",
+                trace_context={"trace_id": trace_id} if trace_id else {},
             ) as span:
                 span.update_trace(
                     user_id=user_id,
@@ -9454,13 +10080,16 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     },
                 )
                 response = await self.llm.ainvoke(
-                    [HumanMessage(content=prompt)],
+                    [
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=human_prompt),
+                    ],
                     config={"callbacks": [langfuse_handler]},
                 )
                 span.update_trace(
                     output={"result_chars": len(str(response.content or ""))},
                 )
-            langfuse.flush()
+            await safe_langfuse_flush(langfuse)
         except Exception as e:
             logger.error("[Cross-SG][CollabSummary] LLM invocation failed: %s", e)
             return (
@@ -9713,6 +10342,27 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                             event['content'], context_id=task.context_id
                         )
                     )
+                    # ── Legacy 最终 EF 日志输出 ──
+                    if agent.execution_flow_tasks:
+                        _legacy_label = agent.agent_name or "sg_orchestrator"
+                        _run_id = (metadata or {}).get("run_id", "")
+                        _trace_id = (metadata or {}).get("trace_id", "")
+                        _user_id = (metadata or {}).get("user_id", "")
+                        legacy_ef_md = render_execution_flow_md(
+                            agent.execution_flow_tasks,
+                            agent=_legacy_label,
+                            role="initiator",
+                            current_agent=_legacy_label,
+                        )
+                        logger.info(
+                            "[ExecutionFlow] run_id=%s trace_id=%s user_id=%s\n%s",
+                            _run_id, _trace_id, _user_id, legacy_ef_md,
+                        )
+                    else:
+                        logger.info(
+                            "[ExecutionFlow] no execution flow tasks recorded (run_id=%s)",
+                            (metadata or {}).get("run_id", ""),
+                        )
 
     @override
     async def cancel(

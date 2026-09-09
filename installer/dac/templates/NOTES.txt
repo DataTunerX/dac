@@ -54,9 +54,14 @@ Namespace: {{ .Release.Namespace }}
   - dataagentcontainers.dac.dac.io  (DataAgentContainer)
   - datadescriptors.dac.dac.io      (DataDescriptor)
 
+  Helm does NOT update CRDs on `helm upgrade`. After chart changes that
+  add fields (e.g. spec.crossSGMaxHop), apply them manually:
+
+    kubectl apply -f installer/dac/crds/
+
   The execution-engine operator watches these CRDs and
   dynamically creates orchestrator-agent, expert-agent,
-  code-agent, doc-agent and data-sinkers-job Jobs.
+  code-agent, doc-agent, skill-agent and data-sinkers-job Jobs.
 
 ------------------------------------------------------------
   Next Steps: Create DataDescriptor / DataAgentContainer

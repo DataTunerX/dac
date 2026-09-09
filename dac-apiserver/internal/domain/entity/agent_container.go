@@ -18,6 +18,7 @@ type AgentContainer struct {
 	ExpertAgentMaxSteps       string
 	OrchestratorAgentMaxLoops string
 	SkillAgentMaxLoops        string
+	CrossSGMaxHop             string
 
 	// Status
 	ActiveDataDescriptors []ActiveDataDescriptor
