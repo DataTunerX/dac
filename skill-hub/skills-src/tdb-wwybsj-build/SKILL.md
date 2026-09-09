@@ -4,7 +4,10 @@ description: >
   Use when adding a WWYBSJ artifact from registry JSON, building or rebuilding
   the local `wwybsj` cultural-relic TDB domain, auditing its layered ontology,
   aligning controlled terms to the remote archeology corpus, or verifying the
-  generated wwybsj statements and wiki pages through gateway APIs.
+  generated wwybsj statements and wiki pages through gateway APIs. This is a
+  write-side build/ingestion tool, not a question-answering skill -- do not
+  route it any query about artifact content, provenance, or interpretation.
+  Use `tdb-wwybsj-answering` for those instead.
 ---
 
 # tdb-wwybsj-build
@@ -12,6 +15,12 @@ description: >
 Build and verify the local `wwybsj` TDB domain from museum registry records.
 The skill moves and annotates knowledge; it must not invent cultural, historical,
 or archaeological claims.
+
+**Not intended for any query.** This skill only ingests, rebuilds, audits and
+verifies the `wwybsj` domain -- it does not answer questions about artifacts,
+collections, or their cultural/historical meaning. If invoked with a question
+rather than a build/verify/audit task, decline and point to
+`tdb-wwybsj-answering`.
 
 ## Non-Negotiables
 
