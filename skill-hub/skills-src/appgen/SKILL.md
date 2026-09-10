@@ -1,12 +1,13 @@
 ---
 name: appgen
-description: Create a new DAC skill and the skill agent that runs it. Use when the user asks to build, generate, scaffold or publish a new skill, capability or agent — for example "make a skill that converts currencies" or "create an agent for X". Publishes the skill package to skill-hub and creates the matching DataAgentContainer, then reports what was created.
+description: Create and verify a new DAC skill and the skill agent that runs it. Use when the user asks to build, generate, scaffold or publish a new skill, capability or agent — for example "make a skill that converts currencies" or "create an agent for X". Publishes the skill package, creates the matching DataAgentContainer, then verifies the skill is loaded by a reachable agent before reporting success.
 ---
 
 # AppGen
 
 Turn a described capability into a working DAC skill **and** the agent that runs
-it. Two steps, in order: publish the skill, then create the agent that loads it.
+it. Three steps, in order: publish the skill, create the agent that loads it,
+then verify the published package and live agent.
 
 Both steps are needed. Publishing a skill only makes it *available* — agents
 load skills from an explicit list, so a published skill with no agent is
@@ -51,10 +52,29 @@ Does not provide historical series or financial advice.`
 
 Poor: `Handles currency things.`
 
-## Step 2 — create the agent
+## Step 2 — create and verify the agent
 
 ```bash
 python3 scripts/create_agent.py --skill currency-convert
+```
+
+`create_agent.py` does not report success immediately after creating the
+DataAgentContainer. It waits up to 120 seconds and requires all of the following:
+
+1. skill-hub lists the requested skill version;
+2. the DataAgentContainer binds that exact namespace/name/version;
+3. its status contains `Available=True` and an endpoint;
+4. the endpoint serves `/.well-known/agent-card.json` and advertises the skill.
+
+Use `--verify-timeout` and `--verify-interval` only when the cluster needs a
+different bounded rollout window. To re-check an existing deployment without
+creating or updating it:
+
+```bash
+python3 scripts/verify_deployment.py \
+  --skill currency-convert \
+  --agent-name currency-convert-agent \
+  --skill-version 1.0.0
 ```
 
 Defaults to agent name `<skill>-agent`. Options: `--agent-name`,
@@ -76,8 +96,8 @@ Both scripts print one JSON object. Report:
 
 - the skill name, version and namespace
 - the agent name and whether it was created or updated
-- that the agent takes a few seconds to become ready while the operator builds
-  its Deployment
+- the verification object: published version, `Available` state, runtime
+  endpoint, and `skill_loaded`
 - if either step failed, the `error` field verbatim — do not paper over it
 
 ## Rules
@@ -90,3 +110,6 @@ Both scripts print one JSON object. Report:
   committed to the repo; secrets belong in the deployment as environment.
 - Report exactly what was created. Do not claim an agent is ready when only the
   skill was published.
+- Do not report the workflow complete unless deployment verification returns
+  `ok: true`. A timeout means the resources may exist but are not proven ready;
+  report that distinction and the last verification error.

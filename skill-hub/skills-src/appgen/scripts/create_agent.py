@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from appgen_common import (  # noqa: E402
     AGENT_NAMESPACE, SKILL_NAMESPACE, AppGenError, k8s_request, skill_exists, validate_name)
+from verify_deployment import wait_for_deployment  # noqa: E402
 
 API = "/apis/dac.dac.io/v1alpha1/namespaces/{ns}/dataagentcontainers"
 
@@ -65,6 +66,10 @@ def main() -> int:
     ap.add_argument("--planner-llm", default=os.getenv("APPGEN_DEFAULT_LLM", "gpt-5.6-luna"))
     ap.add_argument("--max-steps", default="30")
     ap.add_argument("--max-loops", default="2")
+    ap.add_argument("--verify-timeout", type=float, default=120,
+                    help="seconds to wait for skill publication, agent readiness and runtime card")
+    ap.add_argument("--verify-interval", type=float, default=3,
+                    help="seconds between deployment verification attempts")
     args = ap.parse_args()
 
     try:
@@ -94,6 +99,12 @@ def main() -> int:
             manifest["metadata"]["resourceVersion"] = existing["metadata"]["resourceVersion"]
             k8s_request(f"{path}/{agent}", method="PUT", payload=manifest)
             created = False
+
+        verification = wait_for_deployment(
+            skill, agent, args.skill_version,
+            timeout=args.verify_timeout,
+            interval=args.verify_interval,
+        )
     except AppGenError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 1
@@ -104,7 +115,8 @@ def main() -> int:
         "namespace": AGENT_NAMESPACE,
         "skill": skill,
         "action": "created" if created else "updated",
-        "note": "the operator builds the Deployment; it takes a few seconds to become ready",
+        "deployed": True,
+        "verification": verification,
     }, ensure_ascii=False))
     return 0
 

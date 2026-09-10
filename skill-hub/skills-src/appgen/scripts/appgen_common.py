@@ -85,9 +85,14 @@ def k8s_request(path: str, *, method: str = "GET", payload: dict | None = None) 
 
 
 def skill_exists(name: str) -> bool:
+    return find_skill(name) is not None
+
+
+def find_skill(name: str) -> dict[str, Any] | None:
+    """Return one published skill entry from the configured namespace."""
     try:
         listing = http_json(f"{SKILL_HUB_URL}/namespaces/{SKILL_NAMESPACE}/skills")
     except AppGenError:
-        return False
+        return None
     items = listing if isinstance(listing, list) else listing.get("skills") or listing.get("items") or []
-    return any((s or {}).get("name") == name for s in items)
+    return next((s for s in items if isinstance(s, dict) and s.get("name") == name), None)
