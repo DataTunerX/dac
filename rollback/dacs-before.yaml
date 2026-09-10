@@ -1,0 +1,662 @@
+apiVersion: v1
+items:
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      dac.dac.io/refreshed-at: "1787931424"
+      dac.io/reconcile-trigger: "1788279442"
+    creationTimestamp: "2026-08-28T13:57:03Z"
+    generation: 3
+    name: anthropology-sociology-tdb-agent
+    namespace: default
+    resourceVersion: "112007532"
+    uid: fb20fe4e-5f9a-4a3e-adae-9fe29f690261
+  spec:
+    agentCard:
+      description: Answer anthropology and sociology questions grounded in the TDB
+      name: Anthropology-sociology-TDB-Agent
+      skills:
+      - description: Answer anthropology and sociology questions grounded in the TDB
+          gateway at 10.124.48.91:8992 (domain "anthropology_sociology"), combining
+          wiki, ontology concepts, statements/provenance, and search text into an
+          evidence-backed anthropology/sociology answer instead of a triple dump.
+          Verify scope against the live gateway and docs/tdb_agent_user_guide.md.
+        examples: []
+        id: tdb-anthropology-sociology-qa
+        name: tdb-anthropology-sociology-qa
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: tdb-anthropology-sociology-qa
+        namespace: default
+        version: ""
+  status:
+    conditions:
+    - lastUpdateTime: "2026-08-28T10:33:25-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-08-28T09:57:03-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-anthropology-sociology-tdb-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"dac.dac.io/v1alpha1","kind":"DataAgentContainer","metadata":{"annotations":{},"labels":{"dac.io/created-by":"appgen"},"name":"appgen-agent","namespace":"default"},"spec":{"agentCard":{"description":"Create a new DAC skill and the skill agent that runs it. Use when the user asks to build, generate, scaffold or publish a new skill, capability or agent. Publishes the skill package to skill-hub and creates the matching DataAgentContainer. Does not answer domain questions itself.","name":"AppGen-Agent","skills":[{"description":"Create a new DAC skill and the skill agent that runs it. Use when the user asks to build, generate, scaffold or publish a new skill, capability or agent. Publishes the skill package to skill-hub and creates the matching DataAgentContainer. Does not answer domain questions itself.","examples":[],"id":"appgen","name":"appgen","tags":[]}]},"dacType":"skill","dataPolicy":{"dataSourceType":"","semanticGroupID":"","sourceNameSelector":[]},"expertAgentMaxSteps":"30","model":{"expertLLM":"gpt-5.6-luna","plannerLLM":"gpt-5.6-luna"},"orchestratorAgentMaxLoops":"2","skillPolicy":{"skills":[{"name":"appgen","namespace":"default","version":"1.0.0"}]}}}
+    creationTimestamp: "2026-09-01T20:31:09Z"
+    generation: 1
+    labels:
+      dac.io/created-by: appgen
+    name: appgen-agent
+    namespace: default
+    resourceVersion: "112139545"
+    uid: 655474f0-5ea7-4056-ba1c-760dd6467ee5
+  spec:
+    agentCard:
+      description: Create a new DAC skill and the skill agent that runs it. Use when
+        the user asks to build, generate, scaffold or publish a new skill, capability
+        or agent. Publishes the skill package to skill-hub and creates the matching
+        DataAgentContainer. Does not answer domain questions itself.
+      name: AppGen-Agent
+      skills:
+      - description: Create a new DAC skill and the skill agent that runs it. Use
+          when the user asks to build, generate, scaffold or publish a new skill,
+          capability or agent. Publishes the skill package to skill-hub and creates
+          the matching DataAgentContainer. Does not answer domain questions itself.
+        examples: []
+        id: appgen
+        name: appgen
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: appgen
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-09-01T16:31:19-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-09-01T16:31:09-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-appgen-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      dac.dac.io/refreshed-at: "1787931424"
+      dac.io/reconcile-trigger: "1788279443"
+    creationTimestamp: "2026-08-28T13:43:13Z"
+    generation: 4
+    name: art-history-tdb-agent
+    namespace: default
+    resourceVersion: "112007577"
+    uid: b6af015d-2d4e-4ba3-8e36-26f7ced2fb0e
+  spec:
+    agentCard:
+      description: 'Answer art history questions grounded in the TDB '
+      name: Art-history-TDB-Agent
+      skills:
+      - description: Answer art history questions grounded in the TDB gateway at 10.124.48.91:8991
+          (domain "art_history"), combining wiki, ontology concepts, statements/provenance,
+          and search text into an evidence-backed art-historical answer instead of
+          a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.
+        examples: []
+        id: tdb-art-history-qa
+        name: tdb-art-history-qa
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: tdb-art-history-qa
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-08-28T09:50:34-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-08-28T09:50:24-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-art-history-tdb-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    creationTimestamp: "2026-09-01T20:31:34Z"
+    generation: 1
+    labels:
+      dac.io/created-by: appgen
+    name: currency-convert-agent
+    namespace: default
+    resourceVersion: "112139806"
+    uid: 4af512d6-67b3-4a90-8e38-40a5d2a21dd6
+  spec:
+    agentCard:
+      description: Convert an amount between two currencies using published daily
+        rates. Does not provide historical series or financial advice.
+      name: Currency-Convert-Agent
+      skills:
+      - description: Convert an amount between two currencies using published daily
+          rates. Does not provide historical series or financial advice.
+        examples: []
+        id: currency-convert
+        name: currency-convert
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: currency-convert
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-09-01T16:31:45-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-09-01T16:31:34-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-currency-convert-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      dac.io/reconcile-trigger: "1788279443"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"dac.dac.io/v1alpha1","kind":"DataAgentContainer","metadata":{"annotations":{},"name":"geo-environment-tdb-agent","namespace":"default"},"spec":{"agentCard":{"description":"Answer geo-environment questions grounded in the TDB gateway at 10.124.48.91:8994 (domain \"geo_environment\"), combining wiki, ontology concepts, statements/provenance, and search text into an evidence-backed geo-environmental answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.","name":"Geo-environment-TDB-Agent","skills":[{"description":"Answer geo-environment questions grounded in the TDB gateway at 10.124.48.91:8994 (domain \"geo_environment\"), combining wiki, ontology concepts, statements/provenance, and search text into an evidence-backed geo-environmental answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.","examples":[],"id":"tdb-geo-environment-qa","name":"tdb-geo-environment-qa","tags":[]}]},"dacType":"skill","dataPolicy":{"dataSourceType":"","semanticGroupID":"","sourceNameSelector":[]},"expertAgentMaxSteps":"30","model":{"expertLLM":"gpt-5.6-luna","plannerLLM":"gpt-5.6-luna"},"orchestratorAgentMaxLoops":"2","skillPolicy":{"skills":[{"name":"tdb-geo-environment-qa","namespace":"default","version":"1.0.0"}]}}}
+    creationTimestamp: "2026-08-28T16:07:11Z"
+    generation: 1
+    name: geo-environment-tdb-agent
+    namespace: default
+    resourceVersion: "112007610"
+    uid: afabcedd-ad4d-4ffe-9922-b3808ef17be0
+  spec:
+    agentCard:
+      description: Answer geo-environment questions grounded in the TDB gateway at
+        10.124.48.91:8994 (domain "geo_environment"), combining wiki, ontology concepts,
+        statements/provenance, and search text into an evidence-backed geo-environmental
+        answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.
+      name: Geo-environment-TDB-Agent
+      skills:
+      - description: Answer geo-environment questions grounded in the TDB gateway
+          at 10.124.48.91:8994 (domain "geo_environment"), combining wiki, ontology
+          concepts, statements/provenance, and search text into an evidence-backed
+          geo-environmental answer instead of a triple dump. Verified against the
+          live gateway and docs/tdb_agent_user_guide.md.
+        examples: []
+        id: tdb-geo-environment-qa
+        name: tdb-geo-environment-qa
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: tdb-geo-environment-qa
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-08-29T05:23:20-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-08-28T12:07:11-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-geo-environment-tdb-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      dac.io/reconcile-trigger: "1788279443"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"dac.dac.io/v1alpha1","kind":"DataAgentContainer","metadata":{"annotations":{},"name":"history-tdb-agent","namespace":"default"},"spec":{"agentCard":{"description":"Answer history questions grounded in the TDB gateway at 10.124.48.91:8990 (domain \"history\"), combining wiki, ontology concepts, statements/provenance, and search text into an evidence-backed historical answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.","name":"History-TDB-Agent","skills":[{"description":"Answer history questions grounded in the TDB gateway at 10.124.48.91:8990 (domain \"history\"), combining wiki, ontology concepts, statements/provenance, and search text into an evidence-backed historical answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.","examples":[],"id":"tdb-history-qa","name":"tdb-history-qa","tags":[]}]},"dacType":"skill","dataPolicy":{"dataSourceType":"","semanticGroupID":"","sourceNameSelector":[]},"expertAgentMaxSteps":"30","model":{"expertLLM":"gpt-5.6-luna","plannerLLM":"gpt-5.6-luna"},"orchestratorAgentMaxLoops":"2","skillPolicy":{"skills":[{"name":"tdb-history-qa","namespace":"default","version":"1.0.0"}]}}}
+    creationTimestamp: "2026-08-28T16:07:10Z"
+    generation: 1
+    name: history-tdb-agent
+    namespace: default
+    resourceVersion: "112007638"
+    uid: 2a311d52-bdc4-4510-8751-f5c9210b9b49
+  spec:
+    agentCard:
+      description: Answer history questions grounded in the TDB gateway at 10.124.48.91:8990
+        (domain "history"), combining wiki, ontology concepts, statements/provenance,
+        and search text into an evidence-backed historical answer instead of a triple
+        dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.
+      name: History-TDB-Agent
+      skills:
+      - description: Answer history questions grounded in the TDB gateway at 10.124.48.91:8990
+          (domain "history"), combining wiki, ontology concepts, statements/provenance,
+          and search text into an evidence-backed historical answer instead of a triple
+          dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.
+        examples: []
+        id: tdb-history-qa
+        name: tdb-history-qa
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: tdb-history-qa
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-08-28T12:07:20-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-08-28T12:07:10-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-history-tdb-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      dac.io/reconcile-trigger: "1788279443"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"dac.dac.io/v1alpha1","kind":"DataAgentContainer","metadata":{"annotations":{},"name":"literature-humanities-tdb-agent","namespace":"default"},"spec":{"agentCard":{"description":"Answer literature and humanities questions grounded in the TDB gateway at 10.124.48.91:8995 (domain \"literature_humanities\"), combining wiki, ontology concepts, statements/provenance, and search text into an evidence-backed literary/humanities answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.","name":"Literature-humanities-TDB-Agent","skills":[{"description":"Answer literature and humanities questions grounded in the TDB gateway at 10.124.48.91:8995 (domain \"literature_humanities\"), combining wiki, ontology concepts, statements/provenance, and search text into an evidence-backed literary/humanities answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.","examples":[],"id":"tdb-literature-humanities-qa","name":"tdb-literature-humanities-qa","tags":[]}]},"dacType":"skill","dataPolicy":{"dataSourceType":"","semanticGroupID":"","sourceNameSelector":[]},"expertAgentMaxSteps":"30","model":{"expertLLM":"gpt-5.6-luna","plannerLLM":"gpt-5.6-luna"},"orchestratorAgentMaxLoops":"2","skillPolicy":{"skills":[{"name":"tdb-literature-humanities-qa","namespace":"default","version":"1.0.0"}]}}}
+    creationTimestamp: "2026-08-28T16:07:11Z"
+    generation: 1
+    name: literature-humanities-tdb-agent
+    namespace: default
+    resourceVersion: "112007668"
+    uid: 53bf9bc5-33e1-4353-946d-66b354cadb3b
+  spec:
+    agentCard:
+      description: Answer literature and humanities questions grounded in the TDB
+        gateway at 10.124.48.91:8995 (domain "literature_humanities"), combining wiki,
+        ontology concepts, statements/provenance, and search text into an evidence-backed
+        literary/humanities answer instead of a triple dump. Verified against the
+        live gateway and docs/tdb_agent_user_guide.md.
+      name: Literature-humanities-TDB-Agent
+      skills:
+      - description: Answer literature and humanities questions grounded in the TDB
+          gateway at 10.124.48.91:8995 (domain "literature_humanities"), combining
+          wiki, ontology concepts, statements/provenance, and search text into an
+          evidence-backed literary/humanities answer instead of a triple dump. Verified
+          against the live gateway and docs/tdb_agent_user_guide.md.
+        examples: []
+        id: tdb-literature-humanities-qa
+        name: tdb-literature-humanities-qa
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: tdb-literature-humanities-qa
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-08-29T05:23:20-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-08-28T12:07:11-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-literature-humanities-tdb-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"dac.dac.io/v1alpha1","kind":"DataAgentContainer","metadata":{"annotations":{},"name":"paper-answering-tdb-agent","namespace":"default"},"spec":{"agentCard":{"description":"Answer academic-paper questions grounded in the TDB gateway at 10.124.48.91:8996 (domain \"archeology\", streams archeology.academic_papers.*), using paper text, wiki, ontology concepts, statements and provenance for an evidence-backed answer with explicit retrieval scope. Not for museum collection records or general domain knowledge.","name":"Paper-Answering-TDB-Agent","skills":[{"description":"Answer academic-paper questions grounded in the TDB gateway at 10.124.48.91:8996 (domain \"archeology\", streams archeology.academic_papers.*), using paper text, wiki, ontology concepts, statements and provenance for an evidence-backed answer with explicit retrieval scope. Not for museum collection records or general domain knowledge.","examples":[],"id":"tdb-paper-answering","name":"tdb-paper-answering","tags":[]}]},"dacType":"skill","dataPolicy":{"dataSourceType":"","semanticGroupID":""},"expertAgentMaxSteps":"30","model":{"expertLLM":"gpt-5.6-luna","plannerLLM":"gpt-5.6-luna"},"orchestratorAgentMaxLoops":"2","skillPolicy":{"skills":[{"name":"tdb-paper-answering","namespace":"default","version":"1.0.0"}]}}}
+    creationTimestamp: "2026-09-02T21:45:57Z"
+    generation: 1
+    name: paper-answering-tdb-agent
+    namespace: default
+    resourceVersion: "112921988"
+    uid: 2cc4337b-748e-47ee-808f-e4a4da02dc81
+  spec:
+    agentCard:
+      description: Answer academic-paper questions grounded in the TDB gateway at
+        10.124.48.91:8996 (domain "archeology", streams archeology.academic_papers.*),
+        using paper text, wiki, ontology concepts, statements and provenance for an
+        evidence-backed answer with explicit retrieval scope. Not for museum collection
+        records or general domain knowledge.
+      name: Paper-Answering-TDB-Agent
+      skills:
+      - description: Answer academic-paper questions grounded in the TDB gateway at
+          10.124.48.91:8996 (domain "archeology", streams archeology.academic_papers.*),
+          using paper text, wiki, ontology concepts, statements and provenance for
+          an evidence-backed answer with explicit retrieval scope. Not for museum
+          collection records or general domain knowledge.
+        examples: []
+        id: tdb-paper-answering
+        name: tdb-paper-answering
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: tdb-paper-answering
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-09-02T17:46:08-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-09-02T17:45:57-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-paper-answering-tdb-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      dac.io/reconcile-trigger: "1788279444"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"dac.dac.io/v1alpha1","kind":"DataAgentContainer","metadata":{"annotations":{},"name":"philosophy-theory-tdb-agent","namespace":"default"},"spec":{"agentCard":{"description":"Answer philosophy and theory questions grounded in the TDB gateway at 10.124.48.91:8993 (domain \"philosophy_theory\"), combining wiki, ontology concepts, statements/provenance, and search text into an evidence-backed philosophical answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.","name":"Philosophy-theory-TDB-Agent","skills":[{"description":"Answer philosophy and theory questions grounded in the TDB gateway at 10.124.48.91:8993 (domain \"philosophy_theory\"), combining wiki, ontology concepts, statements/provenance, and search text into an evidence-backed philosophical answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.","examples":[],"id":"tdb-philosophy-theory-qa","name":"tdb-philosophy-theory-qa","tags":[]}]},"dacType":"skill","dataPolicy":{"dataSourceType":"","semanticGroupID":"","sourceNameSelector":[]},"expertAgentMaxSteps":"30","model":{"expertLLM":"gpt-5.6-luna","plannerLLM":"gpt-5.6-luna"},"orchestratorAgentMaxLoops":"2","skillPolicy":{"skills":[{"name":"tdb-philosophy-theory-qa","namespace":"default","version":"1.0.0"}]}}}
+    creationTimestamp: "2026-08-28T16:07:10Z"
+    generation: 1
+    name: philosophy-theory-tdb-agent
+    namespace: default
+    resourceVersion: "112007675"
+    uid: 5d8e191f-986e-4f3d-8d2c-da18c803ddd5
+  spec:
+    agentCard:
+      description: Answer philosophy and theory questions grounded in the TDB gateway
+        at 10.124.48.91:8993 (domain "philosophy_theory"), combining wiki, ontology
+        concepts, statements/provenance, and search text into an evidence-backed philosophical
+        answer instead of a triple dump. Verified against the live gateway and docs/tdb_agent_user_guide.md.
+      name: Philosophy-theory-TDB-Agent
+      skills:
+      - description: Answer philosophy and theory questions grounded in the TDB gateway
+          at 10.124.48.91:8993 (domain "philosophy_theory"), combining wiki, ontology
+          concepts, statements/provenance, and search text into an evidence-backed
+          philosophical answer instead of a triple dump. Verified against the live
+          gateway and docs/tdb_agent_user_guide.md.
+        examples: []
+        id: tdb-philosophy-theory-qa
+        name: tdb-philosophy-theory-qa
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: tdb-philosophy-theory-qa
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-08-28T12:07:20-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-08-28T12:07:10-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-philosophy-theory-tdb-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      dac.io/reconcile-trigger: "1788279444"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"dac.dac.io/v1alpha1","kind":"DataAgentContainer","metadata":{"annotations":{},"name":"wwybsj-build-tdb-agent","namespace":"default"},"spec":{"agentCard":{"description":"Use when adding a WWYBSJ artifact from registry JSON, building or rebuilding the local `wwybsj` cultural-relic TDB domain, auditing its layered ontology, aligning controlled terms to the remote archeology corpus, or verifying the generated wwybsj statements and wiki pages through gateway APIs.","name":"Wwybsj-Build-TDB-Agent","skills":[{"description":"Use when adding a WWYBSJ artifact from registry JSON, building or rebuilding the local `wwybsj` cultural-relic TDB domain, auditing its layered ontology, aligning controlled terms to the remote archeology corpus, or verifying the generated wwybsj statements and wiki pages through gateway APIs.","examples":[],"id":"tdb-wwybsj-build","name":"tdb-wwybsj-build","tags":[]}]},"dacType":"skill","dataPolicy":{"dataSourceType":"","semanticGroupID":"","sourceNameSelector":[]},"expertAgentMaxSteps":"30","model":{"expertLLM":"gpt-5.6-luna","plannerLLM":"gpt-5.6-luna"},"orchestratorAgentMaxLoops":"2","skillPolicy":{"skills":[{"name":"tdb-wwybsj-build","namespace":"default","version":"1.0.0"}]}}}
+    creationTimestamp: "2026-08-31T19:08:16Z"
+    generation: 1
+    name: wwybsj-build-tdb-agent
+    namespace: default
+    resourceVersion: "112007690"
+    uid: 1108e784-4a2d-474a-ab30-969fc632807a
+  spec:
+    agentCard:
+      description: Use when adding a WWYBSJ artifact from registry JSON, building
+        or rebuilding the local `wwybsj` cultural-relic TDB domain, auditing its layered
+        ontology, aligning controlled terms to the remote archeology corpus, or verifying
+        the generated wwybsj statements and wiki pages through gateway APIs.
+      name: Wwybsj-Build-TDB-Agent
+      skills:
+      - description: Use when adding a WWYBSJ artifact from registry JSON, building
+          or rebuilding the local `wwybsj` cultural-relic TDB domain, auditing its
+          layered ontology, aligning controlled terms to the remote archeology corpus,
+          or verifying the generated wwybsj statements and wiki pages through gateway
+          APIs.
+        examples: []
+        id: tdb-wwybsj-build
+        name: tdb-wwybsj-build
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: tdb-wwybsj-build
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-08-31T20:38:31-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-08-31T15:08:16-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-wwybsj-build-tdb-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+- apiVersion: dac.dac.io/v1alpha1
+  kind: DataAgentContainer
+  metadata:
+    annotations:
+      dac.io/reconcile-trigger: "1788279444"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"dac.dac.io/v1alpha1","kind":"DataAgentContainer","metadata":{"annotations":{},"name":"wwybsj-tdb-agent","namespace":"default"},"spec":{"agentCard":{"description":"Use when answering questions about the wwybsj museum collection with TDB, especially when combining local collection facts, wwybsj_business_terms field/term ontology, and remote TDB lab context. Use for item and collection research, normalization audits, cross-cultural comparison, lineage, typology, chronology, archaeological or museum interpretation, reports, and analytics. Always report evidence boundaries.","name":"Wwybsj-TDB-Agent","skills":[{"description":"Use when answering questions about the wwybsj museum collection with TDB, especially when combining local collection facts, wwybsj_business_terms field/term ontology, and remote TDB lab context. Use for item and collection research, normalization audits, cross-cultural comparison, lineage, typology, chronology, archaeological or museum interpretation, reports, and analytics. Always report evidence boundaries.","examples":[],"id":"tdb-wwybsj-answering","name":"tdb-wwybsj-answering","tags":[]}]},"dacType":"skill","dataPolicy":{"dataSourceType":"","semanticGroupID":"","sourceNameSelector":[]},"expertAgentMaxSteps":"30","model":{"expertLLM":"gpt-5.6-luna","plannerLLM":"gpt-5.6-luna"},"orchestratorAgentMaxLoops":"2","skillPolicy":{"skills":[{"name":"tdb-wwybsj-answering","namespace":"default","version":"1.0.0"}]}}}
+    creationTimestamp: "2026-08-28T16:07:12Z"
+    generation: 1
+    name: wwybsj-tdb-agent
+    namespace: default
+    resourceVersion: "112007718"
+    uid: 6e9e4eaa-57ff-4d81-816b-26cda155eb8f
+  spec:
+    agentCard:
+      description: Use when answering questions about the wwybsj museum collection
+        with TDB, especially when combining local collection facts, wwybsj_business_terms
+        field/term ontology, and remote TDB lab context. Use for item and collection
+        research, normalization audits, cross-cultural comparison, lineage, typology,
+        chronology, archaeological or museum interpretation, reports, and analytics.
+        Always report evidence boundaries.
+      name: Wwybsj-TDB-Agent
+      skills:
+      - description: Use when answering questions about the wwybsj museum collection
+          with TDB, especially when combining local collection facts, wwybsj_business_terms
+          field/term ontology, and remote TDB lab context. Use for item and collection
+          research, normalization audits, cross-cultural comparison, lineage, typology,
+          chronology, archaeological or museum interpretation, reports, and analytics.
+          Always report evidence boundaries.
+        examples: []
+        id: tdb-wwybsj-answering
+        name: tdb-wwybsj-answering
+        tags: []
+    dacType: skill
+    dataPolicy:
+      dataSourceType: ""
+      semanticGroupID: ""
+      sourceNameSelector: []
+    expertAgentMaxSteps: "30"
+    model:
+      expertLLM: gpt-5.6-luna
+      plannerLLM: gpt-5.6-luna
+    orchestratorAgentMaxLoops: "2"
+    skillPolicy:
+      skills:
+      - name: tdb-wwybsj-answering
+        namespace: default
+        version: 1.0.0
+  status:
+    conditions:
+    - lastUpdateTime: "2026-08-29T05:23:20-04:00"
+      message: Agent is healthy and ready
+      reason: Healthy
+      status: "True"
+      type: Available
+    - lastUpdateTime: "2026-08-28T12:07:12-04:00"
+      message: Initializing DataAgentContainer
+      reason: Creating
+      status: "True"
+      type: Creating
+    endpoint:
+      address: dac-wwybsj-tdb-agent.default.svc.cluster.local
+      port: 10100
+      protocol: sse
+kind: List
+metadata:
+  resourceVersion: ""
