@@ -2,7 +2,8 @@
   "mcpServers": {
     "playwright": {
       "command": "/opt/homebrew/bin/npx",
-      "args": ["-y", "@playwright/mcp@latest"]
+      "args": ["-y", "@playwright/mcp@latest"],
+      "timeout": 14400000
     }
   }
 }

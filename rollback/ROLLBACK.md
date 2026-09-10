@@ -1,0 +1,19 @@
+CURRENT DEPLOYED REVISION: 52
+
+To roll back:
+  helm rollback dac 52 -n dac
+
+Images before the merge deploy:
+biz-chart-agent             10.124.48.120/dac/chart-agent:13-amd64
+biz-orchestrator-registry   10.124.48.120/dac/agent-registry:12-amd64
+biz-routing-agent           10.124.48.120/dac/routing-agent:16-amd64
+biz-skill-agent             10.124.48.120/dac/skill-agent:19-amd64
+dac-apiserver               10.124.48.120/dac/dac-apiserver:16-amd64
+data-services               10.124.48.120/dac/data-services:12-amd64
+execution-engine            10.124.48.120/dac/execution-engine:17-amd64
+frontend                    10.124.48.120/dac/frontend:19-amd64
+orchestrator-registry       10.124.48.120/dac/agent-registry:12-amd64
+semantic-grouper-api        10.124.48.120/dac/semantic-grouper:12-amd64
+semantic-grouper-worker     10.124.48.120/dac/semantic-grouper:12-amd64
+skill-hub                   10.124.48.120/dac/skill-hub:12-amd64
+tdb                         10.124.48.120/dac/tdb-gateway:12-amd64

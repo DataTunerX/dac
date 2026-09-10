@@ -1,0 +1,129 @@
+USER-SUPPLIED VALUES:
+apiserver:
+  image:
+    repository: dac-apiserver
+    tag: 16-amd64
+bizChartAgent:
+  image:
+    repository: chart-agent
+    tag: 13-amd64
+bizOrchestratorRegistry:
+  image:
+    repository: agent-registry
+    tag: 12-amd64
+bizRoutingAgent:
+  image:
+    repository: routing-agent
+    tag: 16-amd64
+bizSkillAgent:
+  config:
+    skillSyncWatchAll: "false"
+  image:
+    repository: skill-agent
+    tag: 19-amd64
+dataServices:
+  image:
+    repository: data-services
+    tag: 12-amd64
+executionEngine:
+  agentImages:
+    codeAgent:
+      repository: code-agent
+      tag: 12-amd64
+    dacDataServices:
+      repository: dac-data-services
+      tag: 12-amd64
+    dataSinkerJob:
+      repository: data-sinkers-job
+      tag: 12-amd64
+    dataSinkerStatus:
+      repository: data-sinkers-status
+      tag: 12-amd64
+    dataSinkersObserver:
+      repository: data-sinkers-observer
+      tag: 12-amd64
+    docAgent:
+      repository: doc-agent
+      tag: 12-amd64
+    expertAgent:
+      repository: expert-agent
+      tag: 13-amd64
+    orchestratorAgent:
+      repository: orchestrator-agent
+      tag: 13-amd64
+    skillAgent:
+      repository: skill-agent
+      tag: 19-amd64
+  image:
+    repository: execution-engine
+    tag: 17-amd64
+  llmConfigs:
+  - apiKey: sk-youre-real-key-123
+    baseUrl: http://10.124.48.200:8001/v1
+    model: google/gemma-4-31B-it
+    name: llm-default
+    provider: openai_compatible
+frontend:
+  image:
+    repository: frontend
+    tag: 19-amd64
+global:
+  embedding:
+    apiKey: sk-youre-real-key-123
+    baseUrl: http://10.124.48.181:11434/v1
+    dims: "1024"
+    model: bge-m3
+    provider: openai_compatible
+  imagePullPolicy: Always
+  imageRegistry: 10.124.48.120/dac
+  langfuse:
+    baseUrl: http://your-langfuse-host:3000
+    enabled: false
+    publicKey: pk-lf-your-langfuse-public-key
+    secretKey: REDACTED_SET_AT_DEPLOY_TIME
+  llm:
+    apiKey: REDACTED_SET_AT_DEPLOY_TIME
+    baseUrl: https://api.openai.com/v1
+    model: gpt-5.6-luna
+    provider: openai_compatible
+mysql:
+  image:
+    registry: 10.124.48.120/dac
+    repository: mysql
+    tag: "8.0"
+  rootPassword: changeme
+neo4j:
+  image:
+    registry: 10.124.48.120/dac
+    repository: neo4j
+    tag: 5.18.0
+  password: changeme
+orchestratorRegistry:
+  image:
+    repository: agent-registry
+    tag: 12-amd64
+pgvector:
+  image:
+    registry: 10.124.48.120/dac
+    repository: pgvector
+    tag: pg16-amd64
+  password: changeme
+redis:
+  image:
+    registry: 10.124.48.120/dac
+    repository: redis
+    tag: 7.0.4
+  password: changeme
+semanticGrouper:
+  config:
+    llm:
+      model: google/gemma-4-31B-it
+  image:
+    repository: semantic-grouper
+    tag: 12-amd64
+skillHub:
+  image:
+    repository: skill-hub
+    tag: 12-amd64
+  persistence:
+    type: hostPath
