@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DAC 测试用例</title>
+<title>EIS 系统演示</title>
 <style>
   :root{
     --bg:#0f1115; --panel:#171a21; --panel2:#1d212a; --line:#2a2f3a;
@@ -42,7 +42,12 @@
   .step .meta{color:var(--muted);font-size:12.5px;margin-top:2px}
   .step .actions{margin-left:auto;display:flex;gap:8px;align-items:center;flex-shrink:0}
   .prompt{margin-top:10px;background:#12151b;border:1px solid var(--line);border-radius:8px;
-    padding:10px 12px;color:#cfd6e4;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
+    padding:10px 12px;color:#cfd6e4;font-size:12.5px;line-height:1.6;width:100%;min-height:88px;
+    resize:vertical;word-break:break-word;font-family:inherit;outline:none}
+  .prompt:focus{border-color:var(--brand);box-shadow:0 0 0 2px rgba(79,140,255,.16)}
+  .promptbar{margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .promptlabel{color:var(--muted);font-size:11.5px}
+  .restore{padding:3px 8px;font-size:11.5px;background:transparent}
   .expect{margin:10px 0 0;padding-left:18px;color:var(--muted);font-size:12.5px}
   .expect li{margin:2px 0}
   .tag{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
@@ -58,11 +63,11 @@
 <body>
 <header>
   <div>
-    <h1>DAC 测试用例</h1>
-    <div class="sub">点击「运行此用例」→ 问题会被自动输入到右侧真实 GUI 窗口执行。本页面不包含任何真实 GUI 组件。</div>
+    <h1>EIS 系统演示</h1>
+    <div class="sub">问题文字可直接编辑。点击「运行此用例」→ 当前文字会被自动输入到右侧真实 GUI 窗口执行。</div>
   </div>
   <div class="progress">
-    <span id="count">0/24</span>
+    <span id="count">0/21</span>
     <span class="bar"><i id="barfill"></i></span>
     <button class="ghost" id="reset">重置</button>
   </div>
@@ -73,10 +78,14 @@
 window.__DEMO_PENDING = null;      // Playwright polls this
 window.__DEMO_LAST_SENT = null;
 const KEY = "dac_demo_runner_state_v1";
+const DRAFT_KEY = "dac_demo_runner_drafts_v1";
 let state = {};
+let drafts = {};
 try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+try { drafts = JSON.parse(localStorage.getItem(DRAFT_KEY) || "{}") || {}; } catch (e) { drafts = {}; }
 
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+function saveDrafts(){ try{ localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts)); }catch(e){} }
 
 // Cache-bust: the case list is regenerated from demo-scenarios.ts between
 // runs, and a cached response silently shows a stale set of cases.
@@ -87,6 +96,7 @@ function render(scenarios){
   const root = document.getElementById("root");
   root.innerHTML = "";
   let total = 0;
+  const activeStepIds = new Set();
   scenarios.forEach(sc=>{
     const box = document.createElement("section");
     box.className = "scenario";
@@ -99,6 +109,7 @@ function render(scenarios){
       <div class="purpose">${sc.purpose}</div>`;
     sc.steps.forEach(st=>{
       total++;
+      activeStepIds.add(st.id);
       const el = document.createElement("div");
       el.className = "step";
       const kindTag = st.kind==="chat"?"自动查询":st.kind==="navigate"?"控制台操作":"环境阻塞";
@@ -118,14 +129,40 @@ function render(scenarios){
               : `<button class="runbtn" disabled>不可自动运行</button>`}
           </div>
         </div>
-        ${st.prompt?`<div class="prompt">${escapeHtml(st.prompt)}</div>`:""}
+        ${st.prompt?`<div class="promptbar">
+          <span class="promptlabel">问题（可编辑；运行时使用当前文字）</span>
+          <button class="restore" data-restore="${st.id}">恢复原问题</button>
+        </div>
+        <textarea class="prompt" data-prompt="${st.id}" aria-label="${escapeHtml(st.title)} 问题">${escapeHtml(drafts[st.id] ?? st.prompt)}</textarea>`:""}
         ${st.blockedReason?`<div class="blockedtxt">阻塞原因：${st.blockedReason}</div>`:""}
         ${st.expected&&st.expected.length?`<ul class="expect">${st.expected.map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul>`:""}
       `;
       const btn = el.querySelector("[data-run]");
+      const promptBox = el.querySelector(`[data-prompt="${st.id}"]`);
+      const restoreBtn = el.querySelector(`[data-restore="${st.id}"]`);
+      if(promptBox){
+        promptBox.addEventListener("input", ()=>{
+          drafts[st.id] = promptBox.value;
+          saveDrafts();
+        });
+      }
+      if(restoreBtn){
+        restoreBtn.addEventListener("click", ()=>{
+          promptBox.value = st.prompt;
+          delete drafts[st.id];
+          saveDrafts();
+          promptBox.focus();
+        });
+      }
       if(btn){
         btn.addEventListener("click", ()=>{
-          window.__DEMO_PENDING = { id: st.id, title: st.title, prompt: st.prompt };
+          const prompt = promptBox ? promptBox.value.trim() : "";
+          if(!prompt){
+            alert("问题不能为空。请输入问题后再运行此用例。");
+            if(promptBox) promptBox.focus();
+            return;
+          }
+          window.__DEMO_PENDING = { id: st.id, title: st.title, prompt };
           const badge = el.querySelector(`[data-state="${st.id}"]`);
           badge.textContent = "已发送到真实 GUI";
           badge.className = "state running";
@@ -137,10 +174,13 @@ function render(scenarios){
     });
     root.appendChild(box);
   });
+  Object.keys(state).forEach(id=>{ if(!activeStepIds.has(id)) delete state[id]; });
+  Object.keys(drafts).forEach(id=>{ if(!activeStepIds.has(id)) delete drafts[id]; });
+  save(); saveDrafts();
   window.__DEMO_TOTAL = total;
   updateCount(total);
   document.getElementById("reset").addEventListener("click", ()=>{
-    state = {}; save(); location.reload();
+    state = {}; drafts = {}; save(); saveDrafts(); location.reload();
   });
 }
 function updateCount(total){

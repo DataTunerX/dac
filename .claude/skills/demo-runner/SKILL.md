@@ -12,8 +12,10 @@ Two windows, strictly separated:
 | **Demo cases** (left) | `http://127.0.0.1:8777/index.html` | Standalone HTML. Lists all cases with prompt + acceptance criteria. **Contains no DAC GUI components.** |
 | **Real GUI** (right) | `http://10.124.48.126:32002/` | The actual DAC frontend. Playwright types prompts here. |
 
-The operator clicks **运行此用例** in the demo window. A blocking Playwright
-watcher picks that up and submits the prompt in the real GUI window. The
+The operator may edit a case's question directly in its text area, then clicks
+**运行此用例** in the demo window. A blocking Playwright watcher picks that up,
+clicks **开启新对话** in the real GUI, and submits the current text-area value.
+Every question must start this way, including the first question. The
 operator reads the answer in the real GUI themselves.
 
 ## Why it is built this way
@@ -90,9 +92,10 @@ Earlier attempts failed for reasons worth not rediscovering:
 
 ## Arm the bridge (serves clicks in a loop)
 
-This blocks and keeps serving every click for ~9 minutes, so the operator can
-run case after case without anyone re-arming between them. It returns when the
-budget expires with no further click — just run it again to continue.
+This blocks and keeps serving every click for up to 24 hours, including long
+idle periods, so the two demo windows remain open between questions. It returns
+only when the 24-hour budget expires, the browser is closed manually, or the
+runner is interrupted; run it again to continue after any of those events.
 
 Do **not** use a single-shot `waitForFunction`: only the operator's first click
 would reach the GUI and every later click would silently do nothing.
@@ -104,7 +107,7 @@ async (page) => {
   const gui  = ctx.pages().find(p => p.url().includes('32002'));
   if (!demo || !gui) return { error: 'missing window', urls: ctx.pages().map(p => p.url()) };
 
-  const BUDGET_MS = 9 * 60 * 1000;
+  const BUDGET_MS = 24 * 60 * 60 * 1000;
   const started = Date.now();
   const fired = [];
 
@@ -123,14 +126,27 @@ async (page) => {
     });
     if (!job || !job.prompt) continue;
 
-    await gui.bringToFront();
-    await gui.goto('http://10.124.48.126:32002/');   // fresh chat
+    const handoffStarted = Date.now();
+    const newChat = gui.getByRole('link', { name: '开启新对话' });
+    await newChat.waitFor({ timeout: 30000 });
+    await newChat.click();
+    await gui.waitForURL(url =>
+      url.pathname === '/' && !url.searchParams.has('run_id'),
+      { timeout: 30000 }
+    );
     const box = gui.getByRole('textbox', { name: '给 DAC 发送消息' });
     await box.waitFor({ timeout: 30000 });
     await box.fill(job.prompt);
+    // Submit first so the request is immediate, then activate the GUI to force
+    // its background React view to repaint without a manual navigation click.
     await box.press('Enter');
-    await gui.waitForTimeout(1200);
-    fired.push({ id: job.id, title: job.title, url: gui.url() });
+    await gui.bringToFront();
+    fired.push({
+      id: job.id,
+      title: job.title,
+      url: gui.url(),
+      handoffMs: Date.now() - handoffStarted,
+    });
   }
   return { servedFor: `${Math.round((Date.now()-started)/1000)}s`, count: fired.length, fired };
 }
@@ -139,16 +155,21 @@ async (page) => {
 Report each case that fired and its `run_id`. The operator reads the answers in
 the real GUI window themselves — don't poll logs and narrate.
 
-Re-run the block when it returns (or when the operator says **next**) to keep
-serving.
+Re-run the block only when it returns or the operator asks to reopen the demo.
+Do not stop an active bridge merely because it has been idle; its browser
+context owns both demo windows, and stopping it closes them.
 
 ## Rules
 
 - **Let an answer finish before the next click, and never navigate or reload the
-  real GUI while one is streaming.** Each submission navigates the GUI to a
-  fresh chat, so firing early abandons the running answer — an interrupted run
+  real GUI while one is streaming.** Each submission clicks **开启新对话**, so
+  firing early abandons the running answer — an interrupted run
   is lost entirely and never reaches history.
-- Paste prompts **verbatim** from the case data; never paraphrase or fix typos.
+- Always create the fresh conversation by clicking the deployed GUI's
+  **开启新对话** link. Do not substitute `gui.goto(...)` for this interaction.
+- The text area starts with the prompt verbatim from the case data. If the
+  operator edits it, submit the edited value exactly; never normalize, paraphrase,
+  or silently restore it.
 - Blocked cases render a disabled button and cannot be fired.
 - Case 3 (`场景 3`, wwybsj-build) permanently inserts its registration number.
   Before rehearsing it, check the number is still free — 466-468, 470-471, 472,
@@ -177,9 +198,11 @@ match the step count `build-scenarios.mjs` printed.
 
 ## Files
 
-- `assets/index.html` — the standalone demo page. Click handler sets
-  `window.__DEMO_PENDING = {id, title, prompt}`; progress persists in
-  `localStorage` under `dac_demo_runner_state_v1`. The 重置 button clears it.
+- `assets/index.html` — the standalone demo page. Each chat case has an editable
+  text area and a 恢复原问题 button. The click handler sets
+  `window.__DEMO_PENDING = {id, title, prompt}` from the current text-area value;
+  progress persists under `dac_demo_runner_state_v1` and edited drafts under
+  `dac_demo_runner_drafts_v1`. The 重置 button clears both.
   Note the localStorage progress counter is keyed by step id, so removing a
   case can leave the counter reading e.g. `4/23` from earlier runs — 重置
   clears it.
