@@ -18,6 +18,7 @@ import {
   X,
   Menu,
   Loader2,
+  ListChecks,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -51,6 +52,7 @@ type SidebarGroupItem = {
 }
 
 const sidebarNav: Array<SidebarLinkItem | SidebarGroupItem> = [
+  { type: "link", icon: ListChecks, label: "测试演示", href: "/demo" },
   { type: "link", icon: Bot, label: "智能体", href: "/agents", requiredPermission: "agent:read" },
   {
     type: "group",
