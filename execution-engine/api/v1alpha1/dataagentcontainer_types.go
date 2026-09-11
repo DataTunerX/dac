@@ -86,6 +86,10 @@ type DataAgentContainerSpec struct {
 	OrchestratorAgentMaxLoops string      `json:"orchestratorAgentMaxLoops"`
 	SkillAgentMaxLoops        string      `json:"skillAgentMaxLoops"`
 	ExpertAgentMaxSteps       string      `json:"expertAgentMaxSteps"`
+	// CrossSGMaxHop is the maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP).
+	// Must be an integer >= 1 when set. "1" is single-agent mode; >= 2 is
+	// multi-agent. Empty falls back to dac-configuration then "5" at generate time.
+	CrossSGMaxHop string `json:"crossSGMaxHop,omitempty"`
 }
 
 // ActiveDataDescriptor tracks which data descriptors are being used

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Test ToolResult pipeline and LLM autonomous error handling.
 
-This test suite validates the Pi Agent Loop-inspired architecture changes:
+This test suite validates the ToolResult architecture:
 
 1. Unit tests: ToolResult model, prepare/execute/finalize phases
 2. Integration tests: SkillRunner with mock LLM

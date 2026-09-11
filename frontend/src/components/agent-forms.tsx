@@ -72,6 +72,8 @@ const formSchema = z
     expertAgentMaxSteps: z.string().optional(),
     orchestratorAgentMaxLoops: z.string().optional(),
     skillAgentMaxLoops: z.string().optional(),
+    agentMode: z.enum(["single", "multi"]).optional(),
+    crossSGMaxHop: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     // skill 类型不绑定 DD/SG，无需 dataSourceId
@@ -89,6 +91,22 @@ const formSchema = z
           message: "请选择模型",
           path: ["expertModel"],
         })
+      }
+      if (data.agentMode !== "single") {
+        const hopRaw = (data.crossSGMaxHop || "5").trim()
+        if (!/^[1-9]\d*$/.test(hopRaw)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "跨智能体最大跳数必须为大于等于 1 的整数",
+            path: ["crossSGMaxHop"],
+          })
+        } else if (Number(hopRaw) < 2) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "多智能体模式下跨智能体最大跳数必须大于等于 2",
+            path: ["crossSGMaxHop"],
+          })
+        }
       }
     } else {
       if (!(data.plannerModel || "").trim()) {
@@ -115,6 +133,7 @@ export type CreateAgentPayload = FormValues & {
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
   skillAgentMaxLoops?: string
+  crossSGMaxHop?: string
   /** skill DAC 必填；Semantic Group 可选（驱动 LocalSkill 下载） */
   skillPolicy?: SkillPolicy
 }
@@ -249,6 +268,8 @@ export function CreateAgentDialog({
       expertAgentMaxSteps: "2",
       orchestratorAgentMaxLoops: "0",
       skillAgentMaxLoops: "2",
+      agentMode: "multi",
+      crossSGMaxHop: "5",
     },
   })
   const resetAll = () => {
@@ -285,6 +306,8 @@ export function CreateAgentDialog({
       expertAgentMaxSteps: "2",
       orchestratorAgentMaxLoops: "0",
       skillAgentMaxLoops: "2",
+      agentMode: "multi",
+      crossSGMaxHop: "5",
     })
   }
 
@@ -300,6 +323,7 @@ export function CreateAgentDialog({
   const name = useWatch({ control: form.control, name: "name" })
   const description = useWatch({ control: form.control, name: "description" })
   const dataSourceId = useWatch({ control: form.control, name: "dataSourceId" })
+  const agentMode = useWatch({ control: form.control, name: "agentMode" })
 
   // State for user interaction tracking (to avoid overwriting user input)
   const [nameTouched, setNameTouched] = useState(false)
@@ -319,9 +343,15 @@ export function CreateAgentDialog({
   /** availableVersions keyed by `${namespace}/${name}` for version picker */
   const [skillVersionsByKey, setSkillVersionsByKey] = useState<Record<string, string[]>>({})
 
+  const lastSkillInit = useRef(false)
+
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      lastSkillInit.current = false
+      return
+    }
     if (dataSourceType === "descriptor") {
+      lastSkillInit.current = false
       form.setValue("orchestratorAgentMaxLoops", "0", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "2", { shouldDirty: false, shouldTouch: false })
     } else if (dataSourceType === "skill") {
@@ -329,7 +359,14 @@ export function CreateAgentDialog({
       form.setValue("orchestratorAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "10", { shouldDirty: false, shouldTouch: false })
       form.setValue("skillAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
+      // Only seed hop/mode when entering skill, otherwise a re-run would wipe user input (e.g. 3 → 5).
+      if (!lastSkillInit.current) {
+        form.setValue("agentMode", "multi", { shouldDirty: false, shouldTouch: false })
+        form.setValue("crossSGMaxHop", "5", { shouldDirty: false, shouldTouch: false })
+        lastSkillInit.current = true
+      }
     } else {
+      lastSkillInit.current = false
       form.setValue("orchestratorAgentMaxLoops", "1", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
     }
@@ -867,6 +904,7 @@ export function CreateAgentDialog({
           expertAgentMaxSteps: values.expertAgentMaxSteps || "10",
           orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "2",
           skillAgentMaxLoops: values.skillAgentMaxLoops || "2",
+          crossSGMaxHop: values.agentMode === "single" ? "1" : values.crossSGMaxHop || "5",
         })
         handleOpenChange(false)
         return
@@ -1228,6 +1266,65 @@ export function CreateAgentDialog({
                         </FormItem>
                       )}
                     />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <FormField
+                        control={form.control}
+                        name="agentMode"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>智能体模式</FormLabel>
+                            <Select
+                              onValueChange={(val) => {
+                                field.onChange(val)
+                                if (val === "single") {
+                                  form.setValue("crossSGMaxHop", "1", { shouldValidate: true })
+                                } else {
+                                  const current = Number((form.getValues("crossSGMaxHop") || "").trim())
+                                  if (!Number.isInteger(current) || current < 2) {
+                                    form.setValue("crossSGMaxHop", "5", { shouldValidate: true })
+                                  }
+                                }
+                              }}
+                              value={field.value || "multi"}
+                            >
+                              <FormControl>
+                                <SelectTrigger className="w-full" disabled={isSubmitting}>
+                                  <SelectValue placeholder="选择模式" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
+                                <SelectItem value="single">单智能体</SelectItem>
+                                <SelectItem value="multi">多智能体</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormDescription>
+                              单智能体不跨语义组委托（跳数为 1）；多智能体须设置大于等于 2 的跳数。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      {agentMode !== "single" ? (
+                        <FormField
+                          control={form.control}
+                          name="crossSGMaxHop"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>跨智能体最大跳数</FormLabel>
+                              <FormControl>
+                                <Input
+                                  placeholder="须 ≥ 2，默认 5"
+                                  {...field}
+                                  disabled={isSubmitting}
+                                />
+                              </FormControl>
+                              <FormDescription>须大于等于 2，默认 5。</FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      ) : null}
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <FormField
                         control={form.control}

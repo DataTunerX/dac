@@ -84,17 +84,17 @@ def _run(executor):
     return json.loads(parts[0].text)
 
 
-def test_disabled_uses_legacy_only(monkeypatch):
+def test_disabled_uses_chain_scoring_only(monkeypatch):
     monkeypatch.setenv("SG_MEMBER_CAPABILITY_CHECK_ENABLED", "false")
     executor = _executor(monkeypatch)
     legacy = _response(reason="legacy")
-    executor._legacy_capability_check = AsyncMock(return_value=legacy)
+    executor._chain_scoring_capability_check = AsyncMock(return_value=legacy)
     executor._delegated_member_capability_check = AsyncMock()
 
     result = _run(executor)
 
     assert result["reason"] == "legacy"
-    executor._legacy_capability_check.assert_awaited_once()
+    executor._chain_scoring_capability_check.assert_awaited_once()
     executor._delegated_member_capability_check.assert_not_awaited()
 
 
@@ -102,7 +102,7 @@ def test_default_uses_delegated_member_capability(monkeypatch):
     monkeypatch.delenv("SG_MEMBER_CAPABILITY_CHECK_ENABLED", raising=False)
     monkeypatch.delenv("SG_MEMBER_CAPABILITY_CHECK_SHADOW", raising=False)
     executor = _executor(monkeypatch)
-    executor._legacy_capability_check = AsyncMock()
+    executor._chain_scoring_capability_check = AsyncMock()
     executor._delegated_member_capability_check = AsyncMock(
         return_value=_response(reason="default delegated")
     )
@@ -111,7 +111,7 @@ def test_default_uses_delegated_member_capability(monkeypatch):
 
     assert result["reason"] == "default delegated"
     executor._delegated_member_capability_check.assert_awaited_once()
-    executor._legacy_capability_check.assert_not_awaited()
+    executor._chain_scoring_capability_check.assert_not_awaited()
 
 
 def test_delegated_check_parses_sidecar_artifact_in_executor(monkeypatch):
@@ -177,7 +177,7 @@ def test_enabled_returns_delegated_fields(monkeypatch):
         member_results=[{"agent_name": "member-a", "can_handle": True}],
         missing_requirements=["optional context"],
     )
-    executor._legacy_capability_check = AsyncMock()
+    executor._chain_scoring_capability_check = AsyncMock()
     executor._delegated_member_capability_check = AsyncMock(return_value=delegated)
 
     result = _run(executor)
@@ -186,47 +186,47 @@ def test_enabled_returns_delegated_fields(monkeypatch):
     assert result["collaboration_agents"] == ["member-a", "member-b"]
     assert result["member_results"][0]["agent_name"] == "member-a"
     assert result["missing_requirements"] == ["optional context"]
-    executor._legacy_capability_check.assert_not_awaited()
+    executor._chain_scoring_capability_check.assert_not_awaited()
 
 
-def test_sidecar_failure_falls_back_to_legacy(monkeypatch):
+def test_sidecar_failure_falls_back_to_chain(monkeypatch):
     monkeypatch.setenv("SG_MEMBER_CAPABILITY_CHECK_ENABLED", "1")
     executor = _executor(monkeypatch)
     executor._delegated_member_capability_check = AsyncMock(
         side_effect=ConnectionError("sidecar unavailable")
     )
-    executor._legacy_capability_check = AsyncMock(
-        return_value=_response(reason="legacy fallback")
+    executor._chain_scoring_capability_check = AsyncMock(
+        return_value=_response(reason="chain fallback")
     )
 
     result = _run(executor)
 
-    assert result["reason"] == "legacy fallback"
-    executor._legacy_capability_check.assert_awaited_once()
+    assert result["reason"] == "chain fallback"
+    executor._chain_scoring_capability_check.assert_awaited_once()
 
 
-def test_degraded_delegated_result_falls_back_to_legacy(monkeypatch):
+def test_degraded_delegated_result_falls_back_to_chain(monkeypatch):
     monkeypatch.setenv("SG_MEMBER_CAPABILITY_CHECK_ENABLED", "yes")
     executor = _executor(monkeypatch)
     executor._delegated_member_capability_check = AsyncMock(
         return_value=_response(degraded=True, unavailable_count=2)
     )
-    executor._legacy_capability_check = AsyncMock(
-        return_value=_response(reason="legacy degraded fallback")
+    executor._chain_scoring_capability_check = AsyncMock(
+        return_value=_response(reason="chain degraded fallback")
     )
 
     result = _run(executor)
 
-    assert result["reason"] == "legacy degraded fallback"
-    executor._legacy_capability_check.assert_awaited_once()
+    assert result["reason"] == "chain degraded fallback"
+    executor._chain_scoring_capability_check.assert_awaited_once()
 
 
-def test_shadow_executes_both_and_returns_legacy(monkeypatch):
+def test_shadow_executes_both_and_returns_chain(monkeypatch):
     monkeypatch.setenv("SG_MEMBER_CAPABILITY_CHECK_ENABLED", "true")
     monkeypatch.setenv("SG_MEMBER_CAPABILITY_CHECK_SHADOW", "true")
     executor = _executor(monkeypatch)
-    executor._legacy_capability_check = AsyncMock(
-        return_value=_response(can_handle=False, reason="legacy")
+    executor._chain_scoring_capability_check = AsyncMock(
+        return_value=_response(can_handle=False, reason="chain")
     )
     executor._delegated_member_capability_check = AsyncMock(
         return_value=_response(can_handle=True, reason="delegated")
@@ -235,8 +235,8 @@ def test_shadow_executes_both_and_returns_legacy(monkeypatch):
     result = _run(executor)
 
     assert result["can_handle"] is False
-    assert result["reason"] == "legacy"
-    executor._legacy_capability_check.assert_awaited_once()
+    assert result["reason"] == "chain"
+    executor._chain_scoring_capability_check.assert_awaited_once()
     executor._delegated_member_capability_check.assert_awaited_once()
 
 
@@ -250,7 +250,7 @@ def test_capability_result_issues_request_scoped_execution_hint(monkeypatch):
             reason="member covers stores",
         )
     )
-    executor._legacy_capability_check = AsyncMock()
+    executor._chain_scoring_capability_check = AsyncMock()
 
     result = _run(executor)
 

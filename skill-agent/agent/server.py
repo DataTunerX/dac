@@ -123,9 +123,17 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         # Compose agent_card.description / skills from the loaded skill
         # inventory. When the runner could not load anything, fall back to the
         # description in agent_card.json so the card is never empty.
+
+        # agent_desc_from_env = 用户在页面上定义的对智能体的描述（Agent_Description）
+        agent_desc_from_env = (os.getenv("Agent_Description", "") or "").strip()
+
         dynamic_description, dynamic_skills = skill_executor.build_dynamic_agent_card_fields()
         if dynamic_skills:
-            agent_card.description = dynamic_description
+            # 将 Agent_Description 前置到 skill 列表描述之前
+            if agent_desc_from_env:
+                agent_card.description = agent_desc_from_env + "\n" + dynamic_description
+            else:
+                agent_card.description = dynamic_description
             agent_card.skills = dynamic_skills
             logger.info(
                 "[LocalSkill][Card] agent_card refreshed from loaded inventory: "
@@ -133,8 +141,12 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
                 len(dynamic_skills), len(dynamic_description),
             )
         else:
-            fallback_desc = data.get("description") or dynamic_description
-            agent_card.description = fallback_desc
+            # 无 skill 加载时：优先用 Agent_Description env，否则用 agent_card.json 的静态值
+            if agent_desc_from_env:
+                agent_card.description = agent_desc_from_env
+            else:
+                fallback_desc = data.get("description") or dynamic_description
+                agent_card.description = fallback_desc
             raw_skills = data.get("skills") or []
             agent_card.skills = [AgentSkill(**s) for s in raw_skills]
             logger.warning(

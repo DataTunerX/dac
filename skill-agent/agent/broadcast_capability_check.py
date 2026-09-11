@@ -65,7 +65,7 @@ def default_get_response_text(chunk: Any) -> str:
 
 
 class CapabilityCheckResponse(BaseModel):
-    can_handle: bool = False
+    can_handle: bool
     confidence: float = 0.0
     reason: str = ""
     agent_name: str = ""
@@ -84,6 +84,15 @@ class CapabilityCheckResponse(BaseModel):
     missing_requirements: list[str] = Field(default_factory=list)
     execution_hint: dict = Field(default_factory=dict)
     latency_ms: int = 0
+    # Capability-chain scoring details (optional; see agent/capability_chain.py).
+    # Empty ``score_version`` means the legacy single-score judgement.
+    score_version: str = ""
+    evidence_grade: str = ""
+    threshold: float = 0.0
+    handle_score: float = 0.0
+    steps: list[dict] = Field(default_factory=list)
+    contributing_steps: list[int] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
 
 
 def _is_non_actionable_contribution_text(text: str) -> bool:
@@ -139,6 +148,11 @@ def _is_skill_mismatch_contributor(response: "CapabilityCheckResponse") -> bool:
 
 def normalize_capability_check_response(response: CapabilityCheckResponse) -> CapabilityCheckResponse:
     if response.can_handle or not response.can_contribute:
+        return response
+    if response.score_version:
+        # Chain-scored responses already gate can_contribute on a complete
+        # three-part contribution statement (input / output / use); the regex
+        # heuristics below are only for legacy single-score judgements.
         return response
     blob = f"{response.contribution or ''} {response.reason or ''}"
     if _is_non_actionable_contribution_text(response.contribution) or _is_non_actionable_contribution_text(blob):
@@ -332,6 +346,15 @@ async def send_capability_check(
                 missing_requirements=response_data.get("missing_requirements") or [],
                 execution_hint=hint,
                 latency_ms=int(response_data.get("latency_ms", 0) or 0),
+                score_version=str(response_data.get("score_version") or ""),
+                evidence_grade=str(response_data.get("evidence_grade") or ""),
+                threshold=float(response_data.get("threshold", 0.0) or 0.0),
+                handle_score=float(response_data.get("handle_score", 0.0) or 0.0),
+                steps=[s for s in (response_data.get("steps") or []) if isinstance(s, dict)],
+                contributing_steps=[
+                    int(x) for x in (response_data.get("contributing_steps") or []) if str(x).lstrip("-").isdigit()
+                ],
+                risks=[str(r) for r in (response_data.get("risks") or [])],
             )
     except json.JSONDecodeError as e:
         logger.error(
@@ -636,13 +659,12 @@ async def probe_agents_capability_concurrent(
             resp = normalize_capability_check_response(resp)
             logger.info(
                 "[CapabilityProbe] result | agent=%s can_handle=%s can_contribute=%s "
-                "confidence=%.2f degraded=%s query=%s reason=%s",
+                "confidence=%.2f degraded=%s reason=%s",
                 getattr(card, "name", "") or resp.agent_name,
                 resp.can_handle,
                 resp.can_contribute,
                 float(resp.confidence or 0.0),
                 resp.degraded,
-                (query or "")[:120],
                 (resp.reason or "")[:160],
             )
             return card, resp

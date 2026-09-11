@@ -665,6 +665,7 @@ class CodeExecution(object):
         max_retries: int = 5,
         no_progress_abort: Optional[bool] = None,
         stagnation_llm_judge: Optional[bool] = None,
+        agent_name: str = "",
     ):
         self.llm = llm
 
@@ -707,6 +708,8 @@ class CodeExecution(object):
             else os.getenv("CODE_EXEC_STAGNATION_LLM_JUDGE", "true").strip().lower()
             not in ("false", "0", "no")
         )
+
+        self._agent_name = agent_name.strip()
 
         # 提前在父进程探测可用库，拼成 prompt 提示；子进程会再各自 import。
         self._available_libs: List[str] = _available_libs_names()
@@ -766,7 +769,7 @@ class CodeExecution(object):
 
         answer = None
         with langfuse.start_as_current_span(
-            name="code_execution-generate_code",
+            name=f"code_execution-generate_code [{self._agent_name}]" if self._agent_name else "code_execution-generate_code",
             trace_context={"trace_id": trace_id},
         ) as span:
             span.update_trace(
@@ -778,6 +781,8 @@ class CodeExecution(object):
                     "last_error": last_error,
                 },
             )
+            if self._agent_name:
+                span.update(metadata={"agent_name": self._agent_name})
 
             log_size_trace(
                 "code_gen-input",

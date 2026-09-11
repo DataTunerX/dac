@@ -5,6 +5,12 @@ cross-domain queries where multiple agents could be involved. Tests whether the
 domain-first logic correctly identifies the primary domain owner even when the
 query spans multiple domains.
 
+Note: the case expectations below were written against the legacy domain-first
+prompt. The judge now uses the capability-chain rubric (agent/capability_chain.py,
+CAPABILITY_EVALUATION_SCORING_DESIGN.md); cases whose expectation relied on
+"primary domain match => can_handle regardless of completeness" may need to be
+revisited. See tests/test_capability_chain_live.py for rubric-based cases.
+
 Requires:
   DASHSCOPE_API_KEY  (Aliyun DashScope API key)
   DASHSCOPE_MODEL    (optional, default deepseek-v4-flash-0731)
@@ -28,6 +34,7 @@ from langchain_core.tools import StructuredTool
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from agent import capability_chain
 from agent import skill_agent as sa
 from agent.tool_call_utils import invoke_llm_with_tool
 from model_sdk.api.model_manager import ModelManager
@@ -615,11 +622,22 @@ async def _judge(case: CrossDomainCase) -> dict[str, Any]:
 
 
 def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
-    can_handle, can_contribute = sa._normalize_capability_result(raw)
-    result = dict(raw)
-    result["can_handle"] = can_handle
-    result["can_contribute"] = can_contribute
-    return result
+    """Aggregate the chain-scored LLM output exactly as production does."""
+    chain = capability_chain.parse_chain_result(raw)
+    agg = capability_chain.aggregate(chain)
+    can_handle, can_contribute = sa._normalize_capability_result(
+        {"can_handle": agg.can_handle, "can_contribute": agg.can_contribute}
+    )
+    return {
+        "can_handle": can_handle,
+        "can_contribute": can_contribute,
+        "confidence": agg.confidence,
+        "handle_score": agg.handle_score,
+        "step_scores": agg.step_scores,
+        "contributing_steps": agg.contributing_steps,
+        "evidence_grade": chain.evidence_grade,
+        "reason": chain.reason,
+    }
 
 
 @pytest.mark.asyncio

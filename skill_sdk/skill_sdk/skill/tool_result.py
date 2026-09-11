@@ -1,5 +1,5 @@
 """
-Unified tool result model — inspired by Pi Agent Loop's ToolResultMessage.
+Unified tool result model.
 
 Every tool execution produces a ToolResult with identical structure,
 regardless of success, failure, or policy block. The ``is_error`` flag
@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 class ToolResult(BaseModel):
     """Unified tool execution result.
 
-    Mirrors Pi Agent Loop's ToolResultMessage structure:
+    Fields:
       - ``content``: the human-readable result (text, JSON, or structured data)
       - ``is_error``: whether the execution encountered an error (informational)
       - ``details``: optional structured metadata (usage, file lists, etc.)
@@ -41,11 +41,11 @@ class ToolResult(BaseModel):
     )
     content: str = Field(
         default="",
-        description="Human-readable result content (Pi: content[{type:text, text:...}])",
+        description="Human-readable result content",
     )
     details: dict[str, Any] = Field(
         default_factory=dict,
-        description="Structured metadata (Pi: details field). May contain returncode, stdout, stderr, etc.",
+        description="Structured metadata. May contain returncode, stdout, stderr, etc.",
     )
 
     def to_tool_message_content(self) -> str:

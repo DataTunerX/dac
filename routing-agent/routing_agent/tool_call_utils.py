@@ -72,6 +72,7 @@ async def invoke_llm_with_tool(
     tool_choice: Optional[str] = None,
     span_name: str = "routing-tool-call",
     span_input: Optional[dict] = None,
+    agent_name: str = "RoutingAgent",
 ) -> Optional[dict]:
     """使用 tool call 机制调用 LLM 并提取结构化输出。
 
@@ -120,8 +121,9 @@ async def invoke_llm_with_tool(
     run_id = _md.get("run_id", "")
 
     _t0 = _time.monotonic()
+    _span_name = f"{span_name} [{agent_name}]" if agent_name else span_name
     with _langfuse_client.start_as_current_span(
-        name=span_name,
+        name=_span_name,
         trace_context={"trace_id": trace_id} if trace_id else {},
     ) as span:
         span.update_trace(

@@ -143,6 +143,7 @@ export type AgentContainerResponse = {
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
   skillAgentMaxLoops?: string
+  crossSGMaxHop?: string
   activeDataDescriptors?: ActiveDataDescriptorResponse[]
   endpoint?: EndpointResponse
   conditions?: ConditionResponse[]
@@ -162,6 +163,7 @@ export type CreateAgentContainerRequest = {
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
   skillAgentMaxLoops?: string
+  crossSGMaxHop?: string
 }
 
 /** PATCH/PUT agent update body (aligned with UpdateAgentContainerRequest). */
@@ -175,6 +177,7 @@ export type UpdateAgentContainerRequest = {
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
   skillAgentMaxLoops?: string
+  crossSGMaxHop?: string
 }
 
 /** GET /namespaces/:ns/agents or GET /agents list payload (after unwrap) */

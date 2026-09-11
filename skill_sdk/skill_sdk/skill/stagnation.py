@@ -1,8 +1,8 @@
 """
 Stagnation detector — detects when the LLM is stuck in a failure loop.
 
-Analysis of Pi Agent Loop revealed zero stagnation detection. The LLM can keep
-issuing the same failing tool calls forever until max_steps exhausts.
+Without this, the LLM can keep issuing the same failing tool calls
+forever until max_steps exhausts.
 
 This module provides:
   - StagnationDetector: tracks consecutive failures, same-cmd repeats,
