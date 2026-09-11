@@ -13,7 +13,7 @@ describe("guided demo manifest", () => {
       "scenario-6",
       "scenario-7",
     ])
-    expect(DEMO_STEPS).toHaveLength(21)
+    expect(DEMO_STEPS).toHaveLength(23)
   })
 
   it("uses unique scenario and step ids", () => {
@@ -33,12 +33,26 @@ describe("guided demo manifest", () => {
     }
   })
 
-  it("keeps blocked data domains non-executable", () => {
-    for (const scenarioId of ["scenario-5", "scenario-6", "scenario-7"]) {
-      const scenario = DEMO_SCENARIOS.find((item) => item.id === scenarioId)
-      expect(scenario?.status).toBe("blocked")
-      expect(scenario?.steps.every((step) => step.kind === "blocked")).toBe(true)
-    }
+  it("makes the circuit question executable", () => {
+    const scenario = DEMO_SCENARIOS.find((item) => item.id === "scenario-7")
+    expect(scenario?.status).toBe("ready")
+    expect(scenario?.steps).toHaveLength(1)
+    expect(scenario?.steps[0].kind).toBe("chat")
+    expect(scenario?.steps[0].prompt).toBe("电路图2号里面的最大芯片是什么？")
+  })
+
+  it("makes the two storage questions executable", () => {
+    const scenario = DEMO_SCENARIOS.find((item) => item.id === "scenario-5")
+    expect(scenario?.status).toBe("ready")
+    expect(scenario?.steps).toHaveLength(2)
+    expect(scenario?.steps.every((step) => step.kind === "chat")).toBe(true)
+  })
+
+  it("makes the three architecture questions executable", () => {
+    const scenario = DEMO_SCENARIOS.find((item) => item.id === "scenario-6")
+    expect(scenario?.status).toBe("ready")
+    expect(scenario?.steps).toHaveLength(3)
+    expect(scenario?.steps.every((step) => step.kind === "chat")).toBe(true)
   })
 
   it("resolves step and scenario lookups", () => {
