@@ -33,6 +33,48 @@ const ceramicsPrompt =
 const newArtifactPrompt =
   '给wwybsj展品录入新展品，信息如下：{ "ww_bh_leixing": "藏品总登记号", "ww_bianhao": "472", "ww_mingchen": "唐鎏金舞马衔杯纹银壶", "ww_yuanming": "舞马衔杯银壶", "ww_niandai_a": "中国历史学年代", "ww_niandai_b": "唐(618~907)", "ww_niandai_c": "盛唐", "ww_niandai_jt": "约公元8世纪", "ww_leibie": "金银器", "ww_zhidi_a": "复合质地", "ww_zhidi_b": "无机质", "ww_zhidi_c": "银、金", "ww_shuliang": 1, "ww_gao": "14.80", "ww_chicun": "高14.8厘米 口径2.3厘米", "ww_zhiliang_jt": "0.549", "ww_zhiliang_dw": "kg", "ww_jibie": "一级", "ww_laiyuan": "1970年陕西省西安市何家村唐代窖藏出土", "ww_wancan_cd": "完整", "ww_wancan_zk": "壶身鎏金舞马纹清晰，提梁与壶盖以银链相连", "ww_baocun_zt": "状态稳定，不需修复", "ww_mingchen_en": "Tang Gilt Silver Flask with Dancing Horse Motif", "ww_ctime": "2026-09-02 10:00:00" }'
 
+const unifiedNasPrompt = `项目采用名称“某大型制造/科研集团｜企业级统一 NAS 平台建设”，评估 Huawei 与 NetApp，输出 DOCX。
+
+客户是一家大型制造/科研集团，现有多个数据中心，需要建设一套企业级统一 NAS 平台，承载研发、办公文件、虚拟化、容器、AI、数据分析和备份等业务。现有环境包含 Dell/HP 服务器、VMware、Red Hat、Windows、Kubernetes 以及部分 AWS/Azure 公有云资源。
+
+初始有效数据约 3 PB，预计三年增长到 8–10 PB。要求系统能够横向扩展，并尽量避免扩容过程中进行大规模数据迁移。
+
+协议、身份与多租户要求：NFS v3 / NFS v4.1、SMB 2.x / SMB 3.x、NFS 和 SMB 同一文件系统访问、POSIX ACL、Windows ACL、Kerberos、LDAP、Microsoft Active Directory、DNS / NTP、IPv4 / IPv6、多租户 Namespace。不同部门须具备独立容量、性能、权限和网络隔离；单文件系统至少扩展到数 PB，单 Namespace 可容纳数十亿文件。
+
+Windows 文件服务：约 15,000 名 Windows 用户，大量 Office、设计文档和共享文件。NAS 必须原生加入 Microsoft Active Directory，并支持 AD Domain Join、SMB ACL、NTFS 风格权限、SID、AD Group、Kerberos Authentication、SMB Signing、SMB Encryption、Access Based Enumeration、DFS Namespace、Windows Previous Versions、Microsoft VSS、文件锁、Quota 和用户/组容量限制。Windows 用户不建立独立 NAS 用户体系，权限直接由 AD Security Group 控制。示例路径：\\\\corp.example.com\\rd、\\\\corp.example.com\\finance、\\\\corp.example.com\\design。
+
+Linux 与计算集群：研发和仿真服务器运行 RHEL、Rocky Linux、Ubuntu、SUSE；必须支持标准 Linux NFS client，无需专有客户端。约 1,000 节点计算集群，典型负载包括 EDA、CAE、CFD、Genome Analysis、Simulation、Software Build、Log Analysis。要求 NFSv3/v4.1、优先 pNFS、优先 RDMA/NFS over RDMA、高并发 metadata、大量小文件、大文件顺序 IO、POSIX locking、UID/GID mapping。性能目标：Sequential Read >= 100 GB/s；Sequential Write >= 50 GB/s；Random Read IOPS >= 1,000,000 IOPS；File create >= 300K ops/s；File stat >= 1M ops/s。
+
+VMware：现有约 4,000 台 VMware VM。存储须作为 VMware NFS Datastore，并最好取得 VMware 官方兼容认证。支持 ESXi、vCenter、NFS Datastore、VMware HA、DRS、vMotion、Storage vMotion、VMware Snapshot、Site Recovery Manager；希望支持 VAAI NAS，包括 File Clone、Fast File Clone、Space Reservation、Extended Statistics。通过 NAS snapshot/clone 快速创建大量开发测试 VM。
+
+容器：平台包括 Kubernetes、Red Hat OpenShift、Rancher、VMware Tanzu。NAS 必须支持 CSI Driver、Dynamic Provisioning、PersistentVolume、PersistentVolumeClaim、ReadWriteMany、Snapshot API、Volume Clone、Volume Expansion；多个 Pod 可同时挂载共享 volume。StorageClass 可指定 Performance Tier、Quota、Snapshot Policy、Replication Policy、Tenant、QoS。优选 Kubernetes Operator 管理 NAS 生命周期和监控。
+
+AI/GPU：计划部署 256–512 GPU，包括 NVIDIA H100/H200/B200。业务包括 LLM Training、Fine-tuning、RAG、Model Repository、Dataset、Checkpoint、AI Inference。NAS 可被 GPU 服务器直接访问，支持 NVIDIA DGX、Base Command、Kubernetes GPU Operator、Slurm、PyTorch、TensorFlow、Hugging Face、Ray；优选 GPUDirect Storage、RDMA、100/200/400GbE、RoCE。重点验证 large sequential read、random read、small file metadata、checkpoint burst write，并通过 per-workload QoS 防止 AI Job 影响普通企业 NAS 用户。
+
+数据分析与统一数据访问：平台包括 Spark、Trino、Presto、Kafka、Flink、Databricks。希望分析平台直接读取 NAS 数据，避免复制。最好 NFS、SMB、S3 三种协议访问同一份 Dataset：AI/GPU 使用 NFS，Windows 用户使用 SMB，分析平台使用 S3。如果无法严格同一 Namespace，需要透明的数据访问或同步机制。AD、LDAP、Kerberos、ACL、Snapshot、Backup、Ransomware Protection、Replication、Cloud Tiering 必须仍然成立。
+
+混合云：已有 AWS、Azure 和少量 GCP。支持 Amazon S3、S3 Glacier、AWS DataSync、AWS Backup、Direct Connect，以及 Azure Blob Storage、Azure Archive、Azure ExpressRoute。热数据保留本地 NAS，冷数据分层至 S3/Azure Blob，但用户访问路径尽量保持不变，例如 /projects/projectA。
+
+备份生态：不能只使用存储厂商自己的备份软件。必须兼容 Veeam、Commvault、Veritas NetBackup、Rubrik、Cohesity、Dell Networker、IBM Storage Protect。优选 NDMP、NFS、SMB、S3、Snapshot API，并允许第三方备份软件控制 Snapshot、Backup、Restore、Clone。
+
+快照与恢复：生产数据约 2 PB，Snapshot interval 5–15 分钟、retention 30–90 天，每天数十个 snapshot 不明显影响性能。支持 Snapshot、Writable Clone、Read-only Snapshot、Instant Restore、File-level Restore、Directory Restore、Full filesystem rollback。每文件系统优选 1000+，甚至 10000+ snapshot。
+
+网络安全与勒索防护：Snapshot 创建后管理员也不能直接修改；删除关键 Snapshot 需要 Admin A + Admin B 双人授权。检测大量文件突然修改、扩展名异常变化、异常删除、异常加密、SMB 异常行为；发现异常后可 Alert + Snapshot + Block User/Client。优选对接 Splunk、Microsoft Sentinel、CrowdStrike、Palo Alto、ServiceNow。
+
+网络与互操作：网络包含 10/25/100/200/400GbE。支持 LACP、VLAN、Jumbo Frame、ECMP、L3 Routing、RoCE、RDMA，并与 Cisco、Arista、Juniper、NVIDIA Spectrum 交换机互通；不得要求专有网络。
+
+数据库与应用一致性：支持 Oracle、PostgreSQL、MySQL、SQL Server、SAP HANA backup，重点包括 Oracle RMAN、Oracle Direct NFS、PostgreSQL Backup、SQL Server Backup、SAP HANA Backup。提供数据库一致性 Snapshot API 或集成机制。
+
+自动化：支持 REST API、Terraform、Ansible、Python SDK、CLI、Kubernetes CSI。Terraform 可创建 Filesystem、Share、Quota、Snapshot Policy、Replication、QoS；主要管理操作不能只能通过 GUI 完成。
+
+可观测性：支持 Prometheus、Grafana、SNMP、Syslog、REST API，优选 OpenTelemetry；监控 IOPS、Bandwidth、Latency、CPU、Cache Hit、Network、Filesystem Capacity、Client IO、Protocol、Top Users、Top Files；对接 Splunk、ServiceNow、Elastic、Dynatrace。
+
+高可用、灾备与扩展：任何 Controller、NIC、SSD、Switch、Power、Fan 单点故障不得中断业务；NAS OS 支持 Non-disruptive Upgrade。DC1 到 DC2 异步复制要求 RPO <= 15 min、RTO <= 30 min；核心业务希望 Active-Active NAS，或至少 Automatic Failover + Global Namespace。
+
+一期 Usable Capacity 3 PB，三年 8–10 PB。扩容必须实现 Add Node -> Automatic Rebalance -> Capacity Increase -> Performance Increase，不能出现容量扩大三倍而仍受原两个 NAS Controller 限制、性能基本不变的情况；优先真正 Scale-out NAS。
+
+请把以上内容转成可追溯的需求编号，先检查硬性门槛，再对 Huawei 与 NetApp 的适用产品和架构进行逐项竞争分析。每项事实必须注明来源、版本、配置和适用条件；严格区分 Not Compliant 与 Not Documented，不比较测试条件不同的性能数字。输出正式 DOCX，包含执行摘要、方法与来源、合规矩阵、架构与工作负载分析、风险与证据缺口、PoC 验证计划、平衡建议及来源清单。`
+
 export const DEMO_SCENARIOS: readonly DemoScenario[] = [
   {
     id: "scenario-1-1",
@@ -258,48 +300,68 @@ export const DEMO_SCENARIOS: readonly DemoScenario[] = [
   {
     id: "scenario-5",
     label: "场景 5",
-    title: "存储 HLD 与竞品分析",
-    purpose: "从 RFI/需求生成 HLD 或针对性竞品报告。",
-    status: "blocked",
+    title: "企业存储问题",
+    purpose: "验证系统能否分析企业存储架构，并调用竞争分析能力比较主流全闪存产品。",
+    status: "ready",
     steps: [
       {
-        id: "5-hld",
+        id: "5-competitive-analysis",
         scenarioId: "scenario-5",
-        title: "根据 RFI 生成 HLD",
-        kind: "blocked",
-        purpose: "生成约 10 页、包含架构和设计决策的高层设计文档。",
-        estimatedTime: "阻塞",
-        expected: ["读取指定 RFI/requirements", "产生多页 HLD artifact", "返回 S3 或下载位置"],
-        blockedReason: "当前平台没有存储领域语料、RFI 输入、HLD 技能或对应 DAC。",
+        title: "NetApp AFF 与 Huawei OceanStor Dorado 对比",
+        kind: "chat",
+        purpose: "验证新建的竞争分析 Agent 能否按工作负载相关维度进行有来源、有边界的产品比较。",
+        estimatedTime: "约 2–3 分钟",
+        prompt: "请对比netapp aff 和 huawei oceanstor dorado",
+        expected: ["路由至 Competitive-Analysis-Agent", "比较 NetApp AFF 与 Huawei OceanStor Dorado", "标注来源和适用条件", "区分“明确不支持”与“未找到文档”", "不直接比较测试条件不一致的性能或容量数字", "给出适用场景、取舍和可能改变结论的待验证项"],
       },
       {
-        id: "5-competitive",
+        id: "5-unified-nas-docx",
         scenarioId: "scenario-5",
-        title: "存储产品竞品分析",
-        kind: "blocked",
-        purpose: "比较 Dorado 8000、HDS VSP 5000 和 PowerMax 8500，并映射 RFI 需求。",
-        estimatedTime: "阻塞",
-        expected: ["结构化比较关键维度", "Plus 版抽取并映射 RFI 要求", "产出针对性报告"],
-        blockedReason: "当前平台没有存储语料或适用技能；已知运行会以 no_suitable_skill 结束。",
+        title: "企业级统一 NAS 平台竞争分析 DOCX",
+        kind: "chat",
+        purpose: "基于完整客户需求，评估 Huawei 与 NetApp 的统一 NAS 方案并生成正式竞争分析文档。",
+        estimatedTime: "约 5–10 分钟",
+        prompt: unifiedNasPrompt,
+        expected: ["路由至 Competitive-Analysis-Agent", "保留项目名称并将全部硬性要求转为可追溯编号", "覆盖统一多协议 NAS、Windows/Linux、VMware、Kubernetes、AI/HPC、分析、云、备份、安全、自动化、HA/DR 与扩展", "逐项比较 Huawei 与 NetApp，并标注来源、版本、配置和适用条件", "区分 Not Compliant 与 Not Documented", "给出风险、证据缺口和 PoC 计划", "返回真实可访问的 DOCX artifact；如运行时不支持则明确报告未生成，不虚构链接"],
       },
     ],
   },
   {
     id: "scenario-6",
     label: "场景 6",
-    title: "建筑平面图理解",
-    purpose: "把图纸 A01 转为可查询的房间结构并统计卧室。",
-    status: "blocked",
+    title: "建筑图纸问答",
+    purpose: "验证 architecture-qa 对建筑标高、窗型缩写和空间连接关系的理解。",
+    status: "ready",
     steps: [
       {
-        id: "6-bedroom",
+        id: "6-height-baseline",
         scenarioId: "scenario-6",
-        title: "统计 A01 卧室",
-        kind: "blocked",
-        purpose: "根据已入库图纸回答卧室数量和位置。",
-        estimatedTime: "阻塞",
-        expected: ["识别图纸 A01", "返回卧室数并列出位置/标签证据", "不使用通用建筑常识猜测"],
-        blockedReason: "尚未加载建筑图纸，也没有从图像抽取房间实体的视觉/结构化管线和技能。",
+        title: "+36 标高基准",
+        kind: "chat",
+        purpose: "检查系统能否解释建筑平面图中的常见高度标注基准。",
+        estimatedTime: "约 1 分钟",
+        prompt: "The floor plan shows \"+36\" next to the vanity in the Master Bath. In architectural drawings, what does a \"+36\" height annotation typically reference as its baseline?\n\n- A. Above Finished Floor (AFF)\n- B. Above Sea Level\n- C. Above the Foundation\n- D. Above the Ceiling",
+        expected: ["选择 A. Above Finished Floor (AFF)", "说明 +36 通常表示高于完成地面 36 英寸", "不把标高解释为海拔、基础或吊顶基准"],
+      },
+      {
+        id: "6-fixed-glass",
+        scenarioId: "scenario-6",
+        title: "F.G. 窗型缩写",
+        kind: "chat",
+        purpose: "检查系统能否识别建筑窗标注中的常用玻璃类型缩写。",
+        estimatedTime: "约 1 分钟",
+        prompt: "The floor plan shows a window notation \"(3) 3'6\" × 3'6\" F.G.\" What type of glazing does \"F.G.\" indicate for these windows?\n\n- A. Frosted Glass\n- B. Fixed Glass\n- C. Framed Glass\n- D. Cannot be determined — F.G. meaning depends on the legend",
+        expected: ["选择 B. Fixed Glass", "说明该标注表示三樘 3'6\" × 3'6\" 的固定玻璃窗", "不误解为 Frosted Glass 或 Framed Glass"],
+      },
+      {
+        id: "6-foyer-connection",
+        scenarioId: "scenario-6",
+        title: "FOYER 到 MASTER BEDROOM",
+        kind: "chat",
+        purpose: "检查系统能否读取平面图中的房间邻接和通行关系。",
+        estimatedTime: "约 1 分钟",
+        prompt: "On the floor plan, what space connects the FOYER to the MASTER BEDROOM?\n\n- A. GALLERY\n- B. STUDY\n- C. HALL\n- D. They connect directly with no intermediate space",
+        expected: ["选择 A. GALLERY", "依据平面图说明 FOYER 经 GALLERY 连接 MASTER BEDROOM", "不将 STUDY 或 HALL 误判为中间空间"],
       },
     ],
   },
@@ -308,17 +370,17 @@ export const DEMO_SCENARIOS: readonly DemoScenario[] = [
     label: "场景 7",
     title: "电路板图理解",
     purpose: "从 2 号电路图抽取元件并识别尺寸最大的芯片。",
-    status: "blocked",
+    status: "ready",
     steps: [
       {
         id: "7-chip",
         scenarioId: "scenario-7",
         title: "识别最大芯片",
-        kind: "blocked",
+        kind: "chat",
         purpose: "基于已入库板图/网表回答，而不是依赖通用电子知识。",
-        estimatedTime: "阻塞",
+        estimatedTime: "约 1 分钟",
+        prompt: "电路图2号里面的最大芯片是什么？",
         expected: ["识别电路图 2", "给出元件标号和尺寸/边界框证据", "答案来自已抽取板级数据"],
-        blockedReason: "尚未加载板图或网表，也没有元件检测、尺寸抽取及查询技能。",
       },
     ],
   },
