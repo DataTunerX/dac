@@ -1666,8 +1666,6 @@ class OrchestratorAgent(BaseAgent):
             for s in (self.skill_runner.lister.skills or []):
                 name = str(getattr(s, "name", "") or "").strip()
                 desc = str(getattr(s, "description", "") or "").strip().replace("\n", " ")
-                if len(desc) > 140:
-                    desc = desc[:140] + "..."
                 if name:
                     lines.append(f"- {name}: {desc}")
         except Exception:  # noqa: BLE001
@@ -1681,15 +1679,10 @@ class OrchestratorAgent(BaseAgent):
                 "planner will see a no-op capability"
             )
         else:
-            preview = lines[:30]
-            description = "本地技能执行器，可在本进程内直接运行以下技能：\n" + "\n".join(preview)
-            if len(lines) > 30:
-                description += f"\n（另有 {len(lines) - 30} 个技能未列出）"
+            description = "\n" + "\n".join(lines)
             logger.info(
-                "[LocalSkill][CardBuild] rendered AgentCard: skills_count=%d (shown=%d, hidden=%d)",
+                "[LocalSkill][CardBuild] rendered AgentCard: skills_count=%d",
                 len(lines),
-                min(len(lines), 30),
-                max(0, len(lines) - 30),
             )
         return AgentCard(
             name=self.local_skill_agent_name,

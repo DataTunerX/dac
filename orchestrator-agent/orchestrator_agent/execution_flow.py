@@ -256,7 +256,7 @@ def render_execution_flow_md(
            - **结果**: ...
            - **原因**: ...
 
-        #### 补充执行 · 第1轮
+        #### 补充执行 · 第1 Round
         1. **agent**（被委派者 ← xxx）→ task
            - ...
 
@@ -371,7 +371,7 @@ def render_execution_flow_md(
                 lines.append("#### 首次任务执行")
             elif stage.startswith("mid_exec_round_"):
                 round_num = stage.split("_")[-1]
-                lines.append(f"#### 补充执行 · 第{round_num}轮")
+                lines.append(f"#### 补充执行 · 第{round_num} Round")
             else:
                 lines.append(f"#### {stage}")
             lines.append("")

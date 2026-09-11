@@ -75,6 +75,8 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from typing_extensions import override
 
 from . import broadcast_capability_check as sg_broadcast
+from . import capability_chain
+from .capability_chain import CapabilityChainResult
 from .agent_card_resolve import resolve_agent_card_by_planner_name
 from .agentregistry_client import AgentRegistryClient
 from .execution_flow import (
@@ -428,6 +430,7 @@ def _log_add_history(
 
 _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
     "original_query", "description", "thought_process", "reason", "rationale", "final_answer",
+    "contribution",
 )
 
 
@@ -461,6 +464,79 @@ def _escape_known_string_field_inner_quotes(text: str) -> str:
         return head + "".join(fixed_chars) + tail
 
     return pattern.sub(_repl, text)
+
+
+def _parse_json_output(answer) -> Optional[dict]:
+    """Parse LLM plain-text output into a dict.
+
+    Tries in order: direct JSON parse, strip markdown fences, escape inner
+    quotes, json_repair, ast.literal_eval, single-quote-to-double-quote.
+    Returns the parsed dict, or None if all attempts fail.
+    """
+    raw = "".join(
+        [
+            str(p.get("text", "")) if isinstance(p, dict) else (getattr(p, "text", None) or str(p))
+            for p in (getattr(answer, "content", None) or [])
+        ]
+    ) if isinstance(getattr(answer, "content", None), list) else ""
+    if not raw:
+        raw = getattr(answer, "content", None)
+    if not isinstance(raw, str):
+        raw = str(answer or "")
+    if not raw.strip():
+        return None
+    try:
+        parsed = json.loads(raw, strict=False)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    cleaned_content = raw.strip()
+    if cleaned_content.startswith("```json"):
+        cleaned_content = cleaned_content[7:]
+    elif cleaned_content.startswith("```"):
+        cleaned_content = cleaned_content[3:]
+    if cleaned_content.endswith("```"):
+        cleaned_content = cleaned_content[:-3]
+    cleaned_content = cleaned_content.strip()
+
+    try:
+        parsed = json.loads(cleaned_content, strict=False)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
+    if escaped_content != cleaned_content:
+        try:
+            parsed = json.loads(escaped_content, strict=False)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            pass
+
+    if _json_repair is not None:
+        try:
+            repaired = _json_repair(escaped_content, return_objects=True)
+            if isinstance(repaired, dict):
+                return repaired
+        except Exception:
+            pass
+
+    try:
+        import ast
+        parsed = ast.literal_eval(cleaned_content)
+        if isinstance(parsed, dict):
+            return parsed
+    except (ValueError, SyntaxError):
+        pass
+
+    try:
+        parsed = json.loads(cleaned_content.replace("'", '"'), strict=False)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -576,18 +652,48 @@ class TaskStatus(BaseModel):
     status: str = Field(description="the status of the task.")
 
 
-class CapabilityCheckToolResult(BaseModel):
-    """Capability check result for handle_capability_check (aligned with SD orchestrator)."""
+# ── Chain-driven planning models ──────────────────────────────────────
+
+class CapabilityChainStep(BaseModel):
+    """Planner output: one step in the operation chain decomposition."""
     model_config = {"extra": "ignore"}
-    can_handle: bool = Field(description="Whether this SG can handle the query")
-    can_contribute: bool = Field(description="Whether this SG can contribute")
-    contribution: str = Field(description="What this SG can contribute")
-    confidence: float = Field(description="Confidence score from 0.0 to 1.0")
-    reason: str = Field(description="Detailed reasoning")
+    step_id: int = Field(description="步骤编号，从 1 开始")
+    description: str = Field(description="一步一句话：输入→操作→产出")
+    operation: str = Field(description="操作类别，建议从常用类别中选择，若无匹配可用自定义文本")
+    input_source: Literal["query", "upstream"] = Field(description="输入来源")
+    input_desc: str = Field(description="输入描述")
+    output_desc: str = Field(description="期望产出")
+    is_final: bool = Field(description="是否最终结果的步骤")
+    matched_agent: str = Field(description="匹配的 Agent 名称或 NONE")
+    match_reason: str = Field(description="为什么选这个 Agent（或为什么 NONE）")
+
+
+class ChainPlanResult(BaseModel):
+    """LLM output for chain-driven planning."""
+    model_config = {"extra": "ignore"}
+    thought_process: str = Field(description="完整推理过程")
+    original_query: str = Field(description="用户原始问题")
+    capability_chain: list[CapabilityChainStep] = Field(description="操作链分解")
+    tasks: list[PlannerTask] = Field(description="可执行任务列表")
+
+
+# ── Recommended operations for chain planning (soft hint, not hard enum) ──
+
+_RECOMMENDED_OPERATIONS: frozenset[str] = frozenset({
+    "lookup", "filter", "aggregate", "retrieve", "extract",
+    "summarize", "classify", "compare", "translate", "generate", "modify",
+})
+
+
+# Capability check LLM schema: the LLM outputs per-step, per-dimension
+# checklists and ratios (see agent/capability_chain.py and
+# CAPABILITY_EVALUATION_SCORING_DESIGN.md); can_handle / can_contribute /
+# confidence are derived arithmetically by ``capability_chain.aggregate``.
+CapabilityCheckToolResult = CapabilityChainResult
 
 
 def _normalize_capability_result(result_data: dict[str, Any]) -> tuple[bool, bool]:
-    """Normalize LLM capability result, aligned with SD orchestrator
+    """Normalize a (can_handle, can_contribute) pair, aligned with SD orchestrator
     _normalize_member_capability_judgment.
 
     When can_handle=True, can_contribute is also True.
@@ -597,6 +703,26 @@ def _normalize_capability_result(result_data: dict[str, Any]) -> tuple[bool, boo
     if can_handle:
         can_contribute = True
     return can_handle, can_contribute
+
+
+def _format_skills_for_capability_check(skills: Optional[List[Any]]) -> str:
+    """Render loaded skills as ``### name`` blocks with the full SKILL.md body.
+
+    The capability judge scores against the skill body (field lists, command
+    examples, coverage statements, exclusions), so nothing is truncated.
+    """
+    if not skills:
+        return "（无）"
+    blocks: List[str] = []
+    for skill in skills:
+        name = str(getattr(skill, "name", "") or "").strip() or "unnamed"
+        body = str(getattr(skill, "description", "") or "").strip() or "（无正文）"
+        tags = getattr(skill, "tags", None) or []
+        header = f"### 技能：{name}"
+        if tags:
+            header += f"  (tags: {', '.join(str(t) for t in tags)})"
+        blocks.append(f"{header}\n{body}")
+    return "\n\n".join(blocks)
 
 
 class DelegationDetectionResult(BaseModel):
@@ -1216,6 +1342,173 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY_JSONSTRING = """
 问题：
 
 """
+# 2026-09-11 更新：此模板已废弃，请使用链驱动的 PLANNER_CHAIN_INSTRUCTIONS_ZH 模板
+# 如需回退，将 USE_CHAIN_PLANNING 设置为 false
+
+
+# ── 链驱动规划提示词 ─────────────────────────────────────────────────
+PLANNER_CHAIN_INSTRUCTIONS_ZH = """
+# 角色：首席战略规划师（多智能体编排专家）
+
+## 核心使命
+先将用户查询分解为**操作步骤链**，再对链上每一步做数据归属路由，最终输出可执行任务列表。
+
+## 步骤方法论
+
+### Step 0：操作链分解（先拆链，再路由）
+
+把用户 query 分解为操作步骤链："已知输入 → 访问数据/资源 → 执行操作 → 产出结果"。
+
+**拆分规则：**
+1. 一步只做**一种操作**、访问**一类数据**。上一步的产出是下一步的输入时拆开，否则不拆。
+2. 单一简单问题就是一步。复杂问题是多段链串联。
+3. 拆分依据是**问题本身需要什么**，不考虑 Agent 能不能做。Agent 做不了的操作也必须出现在链上（最终会标记 agent=NONE）。
+4. 为每个步骤标注：
+   - `operation`：操作类别。优先从常用类别中选择，若无匹配可用简短自定义文本。
+     常用类别：lookup（按键/条件查询）│ filter（条件筛选）│ aggregate（统计/分组/排序）│
+     retrieve（文档/知识库检索）│ extract（从文本/图片/音频抽取）│ summarize（归纳/摘要）│
+     classify（分类/打标签/判定）│ compare（对比）│ translate（格式/语言转换）│
+     generate（创作新内容）│ modify（写入/更新/删除）
+   - `input_source`：`query`（问题文本/附件已给出）或 `upstream`（需由上一步产出）
+   - `input_desc`：输入是什么（简洁短语）
+   - `output_desc`：期望产出什么（简洁短语）
+   - `is_final`：该步骤的产出是否就是用户要的最终结果（之一）
+
+**示例 1**：「张三买了哪些东西」
+```
+链（2 步）：
+  步骤1：用户名(query) → 用户表 → lookup → user_id  [is_final=false]
+  步骤2：user_id(upstream) → 订单表 → lookup → 商品列表  [is_final=true]
+```
+
+**示例 2**：「北京明天天气怎么样，并且帮我把这句话翻译成英文」
+```
+链（2 步，独立）：
+  步骤1：地点+时间(query) → 天气数据 → lookup → 天气信息  [is_final=true]
+  步骤2：文本(query) → 无外部数据 → translate → 英文翻译  [is_final=true]
+```
+
+**示例 3**：「对数据库做一次全面体检并给出优化建议」
+```
+链（4 步）：
+  步骤1：时间范围(query) → 慢查询日志 → lookup → 慢查询列表  [is_final=false]
+  步骤2：时间范围(query) → 性能指标数据 → lookup → QPS/CPU/内存  [is_final=false]
+  步骤3：连接池名(query) → 连接池状态 → lookup → 连接池快照  [is_final=false]
+  步骤4：慢查询列表+性能时序+连接池快照(upstream) → 汇总分析 → summarize → 优化建议  [is_final=true]
+```
+
+**示例 4**：「帮我查一下」（意图模糊）
+```
+链（1 步）：
+  步骤1：意图(query) → 无外部数据 → classify → 确定查询意图  [is_final=true]
+  注：无法匹配到 Agent，最终 agent=NONE
+```
+
+
+### Step 1：对链上每一步做数据归属判定
+
+对 Step 0 产出的链上**每一个步骤**，独立判定该步骤所需数据的业务性质：
+
+1. **静态本体数据**（实体的内在属性/自身状态）：归属于该实体生命周期的 Agent。
+   例：商品名称/SKU/库存量 → 商品 Agent；用户昵称/注册时间 → 用户 Agent
+2. **动态行为数据**（行为/事件/交互产生的流水或统计）：归属于**记录该行为本身**的 Agent。
+   例：商品销量/成交额 → 订单/交易 Agent（不是商品 Agent）；用户登录记录 → 行为日志 Agent
+
+
+### Step 2：对链上每一步做 Agent 匹配
+
+逐个审视 [可用智能体]，对每一步：
+- **读懂它的业务能力范围**，不是死扣描述里的字
+- 自问：**该步骤需要的这份数据，是这个 Agent 业务能力的"自然产物/直接职责覆盖"吗？**
+- 如果没有任何 Agent 覆盖该步骤的数据需求，则该步骤标记为 agent="NONE"
+
+
+### Step 3：路由前自检（per-step）
+
+对链上每一步（除 NONE 外），在 thought_process 中回答：
+1. 该步骤产出数据的业务性质（静态/动态）
+2. 选的 Agent 的业务能力是否天然产出这份数据
+3. 是否仅因为"步骤描述里的名词"和"Agent 主体名词"同名就做了路由 → 如果是，必须纠正
+
+
+### Step 4：执行上下文 + 对话历史闭环
+
+- 若 [执行上下文] 中有已成功执行的步骤结果，复用其产出，从链上删除对应步骤
+- 若上下文显示某些步骤已失败，链上对应步骤标记原因
+- 对话历史仅用于解析指代
+
+
+### Step 5：从链推导任务编排
+
+将链上步骤转化为 task 列表：
+- 链上每个步骤 → 一个 task，task.id = step_id
+- `depends_on` 从链拓扑自然导出：当前步骤 input_source 为 `upstream` 时，depends_on 包含该上游步骤的 id
+- `description` 从链信息组装：`{{input_desc}}→{{operation}}→{{output_desc}}`，并注入已知键值
+- 链上标记为 NONE 的步骤 → task 的 agent="NONE"
+- 如所有步骤均为 NONE → tasks 只输出一个 id=1、agent="NONE" 的 task
+
+
+## ⚠ 反模式（必须避免）
+1. **名词陷阱**：把动态行为数据当成被作用对象领域的数据。商品 Agent 不管销售量——那是交易行为的产物。
+2. **关键词字面匹配**：不要因为 Agent 描述里有某个词就路由，要看业务本质。
+3. **跳过链分解**：必须先拆链再做路由，不能直接从 query 跳到 agent。
+4. **链步骤遗漏**：Agent 做不了的操作也必须出现在链上（agent=NONE）。
+
+
+## 可用输入：
+
+**[对话历史] (History):**
+{history}
+
+**[可用智能体] (Agents):**
+{agents}
+
+**[执行上下文] (Information):**
+{information}
+
+**[组级记忆] (Group Memory):**
+{group_memory}
+
+
+## 输出要求
+
+只输出一个纯 JSON 对象（不要 ```json 围栏），字段全必填：
+
+{{
+  "thought_process": "Step0 链分解 → Step1 数据归属 → Step2 Agent匹配 → Step3 自检 → Step4 上下文 → Step5 任务编排，完整写出每步推理",
+  "original_query": "用户问题原文",
+  "capability_chain": [
+    {{
+      "step_id": 1,
+      "description": "一步一句话：输入→操作→产出",
+      "operation": "lookup 或自定义文本",
+      "input_source": "query",
+      "input_desc": "输入描述",
+      "output_desc": "期望产出",
+      "is_final": true,
+      "matched_agent": "从可用智能体列表选择的 agent name 或 NONE",
+      "match_reason": "为什么选这个 Agent（或为什么 NONE）"
+    }}
+  ],
+  "tasks": [
+    {{
+      "id": 1,
+      "description": "从链信息组装的完整任务描述，含具体键值",
+      "agent": "与 capability_chain.matched_agent 一致",
+      "depends_on": []
+    }}
+  ]
+}}
+
+输出前自检：
+- capability_chain 中每个步骤的 matched_agent 必须映射到 tasks 中对应 id 的 agent 字段
+- tasks 中的 depends_on 必须与 capability_chain 中的 input_source=upstream 一致（例：若步骤3的 input_source=upstream，则 depends_on 应包含步骤2的 id）
+- 如所有步骤均为 NONE → tasks 只输出一个 agent="NONE" 的 task
+
+---
+
+问题：
+"""
 
 
 Orchestrator_INSTRUCTIONS_ZH = """
@@ -1258,157 +1551,206 @@ Orchestrator_INSTRUCTIONS_ZH = """
    * 若用户未明确要求扩展分析，默认不要主动展开这些内容。
 """
 
-SKILL_CAPABILITY_CHECK_PROMPT = """# Role: capability judge for a skill agent
+SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 
-You are a capability judge for a skill agent. Your task is to determine whether
-this agent can handle or contribute to the user's query, based on domain
-alignment and skill inventory.
+你要评估"本 Agent"能否解决或贡献用户问题。评估对象是任务成功的必要条件，不是主题相似度。
+你负责：拆分步骤、逐维度列清单并给出比例、给出证据等级、书写贡献说明与缺失项。
+你不负责：判定 can_handle / can_contribute、计算 confidence。这些由程序按固定公式从你的比例中推导。
 
-Think step by step, then call evaluate_capability.
+评估依据只有下面四类文本，按可信度从高到低：
+1. 技能正文（skill inventory 中每个技能的完整说明：字段列表、数据格式、命令示例、处理流程、覆盖范围、排除项）
+2. 技能短描述
+3. Agent 描述
+4. 用户问题原文与历史
 
-## Core Principle: Domain-First Decision
+本标准同时适用于结构化数据技能（表、字段、键）和非结构化技能（文档库、知识库、图片、音频、纯生成 / 转换）。
+两类技能使用同一套维度，区别只在清单里的"项"是字段还是信息需求项（主题、知识点、文档集、模态）。
 
-The fundamental question is: **does this agent's primary domain match the
-primary domain of the user's query?**
+## 一、方法论：任务是一条步骤链
 
-### Decision Steps (follow in order):
+任何任务都是一条或多条这样的链：已知输入 → 访问数据/资源 → 执行操作 → 产出结果（在给定的限定条件下）。
+复杂问题是多段链串起来，上一步的产出是下一步的输入。
 
-D1) **Identify the query's primary domain(s).**
-    What is the main subject / topic the user is asking about? Look at the
-    central entity, the core question being asked, or the main problem area.
-    A query may touch multiple domains. If the query has a single clear
-    primary domain, identify it. If the query explicitly asks about two or
-    more domains as parallel, equally-weighted concerns (e.g., "同时排查 A 和 B",
-    "既需要 X 也需要 Y"), there may be MULTIPLE peer primary domains — each is
-    an equally valid primary domain from the perspective of its respective agent.
+- 能独立解决 = 本 Agent 能独立走完所有步骤。
+- 能贡献 = 本 Agent 能独立走完某一步，且这一步的产出是后续步骤的输入，或本身就是用户要的结果之一。
 
-    **Distinguishing peer vs. secondary**: A domain is a PEER primary domain
-    only when it is presented as a first-class problem/concern, not merely a
-    supporting check to help diagnose the main problem. Key signals:
-    - Peer: "同时排查 A 和 B", "分别检查 X 和 Y", "X 和 Y 都需要确认"
-    - Secondary: "排查 A 的同时看看 B", "A 出了问题，顺便确认下 B",
-      "主要排查 A，同时 B 也查一下", "排查 A（原因），同时确认 B（是否受牵连）"
-    When one domain is the CLEAR trigger/root problem and the other is just a
-    supporting check to help explain it, the trigger domain is the PRIMARY
-    domain and the supporting check is SECONDARY.
+示例（结构化）："张三买了哪些东西"
+  步骤 1：用户名(query) → 用户表[用户名, 用户ID] → lookup → user_id                 is_final=false
+  步骤 2：user_id(upstream) → 订单表[订单, 商品] → lookup → 商品列表                 is_final=true
+示例（非结构化）："总结这份合同的风险点，并对比去年版本的变化"
+  步骤 1：合同文件(query 附件) → 合同文本 → extract → 风险条款列表                    is_final=true
+  步骤 2：合同名称(query) → 合同归档库 → retrieve → 去年版本文本                       is_final=false
+  步骤 3：风险条款列表(upstream) + 去年版本文本(upstream) → 无外部数据 → compare → 变化说明   is_final=true
 
-D2) **Compare with the agent's domain.**
-    Determine whether this agent's domain (inferred from its name, description,
-    and skill inventory) matches the query's primary domain. This is a topical
-    / subject-matter judgment, not a completeness check.
+## 二、步骤拆分规则
 
-D3) **Determine can_handle and can_contribute.**
+- 一步只做一种操作、访问一类数据；上一步的输出必须是下一步的输入，否则不拆。单一简单问题就是一步。
+- 拆分依据是问题本身需要什么，不是本 Agent 会什么。本 Agent 做不了的步骤也必须列出并打分。
+- 每个输入项标注来源：query（问题文本或用户附带的文件、图片等附件已给出）/ upstream（需由上一步产出）/ missing（都没有）。
+- 操作类别只能取：lookup（按键或条件定位记录）、filter（按条件筛选）、aggregate（统计、分组、排序）、
+  retrieve（在文档库 / 知识库检索）、extract（从文本、图片、音频抽取信息）、summarize（归纳、摘要）、
+  classify（分类、打标签、判定）、compare（对比）、translate（语言或格式转换）、generate（基于输入创作新内容）、
+  modify（写入、删除、更新外部状态）。
+- is_final：该步骤的产出是否就是用户要的最终结果（之一）。多个并列子问题各自是一步且各自 is_final=true。
+- 问候、闲聊、无法识别意图的问题：拆成一步，操作类别按最接近的选，五个维度按实际情况打分（通常 D 与 R 为 0）。
 
-## Core Rules
+## 三、五个维度（每个步骤各评一次）
 
-### Rule 1: Primary Domain Match → can_handle = true
+四个比例维度必须先写清单（required / matched）再给 ratio；只给数字不给清单视为无效。
+操作维度为三档。
 
-If the agent's primary domain MATCHES the query's domain (or at least one of
-the query's peer primary domains from D1), set **can_handle = true**, regardless
-of how complex the query is.
+### I 输入匹配
+- 定义：该步骤所需输入，问题或上一步给了多少。
+- 打分：列出所需输入项；逐项判断是否已提供且类型 / 模态可用；I = 可用项 / 所需项。
+- 来源为 upstream 的输入按可用计，但必须写入 missing_requirements（若本 Agent 的上一步能产出则不必）。
+- 输入模态与技能不匹配（技能只处理文本，输入是图片）记为不可用。
+- 该步骤不需要输入时 required 为空、ratio = 1.0。
+- **时间表达式规则**："本月"、"今天"、"本周"、"最近"、"上月"等时间表达式是自包含输入，直接记为已匹配。系统知道当前日期，执行时自然会按时间筛选，不需要调用方补精确起止日期。
 
-**Key insight**: A complex query may require multiple agents to fully solve.
-That does NOT mean this agent cannot handle it. If the query's domain (or one
-of its peer domains) is this agent's domain, this agent is the right owner for
-that portion. Other agents can collaborate to fill in the gaps. Do NOT downgrade
-to can_handle=false just because the query is complex or spans multiple domains.
+### D 信息覆盖
+- 定义：该步骤要读写的信息需求项，技能的数据源 / 知识源里有多少。
+- 打分：列出所需信息项；逐项在技能正文声明的覆盖范围中核对；D = 命中项 / 所需项。
+- 结构化：信息项 = 实体与字段；核对对象 = 字段列表、数据格式说明。
+- 非结构化：信息项 = 主题、知识点、文档集、时间版本、模态；核对对象 = 正文的覆盖范围声明（主题清单、来源、版本、模态）。
+- 特例 1：正文明确写"不包含 X / 不支持 X / 不覆盖 X / 请使用其他技能查询 X"，X 对应项直接记未命中。
+- 特例 2：该步骤不需要访问任何外部数据 / 知识（纯生成、纯转换、对上游产物的加工），required 为空、ratio = 1.0。
+- 特例 3：信息项属于正文声明主题的子项（"年假"属于"请假制度"），可记命中，但整体证据等级不得高于 B。
+- D 判断的是"技能是否拥有这类信息源"，不判断"具体答案是否一定在里面"。记录可能不存在属于数据实例问题，写入 risks，不影响分值。
 
-**Peer domain rule**: When the query has multiple TRUE peer-level primary domains
-(see D1 definition — both are first-class problems, not one supporting the other),
-the agent whose domain matches ANY of those peer domains should get can_handle=true.
-Multiple agents can each be can_handle=true for the same query — each handles
-their own domain and collaborates on the rest.
+### O 操作能力
+- 定义：该步骤要做的变换，技能能不能做。
+- 打分只能取三档：
+  1.0 = 技能正文明确描述该操作或给出等价命令 / 流程；
+  0.7 = 正文未明确描述，但技能允许的工具或已声明的能力可以直接组合完成；
+  0   = 不能做、明确不支持、或需要技能没有的工具类别（如只读技能遇到 modify）。
+- 摘要、翻译、生成类操作的质量不确定性由 0.7 档承担，不进 R。
 
-**Important — when NOT to use peer domain rule**: If the query has ONE clear
-trigger/root problem (primary domain) and the other mentioned domains are just
-supporting checks to help diagnose it, those supporting checks are SECONDARY
-domains. The agent for the secondary domain should get can_handle=false,
-can_contribute=true. 
+### R 结果匹配
+- 定义：该步骤要产出的项 / 形态，技能的输出能满足多少。
+- 打分：列出期望产出项（含形态要求：列表、数量、图表、摘要、译文、标签）；逐项判断技能能否输出该项及该形态；R = 可产出项 / 期望项。
+- R 只判"能不能产出这个形态的结果"，不判质量。
+- **R 部分匹配规则**：当该步骤不是最终步骤（is_final=false）或 Agent 只在链中贡献部分步骤时，期望产出项只需匹配"步骤描述中的核心产出类型"，不要额外要求最终结果的完整语义。示例：query="Rust 电子产品周边"，step1 描述为"筛选电子类商品列表"，则 R 只需判"电子商品列表"，不要求产出项必须包含"Rust 相关"。
 
-Examples of domain match (can_handle=true):
-- Query: "Analyze the deployment status of service X and check if there are
-  related alerts" → primary domain = deployment/operations. If this agent is a
-  deployment agent, can_handle=true, even though alerts may need another agent.
-- Query: "Monitor the database performance and suggest optimizations" →
-  primary domain = database. If this agent is a database monitoring agent,
-  can_handle=true, even though optimization suggestions may need another agent.
-- Query: "排查数据库连接数异常增长和部署配置变更" → peer primary domains =
-  database AND deployment. If this agent is a DB agent, can_handle=true.
-  If this agent is a deploy agent, ALSO can_handle=true. Both are valid.
+### C 约束满足
+- 定义：问题里显式或隐含的限定条件，技能能满足多少。
+- 打分：列出该步骤的约束项：时效（实时 / 快照）、权限与副作用（只读 / 可写）、数据范围（区域 / 租户 / 时间跨度）、规模、精度、合规、语言、文档版本；逐项对照技能正文；C = 满足项 / 约束项。
+- 没有约束时 required 为空、ratio = 1.0。
+- 正文没有声明能满足的约束（如未声明支持英文、未声明实时同步）记为不满足，不得推断。
+- **时间约束不拆分**：问题中有"本月/今天/最近/实时"等时间限定，且技能有时间字段+筛选工具（如 grep、awk sort）时，约束视为可满足（ratio=1.0），仅在 risks 里提示"非实时/快照数据可能不是最新状态"。只有当技能明确说"不包含时间字段"或"不支持按时间筛选"时才记未命中。
 
-### Rule 2: Not Primary Domain, But Concrete Overlap → can_contribute = true
+## 四、打分总则
 
-If the agent's domain is NOT the query's primary domain, but the agent's skill
-inventory can concretely supply a needed slice of the answer, set
-**can_handle = false, can_contribute = true**.
+- 技能正文没写的能力视为没有。禁止根据 Agent 名称、行业常识或"通常应该有"推断。
+  非结构化技能尤其如此：正文只写"公司内部文档问答"而没有主题清单时，任何具体主题都不能记命中，证据等级记 C。
+- 正文明确"不包含 / 不支持 / 不覆盖"的内容，对应项直接记未命中或 0。
+- 各维度独立核对各自的清单，不允许为了让总分好看而调整某个维度。
+- 每条 evidence 必须是原文引用并注明来源类别，如："技能正文：用户数据中不包含订单信息"、"问题原文：张三"。
+- 五个条件缺一不可，程序会把它们相乘：任何一项为 0，该步骤即不可完成。你只需如实给出每一项。
+- **多维度/多子任务查询规则**：当 query 明确列出多个维度或子任务（"从 A、B、C 三个维度排查"），必须为每个维度各建至少一个步骤。本 Agent 不覆盖的维度同样建步骤，但对应的 D=0/1 或 O=0。不允许只建自己能做的维度然后判 h=true。
 
-"Concrete overlap" means the agent's skills can actually answer a specific
-sub-question or provide a specific data point the user is asking for. Vague
-"might be helpful" or "the agent knows about related things" is NOT enough.
+## 五、证据等级（整体一个，不进乘法）
 
-Examples of concrete contribution (can_contribute=true):
-- Query: "Analyze the deployment status of service X and check related alerts"
-  → primary domain = deployment. If this agent is an alert monitoring agent,
-  it can contribute the alert data (can_handle=false, can_contribute=true).
-- Query: "Investigate the root cause of a slow API response" → primary domain
-  = API/investigation. If this agent is a database agent that can provide
-  query latency data, can_handle=false, can_contribute=true.
+- A：各维度依据全部来自技能正文中的明确内容（字段列表、数据格式、命令示例；主题清单、来源、版本、处理流程、排除项）。
+- B：主要来自技能正文，个别维度只能依赖技能短描述，或使用了 D 特例 3 的子项推断。
+- C：主要依赖技能短描述或 Agent 描述，正文无对应内容。
+- D：缺乏文本依据，含推测成分。
 
-### Rule 3: No Domain Overlap → can_handle = false, can_contribute = false
+## 六、contribution、missing_requirements、risks、reason
 
-If the agent's domain has nothing to do with the query, set both to false.
-A neighboring domain that cannot answer any concrete asked question is
-insufficient.
+- contribution：本 Agent 至少能独立完成一个有用步骤时按三要素书写，否则留空。
+  三要素：输入（使用问题中的哪个已知值，或需补齐哪个缺失值）；输出（产出哪个具体项）；用途（对应哪个后续步骤的输入，或最终结果的哪一部分）。
+  合格："输入 username=张三，输出 user_id，供步骤 2 查询订单使用"。
+  不合格："可以提供相关用户信息"、"可以补充辅助数据"。
+  程序侧判断 can_contribute 的条件：有贡献步骤（步骤能力分≥阈值且产出被需要） 且 contribution 非空。
+- missing_requirements：本 Agent 无法自行提供、需由请求方或其他 Agent 补齐的输入或数据，注明所属步骤，如 "user_id（步骤 2）"。
+- risks：不影响分值的提示，如结果唯一性（"张三"可能对应多人）、记录可能不存在。
+- reason：固定结构，逐步骤一行："步骤 N（一句话）：I=a/b D=c/d O=x R=e/f C=g/h，依据要点"；最后一句给整体结论（能独立完成 / 只能贡献步骤 N / 都不能）。
 
-### Rule 4: Evidence from Skill Inventory
+## 七、程序侧公式（供你理解结果含义，不需要你计算）
 
-- **Skill inventory** (loaded skills listed below) is the primary evidence
-  for what this agent can actually do.
-- Agent name and description provide domain context but are NOT sufficient
-  alone to prove can_handle. The inventory must back it up.
-- If the agent's inventory clearly covers the query's primary domain but
-  lacks some related sub-topics, keep can_handle=true and note the gaps in
-  the reason field — do NOT downgrade.
+  步骤能力分 = (I + D + O + R + C) / 5（算术平均）
+  can_handle = 各步骤能力分的算术平均达到阈值，且没有本 Agent 无法自行产出的 upstream / missing 输入
+  can_contribute = can_handle，或存在某一步能力分达到阈值且其产出被需要
+  confidence = 能独立完成时取 step_score 均值；只能贡献时取贡献步骤能力分最大值；都不能时为 0
 
-### Rule 5: Complex / Multi-Domain Queries
+## 八、完整示例
 
-When a query is complex and spans multiple domains:
-- The agent whose domain matches the query's domain (or one of its peer domains
-  from D1) → can_handle=true.
-- Agents whose domains match SECONDARY aspects → can_contribute=true.
-- Multiple agents can simultaneously have can_handle=true for the same query
-  when the query has multiple peer-level primary domains.
-- Do not deny can_handle just because the query needs other agents too.
-- Do not confuse "can fully answer alone" with "can handle". An agent can
-  handle a query even if it needs collaboration.
-- When judging whether a domain is primary or secondary, look at the perspective
-  of THIS agent — if the query asks about this agent's domain as a first-class
-  topic (not just a supporting check), it is a primary domain for this agent.
+本 Agent 技能正文关键内容：字段 用户ID|用户名|电话|邮箱；"按用户名查询：grep 张三 data/users.txt"；"用户数据中不包含订单信息，如需获取用户的订单数据，请使用 order_query 技能"。
+用户问题："张三买了哪些东西"
 
-### Rule 6: Confidence
-
-- domain match + inventory covers the core → confidence >= 0.8
-- domain match but inventory has gaps → confidence 0.5–0.8
-- no domain match but concrete contribution → confidence 0.3–0.5
-- no domain overlap → confidence 0.0–0.2
+步骤 1（用户名 → user_id，lookup，is_final=false）
+  I: required=[用户名] matched=[用户名] ratio=1.0         依据：问题原文"张三"
+  D: required=[用户名, 用户ID] matched=[用户名, 用户ID] ratio=1.0   依据：技能正文字段列表
+  O: 1.0                                                  依据：技能正文 grep 示例
+  R: required=[user_id] matched=[user_id] ratio=1.0
+  C: required=[] matched=[] ratio=1.0
+步骤 2（user_id → 商品列表，lookup，is_final=true；inputs: user_id source=upstream）
+  I: required=[user_id] matched=[user_id] ratio=1.0       上游产出，由本 Agent 步骤 1 提供
+  D: required=[订单, 商品] matched=[] ratio=0.0           依据：技能正文"用户数据中不包含订单信息"
+  O: 1.0
+  R: required=[商品列表] matched=[] ratio=0.0
+  C: required=[] matched=[] ratio=1.0
+evidence_grade: A
+contribution: "输入 username=张三，输出 user_id，供步骤 2 查询订单使用"
+missing_requirements: ["订单 / 购买记录数据（步骤 2）"]
+risks: ["用户名 张三 可能对应多个用户"]
+reason: "步骤 1（用户名→user_id）：I=1/1 D=2/2 O=1.0 R=1/1 C=1.0，字段列表与 grep 示例明确。步骤 2（user_id→商品列表）：I=1/1 D=0/2 O=1.0 R=0/1 C=1.0，正文明确不包含订单信息。不能独立完成；可贡献步骤 1。"
 
 ---
-Agent info:
+本 Agent 信息：
 - name: {agent_name}
 - description: {agent_description}
-- skill inventory (loaded skills; evidence for judgment):
+- skill inventory（技能名 + 完整正文；打分的主要依据）:
 {agent_skills}
 
-History:
+历史：
 {history}
 
-User query:
+用户问题：
 {query}
 
 ---
-Output guidance:
-- Put your D1–D3 step-by-step reasoning into the reason field.
-- Call evaluate_capability to output the verdict.
+输出要求：
+- 只输出一个纯 JSON 对象，**不要使用 ```json 代码块包裹**，直接输出 JSON 文本。
+- 每个 RatioCheck（input_match / data_coverage / result_match / constraint_satisfaction）必须同时给出 required（字符串数组）、matched（字符串数组）、ratio（数字，0~1）。
+- operation_capability 只能是 1.0、0.7 或 0。
+- 不要输出 can_handle、can_contribute、confidence。
+
+严格按照以下 JSON schema 输出（示例，实际内容按评估结果填写）：
+
+{{
+  "steps": [
+    {{
+      "step_id": 1,
+      "description": "从慢查询日志中检索并排序慢查询记录",
+      "operation": "lookup",
+      "is_final": true,
+      "inputs": [
+        {{"name": "时间范围", "source": "query"}}
+      ],
+      "outputs": ["慢查询TOP列表"],
+      "constraints": ["只读"],
+      "input_match": {{"required": ["时间范围"], "matched": ["时间范围"], "ratio": 1.0}},
+      "data_coverage": {{"required": ["慢查询日志数据"], "matched": ["慢查询日志数据"], "ratio": 1.0}},
+      "operation_capability": 1.0,
+      "result_match": {{"required": ["慢查询列表"], "matched": ["慢查询列表"], "ratio": 1.0}},
+      "constraint_satisfaction": {{"required": ["只读"], "matched": ["只读"], "ratio": 1.0}},
+      "evidence": ["技能正文：grep 'slow_query' data/mysql-slow.log"]
+    }}
+  ],
+  "evidence_grade": "A",
+  "contribution": "输入时间范围，输出慢查询TOP列表",
+  "missing_requirements": [],
+  "risks": [],
+  "reason": "步骤1（慢查询日志→慢查询列表）：I=1/1 D=1/1 O=1.0 R=1/1 C=1/1，依据技能正文grep示例。可独立完成。"
+}}
+
+注意要点：
+- steps 是数组，每项中的 inputs 是对象数组（每个对象含 name 和 source），outputs 和 constraints 是字符串数组。
+- input_match、data_coverage、result_match、constraint_satisfaction 是对象（含 required/matched/ratio），不是数组。
+- operation_capability 是数字（1.0 / 0.7 / 0），必须是数字类型不是字符串。
+- evidence 是字符串数组。
+- 每个步骤的 step_id 从 1 开始连续递增。
 """
 
 
@@ -1478,8 +1820,9 @@ class PlannerAgent(BaseAgent):
             stream=stream,
             extra_body=_extra_body,
         )
-        # 工具绑定（bind_tools / tool_choice）由 invoke_llm_with_tool 内部完成，
-        # 这里只保留一个非流式的原始 LLM 实例。
+        # make_plan 与 capability_check 已改用纯文本 JSON 字符串输出
+        # （self.llm.ainvoke，不经 bind_tools），此 LLM 实例仅用于
+        # _ainvoke_plain_plan 路径，不再参与 invoke_llm_with_tool。
         self.make_plan_max_attempts = int(os.getenv("MAKE_PLAN_MAX_ATTEMPTS", "3"))
         self.data_services_client = DataServicesClient(
             base_url=data_services_url,
@@ -1571,61 +1914,8 @@ class PlannerAgent(BaseAgent):
         return str(raw)
 
     def format_llm_output(self, answer) -> Optional[dict]:
-        raw = self._llm_answer_text(answer)
-        if not isinstance(raw, str) or not raw.strip():
-            return None
-        try:
-            parsed = json.loads(raw, strict=False)
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            pass
-
-        cleaned_content = raw.strip()
-        if cleaned_content.startswith("```json"):
-            cleaned_content = cleaned_content[7:]
-        elif cleaned_content.startswith("```"):
-            cleaned_content = cleaned_content[3:]
-        if cleaned_content.endswith("```"):
-            cleaned_content = cleaned_content[:-3]
-        cleaned_content = cleaned_content.strip()
-
-        try:
-            parsed = json.loads(cleaned_content, strict=False)
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            pass
-
-        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
-        if escaped_content != cleaned_content:
-            try:
-                parsed = json.loads(escaped_content, strict=False)
-                return parsed if isinstance(parsed, dict) else None
-            except json.JSONDecodeError:
-                pass
-
-        if _json_repair is not None:
-            try:
-                repaired = _json_repair(escaped_content, return_objects=True)
-                if isinstance(repaired, dict):
-                    return repaired
-            except Exception:
-                pass
-
-        try:
-            import ast
-            parsed = ast.literal_eval(cleaned_content)
-            if isinstance(parsed, dict):
-                return parsed
-        except (ValueError, SyntaxError):
-            pass
-
-        try:
-            parsed = json.loads(cleaned_content.replace("'", '"'), strict=False)
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            pass
-
-        return None
+        """Parse LLM plain-text output into a dict (delegates to module-level helper)."""
+        return _parse_json_output(answer)
 
     @staticmethod
     def _plan_information(
@@ -1667,6 +1957,170 @@ class PlannerAgent(BaseAgent):
                 )
             ],
         )
+
+    @staticmethod
+    def _validate_chain_task_consistency(
+        args: dict[str, Any],
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Validate that capability_chain ↔ tasks are consistent.
+
+        Returns (error_msg, thought_process_validated).
+        """
+        chain_steps: list[dict] = args.get("capability_chain") or []
+        tasks: list[dict] = args.get("tasks") or []
+
+        if not chain_steps:
+            return None, None  # No chain present — skip validation (legacy mode)
+
+        # --- Validate chain steps themselves ---
+        for i, s in enumerate(chain_steps):
+            sid = s.get("step_id")
+            if sid is None:
+                return f"capability_chain[{i}].step_id 缺失", None
+            if not isinstance(sid, int) or sid < 1:
+                return f"capability_chain[{i}].step_id 必须是正整数，实际: {sid}", None
+            if not str(s.get("description") or "").strip():
+                return f"capability_chain[{i}].description 为空", None
+            if not str(s.get("matched_agent") or "").strip():
+                return f"capability_chain[{i}].matched_agent 为空（链步骤不允许没有 agent 标记）", None
+
+        # --- Build lookup maps ---
+        chain_by_id: dict[int, dict] = {}
+        task_by_id: dict[int, dict] = {}
+        for s in chain_steps:
+            chain_by_id[s["step_id"]] = s
+        for t in tasks:
+            tid = t.get("id")
+            if tid is not None:
+                task_by_id[tid] = t
+
+        # --- Cross-check: chain ↔ tasks ---
+        # Every chain step must have a corresponding task
+        for sid, s in chain_by_id.items():
+            if sid not in task_by_id:
+                return (
+                    f"capability_chain 中步骤 {sid} ({s.get('description','')[:60]}) "
+                    f"在 tasks 中没有对应的 task（期望 task.id={sid}）",
+                    None,
+                )
+            chain_agent = str(s.get("matched_agent", "")).strip()
+            task_agent = str(task_by_id[sid].get("agent", "")).strip()
+            if chain_agent.upper() != task_agent.upper():
+                return (
+                    f"capability_chain 步骤 {sid} 的 matched_agent='{chain_agent}' "
+                    f"与 task[{sid}] 的 agent='{task_agent}' 不一致",
+                    None,
+                )
+
+        # Check if extra tasks not in chain
+        for tid in task_by_id:
+            if tid not in chain_by_id:
+                return (
+                    f"task[{tid}] ('{task_by_id[tid].get('description','')[:60]}') "
+                    f"在 capability_chain 中没有对应步骤",
+                    None,
+                )
+
+        # --- Cross-check depends_on ---
+        for _, s in chain_by_id.items():
+            if str(s.get("input_source", "")).lower() == "upstream":
+                sid = s["step_id"]
+                task_deps = task_by_id.get(sid, {}).get("depends_on") or []
+                if not task_deps:
+                    return (
+                        f"capability_chain 步骤 {sid} input_source=upstream，"
+                        f"但 task[{sid}].depends_on 为空（必须包含上游步骤 id）",
+                        None,
+                    )
+
+        # All good — return the valid thought_process
+        tp = str(args.get("thought_process") or "").strip()
+        return None, tp
+
+    def _hydrate_chain_plan(
+        self,
+        args: dict[str, Any],
+        query: Any,
+        valid_agent_names: set[str],
+    ) -> tuple[Optional[TaskList], Optional[str]]:
+        """Parse chain-driven planner output into TaskList.
+
+        Steps:
+        1. Validate capability_chain ↔ tasks consistency
+        2. Run standard field completeness checks
+        3. Build TaskList
+        """
+        # --- Step 1: chain-task consistency ---
+        err, thought_process = self._validate_chain_task_consistency(args)
+        if err:
+            return None, err
+
+        # --- Step 2: standard field checks ---
+        omitted: list[str] = []
+        if not (thought_process or "").strip():
+            omitted.append("thought_process")
+        if not str(args.get("original_query") or query or "").strip():
+            omitted.append("original_query")
+
+        raw_tasks: list[dict] = args.get("tasks") or []
+        if not raw_tasks:
+            omitted.append("tasks(必须是非空数组)")
+        else:
+            for idx, rt in enumerate(raw_tasks):
+                if not isinstance(rt, dict):
+                    omitted.append(f"tasks[{idx}](必须是对象)")
+                    continue
+                if rt.get("id") is None:
+                    omitted.append(f"tasks[{idx}].id")
+                if not str(rt.get("description") or "").strip():
+                    omitted.append(f"tasks[{idx}].description")
+                if not str(rt.get("agent") or "").strip():
+                    omitted.append(f"tasks[{idx}].agent")
+                if "depends_on" not in rt or rt.get("depends_on") is None:
+                    omitted.append(f"tasks[{idx}].depends_on")
+
+        if omitted:
+            return None, (
+                f"缺少必填字段: {omitted}。"
+                f"`thought_process`、`original_query`、`capability_chain`、`tasks` 以及每个 task 的 "
+                f"`id`、`description`、`agent`、`depends_on` 全部为必填，不允许省略或留空。"
+                f"特别注意 `depends_on`：即使该任务没有上游依赖，也必须显式写成 `depends_on: []`；"
+                f"若该任务需要上游任务的产出，则必须写入对应的上游 task id。"
+            )
+
+        # --- Step 3: build TaskList ---
+        try:
+            tasks = TaskList(
+                thought_process=thought_process or str(args.get("thought_process")),
+                original_query=_non_empty_str(query),
+                tasks=raw_tasks,
+            )
+        except Exception as exc:
+            return None, f"规划结果解析失败: {exc}."
+
+        if not tasks.tasks:
+            return None, (
+                f"`tasks` 列表为空。如果确实没有合适的智能体，请使用 agent='NONE' "
+                f"和 description='{NONE_TASK_DESCRIPTION}'。"
+            )
+
+        unknown = [
+            (t.id, (t.agent or "").strip())
+            for t in tasks.tasks
+            if (t.agent or "").strip() not in valid_agent_names
+            and (t.agent or "").strip().upper() != "NONE"
+        ]
+        if unknown:
+            return None, (
+                f"agent 名称不存在于可用智能体列表中: "
+                f"{[a for _, a in unknown]}。"
+                f"`agent` 字段必须与可用智能体的名称完全一致，可选值为: "
+                f"{sorted(n for n in valid_agent_names if n != 'NONE')}。"
+                f"如果确实没有合适的智能体，请使用 agent='NONE' 和 "
+                f"description='{NONE_TASK_DESCRIPTION}'。"
+            )
+
+        return tasks, None
 
     def _hydrate_task_list(
         self,
@@ -1826,122 +2280,6 @@ class PlannerAgent(BaseAgent):
         )
         return answer
 
-    async def make_plan_structuredtool(
-        self,
-        query,
-        agent_cards,
-        group_memory: str = "",
-        replan_context: Optional[Dict[str, Any]] = None,
-        replan_guidance: str = "",
-        plan_stage: str = "pre_exec",
-    ) -> TaskList:
-        information = ""
-        if replan_context or replan_guidance:
-            info_parts: List[str] = []
-            if replan_context:
-                info_parts.append(
-                    "REPLAN_CONTEXT(JSON):\n" + json.dumps(replan_context, ensure_ascii=False)
-                )
-            if replan_guidance:
-                info_parts.append(f"REPLAN_GUIDANCE:\n{replan_guidance}")
-            information = "\n\n".join(info_parts)
-
-        system_template = PLANNER_COT_INSTRUCTIONS_ZH_HISTORY
-
-        human_template = "{query}"
-
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["history", "agents", "information", "group_memory"],
-        )
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-        system_prompt_agents = self.generate_system_prompt_agents(agent_cards)
-
-        user_id = self.metadata.get("user_id", "")
-        run_id = self.metadata.get("run_id", "")
-        trace_id = self.metadata.get("trace_id", "")
-
-        history = await self.get_history()
-
-        format_kwargs = {
-            "query": query,
-            "agents": system_prompt_agents,
-            "information": information,
-            "group_memory": group_memory,
-            "history": history,
-        }
-        messages = chat_prompt.format_messages(**format_kwargs)
-
-        tasks = None
-
-        valid_agent_names = {
-            str(getattr(c, "name", "") or "").strip()
-            for c in (agent_cards or [])
-        }
-        valid_agent_names.discard("")
-        valid_agent_names.add("NONE")
-
-        make_plan_tool = StructuredTool(
-            name="make_plan_cmd",
-            description="Create a structured plan with tasks to be executed sequentially.",
-            args_schema=TaskList,
-            func=None,
-            coroutine=None,
-        )
-
-        agent_name = self.agent_id or self.agent_name or "PlannerAgent"
-        nudge: Optional[HumanMessage] = None
-        span_prefix = (
-            "skill-agent-make_plan-mid-exec"
-            if plan_stage == "mid_exec"
-            else "skill-agent-make_plan"
-        )
-
-        for attempt in range(1, self.make_plan_max_attempts + 1):
-            logger.info(
-                "make_plan llm_invoke stage=%s attempt=%d/%d",
-                plan_stage, attempt, self.make_plan_max_attempts,
-            )
-            attempt_messages = (
-                messages + [AIMessage(content=""), nudge] if nudge is not None else messages
-            )
-            try:
-                args = await invoke_llm_with_tool(
-                    llm=self.llm,
-                    tool=make_plan_tool,
-                    messages=attempt_messages,
-                    metadata={"user_id": user_id, "run_id": run_id, "trace_id": trace_id},
-                    tool_choice="make_plan_cmd",
-                    span_name=f"{span_prefix}-attempt-{attempt}",
-                    query=str(query),
-                    agent_name=agent_name,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "make_plan attempt %s: tool-call LLM failed: %s: %s",
-                    attempt, type(exc).__name__, exc,
-                )
-                nudge = HumanMessage(
-                    content="上一次工具调用失败。请**必须**调用 `make_plan_cmd` 工具来输出规划结果。"
-                )
-                continue
-
-            tasks, err = self._hydrate_task_list(args, query, valid_agent_names)
-            if tasks is not None:
-                logger.info(
-                    "make_plan SELECTED attempt=%d tasks_count=%d",
-                    attempt, len(tasks.tasks),
-                )
-                break
-            logger.warning("make_plan attempt %s: invalid tool-call plan, nudging: %s", attempt, err)
-            nudge = HumanMessage(
-                content=(err or "规划结果无效。")
-                + " 请重新调用 `make_plan_cmd` 并补全所有字段。"
-            )
-
-        return tasks
-
     async def make_plan(
         self,
         query,
@@ -1951,11 +2289,23 @@ class PlannerAgent(BaseAgent):
         replan_guidance: str = "",
         plan_stage: str = "pre_exec",
     ) -> TaskList:
-        """planner: LLM emits a JSON object as text (no nested tool schema)."""
+        """planner: LLM emits a JSON object as text (no nested tool schema).
+
+        Feature flag: set USE_CHAIN_PLANNING=true to enable chain-driven planning
+        (operation chain decomposition → agent matching → task generation).
+        """
+        use_chain = os.getenv("USE_CHAIN_PLANNING", "true").strip().lower() in ("true", "1", "yes")
+        plan_mode = "chain" if use_chain else "legacy"
+
+        system_template = (
+            PLANNER_CHAIN_INSTRUCTIONS_ZH
+            if use_chain
+            else PLANNER_COT_INSTRUCTIONS_ZH_HISTORY_JSONSTRING
+        )
         information = self._plan_information(replan_context, replan_guidance)
         history = await self.get_history()
         messages = self._format_plan_messages(
-            system_template=PLANNER_COT_INSTRUCTIONS_ZH_HISTORY_JSONSTRING,
+            system_template=system_template,
             query=query,
             agent_cards=agent_cards,
             group_memory=group_memory,
@@ -1969,14 +2319,15 @@ class PlannerAgent(BaseAgent):
             if plan_stage == "mid_exec"
             else "skill-agent-make_plan_jsonstring"
         )
+        span_prefix = f"{span_prefix}-{plan_mode}"
         max_attempts = self.make_plan_max_attempts
         nudge: Optional[HumanMessage] = None
         tasks: Optional[TaskList] = None
 
         for attempt in range(1, max_attempts + 1):
             logger.info(
-                "make_plan_jsonstring llm_invoke stage=%s attempt=%d/%d",
-                plan_stage, attempt, max_attempts,
+                "make_plan_jsonstring llm_invoke stage=%s mode=%s attempt=%d/%d",
+                plan_stage, plan_mode, attempt, max_attempts,
             )
             attempt_messages = (
                 messages + [AIMessage(content=""), nudge] if nudge is not None else messages
@@ -2003,11 +2354,16 @@ class PlannerAgent(BaseAgent):
                 continue
 
             args = self.format_llm_output(answer)
-            tasks, err = self._hydrate_task_list(args, query, valid_agent_names)
+
+            if use_chain:
+                tasks, err = self._hydrate_chain_plan(args, query, valid_agent_names)
+            else:
+                tasks, err = self._hydrate_task_list(args, query, valid_agent_names)
+
             if tasks is not None:
                 logger.info(
-                    "make_plan_jsonstring SELECTED attempt=%d tasks_count=%d",
-                    attempt, len(tasks.tasks),
+                    "make_plan_jsonstring SELECTED mode=%s attempt=%d tasks_count=%d",
+                    plan_mode, attempt, len(tasks.tasks),
                 )
                 break
             preview = self._llm_answer_text(answer)[:400]
@@ -2027,8 +2383,8 @@ class PlannerAgent(BaseAgent):
 
         if tasks is None:
             logger.warning(
-                "make_plan_jsonstring EXIT no_valid_selection after %s attempts.",
-                max_attempts,
+                "make_plan_jsonstring EXIT no_valid_selection mode=%s after %s attempts.",
+                plan_mode, max_attempts,
             )
             tasks = self._none_task_list(
                 query,
@@ -2835,8 +3191,6 @@ class SkillAgentExecutor(AgentExecutor):
             for s in (self._skill_runner.lister.skills or []):
                 name = str(getattr(s, "name", "") or "").strip()
                 desc = str(getattr(s, "description", "") or "").strip().replace("\n", " ")
-                if len(desc) > 140:
-                    desc = desc[:140] + "..."
                 if name:
                     lines.append(f"- {name}: {desc}")
         except Exception:
@@ -2850,15 +3204,10 @@ class SkillAgentExecutor(AgentExecutor):
                 "planner will see a no-op capability"
             )
         else:
-            preview = lines[:30]
-            description = "本地技能执行器，可在本进程内直接运行以下技能：\n" + "\n".join(preview)
-            if len(lines) > 30:
-                description += f"\n（另有 {len(lines) - 30} 个技能未列出）"
+            description = "\n" + "\n".join(lines)
             logger.info(
-                "[LocalSkill][CardBuild] rendered AgentCard: skills_count=%d (shown=%d, hidden=%d)",
+                "[LocalSkill][CardBuild] rendered AgentCard: skills_count=%d",
                 len(lines),
-                min(len(lines), 30),
-                max(0, len(lines) - 30),
             )
         return AgentCard(
             name=self.local_skill_agent_name,
@@ -3417,8 +3766,7 @@ class SkillAgentExecutor(AgentExecutor):
     # ------------------------------------------------------------------
 
     _EMPTY_SKILL_DESCRIPTION = "本地技能执行器。当前未加载任何技能。"
-    _SKILL_LIST_HEADER = "本地技能执行器，可在本进程内直接运行以下技能："
-    _MAX_DESC_PREVIEW_LINES = 30
+    _SKILL_LIST_HEADER = ""
 
     def build_dynamic_agent_card_fields(self) -> tuple[str, list[AgentSkill]]:
         runner = self._skill_runner
@@ -3434,15 +3782,17 @@ class SkillAgentExecutor(AgentExecutor):
             name = str(getattr(s, "name", "") or "").strip()
             desc_raw = str(getattr(s, "description", "") or "").strip()
             desc_inline = desc_raw.replace("\n", " ").strip()
+            detail_raw = str(getattr(s, "detail", "") or "").strip()
             if not name:
                 continue
             lines.append(f"- {name}: {desc_inline}")
             try:
+                # AgentSkill.description = skill 的 full detail（SKILL.md 正文），不截断
                 agent_skills.append(
                     AgentSkill(
                         id=name,
                         name=name,
-                        description=desc_raw or desc_inline,
+                        description=detail_raw or desc_raw or desc_inline,
                         tags=[name, "local skill", "skill sdk"],
                         examples=[],
                         input_modes=["text", "text/plain"],
@@ -3455,11 +3805,8 @@ class SkillAgentExecutor(AgentExecutor):
         if not lines:
             return self._EMPTY_SKILL_DESCRIPTION, []
 
-        preview_lines = lines[: self._MAX_DESC_PREVIEW_LINES]
-        description = self._SKILL_LIST_HEADER + "\n" + "\n".join(preview_lines)
-        hidden = max(0, len(lines) - self._MAX_DESC_PREVIEW_LINES)
-        if hidden:
-            description += f"\n（另有 {hidden} 个技能未列出）"
+        # agent_card.description = 所有 skill 的 name + short description 列表（不截断）
+        description = self._SKILL_LIST_HEADER + "\n" + "\n".join(lines)
         return description, agent_skills
 
     # ------------------------------------------------------------------
@@ -5667,96 +6014,46 @@ class SkillAgentExecutor(AgentExecutor):
         event_queue: EventQueue,
         query: str,
     ) -> None:
+        _md = context.metadata if isinstance(context.metadata, dict) else {}
+        logger.info(
+            "[Capability] request received | agent=%s run_id=%s query=%s",
+            self.agent_id,
+            _md.get("run_id") or "",
+            (query or "")[:150],
+        )
         task = context.current_task
         if not task:
             task = new_task(context.message)
             await event_queue.enqueue_event(task)
 
         updater = TaskUpdater(event_queue, task.id, task.context_id)
-        request_metadata = context.metadata if isinstance(context.metadata, dict) else {}
-        md = request_metadata
+        md = _md
 
         card = self.agent_card
         agent_name = card.name if card else "SkillAgent"
         agent_description = (card.description if card else "") or ""
         agent_url = (card.url if card else "") or ""
 
-        agent_skills_text = "（无）"
-        if card and card.skills:
-            skills_lines = []
-            for skill in card.skills:
-                skill_desc = f"- {skill.name}: {skill.description}"
-                if hasattr(skill, "tags") and skill.tags:
-                    skill_desc += f" (tags: {', '.join(skill.tags)})"
-                skills_lines.append(skill_desc)
-            agent_skills_text = "\n".join(skills_lines)
+        agent_skills_text = _format_skills_for_capability_check(card.skills if card else None)
 
         history_text = _history_text_from_metadata(md)
         _cc_start = _time.monotonic()
+        leaf_path = [agent_name]
+        threshold = capability_chain.get_threshold()
 
-        try:
-            mgr = ModelManager()
-            _extra_body = (
-                {"enable_thinking": False}
-                if os.getenv("ENABLE_THINKING_PARAM", "true").strip().lower() not in ("false", "0", "no")
-                else {}
-            )
-            llm = mgr.get_llm(
-                provider=self.provider,
-                api_key=self.api_key,
-                base_url=self.base_url,
-                model=self.model,
-                temperature=0.01,
-                stream=False,
-                extra_body=_extra_body,
-            )
-            prompt = SKILL_CAPABILITY_CHECK_PROMPT.format(
-                agent_name=agent_name,
-                agent_description=agent_description,
-                agent_skills=agent_skills_text,
-                history=history_text,
-                query=query,
-            )
-            cap_tool = StructuredTool(
-                name="evaluate_capability",
-                description="评估本智能体能否处理用户问题",
-                args_schema=CapabilityCheckToolResult,
-                func=None,
-                coroutine=None,
-            )
-            result_data = await invoke_llm_with_tool(
-                llm=llm,
-                tool=cap_tool,
-                messages=[HumanMessage(content=prompt)],
-                metadata=md,
-                tool_choice="evaluate_capability",
-                span_name="skill-capability-check-llm",
-                query=query,
-                agent_name=agent_name,
-            )
-            if result_data is None:
-                raise ValueError("LLM did not call evaluate_capability tool")
-
-            # Normalize (aligned with SD orchestrator _normalize_member_capability_judgment)
-            can_handle, can_contribute = _normalize_capability_result(result_data)
-            try:
-                conf = float(result_data.get("confidence", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                conf = 0.0
-            conf = max(0.0, min(1.0, conf))
-            reason = str(result_data.get("reason") or "").strip()[:500]
-
-            leaf_path = [agent_name]
+        if not (card and card.skills):
+            # Runtime fact, not a capability judgement: nothing is loaded, so
+            # there is nothing to evaluate. Skip the LLM entirely.
             check_response = sg_broadcast.CapabilityCheckResponse(
-                can_handle=can_handle,
-                confidence=round(conf, 2),
-                reason=reason,
+                can_handle=False,
+                confidence=0.0,
+                reason="No skills loaded; nothing to evaluate.",
                 agent_name=agent_name,
                 agent_url=agent_url,
                 route_path=leaf_path,
-                route_paths=[{"path": leaf_path, "confidence": round(conf, 2), "alias": _path_to_alias(leaf_path)}],
-                can_contribute=can_contribute,
-                contribution=str(result_data.get("contribution", "")),
+                route_paths=[{"path": leaf_path, "confidence": 0.0, "alias": _path_to_alias(leaf_path)}],
+                can_contribute=False,
+                contribution="",
                 execution_strategy="single",
                 collaboration_agents=[],
                 collaboration_roles={},
@@ -5767,10 +6064,170 @@ class SkillAgentExecutor(AgentExecutor):
                 missing_requirements=[],
                 execution_hint={},
                 latency_ms=int((_time.monotonic() - _cc_start) * 1000),
+                score_version=capability_chain.SCORE_VERSION,
+                evidence_grade="D",
+                threshold=threshold,
+                handle_score=0.0,
+                steps=[],
+                contributing_steps=[],
+            )
+            await self._emit_capability_check_response(updater, task, md, query, check_response)
+            return
+
+        try:
+            max_attempts = int(os.getenv("CAPABILITY_CHECK_MAX_ATTEMPTS", "3"))
+            prompt = SKILL_CAPABILITY_CHECK_PROMPT.format(
+                agent_name=agent_name,
+                agent_description=agent_description,
+                agent_skills=agent_skills_text,
+                history=history_text,
+                query=query,
+            )
+            nudge: Optional[HumanMessage] = None
+            chain_result: Optional[CapabilityChainResult] = None
+            llm = self._get_orchestration_llm()
+
+            for attempt in range(1, max_attempts + 1):
+                logger.info(
+                    "[Capability][JSON] llm_invoke attempt=%d/%d agent=%s",
+                    attempt, max_attempts, agent_name,
+                )
+                attempt_messages = (
+                    [HumanMessage(content=prompt)]
+                    if nudge is None
+                    else [HumanMessage(content=prompt), AIMessage(content=""), nudge]
+                )
+                try:
+                    answer = await llm.ainvoke(attempt_messages)
+                except Exception as exc:
+                    logger.warning(
+                        "[Capability][JSON] attempt %d: LLM invoke failed: %s: %s",
+                        attempt, type(exc).__name__, exc,
+                    )
+                    nudge = HumanMessage(
+                        content=(
+                            "上一次调用失败。请重新输出一个完整的 JSON 对象，"
+                            "字段必须包含 steps、evidence_grade、contribution、"
+                            "missing_requirements、risks、reason。"
+                        )
+                    )
+                    continue
+
+                result_data = _parse_json_output(answer)
+                if result_data is None:
+                    raw_text = (
+                        "".join(
+                            [
+                                str(p.get("text", "")) if isinstance(p, dict) else str(p)
+                                for p in (getattr(answer, "content", None) or [])
+                            ]
+                        ) if isinstance(getattr(answer, "content", None), list) else getattr(answer, "content", "") or ""
+                    )
+                    preview = (raw_text or str(answer))[:400]
+                    logger.warning(
+                        "[Capability][JSON] attempt %d: invalid JSON, nudging | preview=%s",
+                        attempt, preview,
+                    )
+                    nudge = HumanMessage(
+                        content=(
+                            "输出无法解析为合法 JSON。请只输出一个 JSON 对象，"
+                            "字段包含 steps（步骤数组）、evidence_grade（A/B/C/D）、"
+                            "contribution（贡献说明，不能贡献时为空字符串）、"
+                            "missing_requirements（缺失项列表，无缺失时为 []）、"
+                            "risks（风险列表，无风险时为 []）、"
+                            "reason（结构化理由）。"
+                            "每个步骤的 RatioCheck 必须同时给出 required、matched、ratio。"
+                        )
+                    )
+                    continue
+
+                try:
+                    chain_result = capability_chain.parse_chain_result(result_data)
+                except Exception as exc:
+                    preview = json.dumps(result_data, ensure_ascii=False, default=str)[:400]
+                    logger.warning(
+                        "[Capability][JSON] attempt %d: parse_chain_result failed: %s | data=%s",
+                        attempt, exc, preview,
+                    )
+                    nudge = HumanMessage(
+                        content=(
+                            f"JSON 解析成功，但字段类型不符合 schema：{exc}。\n"
+                            "请严格按照以下 schema 修正后重新输出：\n"
+                            '- steps 是数组，每项的 inputs 是对象数组 [{"name":"...","source":"..."}]，不能是单个对象\n'
+                            '- outputs 是字符串数组 ["..."]，不能是对象\n'
+                            '- constraints 是字符串数组 ["..."]，不能是对象\n'
+                            "- input_match/data_coverage/result_match/constraint_satisfaction 是对象 "
+                            '{"required":["..."],"matched":["..."],"ratio":0.0}，不是数组\n'
+                            "- operation_capability 必须是数字 1.0、0.7 或 0\n"
+                        )
+                    )
+                    continue
+
+                # Valid chain_result obtained
+                logger.info(
+                    "[Capability][JSON] SELECTED attempt=%d steps=%d",
+                    attempt, len(chain_result.steps),
+                )
+                break
+
+            if chain_result is None:
+                raise ValueError(
+                    f"Capability check failed to produce valid JSON after {max_attempts} attempts."
+                )
+
+            agg = capability_chain.aggregate(chain_result, threshold=threshold)
+            # Aligned with SD orchestrator _normalize_member_capability_judgment
+            can_handle, can_contribute = _normalize_capability_result(
+                {"can_handle": agg.can_handle, "can_contribute": agg.can_contribute}
+            )
+            conf = agg.confidence
+            reason = str(chain_result.reason or "").strip()[:2000]
+
+            logger.info(
+                "[Capability][Chain] agent=%s handle_score=%.3f threshold=%.2f steps=%s "
+                "contributing=%s external_dep=%s evidence=%s -> handle=%s contribute=%s conf=%.2f",
+                agent_name,
+                agg.handle_score,
+                agg.threshold,
+                {k: round(v, 3) for k, v in agg.step_scores.items()},
+                agg.contributing_steps,
+                agg.has_external_dependency,
+                chain_result.evidence_grade,
+                can_handle,
+                can_contribute,
+                conf,
+            )
+
+            check_response = sg_broadcast.CapabilityCheckResponse(
+                can_handle=can_handle,
+                confidence=conf,
+                reason=reason,
+                agent_name=agent_name,
+                agent_url=agent_url,
+                route_path=leaf_path,
+                route_paths=[{"path": leaf_path, "confidence": conf, "alias": _path_to_alias(leaf_path)}],
+                can_contribute=can_contribute,
+                contribution=agg.contribution,
+                execution_strategy="single",
+                collaboration_agents=[],
+                collaboration_roles={},
+                collaboration_paths=[],
+                member_results=[],
+                degraded=False,
+                unavailable_count=0,
+                missing_requirements=agg.missing_requirements,
+                execution_hint={},
+                latency_ms=int((_time.monotonic() - _cc_start) * 1000),
+                score_version=capability_chain.SCORE_VERSION,
+                evidence_grade=chain_result.evidence_grade,
+                threshold=agg.threshold,
+                handle_score=agg.handle_score,
+                steps=agg.steps_payload(chain_result),
+                contributing_steps=agg.contributing_steps,
+                risks=list(chain_result.risks or []),
             )
         except Exception as e:
             logger.error("Capability check failed: %s", e, exc_info=True)
-            leaf_path = [agent_name]
             check_response = sg_broadcast.CapabilityCheckResponse(
                 can_handle=False,
                 confidence=0.0,
@@ -5789,8 +6246,20 @@ class SkillAgentExecutor(AgentExecutor):
                 missing_requirements=[],
                 execution_hint={},
                 latency_ms=int((_time.monotonic() - _cc_start) * 1000),
+                score_version=capability_chain.SCORE_VERSION,
+                threshold=threshold,
             )
 
+        await self._emit_capability_check_response(updater, task, md, query, check_response)
+
+    async def _emit_capability_check_response(
+        self,
+        updater: TaskUpdater,
+        task: Any,
+        md: dict,
+        query: str,
+        check_response: "sg_broadcast.CapabilityCheckResponse",
+    ) -> None:
         check_response.execution_hint = self._build_execution_hint(
             run_id=str(md.get("run_id") or ""),
             query=query,
@@ -5820,8 +6289,10 @@ class SkillAgentExecutor(AgentExecutor):
 
         Called when the routing agent sends ``message_type="pre_make_plan"``
         to evaluate this agent's task-planning capability before making a
-        final routing decision.  The agent runs :meth:`make_plan` with the
-        query and returns the resulting ``TaskList`` as JSON.
+        final routing decision.  The agent runs :meth:`make_plan` against
+        **this agent only** (own AgentCard + optional LocalSkill).  Peer
+        SGs are not loaded: routing already filtered candidates, and
+        PreMakePlan is a self-capability probe, not a collaboration plan.
         """
         task = context.current_task
         if not task:
@@ -5848,7 +6319,15 @@ class SkillAgentExecutor(AgentExecutor):
             )
 
         try:
-            all_cards, own_names, collab_names = await self._resolve_planner_agent_pool(query)
+            await self._ensure_skill_runner()
+            local_card = self.agent_card
+            all_cards = [local_card] if local_card else []
+            all_cards = self._maybe_append_local_skill_card(all_cards)
+            logger.info(
+                "[PreMakePlan] local-only planner pool | agent=%s cards=%s",
+                self.agent_id,
+                [getattr(c, "name", "") for c in all_cards],
+            )
 
             base_group_memory = await self._get_memory(query)
             group_memory = self._enrich_group_memory_with_upstream(
