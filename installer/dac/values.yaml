@@ -837,6 +837,23 @@ bizRoutingAgent:
     routingMode: "simple"
     # -- Max retries for LLM routing calls
     maxRetries: "1"
+    # -- Phase 0.6: maximum agents that receive a model-based capability check
+    #    (env: ROUTING_CANDIDATE_TOP_K). Provisional; the recall gate in
+    #    docs/MULTI_AGENT_V2_DESIGN.md §23.5 must pass before enforcing it.
+    candidateTopK: "5"
+    # -- Compute and log the proposed top-K shortlist without changing the
+    #    active route (env: ROUTING_CANDIDATE_SHORTLIST_SHADOW). Measurement
+    #    only; safe to leave on.
+    candidateShortlistShadow: "true"
+    # -- Restrict capability checks to the shortlist (env:
+    #    ROUTING_CANDIDATE_LIMIT_ENFORCE). Changes which agents are considered —
+    #    enable only after the shadow recall gate passes.
+    candidateLimitEnforce: "false"
+    # -- Forbid capability-check and pre-plan receivers from broadcasting their
+    #    own capability checks (env: ROUTING_SUPPRESS_NESTED_BROADCAST).
+    #    Removes the quadratic fan-out but changes candidate plan content, so it
+    #    is replayed before enforcement.
+    suppressNestedBroadcast: "false"
   service:
     type: ClusterIP
     # -- A2A protocol port

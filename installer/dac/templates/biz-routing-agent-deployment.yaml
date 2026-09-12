@@ -40,6 +40,17 @@ spec:
             # broadcast: also allow multi-root task planning across several agents.
             - name: ROUTING_MODE
               value: {{ .Values.bizRoutingAgent.config.routingMode | quote }}
+            # Phase 0.6 candidate fan-out control. Shadow computes and logs the
+            # proposed top-K without changing the active route; enforcement and
+            # nested-broadcast suppression are separately rollback-able.
+            - name: ROUTING_CANDIDATE_TOP_K
+              value: {{ .Values.bizRoutingAgent.config.candidateTopK | quote }}
+            - name: ROUTING_CANDIDATE_SHORTLIST_SHADOW
+              value: {{ .Values.bizRoutingAgent.config.candidateShortlistShadow | quote }}
+            - name: ROUTING_CANDIDATE_LIMIT_ENFORCE
+              value: {{ .Values.bizRoutingAgent.config.candidateLimitEnforce | quote }}
+            - name: ROUTING_SUPPRESS_NESTED_BROADCAST
+              value: {{ .Values.bizRoutingAgent.config.suppressNestedBroadcast | quote }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
             {{- include "dac.enableThinkingEnv" . | nindent 12 }}
           args:

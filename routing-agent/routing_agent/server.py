@@ -53,6 +53,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.tools import StructuredTool, tool
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
+from . import candidate_shortlist
 from .agentregistry_client import AgentRegistryClient
 from .dataservices_client import DataServicesClient, CreateHistoryRequest, HistoryMessage, SearchHistoryRequest
 from .tool_call_utils import invoke_llm_with_tool, extract_tool_call_result
@@ -410,6 +411,44 @@ class CapabilityCheckResponse(BaseModel):
     )
 
 # ==================== Multi-Root Task Plan Protocol ====================
+
+# ── Phase 0.6: bounded capability fan-out ──────────────────────────────────
+# Shadow mode computes and logs the proposed top-K without changing the active
+# route. Enforcement is a separate flag so it can be rolled back on its own.
+CANDIDATE_SHORTLIST_SHADOW_DEFAULT = "true"
+CANDIDATE_LIMIT_ENFORCE_DEFAULT = "false"
+SUPPRESS_NESTED_BROADCAST_DEFAULT = "false"
+SUPPRESS_NESTED_BROADCAST_KEY = "suppress_nested_broadcast"
+
+
+def _flag(name: str, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() in ("true", "1", "yes")
+
+
+def candidate_top_k() -> int:
+    raw = (os.getenv("ROUTING_CANDIDATE_TOP_K", "") or "").strip()
+    if not raw:
+        return candidate_shortlist.DEFAULT_TOP_K
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("[Shortlist] invalid ROUTING_CANDIDATE_TOP_K=%r — using %d",
+                       raw, candidate_shortlist.DEFAULT_TOP_K)
+        return candidate_shortlist.DEFAULT_TOP_K
+    return max(1, value)
+
+
+def candidate_shortlist_shadow_enabled() -> bool:
+    return _flag("ROUTING_CANDIDATE_SHORTLIST_SHADOW", CANDIDATE_SHORTLIST_SHADOW_DEFAULT)
+
+
+def candidate_limit_enforced() -> bool:
+    return _flag("ROUTING_CANDIDATE_LIMIT_ENFORCE", CANDIDATE_LIMIT_ENFORCE_DEFAULT)
+
+
+def suppress_nested_broadcast_enabled() -> bool:
+    return _flag("ROUTING_SUPPRESS_NESTED_BROADCAST", SUPPRESS_NESTED_BROADCAST_DEFAULT)
+
 
 MULTI_ROOT_CONFIDENCE_THRESHOLD = float(os.getenv("MULTI_ROOT_CONFIDENCE_THRESHOLD", "0.6"))
 ROOT_SINGLE_FAST_PATH_MIN_CONFIDENCE = float(os.getenv("ROOT_SINGLE_FAST_PATH_MIN_CONFIDENCE", "0.78"))
@@ -1943,6 +1982,9 @@ class RoutingAgent(BaseAgent):
                 'run_id': run_id,
                 'trace_id': trace_id,
                 PROPAGATED_HISTORY_KEY: propagated_history or {},
+                # Phase 0.6: a capability check must not cause the receiver to
+                # broadcast its own capability checks (quadratic fan-out).
+                SUPPRESS_NESTED_BROADCAST_KEY: suppress_nested_broadcast_enabled(),
             },
         }
 
@@ -2038,6 +2080,9 @@ class RoutingAgent(BaseAgent):
                 'user_id': user_id,
                 'run_id': run_id,
                 'trace_id': trace_id,
+                # Phase 0.6: candidate pre-plans must not each trigger their own
+                # registry-wide capability broadcast.
+                SUPPRESS_NESTED_BROADCAST_KEY: suppress_nested_broadcast_enabled(),
             },
         }
 
@@ -2091,6 +2136,57 @@ class RoutingAgent(BaseAgent):
             )
             return None
 
+    def _log_shortlist_outcome(
+        self,
+        selected_root: str,
+        shortlist: Optional["candidate_shortlist.Shortlist"],
+        *,
+        run_id: str = "",
+        trace_id: str = "",
+    ) -> None:
+        """Record whether candidate limiting would have kept the selected root.
+
+        This is the measurement the Phase 0.6 recall gate reads: for every
+        disagreement it names the selected root, its rank, and why the shortlist
+        would have dropped it.
+
+        *shortlist* is passed in rather than read from instance state: the
+        executor is process-wide and serves concurrent requests, so shared state
+        would measure one request's root against another request's shortlist.
+        """
+        if shortlist is None:
+            return
+        if not (candidate_shortlist_shadow_enabled() or candidate_limit_enforced()):
+            return
+        would_keep = shortlist.contains(selected_root)
+        logger.info(
+            "[Shortlist] %s",
+            json.dumps(
+                {
+                    "schema_version": "v1",
+                    "record_type": "shortlist_outcome",
+                    "run_id": run_id,
+                    "trace_id": trace_id,
+                    "selected_root": selected_root,
+                    "selected_rank": shortlist.rank_of(selected_root),
+                    "k": shortlist.k,
+                    "would_keep_selected_root": would_keep,
+                    "disagreement": not would_keep,
+                    "exclusion_reason": shortlist.exclusion_reason(selected_root),
+                    "enforced": candidate_limit_enforced(),
+                },
+                ensure_ascii=False,
+            ),
+        )
+        if not would_keep:
+            logger.warning(
+                "[Shortlist] DISAGREEMENT | selected_root=%s rank=%s k=%d reason=%s",
+                selected_root,
+                shortlist.rank_of(selected_root),
+                shortlist.k,
+                shortlist.exclusion_reason(selected_root),
+            )
+
     async def broadcast_capability_check(
         self,
         query: str,
@@ -2098,9 +2194,15 @@ class RoutingAgent(BaseAgent):
         run_id: str,
         trace_id: str,
         propagated_history: Optional[dict] = None,
+        shortlist_out: Optional[list] = None,
     ) -> list[tuple[AgentCard, CapabilityCheckResponse]]:
-        """Broadcast a capability check to ALL registered orchestrator agents concurrently.
-        
+        """Broadcast a capability check to registered orchestrator agents concurrently.
+
+        Pass *shortlist_out* (an empty list) to receive this request's candidate
+        shortlist without sharing state between concurrent requests; the caller
+        needs it to record whether the root it selects would have survived
+        candidate limiting.
+
         Returns all capable agents sorted by confidence (highest first), not just the top one.
         The caller decides whether to use single-root or multi-root routing.
         """
@@ -2108,10 +2210,58 @@ class RoutingAgent(BaseAgent):
 
         if not all_agent_cards:
             logger.warning("Broadcast routing: no agents found in registry")
+            if shortlist_out is not None:
+                shortlist_out.append(candidate_shortlist.build_shortlist(query, []))
             return []
 
+        # ── Phase 0.6: bounded capability fan-out ──
+        # The shortlist is always computed so its recall can be measured; it
+        # only restricts the checked set when enforcement is explicitly on.
+        explicit_target = candidate_shortlist.find_explicit_target(query, all_agent_cards)
+        if explicit_target:
+            logger.info(
+                "[Shortlist] explicit target detected in query | agent=%s",
+                explicit_target,
+            )
+        shortlist = candidate_shortlist.build_shortlist(
+            query,
+            all_agent_cards,
+            k=candidate_top_k(),
+            explicit_target=explicit_target,
+            always_include=candidate_shortlist.static_matches(query, all_agent_cards),
+        )
+        if shortlist_out is not None:
+            shortlist_out.append(shortlist)
+        enforced = candidate_limit_enforced()
+        if candidate_shortlist_shadow_enabled() or enforced:
+            logger.info(
+                "[Shortlist] %s",
+                json.dumps(
+                    shortlist.to_shadow_record(
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        enforced=enforced,
+                        checked_count=len(shortlist.included) if enforced else len(all_agent_cards),
+                        registry_count=len(all_agent_cards),
+                        query_preview=(query or "")[:200],
+                    ),
+                    ensure_ascii=False,
+                ),
+            )
+
+        checked_cards = list(all_agent_cards)
+        if enforced:
+            included = set(shortlist.included_names)
+            checked_cards = [c for c in all_agent_cards if getattr(c, "name", "") in included]
+            logger.info(
+                "[Shortlist] enforcing candidate limit | k=%d checked=%d skipped=%d",
+                shortlist.k,
+                len(checked_cards),
+                len(all_agent_cards) - len(checked_cards),
+            )
+
         logger.info(
-            f"Broadcast routing: sending capability check to {len(all_agent_cards)} agents "
+            f"Broadcast routing: sending capability check to {len(checked_cards)} agents "
             f"for query: {query[:100]}..."
         )
         tasks = [
@@ -2123,9 +2273,10 @@ class RoutingAgent(BaseAgent):
                 trace_id,
                 propagated_history=propagated_history,
             )
-            for agent_card in all_agent_cards
+            for agent_card in checked_cards
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        all_agent_cards = checked_cards
 
         capable_agents: list[tuple[AgentCard, CapabilityCheckResponse]] = []
         for i, result in enumerate(results):
@@ -2850,13 +3001,18 @@ class RoutingAgent(BaseAgent):
                 propagated_history=propagated_history,
             )
 
+        # Per-request sink: the executor is shared across concurrent requests,
+        # so the shortlist must not live on ``self``.
+        _shortlist_sink: list = []
         capable_agents = await self.broadcast_capability_check(
             query,
             user_id,
             run_id,
             trace_id,
             propagated_history=history_payload,
+            shortlist_out=_shortlist_sink,
         )
+        request_shortlist = _shortlist_sink[0] if _shortlist_sink else None
 
         if not capable_agents:
             logger.info("[RoutePlan] Simple route: no capable agent found")
@@ -2906,6 +3062,10 @@ class RoutingAgent(BaseAgent):
                 )
             selected_card, selected_resp = capable_agents[0]
         # ── End Pre-Make-Plan ──
+
+        self._log_shortlist_outcome(
+            selected_card.name, request_shortlist, run_id=run_id, trace_id=trace_id
+        )
 
         self.agent_cards = [selected_card]
 
@@ -4433,6 +4593,18 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         agent_card.url = f'http://{agent_host}:{agent_port}'
 
         logger.info(f"agent_card is: {agent_card}")
+        # Every behavior-changing flag is logged at startup so a running pod's
+        # configuration can be read without inferring it from a Helm release.
+        logger.info(
+            "[Shortlist] startup config | ROUTING_MODE=%s ROUTING_CANDIDATE_TOP_K=%d "
+            "ROUTING_CANDIDATE_SHORTLIST_SHADOW=%s ROUTING_CANDIDATE_LIMIT_ENFORCE=%s "
+            "ROUTING_SUPPRESS_NESTED_BROADCAST=%s",
+            os.getenv("ROUTING_MODE", "simple"),
+            candidate_top_k(),
+            candidate_shortlist_shadow_enabled(),
+            candidate_limit_enforced(),
+            suppress_nested_broadcast_enabled(),
+        )
         logger.info(
             "Runtime build info: hostname=%s, pod_name=%s, app_version=%s, image=%s, image_tag=%s, git_sha=%s",
             os.getenv("HOSTNAME", "unknown"),
