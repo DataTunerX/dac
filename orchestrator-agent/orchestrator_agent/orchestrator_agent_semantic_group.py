@@ -68,7 +68,7 @@ from .tool_call_utils import invoke_llm_with_tool, safe_langfuse_flush
 # SG Orchestrator 和 skill-agent 是同一注册中心中的对等智能体，双向协作，
 # 通过 A2A 协议传输 Execution Flow 状态地图。
 from .execution_flow import (
-    ExecutionTask, is_execution_flow_frame, render_execution_flow_md,
+    ExecutionTask, is_execution_flow_frame, render_execution_flow_md, render_execution_flow_table,
 )
 
 try:
@@ -9437,6 +9437,14 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     "─── 上游执行流水账 ───\n%s",
                     run_id, trace_id, user_id, upstream_md,
                 )
+                # ── Execution Flow 表格快照（调试用） ──
+                ef_table_upstream = render_execution_flow_table(upstream_ef_for_log, current_agent=sg_label)
+                if ef_table_upstream:
+                    logger.info(
+                        "[ExecutionFlowTable] run_id=%s trace_id=%s\n"
+                        "─── 上游执行流水账表格 ───\n%s",
+                        run_id, trace_id, ef_table_upstream,
+                    )
 
             if local_ef:
                 local_md = render_execution_flow_md(
@@ -9450,6 +9458,14 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     "─── 本层执行流水账 ───\n%s",
                     run_id, trace_id, user_id, local_md,
                 )
+                # ── Execution Flow 表格快照（调试用） ──
+                ef_table_local = render_execution_flow_table(local_ef, current_agent=sg_label)
+                if ef_table_local:
+                    logger.info(
+                        "[ExecutionFlowTable] run_id=%s trace_id=%s\n"
+                        "─── 本层执行流水账表格 ───\n%s",
+                        run_id, trace_id, ef_table_local,
+                    )
 
             if not upstream_ef_for_log and not local_ef:
                 logger.info("[ExecutionFlow] no execution flow tasks recorded (run_id=%s)", run_id)
@@ -11548,6 +11564,13 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                             "[ExecutionFlow] run_id=%s trace_id=%s user_id=%s\n%s",
                             _run_id, _trace_id, _user_id, legacy_ef_md,
                         )
+                        # ── Execution Flow 表格快照（调试用） ──
+                        ef_table_legacy = render_execution_flow_table(agent.execution_flow_tasks, current_agent=_legacy_label)
+                        if ef_table_legacy:
+                            logger.info(
+                                "[ExecutionFlowTable] run_id=%s trace_id=%s\n%s",
+                                _run_id, _trace_id, ef_table_legacy,
+                            )
                     else:
                         logger.info(
                             "[ExecutionFlow] no execution flow tasks recorded (run_id=%s)",

@@ -2883,10 +2883,22 @@ class RoutingAgent(BaseAgent):
             if result is None:
                 continue
             candidates_with_plans.append((card, resp, result))
+            tasks = result.get("tasks", [])
+            thought = str(result.get("thought_process") or "")
+            # Build a per-task summary for the log
+            task_summaries: list[str] = []
+            for t in tasks:
+                if isinstance(t, dict):
+                    t_name = t.get("task_name") or t.get("name") or t.get("title") or "?"
+                    t_agent = t.get("agent") or t.get("agent_name") or t.get("assigned_agent") or "?"
+                    t_desc = str(t.get("description") or "")
+                    task_summaries.append(f"  task[{t_name}](agent={t_agent}): {t_desc}")
             logger.info(
-                "[PreMakePlan] agent=%s plan: tasks=%d",
+                "[PreMakePlan] agent=%s plan: tasks=%d | thought=%s\n%s",
                 card.name,
-                len(result.get("tasks", [])),
+                len(tasks),
+                thought,
+                "\n".join(task_summaries) if task_summaries else "  (no task details)",
             )
 
         if not candidates_with_plans:
@@ -2941,6 +2953,13 @@ class RoutingAgent(BaseAgent):
                 f"Planned tasks:\n{tasks_text}"
             )
         plans_text = "\n\n".join(plans_text_parts)
+
+        logger.info(
+            "[PreMakePlan][LLM] comparing %d candidate plans for query: %s\n%s",
+            len(candidates_with_plans),
+            query,
+            plans_text,
+        )
 
         # ── CoT prompt ──
         prompt = (
@@ -3009,10 +3028,10 @@ class RoutingAgent(BaseAgent):
         idx = int(result.get("selected_agent_index", 1)) - 1
         idx = max(0, min(idx, len(candidates_with_plans) - 1))
         logger.info(
-            "[PreMakePlan] selected agent=%s reason=%s thought=%s",
+            "[PreMakePlan][LLM] selected agent=%s | thought=%s | reason=%s",
             candidates_with_plans[idx][0].name,
+            result.get("thought", ""),
             result.get("reason", ""),
-            (result.get("thought", "") or "")[:300],
         )
         return (candidates_with_plans[idx][0], candidates_with_plans[idx][1])
 

@@ -45,7 +45,7 @@ from .skill_agent import (
     PRE_MAKE_PLAN_MESSAGE_TYPE,
     _log_boxed_document,
 )
-from .execution_flow import ExecutionTask, render_execution_flow_md
+from .execution_flow import ExecutionTask, render_execution_flow_md, render_execution_flow_table
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def _build_executed_tasks(turn_records: list[dict]) -> list[dict]:
 
 
 def _accumulated_execution_flow_tasks(turn_records: list[dict]) -> list[dict]:
-    """Flatten all turns' execution_flow_tasks, plus turn_summary and final_answer entries."""
+    """Flatten all turns' execution_flow_tasks into a single list of dicts."""
     tasks: list[dict] = []
     for r in turn_records:
         ef_tasks = r.get("execution_flow_tasks", [])
@@ -108,15 +108,6 @@ def _accumulated_execution_flow_tasks(turn_records: list[dict]) -> list[dict]:
                 tasks.append(t.to_dict())
             elif isinstance(t, dict):
                 tasks.append(t)
-        # Add turn_summary if present
-        ts = r.get("turn_summary")
-        if ts:
-            tasks.append(ts if isinstance(ts, dict) else ts.to_dict())
-    # Add final_answer if present (from the last turn record)
-    if turn_records:
-        fa = turn_records[-1].get("final_answer")
-        if fa:
-            tasks.append(fa if isinstance(fa, dict) else fa.to_dict())
     return tasks
 
 
@@ -517,6 +508,9 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
             # Build upstream_context for the next turn from all turn_records.
             upstream_context = dict(upstream_context)
             upstream_context["executed_tasks"] = _build_executed_tasks(turn_records)
+            # Propagate accumulated Execution Flow so downstream delegations
+            # in subsequent turns can see earlier-turn EF history.
+            upstream_context["execution_flow"] = _accumulated_execution_flow_tasks(turn_records)
 
             # ---- Guard: hop exhausted — stop turns or reset hop ----
             # Hop limits the depth of a single delegation chain, not the
@@ -588,38 +582,40 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
 
             if eval_result.satisfactory:
                 final_answer = eval_result.answer
-                # Record turn_summary (success)
-                turn_records[-1]["turn_summary"] = {
-                    "execution_id": f"turn-summary-t{total_turns}",
-                    "turn": total_turns,
-                    "stage": "turn_summary",
-                    "agent": self._self_planner_agent_name(),
-                    "role": "initiator",
-                    "task": f"Turn {total_turns} 评估结果",
-                    "result": "success",
-                    "reason": eval_result.rationale or "信息充足",
-                    "parent_execution_id": None,
-                    "delegated_by": None,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                }
-                # Record final_answer
-                turn_records[-1]["final_answer"] = {
-                    "execution_id": f"final-answer-t{total_turns}",
-                    "turn": total_turns,
-                    "stage": "final_answer",
-                    "agent": self._self_planner_agent_name(),
-                    "role": "initiator",
-                    "task": "最终答案",
-                    "result": final_answer,
-                    "reason": eval_result.rationale or "",
-                    "parent_execution_id": None,
-                    "delegated_by": None,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                }
+                # Record turn_summary as formal ExecutionTask (success)
+                ts_task = ExecutionTask(
+                    execution_id=f"turn-summary-t{total_turns}",
+                    turn=total_turns,
+                    stage="turn_summary",
+                    agent=self._self_planner_agent_name(),
+                    role="initiator",
+                    task=f"Turn {total_turns} 评估结果",
+                    result="success",
+                    reason=eval_result.rationale or "信息充足",
+                    parent_execution_id=None,
+                    delegated_by=None,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                )
+                turn_records[-1]["execution_flow_tasks"].append(ts_task)
+                # Record final_answer as formal ExecutionTask
+                fa_task = ExecutionTask(
+                    execution_id=f"final-answer-t{total_turns}",
+                    turn=total_turns,
+                    stage="final_answer",
+                    agent=self._self_planner_agent_name(),
+                    role="initiator",
+                    task="最终答案",
+                    result=final_answer,
+                    reason=eval_result.rationale or "",
+                    parent_execution_id=None,
+                    delegated_by=None,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                )
+                turn_records[-1]["execution_flow_tasks"].append(fa_task)
                 logger.info(
                     "[TurnLoop] answer satisfactory after %d turn(s) — exiting",
                     total_turns,
@@ -634,7 +630,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 break
 
             # Not satisfactory — prepare failure context for next turn
-            # Record turn_summary for this turn
+            # Record turn_summary as formal ExecutionTask for this turn
             reason_parts: list[str] = []
             if eval_result.missing_info:
                 reason_parts.append(f"缺少信息: {eval_result.missing_info}")
@@ -642,21 +638,22 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 reason_parts.append(f"评估理由: {eval_result.rationale}")
             reason_text = "；".join(reason_parts) if reason_parts else "信息不足"
 
-            turn_records[-1]["turn_summary"] = {
-                "execution_id": f"turn-summary-t{total_turns}",
-                "turn": total_turns,
-                "stage": "turn_summary",
-                "agent": self._self_planner_agent_name(),
-                "role": "initiator",
-                "task": f"Turn {total_turns} 评估结果",
-                "result": "fail",
-                "reason": reason_text,
-                "parent_execution_id": None,
-                "delegated_by": None,
-                "run_id": run_id,
-                "trace_id": trace_id,
-                "user_id": user_id,
-            }
+            ts_task = ExecutionTask(
+                execution_id=f"turn-summary-t{total_turns}",
+                turn=total_turns,
+                stage="turn_summary",
+                agent=self._self_planner_agent_name(),
+                role="initiator",
+                task=f"Turn {total_turns} 评估结果",
+                result="fail",
+                reason=reason_text,
+                parent_execution_id=None,
+                delegated_by=None,
+                run_id=run_id,
+                trace_id=trace_id,
+                user_id=user_id,
+            )
+            turn_records[-1]["execution_flow_tasks"].append(ts_task)
 
             failure_context = (
                 f"【上轮评估反馈】当前信息不足以完整回答用户问题。"
@@ -738,28 +735,28 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 agent_role="delegatee" if is_delegated else "initiator",
             )
 
-            # Record final_answer for exhausted case
+            # Record final_answer for exhausted case as formal ExecutionTask
+            fa_task = ExecutionTask(
+                execution_id=f"final-answer-t{total_turns}-exhausted",
+                turn=total_turns,
+                stage="final_answer",
+                agent=self._self_planner_agent_name(),
+                role="initiator",
+                task="最终答案",
+                result=final_answer,
+                reason=reason,
+                parent_execution_id=None,
+                delegated_by=None,
+                run_id=run_id,
+                trace_id=trace_id,
+                user_id=user_id,
+            )
             turn_records.append({
                 "turn": total_turns,
                 "plan": [],
                 "task_results": {},
                 "delegate_results": {},
-                "execution_flow_tasks": [],
-                "final_answer": {
-                    "execution_id": f"final-answer-t{total_turns}-exhausted",
-                    "turn": total_turns,
-                    "stage": "final_answer",
-                    "agent": self._self_planner_agent_name(),
-                    "role": "initiator",
-                    "task": "最终答案",
-                    "result": final_answer,
-                    "reason": reason,
-                    "parent_execution_id": None,
-                    "delegated_by": None,
-                    "run_id": run_id,
-                    "trace_id": trace_id,
-                    "user_id": user_id,
-                },
+                "execution_flow_tasks": [fa_task],
             })
 
         # ==================================================================
@@ -819,5 +816,12 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 "[ExecutionFlow] run_id=%s trace_id=%s user_id=%s turns=%d\n%s",
                 run_id, trace_id, user_id, total_turns, ef_md,
             )
+            # ── Execution Flow 表格快照（调试用） ──
+            ef_table = render_execution_flow_table(all_ef, current_agent=self._self_planner_agent_name())
+            if ef_table:
+                logger.info(
+                    "[ExecutionFlowTable] run_id=%s trace_id=%s turns=%d\n%s",
+                    run_id, trace_id, total_turns, ef_table,
+                )
         else:
             logger.info("[ExecutionFlow] no execution flow tasks recorded (run_id=%s turns=%d)", run_id, total_turns)

@@ -322,7 +322,7 @@ def render_execution_flow_md(
     # 被委派 agent 的 summary/final_answer 已设置 parent_execution_id，应作为
     # 普通 task 渲染在对应的树节点下，避免混淆层级关系。
     summaries: dict[int, dict] = {}  # turn -> summary dict
-    final_answer: dict | None = None
+    final_answer_obj: dict | None = None
     normal_tasks: list[dict] = []
 
     for d in dicts:
@@ -331,16 +331,29 @@ def render_execution_flow_md(
         if stage == "turn_summary" and not has_parent:
             summaries[d.get("turn", 0)] = d
         elif stage == "final_answer" and not has_parent:
-            final_answer = d
+            final_answer_obj = d
         else:
             normal_tasks.append(d)
 
     tree = build_tree(normal_tasks)
 
+    # ── 全局序号计数器 ──
+    _total_normal = len(tree)
+    _summary_turns = sorted(summaries.keys())
+    _total_summaries = len(_summary_turns)
+
     # 按 turn 分组
     by_turn: dict[int, list[dict]] = {}
     for t in tree:
         by_turn.setdefault(t["turn"], []).append(t)
+
+    # ── 统计：每个 turn 之前累积了多少个 summary ──
+    _summaries_before: dict[int, int] = {}
+    _acc = 0
+    for tn in sorted(by_turn):
+        _summaries_before[tn] = _acc
+        if tn in _summary_turns:
+            _acc += 1
 
     for turn_num in sorted(by_turn):
         lines.append("---")
@@ -378,10 +391,12 @@ def render_execution_flow_md(
 
             _render_task_list_md(stage_tasks, lines, indent=0, current_agent=agent, show_children=show_children)
 
-        # Turn 总结
+        # Turn 总结 — 编号 = 前面正常 task 数 + 前面 summary 数 + 1
         summary = summaries.get(turn_num)
         if summary:
-            lines.append(f"#### Turn {turn_num} 总结")
+            _prev_normal = sum(len(by_turn.get(t, [])) for t in sorted(by_turn) if t < turn_num)
+            _no = _prev_normal + _summaries_before[turn_num] + 1
+            lines.append(f"#### {_no}. Turn {turn_num} 总结")
             lines.append("")
             lines.append(f"- **结果**: {summary.get('result', '?')}")
             reason = summary.get("reason", "")
@@ -389,13 +404,14 @@ def render_execution_flow_md(
                 lines.append(f"- **原因**: {reason}")
             lines.append("")
 
-    # 最终答案
-    if final_answer:
+    # 最终答案 — 编号 = 正常 task 总数 + 所有 summary 数 + 1
+    if final_answer_obj:
+        _no = _total_normal + _total_summaries + 1
         lines.append("---")
         lines.append("")
-        lines.append("### 最终答案")
+        lines.append(f"### {_no}. 最终答案")
         lines.append("")
-        result_text = final_answer.get("result", "")
+        result_text = final_answer_obj.get("result", "")
         if result_text:
             lines.append(result_text)
         lines.append("")
@@ -464,3 +480,166 @@ def _render_task_list_md(
             lines.append(f"{prefix}   ⤷ **{agent_name} 内部执行**:")
             lines.append("")
             _render_task_list_md(children, lines, indent + 1, current_agent=current_agent, show_children=show_children)
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 表格渲染（调试用 — 在 summary 之后打印一份完整的 EF 快照）
+# ---------------------------------------------------------------------------
+
+# 列宽设定（固定宽度，内容超出自动换行）
+_COL_WIDTHS = {
+    "#": 3,
+    "execution_id": 24,
+    "turn": 4,
+    "stage": 14,
+    "agent": 14,
+    "role": 10,
+    "task": 44,
+    "result": 58,
+}
+
+_COL_KEYS = ["#", "execution_id", "turn", "stage", "agent", "role", "task", "result"]
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    """将文本按指定宽度换行。
+
+    1. 先按换行符（原文字段中的 \\n）切为段落
+    2. 每段再按列宽进行 word-wrap（优先在空格处断行）
+    """
+    if not text:
+        return [""]
+    result: list[str] = []
+    for paragraph in text.split("\n"):
+        if not paragraph:
+            result.append("")
+            continue
+        remaining = paragraph
+        while remaining:
+            if len(remaining) <= width:
+                result.append(remaining)
+                break
+            chunk = remaining[:width + 1]
+            break_at = chunk.rfind(" ")
+            if break_at >= 0:
+                result.append(remaining[:break_at])
+                remaining = remaining[break_at + 1:]
+            else:
+                result.append(remaining[:width])
+                remaining = remaining[width:]
+    if not result:
+        result = [""]
+    return result
+
+
+def render_execution_flow_table(
+    tasks: list[dict] | list[ExecutionTask],
+    current_agent: str = "",
+) -> str:
+    """将 ExecutionTask 列表渲染为固定宽度的 ASCII 表格，供调试日志使用。
+
+    列: # | execution_id | turn | stage | agent | task | result | reason
+
+    Args:
+        tasks: ExecutionTask 列表（dict 或 ExecutionTask 对象）。
+        current_agent: 当前 agent 名称，用于在 task 列标记「⬅ 当前节点」。
+
+    Returns:
+        格式化的 ASCII 表格字符串。空列表返回空字符串。
+    """
+    if not tasks:
+        return ""
+
+    # 统一转为 dict
+    rows: list[dict] = []
+    for t in tasks:
+        if isinstance(t, ExecutionTask):
+            rows.append(t.to_dict())
+        elif isinstance(t, dict):
+            rows.append(t)
+        else:
+            continue
+    if not rows:
+        return ""
+
+    # 保持插入顺序（_accumulated_execution_flow_tasks 已按 turn/时间顺序追加）
+
+    # ── 构建表格行 ──
+
+    def _task_display(r: dict) -> str:
+        """构建 task 列显示文本，含委派关系和当前节点标记。"""
+        task = r.get("task", "")
+        role = r.get("role", "")
+        delegated_by = r.get("delegated_by")
+        agent = r.get("agent", "")
+        # 委派关系标记
+        if role == "delegatee" and delegated_by:
+            task = f"{task} (← {delegated_by})"
+        # 当前节点标记（跳过 turn_summary / final_answer，它们是元条目不是执行任务）
+        if current_agent and agent == current_agent and r.get("stage") not in ("turn_summary", "final_answer"):
+            task = f"{task}  ⬅ 当前节点"
+        return task
+
+    def _cell_text(r: dict, key: str, seq: int) -> str:
+        if key == "#":
+            return str(seq)
+        if key == "task":
+            return _task_display(r)
+        return str(r.get(key, ""))
+
+    # ── 表头 + 分隔线 ──
+    header_parts = [k.rjust(_COL_WIDTHS[k]) if k == "#" else k.ljust(_COL_WIDTHS[k])
+                    for k in _COL_KEYS]
+    sep_line = "-" * (sum(_COL_WIDTHS.values()) + (len(_COL_WIDTHS) - 1) * 2)
+    row_sep = sep_line
+    header = "  ".join(header_parts)
+
+    # ── 数据行（支持多行换行，行间加分隔线） ──
+    data_blocks: list[list[str]] = []  # 每个逻辑行 = 一组物理行（不含分隔线）
+    for seq, r in enumerate(rows, 1):
+        cell_lines: dict[str, list[str]] = {}
+        max_lines = 0
+        for k in _COL_KEYS:
+            raw = _cell_text(r, k, seq)
+            if k == "#":
+                wrapped = [raw.rjust(_COL_WIDTHS["#"])]
+            else:
+                wrapped = _wrap(raw, _COL_WIDTHS[k])
+            if not wrapped:
+                wrapped = [""]
+            cell_lines[k] = wrapped
+            if len(wrapped) > max_lines:
+                max_lines = len(wrapped)
+        block: list[str] = []
+        for i in range(max_lines):
+            parts: list[str] = []
+            for k in _COL_KEYS:
+                lines_for_cell = cell_lines[k]
+                if i < len(lines_for_cell):
+                    line = lines_for_cell[i]
+                else:
+                    line = ""
+                parts.append(line.ljust(_COL_WIDTHS[k]))
+            block.append("  ".join(parts))
+        data_blocks.append(block)
+
+    # ── 组装输出 ──
+    total_width = sum(_COL_WIDTHS.values()) + (len(_COL_WIDTHS) - 1) * 2
+    out: list[str] = []
+    out.append("")
+    out.append("=" * total_width)
+    out.append("  Execution Flow Table")
+    out.append("=" * total_width)
+    out.append(header)
+    out.append(sep_line)
+    for i, block in enumerate(data_blocks):
+        out.extend(block)
+        # 最后一个 block 后不加分隔线，交给闭合线统一收尾
+        if i < len(data_blocks) - 1:
+            out.append(row_sep)
+    out.append(sep_line)
+    out.append(f"  Total: {len(rows)} entries")
+    out.append("=" * total_width)
+
+    return "\n".join(out)
