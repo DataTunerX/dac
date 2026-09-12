@@ -931,6 +931,11 @@ bizSkillAgent:
     skillSyncInterval: "30"
     # -- Pull newly published skills in addition to configured startup skills.
     skillSyncWatchAll: "true"
+    # -- Phase 0.5: first wait before re-requesting a skill the agent asked for
+    #    but did not receive; doubles per attempt (env: SKILL_SYNC_FAILURE_BACKOFF_SEC).
+    skillSyncFailureBackoffSec: "300"
+    # -- Upper bound for that backoff (env: SKILL_SYNC_FAILURE_BACKOFF_MAX_SEC).
+    skillSyncFailureBackoffMaxSec: "3600"
     # -- Maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP)
     crossSGMaxHop: "5"
     # -- Maximum mid-execution rounds (env: CROSS_SG_MID_EXEC_ROUNDS)

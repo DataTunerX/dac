@@ -34,6 +34,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 from urllib.parse import quote
@@ -55,6 +57,31 @@ logger = logging.getLogger(__name__)
 
 _TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 DEFAULT_SYNC_INTERVAL = 60.0
+DEFAULT_FAILURE_BACKOFF = 300.0
+DEFAULT_FAILURE_BACKOFF_MAX = 3600.0
+
+
+@dataclass
+class _UnavailableSkill:
+    """A download target that the hub advertises but the agent cannot obtain.
+
+    Some targets never succeed under the current configuration — ``tavily-search``
+    is dropped by the downloader whenever ``TAVILY_API_KEY`` is unset, so the
+    watcher would otherwise re-request it on every poll forever. Each failed
+    attempt doubles the wait, capped at ``SKILL_SYNC_FAILURE_BACKOFF_MAX_SEC``.
+    """
+
+    attempts: int = 0
+    retry_after: float = 0.0
+
+    def note_failure(self, *, now: float, base: float, maximum: float) -> float:
+        self.attempts += 1
+        delay = min(base * (2 ** (self.attempts - 1)), maximum)
+        self.retry_after = now + delay
+        return delay
+
+    def suppressed(self, now: float) -> bool:
+        return now < self.retry_after
 
 
 def _env_truthy(value: Optional[str], default: bool = False) -> bool:
@@ -83,6 +110,18 @@ def _sync_interval() -> float:
             DEFAULT_SYNC_INTERVAL,
         )
         return DEFAULT_SYNC_INTERVAL
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("[SkillSync] invalid %s=%r — using %.0fs", name, raw, default)
+        return default
+    return value if value >= 0 else default
 
 
 class SkillHubWatcher(threading.Thread):
@@ -149,11 +188,51 @@ class SkillHubWatcher(threading.Thread):
         self.timeout = timeout
         # name -> last-synced latest version string
         self._known: Dict[str, str] = dict(initial_versions or {})
+        # (namespace, name, wanted version) -> backoff state for targets the hub
+        # advertises but this agent cannot download.
+        self._unavailable: Dict[Tuple[str, str, str], _UnavailableSkill] = {}
+        self._failure_backoff = _float_env(
+            "SKILL_SYNC_FAILURE_BACKOFF_SEC", DEFAULT_FAILURE_BACKOFF
+        )
+        self._failure_backoff_max = _float_env(
+            "SKILL_SYNC_FAILURE_BACKOFF_MAX_SEC", DEFAULT_FAILURE_BACKOFF_MAX
+        )
         # Do not call this ``_stop``: threading.Thread owns a private _stop()
         # method which join() invokes.
         self._stop_event = threading.Event()
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _now() -> float:
+        return time.monotonic()
+
+    @staticmethod
+    def _target_key(ref: SkillRef, wanted: str) -> Tuple[str, str, str]:
+        return (ref.namespace, ref.name, wanted)
+
+    def _note_download_failure(self, ref: SkillRef, wanted: str) -> None:
+        """Back off a target that was requested but did not arrive."""
+        if self._failure_backoff <= 0:
+            return
+        key = self._target_key(ref, wanted)
+        state = self._unavailable.setdefault(key, _UnavailableSkill())
+        delay = state.note_failure(
+            now=self._now(),
+            base=self._failure_backoff,
+            maximum=self._failure_backoff_max,
+        )
+        logger.warning(
+            "[SkillSync] %s/%s@%s unavailable (attempt %d) — next retry in %.0fs",
+            ref.namespace,
+            ref.name,
+            wanted,
+            state.attempts,
+            delay,
+        )
+
+    def _clear_download_failure(self, ref: SkillRef, wanted: str) -> None:
+        self._unavailable.pop(self._target_key(ref, wanted), None)
+
     def stop(self) -> None:
         self._stop_event.set()
         if self.is_alive() and threading.current_thread() is not self:
@@ -238,11 +317,27 @@ class SkillHubWatcher(threading.Thread):
                 continue
             desired[name] = (ref, wanted)
 
+        now = self._now()
         targets: List[Tuple[SkillRef, str]] = []
         for name in sorted(desired):
             ref, wanted = desired[name]
             local_present = (self.skills_dir / f"{name}.zip").exists()
             if self._known.get(name) == wanted and local_present:
+                continue
+            state = self._unavailable.get(self._target_key(ref, wanted))
+            if state is not None and state.suppressed(now):
+                # Known-unavailable under the current configuration. Stay quiet
+                # until the backoff window elapses; a new hub version produces a
+                # different key and retries immediately.
+                logger.debug(
+                    "[SkillSync] skipping %s/%s@%s — backing off %.0fs more "
+                    "(attempt %d)",
+                    ref.namespace,
+                    ref.name,
+                    wanted,
+                    state.retry_after - now,
+                    state.attempts,
+                )
                 continue
             targets.append((ref, wanted))
         return targets
@@ -273,6 +368,8 @@ class SkillHubWatcher(threading.Thread):
             )
         except Exception:  # noqa: BLE001
             logger.exception("[SkillSync] download_skills raised")
+            for ref, wanted in targets:
+                self._note_download_failure(ref, wanted)
             return
 
         got = {p.stem for p in downloaded}
@@ -280,6 +377,9 @@ class SkillHubWatcher(threading.Thread):
         for ref, wanted in targets:
             if ref.name in got:
                 self._known[ref.name] = wanted
+                self._clear_download_failure(ref, wanted)
+            else:
+                self._note_download_failure(ref, wanted)
         if not applied:
             logger.warning(
                 "[SkillSync] nothing was successfully downloaded (targets=%s)",

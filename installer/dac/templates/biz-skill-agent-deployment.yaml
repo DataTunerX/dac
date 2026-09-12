@@ -72,6 +72,13 @@ spec:
               value: {{ .Values.bizSkillAgent.config.skillSyncInterval | quote }}
             - name: SKILL_SYNC_WATCH_ALL
               value: {{ .Values.bizSkillAgent.config.skillSyncWatchAll | quote }}
+            # Phase 0.5: back off skills the hub advertises but this agent cannot
+            # download (e.g. tavily-search without TAVILY_API_KEY) instead of
+            # re-requesting them on every poll.
+            - name: SKILL_SYNC_FAILURE_BACKOFF_SEC
+              value: {{ .Values.bizSkillAgent.config.skillSyncFailureBackoffSec | default "300" | quote }}
+            - name: SKILL_SYNC_FAILURE_BACKOFF_MAX_SEC
+              value: {{ .Values.bizSkillAgent.config.skillSyncFailureBackoffMaxSec | default "3600" | quote }}
             {{- include "dac.langfuseEnv" . | nindent 12 }}
             - name: CROSS_SG_MAX_HOP
               value: {{ .Values.bizSkillAgent.config.crossSGMaxHop | default "5" | quote }}
