@@ -40,7 +40,12 @@ from a2a.types import TextPart
 from a2a.utils import new_agent_text_message, new_task
 
 from . import broadcast_capability_check as sg_broadcast
-from .skill_agent import SkillAgentExecutor, PRE_MAKE_PLAN_MESSAGE_TYPE
+from .skill_agent import (
+    NONE_TASK_DESCRIPTION,
+    PRE_MAKE_PLAN_MESSAGE_TYPE,
+    SkillAgentExecutor,
+)
+from .task_results import DispatchLedger, turn_scoped_id
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +91,40 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
         )
 
     # ------------------------------------------------------------------
+    # Failure diagnostics
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _turn_failure_digest(ledger: DispatchLedger, turn: int, limit: int = 6) -> str:
+        """Compact description of what errored or never ran in *turn*.
+
+        Execution errors are kept out of the evidence passed to synthesis, so
+        this is the channel that tells the next turn's planner which operation
+        to stop repeating.
+        """
+        failed = ledger.failed(turn=turn)
+        blocked = ledger.blocked(turn=turn)
+        if not failed and not blocked:
+            return ""
+
+        lines: list[str] = ["【上轮执行诊断】"]
+        for outcome in failed[:limit]:
+            detail = (outcome.error or "").strip().splitlines()[0][:160]
+            lines.append(
+                f"- 任务#{outcome.task_id} 委派 {outcome.agent or '?'} 执行失败：{detail}"
+            )
+        for outcome in blocked[:limit]:
+            lines.append(
+                f"- 任务#{outcome.task_id} 未派发（{outcome.reason_code}）："
+                f"{outcome.agent or '?'}"
+            )
+        dropped = (len(failed) + len(blocked)) - min(len(failed), limit) - min(len(blocked), limit)
+        if dropped > 0:
+            lines.append(f"- 另有 {dropped} 项未列出")
+        lines.append("请勿重复相同的失败操作，改用其他数据来源或调整任务分解。")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
     # Turn loop execution
     # ------------------------------------------------------------------
 
@@ -113,6 +152,11 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
         query = context.get_user_input()
         metadata = dict(context.metadata or {})
         self.metadata = metadata
+
+        # Reset per-request collaborator state before any fast path returns:
+        # pre-plan and capability-check requests carry no pool, and the executor
+        # is process-wide, so a stale pool would otherwise be reused.
+        self._init_routing_pool_from_metadata(metadata)
 
         # ---- Step 0: Capability check fast-path ----
         if isinstance(metadata, dict) and metadata.get(
@@ -299,8 +343,15 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
         # ==================================================================
         total_turns = 0
         failure_context = ""
+        # One append-only ledger for the whole run. Each turn's planner numbers
+        # its tasks from 1, so merging turn results by raw task id or by agent
+        # name silently replaces earlier evidence; the ledger is the source of
+        # truth and the dicts below are views derived from it.
+        run_ledger = DispatchLedger(placeholders=(NONE_TASK_DESCRIPTION,))
         accumulated_task_results: dict[int, str] = {}
         accumulated_delegate_results: dict[str, str] = {}
+        # scoped task id -> {description, agent, turn, task_id}
+        accumulated_task_meta: dict[int, dict] = {}
         final_answer: str | None = None
 
         while total_turns < self.max_loops:
@@ -338,14 +389,26 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 delegation_chain=delegation_chain,
                 failure_context=failure_context,
                 prior_delegate_results=accumulated_delegate_results,
+                turn=total_turns,
+                ledger=run_ledger,
             )
             # Update hop from the execution — this is consumed by pre-exec
             # and mid-exec delegation edges within the turn.
             current_hop = remaining_hop
 
-            # Accumulate results across turns
-            accumulated_task_results.update(task_results)
-            accumulated_delegate_results.update(delegate_results)
+            # Accumulate results across turns.
+            # Both views come from the run ledger, which is append-only and
+            # scopes task ids by turn, so a later turn cannot replace an
+            # earlier turn's result for the same task number or agent.
+            # The ledger is the only source: it records local, delegated and
+            # mid-exec self results for every turn and round, so merging the
+            # per-turn dict as well would double-count the same evidence under
+            # a differently scoped key.
+            accumulated_task_results = run_ledger.task_results_by_scoped_id()
+            accumulated_delegate_results = run_ledger.results_by_agent()
+            for _meta in plan_task_meta:
+                _scoped = turn_scoped_id(int(_meta["id"]), total_turns)
+                accumulated_task_meta[_scoped] = {**_meta, "turn": total_turns}
 
             # Update upstream_context with accumulated task results so the
             # next turn's planner can see what was already done.  Without
@@ -353,22 +416,25 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
             # from the initial delegation and would not know about Turn 1's
             # discoveries, leading to redundant or misaligned planning.
             upstream_context = dict(upstream_context)
-            # Build a lookup of task_id → (description, agent) from plan metadata
-            _task_meta_by_id: dict[int, dict] = {
-                m["id"]: m for m in plan_task_meta
-            }
+            # Lookup is keyed by the turn-scoped id so turn 2's task #1 does not
+            # inherit turn 1's task #1 description.
             upstream_context["executed_tasks"] = [
                 {
-                    "task_id": tid,
-                    "description": _task_meta_by_id.get(tid, {}).get("description", ""),
-                    "agent": _task_meta_by_id.get(tid, {}).get("agent", ""),
+                    "task_id": accumulated_task_meta.get(tid, {}).get("id", tid),
+                    "turn": accumulated_task_meta.get(tid, {}).get("turn", 1),
+                    "description": accumulated_task_meta.get(tid, {}).get("description", ""),
+                    "agent": accumulated_task_meta.get(tid, {}).get("agent", ""),
                     "status": "completed",
                     "result": res,
                 }
                 for tid, res in accumulated_task_results.items() if res
             ]
             upstream_context["key_findings_so_far"] = "\n".join(
-                f"[Task#{tid}] {res[:300]}"
+                "[Turn{t} Task#{n}] {r}".format(
+                    t=accumulated_task_meta.get(tid, {}).get("turn", 1),
+                    n=accumulated_task_meta.get(tid, {}).get("id", tid),
+                    r=res[:300],
+                )
                 for tid, res in accumulated_task_results.items() if res
             )
 
@@ -459,6 +525,18 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 if eval_result.missing_info
                 else "【上轮评估反馈】当前信息不足，请调整策略重新获取关键数据。"
             )
+            # Execution diagnostics are excluded from the evidence the
+            # summarizer sees, so the planner would otherwise never learn that a
+            # task errored or was never dispatched — and would plan the same
+            # broken operation again.
+            _diagnostics = self._turn_failure_digest(run_ledger, total_turns)
+            if _diagnostics:
+                failure_context = f"{failure_context}\n{_diagnostics}"
+                logger.info(
+                    "[TurnLoop] turn %d diagnostics carried forward | %s",
+                    total_turns,
+                    _diagnostics.replace("\n", " | "),
+                )
             logger.info(
                 "[TurnLoop] turn %d not satisfactory — continuing | missing_info=%s hop=%d",
                 total_turns,

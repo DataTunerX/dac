@@ -84,6 +84,17 @@ from .dataservices_client import (
     HistoryMessage,
     SearchHistoryRequest,
 )
+from .task_results import (
+    REASON_DEPENDENCY_UNMET,
+    REASON_HOP_EXHAUSTED,
+    REASON_NO_AGENT_CARD,
+    REASON_UPSTREAM_INVALID,
+    STAGE_LOCAL,
+    STAGE_MID_EXEC,
+    STAGE_MID_EXEC_SELF,
+    STAGE_PRE_EXEC,
+    DispatchLedger,
+)
 from .tool_call_utils import invoke_llm_with_tool
 
 try:
@@ -125,6 +136,10 @@ PRE_MAKE_PLAN_MESSAGE_TYPE = "pre_make_plan"
 PROPAGATED_HISTORY_KEY = "propagated_history"
 SG_EXECUTION_HINT_KEY = "sg_execution_hint"
 NONE_TASK_DESCRIPTION = "No available agent can do this task. "
+
+# Phase 0.6: request metadata key set by routing on capability-check and
+# pre-plan requests to forbid a nested, registry-wide capability broadcast.
+SUPPRESS_NESTED_BROADCAST_KEY = "suppress_nested_broadcast"
 DEPENDENT_TASK_SKIP_MARKER = "__SG_SKIP_UPSTREAM_NO_DATA__"
 DEPENDENT_TASK_SKIP_DESCRIPTION = (
     DEPENDENT_TASK_SKIP_MARKER + "上游依赖任务未返回有效数据，当前子任务无输入来源，已自动跳过。"
@@ -1836,7 +1851,24 @@ class SkillAgentExecutor(AgentExecutor):
         return os.getenv("ENABLE_ROUTING_AGENT_POOL", "true").strip().lower() in ("true", "1", "yes")
 
     def _sg_capability_rebroadcast_enabled(self) -> bool:
+        if self._nested_broadcast_suppressed():
+            return False
         return os.getenv("ENABLE_SG_CAPABILITY_REBROADCAST", "true").strip().lower() in ("true", "1", "yes")
+
+    def _nested_broadcast_suppressed(self) -> bool:
+        """Whether the caller forbade this request from broadcasting further.
+
+        Phase 0.6: routing sets ``suppress_nested_broadcast`` on capability-check
+        and pre-plan requests. Without it, each of the top-N pre-plan candidates
+        runs its own registry-wide capability broadcast, so one user query costs
+        ``N + K*N`` capability model calls.
+        """
+        md = self.metadata if isinstance(self.metadata, dict) else {}
+        if md.get(SUPPRESS_NESTED_BROADCAST_KEY) is True:
+            return True
+        return os.getenv("SKILL_AGENT_SUPPRESS_NESTED_BROADCAST", "false").strip().lower() in (
+            "true", "1", "yes",
+        )
 
     def _self_planner_agent_name(self) -> str:
         if self.agent_card and getattr(self.agent_card, "name", None):
@@ -2079,10 +2111,23 @@ class SkillAgentExecutor(AgentExecutor):
         return list(cards) + [card]
 
     def _init_routing_pool_from_metadata(self, metadata: Optional[dict] = None) -> None:
+        """Reset the collaborator pool to the one carried by *this* request.
+
+        The executor is process-wide. Keeping a previous request's pool when the
+        current request carries none lets an agent plan against collaborators
+        chosen for an unrelated query — reachable from pre-plan requests, which
+        never carry a pool, and from any request once nested rebroadcast is
+        suppressed.
+        """
         md = metadata if isinstance(metadata, dict) else (self.metadata if isinstance(self.metadata, dict) else {})
         parsed = sg_broadcast.parse_routing_agent_pool(md)
-        if parsed:
-            self._routing_agent_pool = parsed
+        if not parsed and self._routing_agent_pool:
+            logger.info(
+                "[RoutingPool] request carries no pool — discarding %d stale entries",
+                len(self._routing_agent_pool),
+            )
+        self._routing_agent_pool = parsed or []
+        self._routing_skip_broadcast_used = False
 
     def _may_skip_routing_broadcast(self) -> bool:
         if not self._routing_pool_flow_enabled():
@@ -2142,8 +2187,15 @@ class SkillAgentExecutor(AgentExecutor):
                 len(str(query or "")),
             )
         elif self._routing_agent_pool:
+            # Set from this request's metadata by _init_routing_pool_from_metadata.
             pool = self._routing_agent_pool
         else:
+            if self._nested_broadcast_suppressed():
+                logger.info(
+                    "[RoutingPool] nested broadcast suppressed and this request "
+                    "carries no pool — listing the registry instead of reusing "
+                    "a pool from an earlier query"
+                )
             # Fallback to legacy
             local_card = self.agent_card
             local_name = local_card.name if local_card else "SkillAgent"
@@ -3839,6 +3891,9 @@ class SkillAgentExecutor(AgentExecutor):
         updater: Optional[Any] = None,
         skill_runner: "SkillRunner | None" = None,
         metadata: dict | None = None,
+        ledger: Optional[DispatchLedger] = None,
+        self_ledger: Optional[DispatchLedger] = None,
+        turn: int = 1,
     ) -> tuple[dict[str, str], dict[str, str], int]:
         """Mid-execution Step 3: dispatch plan tasks to target SGs.
 
@@ -3848,6 +3903,11 @@ class SkillAgentExecutor(AgentExecutor):
         When *skill_runner* is provided and the task's agent is self, the
         task is executed locally (in-process) instead of delegated via A2A.
 
+        Outcomes are recorded per ``task_id`` in *ledger* / *self_ledger* so a
+        task that is blocked before dispatch cannot overwrite a completed
+        result from the same agent (Phase 0.5). The returned dicts are the
+        agent-keyed view derived from the usable outcomes of this call.
+
         Returns:
             Tuple of (delegate_results, self_results, remaining_hop).
             delegate_results  — remote delegation results (key: SG name)
@@ -3855,17 +3915,82 @@ class SkillAgentExecutor(AgentExecutor):
             remaining_hop     — reflects the hop count after all dispatches in this
                                 call, accounting for each delegation edge consumed.
         """
-        delegate_results: dict[str, str] = {}
-        self_results: dict[str, str] = {}
+        # Per-call ledgers keep the returned view scoped to this round even when
+        # a run-level ledger is also accumulating outcomes.
+        round_ledger = DispatchLedger(placeholders=(NONE_TASK_DESCRIPTION,))
+        round_self_ledger = DispatchLedger(placeholders=(NONE_TASK_DESCRIPTION,))
         name_to_card = {c.name: c for c in target_cards}
         hints = dict(hints_by_sg or {})
         mid_exec_round = int((upstream_context or {}).get("mid_exec_round") or 0)
+
+        def _record_result(task_id: int, agent: str, result: str, *, is_self: bool) -> None:
+            # Self results go to the run ledger too, tagged with their own
+            # stage: without that they exist only in this call's return value
+            # and never reach final synthesis.
+            if is_self:
+                targets = (round_self_ledger, self_ledger, ledger)
+                stage = STAGE_MID_EXEC_SELF
+            else:
+                targets = (round_ledger, ledger)
+                stage = STAGE_MID_EXEC
+            for target in targets:
+                if target is not None:
+                    target.record_result(
+                        task_id=task_id,
+                        agent=agent,
+                        result=result,
+                        stage=stage,
+                        round_index=mid_exec_round,
+                        turn=turn,
+                    )
+
+        async def _record_blocked(task_id: int, agent: str, reason_code: str, detail: str) -> None:
+            for target in (round_ledger, ledger):
+                if target is not None:
+                    target.record_blocked(
+                        task_id=task_id,
+                        agent=agent,
+                        reason_code=reason_code,
+                        stage=STAGE_MID_EXEC,
+                        round_index=mid_exec_round,
+                        turn=turn,
+                        detail=detail,
+                    )
+            logger.warning(
+                "[MidExec][Dispatch] task blocked | task_id=%s agent=%s reason=%s",
+                task_id,
+                agent,
+                reason_code,
+            )
+            if updater is not None:
+                await self._emit_progress(
+                    updater,
+                    "mid_exec_task_blocked",
+                    message=(
+                        f"Mid-exec Task #{task_id} for [{agent or '?'}] was not dispatched "
+                        f"({reason_code}): {detail}"
+                    ),
+                    status="blocked",
+                    task_id=task_id,
+                    extra={
+                        "target_sg": agent,
+                        "task_id": task_id,
+                        "mid_exec_round": mid_exec_round,
+                        "reason_code": reason_code,
+                        "dispatched": False,
+                    },
+                )
 
         for task in plan.tasks:
             agent_name = (task.agent or "").strip()
             target_card = name_to_card.get(agent_name)
             if target_card is None:
-                logger.warning("[MidExec][Dispatch] no card for agent=%s", agent_name)
+                await _record_blocked(
+                    task.id,
+                    agent_name,
+                    REASON_NO_AGENT_CARD,
+                    "target agent is not in the granted collaborator scope",
+                )
                 continue
             # ── Self-execution: run locally when agent is self ──
             if agent_name == self._self_planner_agent_name() and skill_runner is not None:
@@ -3899,7 +4024,7 @@ class SkillAgentExecutor(AgentExecutor):
                     metadata=metadata,
                     updater=updater,
                 )
-                self_results[agent_name] = result
+                _record_result(task.id, agent_name, result, is_self=True)
                 if updater is not None:
                     await self._emit_progress(
                         updater,
@@ -3919,7 +4044,15 @@ class SkillAgentExecutor(AgentExecutor):
                     )
                 continue
             if current_hop <= 1:
-                delegate_results[agent_name] = NONE_TASK_DESCRIPTION
+                # Never dispatched: record the block, do not write a placeholder
+                # into the result view where it could replace a completed result
+                # from the same agent.
+                await _record_blocked(
+                    task.id,
+                    agent_name,
+                    REASON_HOP_EXHAUSTED,
+                    f"collaboration budget exhausted (current_hop={current_hop})",
+                )
                 continue
 
             # Consume 1 hop for this delegation edge.
@@ -3959,7 +4092,7 @@ class SkillAgentExecutor(AgentExecutor):
                 execution_hint=peer_hint,
                 updater=updater,
             )
-            delegate_results[agent_name] = result
+            _record_result(task.id, agent_name, result, is_self=False)
 
             if updater is not None:
                 await self._emit_progress(
@@ -3979,7 +4112,19 @@ class SkillAgentExecutor(AgentExecutor):
                         "result_chars": len(result or ""),
                     },
                 )
-        return delegate_results, self_results, current_hop
+
+        logger.info(
+            "[MidExec][Dispatch] round=%d outcomes=%s",
+            mid_exec_round,
+            round_ledger.summary(),
+        )
+        return (
+            round_ledger.results_by_agent(),
+            # The self view is keyed by this agent's own name, so it asks for
+            # the self stage explicitly rather than the remote default.
+            round_self_ledger.results_by_agent(stages={STAGE_MID_EXEC_SELF}),
+            current_hop,
+        )
 
     # ------------------------------------------------------------------
     # Updated _delegate_to_peer with delegation_chain and execution_hint
@@ -5040,6 +5185,11 @@ satisfactory=False,
         metadata = dict(context.metadata or {})
         self.metadata = metadata
 
+        # Reset per-request collaborator state before any fast path returns:
+        # pre-plan and capability-check requests carry no pool, and the executor
+        # is process-wide, so a stale pool would otherwise be reused.
+        self._init_routing_pool_from_metadata(metadata)
+
         if isinstance(metadata, dict) and metadata.get("message_type") == CAPABILITY_CHECK_MESSAGE_TYPE:
             await self.handle_capability_check(context, event_queue, query)
             return
@@ -5334,6 +5484,8 @@ satisfactory=False,
         delegation_chain: list[str],
         failure_context: str = "",
         prior_delegate_results: dict[str, str] | None = None,
+        turn: int = 1,
+        ledger: Optional[DispatchLedger] = None,
     ) -> tuple[dict[int, str], dict[str, str], int, list[dict]]:
         """Execute Steps 3-5 (plan → execute tasks → mid-exec loop).
 
@@ -5469,6 +5621,15 @@ satisfactory=False,
             for t in plan.tasks
         ]
         own_results: dict[int, str] = {}
+        # Task-keyed, append-only. ``delegate_results`` is the agent-keyed view
+        # rebuilt from it, so a blocked task can never replace a completed one.
+        # The turn loop passes one ledger for the whole run so results also
+        # survive across turns.
+        dispatch_ledger = (
+            ledger
+            if ledger is not None
+            else DispatchLedger(placeholders=(NONE_TASK_DESCRIPTION,))
+        )
         delegate_results: dict[str, str] = {}
         all_task_results: dict[int, str] = {}
         self._tasks_status_list: list[dict] = []
@@ -5500,6 +5661,28 @@ satisfactory=False,
                         "answer": reason,
                     })
                     logger.info("[Orchestration] task #%d blocked by dependency guard", task_item.id)
+                    dispatch_ledger.record_blocked(
+                        task_id=task_item.id,
+                        agent=agent_name,
+                        reason_code=REASON_DEPENDENCY_UNMET,
+                        stage=STAGE_PRE_EXEC,
+                        turn=turn,
+                        detail=reason,
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "task_blocked",
+                        message=f"Task #{task_item.id} blocked: {reason}",
+                        status="blocked",
+                        task_id=task_item.id,
+                        extra={
+                            "task_id": task_item.id,
+                            "target_sg": agent_name,
+                            "reason_code": REASON_DEPENDENCY_UNMET,
+                            "unmet_upstream_ids": dep_verdict.get("unmet_upstream_ids", []),
+                            "dispatched": False,
+                        },
+                    )
                     continue
 
             # Check if this is a dependency chain — refine query if needed
@@ -5534,6 +5717,31 @@ satisfactory=False,
                             "failure_reason_code": DEPENDENT_TASK_SKIP_MARKER,
                             "answer": refined,
                         })
+                        dispatch_ledger.record_blocked(
+                            task_id=task_item.id,
+                            agent=agent_name,
+                            reason_code=REASON_UPSTREAM_INVALID,
+                            stage=STAGE_PRE_EXEC,
+                            turn=turn,
+                            detail="upstream dependency returned no usable data",
+                        )
+                        await self._emit_progress(
+                            updater,
+                            "task_blocked",
+                            message=(
+                                f"Task #{task_item.id} skipped: upstream dependency "
+                                f"returned no usable data"
+                            ),
+                            status="blocked",
+                            task_id=task_item.id,
+                            extra={
+                                "task_id": task_item.id,
+                                "target_sg": agent_name,
+                                "reason_code": REASON_UPSTREAM_INVALID,
+                                "depends_on": list(task_item.depends_on or []),
+                                "dispatched": False,
+                            },
+                        )
                         continue
                     task_query = refined
 
@@ -5579,6 +5787,13 @@ satisfactory=False,
                 result = "\n".join(result_parts)
                 own_results[task_item.id] = result
                 all_task_results[task_item.id] = result
+                dispatch_ledger.record_result(
+                    task_id=task_item.id,
+                    agent=agent_name,
+                    result=result,
+                    stage=STAGE_LOCAL,
+                    turn=turn,
+                )
                 is_fail = result.startswith("Delegation failed:") or result.startswith("Execution error:") or not result.strip()
                 self._tasks_status_list.append({
                     "id": task_item.id,
@@ -5632,6 +5847,29 @@ satisfactory=False,
                         "failure_reason_code": "hop_exhausted",
                         "answer": NONE_TASK_DESCRIPTION,
                     })
+                    dispatch_ledger.record_blocked(
+                        task_id=task_item.id,
+                        agent=agent_name,
+                        reason_code=REASON_HOP_EXHAUSTED,
+                        stage=STAGE_PRE_EXEC,
+                        turn=turn,
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "task_blocked",
+                        message=(
+                            f"Pre-exec Task #{task_item.id} for [{agent_name}] was not "
+                            f"dispatched (hop_exhausted, current_hop={current_hop})"
+                        ),
+                        status="blocked",
+                        task_id=task_item.id,
+                        extra={
+                            "task_id": task_item.id,
+                            "target_sg": agent_name,
+                            "reason_code": REASON_HOP_EXHAUSTED,
+                            "dispatched": False,
+                        },
+                    )
                     continue
 
                 # Consume 1 hop for this delegation edge.
@@ -5642,6 +5880,37 @@ satisfactory=False,
                 target_card = next((c for c in all_cards if getattr(c, "name", "") == agent_name), None)
                 if target_card is None:
                     logger.warning("[Orchestration] task #%d: no peer card found for agent=%s", task_item.id, agent_name)
+                    self._tasks_status_list.append({
+                        "id": task_item.id,
+                        "description": task_item.description,
+                        "agent": agent_name,
+                        "status": "fail",
+                        "failure_reason_code": REASON_NO_AGENT_CARD,
+                        "answer": NONE_TASK_DESCRIPTION,
+                    })
+                    dispatch_ledger.record_blocked(
+                        task_id=task_item.id,
+                        agent=agent_name,
+                        reason_code=REASON_NO_AGENT_CARD,
+                        stage=STAGE_PRE_EXEC,
+                        turn=turn,
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "task_blocked",
+                        message=(
+                            f"Pre-exec Task #{task_item.id} was not dispatched "
+                            f"(no_agent_card for [{agent_name}])"
+                        ),
+                        status="blocked",
+                        task_id=task_item.id,
+                        extra={
+                            "task_id": task_item.id,
+                            "target_sg": agent_name,
+                            "reason_code": REASON_NO_AGENT_CARD,
+                            "dispatched": False,
+                        },
+                    )
                     continue
 
                 # Build upstream context with completed results so far
@@ -5722,7 +5991,14 @@ satisfactory=False,
                     upstream_context=_ctx,
                     updater=updater,
                 )
-                delegate_results[agent_name] = result
+                dispatch_ledger.record_result(
+                    task_id=task_item.id,
+                    agent=agent_name,
+                    result=result,
+                    stage=STAGE_PRE_EXEC,
+                    turn=turn,
+                )
+                delegate_results = dispatch_ledger.results_by_agent()
                 all_task_results[task_item.id] = result
                 is_fail = result.startswith("Delegation failed:") or result.startswith("Execution error:") or not result.strip()
                 self._tasks_status_list.append({
@@ -6345,7 +6621,9 @@ satisfactory=False,
                     "delegation_chain": delegation_chain,
                 },
             )
-            mid_delegate, mid_self, current_hop = await self._dispatch_mid_exec_delegation(
+            # ``_mid_delegate`` is this round's view only; the merged view below
+            # comes from the run-level ledger.
+            _mid_delegate, mid_self, current_hop = await self._dispatch_mid_exec_delegation(
                 plan=mid_plan,
                 target_cards=target_cards_list,
                 user_id=user_id,
@@ -6358,25 +6636,36 @@ satisfactory=False,
                 updater=updater,
                 skill_runner=skill_runner,
                 metadata=metadata,
+                ledger=dispatch_ledger,
+                turn=turn,
             )
-            delegate_results.update(mid_delegate)
+            # Rebuild the agent-keyed view from the run ledger instead of
+            # ``update()``: a later round must not replace an earlier round's
+            # result for the same agent.
+            delegate_results = dispatch_ledger.results_by_agent()
 
             # Hop is consumed inside _dispatch_mid_exec_delegation;
             # current_hop has already been updated by the returned value.
 
             # ── Re-delegation guard ──
-            # Mark SGs that returned NONE or empty results as exhausted so
-            # they are excluded from subsequent mid-exec rounds.  This
-            # prevents infinite ping-pong between the same agent pair when
-            # the delegated SG cannot contribute meaningful data.
-            for sg_name, result in mid_delegate.items():
-                if not result or result == NONE_TASK_DESCRIPTION:
-                    _exhausted_sgs.add(sg_name)
-                    logger.info(
-                        "[MidExec] exhausted SG marked | sg=%s round=%d "
-                        "reason=empty_or_none_result",
-                        sg_name, mid_exec_round + 1,
-                    )
+            # Mark SGs that were dispatched and returned nothing as exhausted so
+            # they are excluded from subsequent mid-exec rounds.  This prevents
+            # infinite ping-pong between the same agent pair when the delegated
+            # SG cannot contribute meaningful data.  A task blocked before
+            # dispatch does not mark its agent: it was never asked.
+            # ``dispatch_ctx`` passes ``mid_exec_round + 1`` as the round index,
+            # so scope the lookup to the round that just ran.
+            for sg_name in sorted(
+                dispatch_ledger.agents_without_usable_result(
+                    round_index=mid_exec_round + 1, turn=turn
+                )
+            ):
+                _exhausted_sgs.add(sg_name)
+                logger.info(
+                    "[MidExec] exhausted SG marked | sg=%s round=%d "
+                    "reason=empty_result_after_dispatch",
+                    sg_name, mid_exec_round + 1,
+                )
 
             # Merge self-execution results into own_results for next round detection.
             # Delegated results are already in delegate_results — do NOT duplicate
@@ -6393,6 +6682,10 @@ satisfactory=False,
                 )
                 fake_task_id = 10000 + mid_exec_round * 100 + len(delegate_results)
                 own_results[fake_task_id] = f"[Self-exec {self_name}]: {mid_self[self_name]}"
+                # Also surface it in the returned task results: callers that do
+                # not read the ledger (single-turn execution) would otherwise
+                # drop this work before synthesis.
+                all_task_results[fake_task_id] = own_results[fake_task_id]
 
             mid_exec_round += 1
 
