@@ -7,3 +7,9 @@ target/
 # Playwright accessibility snapshots written to the repo root by the
 # browser MCP server when a bare filename is passed.
 /*.yml
+.DS_Store
+/temp/
+
+# Python bytecode caches
+__pycache__/
+*.py[cod]
