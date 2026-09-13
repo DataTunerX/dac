@@ -7576,7 +7576,6 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                         target_cards = _filtered_cards
                         target_sg_names = _filtered_names
 
-                if not target_cards:
                 await self.emit_progress(
                     updater,
                     "collaboration-progress",
@@ -9361,6 +9360,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         ``execution_hint`` for a peer, forward it opaquely on dispatch.
         Returns ``(results_dict, remaining_hop)`` where remaining_hop is the
         hop count after all dispatches in this call.
+        """
         results: dict[str, str] = {}
         name_to_card = {c.name: c for c in target_cards}
         hints_by_sg = dict(execution_hints_by_sg or {})
