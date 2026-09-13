@@ -14,6 +14,8 @@ Run with:
 
 from __future__ import annotations
 
+# ruff: noqa: E402, I001 - environment must be set before SDK imports.
+
 import asyncio
 import json
 import os
@@ -145,7 +147,7 @@ def _corrupt_unescape(raw: str) -> str:
     return pattern.sub(_repl, raw)
 
 
-async def test_one(llm, query: str, planner: _DummyPlanner):
+async def _run_one(llm, query: str, planner: _DummyPlanner):
     print("\n" + "#" * 80)
     print(f"# QUERY: {query}")
     print("#" * 80)
@@ -247,7 +249,7 @@ async def main():
     results = []
     for q in QUERIES:
         try:
-            ok = await test_one(llm, q, planner)
+            ok = await _run_one(llm, q, planner)
         except Exception as e:  # noqa: BLE001
             print(f"\n!! test raised: {e}")
             ok = False

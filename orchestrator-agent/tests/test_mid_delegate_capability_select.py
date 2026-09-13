@@ -408,7 +408,6 @@ def test_structured_detect_works_with_empty_collaborator_cards():
 
 
 def test_apply_scoped_mid_exec_task_descriptions_overwrites_bloated_plan():
-    executor = object.__new__(sg.OrchestratorAgentExecutorSemanticGroup)
     plan = SimpleNamespace(
         tasks=[
             SimpleNamespace(
@@ -490,7 +489,7 @@ def test_dispatch_forwards_execution_hint(monkeypatch):
     )
     hint = {"version": "v1", "selected_members": ["m1"], "can_handle": True}
 
-    results = asyncio.run(
+    results, remaining_hop = asyncio.run(
         executor._dispatch_mid_exec_delegation(
             plan=plan,
             target_cards=[target],
@@ -507,5 +506,6 @@ def test_dispatch_forwards_execution_hint(monkeypatch):
     )
 
     assert results == {"peer-sg": "ok"}
+    assert remaining_hop == 1
     assert captured["execution_hint"] == hint
     assert captured["target_card"].name == "peer-sg"
