@@ -7,10 +7,17 @@ This module keeps the transport layer (FastAPI) separate from the index logic
 
 from __future__ import annotations
 
+import io
+import json
 import logging
+import os
 import tempfile
+import urllib.error
+import urllib.request
+import zipfile
 from pathlib import Path
 
+from agent_contracts import SchemaDescriptor
 from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -32,6 +39,7 @@ from .validation import validate_namespace, validate_skill_name, validate_versio
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 256 * 1024 * 1024  # 256 MiB safety cap for uploaded zips.
+SCHEMA_REGISTRY_TIMEOUT_SEC = 10
 
 
 def _require_index() -> SkillIndex:
@@ -272,7 +280,9 @@ async def get_skill_detail(
         version=resolved or skill.version,
         filename=zip_path.name,
         download_url=summary.get("download_url") or download_url,
-        available_versions=list(summary.get("available_versions") or ([resolved] if resolved else [])),
+        available_versions=list(
+            summary.get("available_versions") or ([resolved] if resolved else [])
+        ),
         allowed_tools=list(skill.allowed_tools or []),
         scripts=[
             SkillScriptInfo(
@@ -282,6 +292,9 @@ async def get_skill_detail(
             for s in (skill.scripts or [])
         ],
         resource_dirs=list(skill.resource_dirs or []),
+        output_schemas=_extract_schema_descriptors(
+            zip_path.read_bytes(), skill_name=skill.name, namespace=namespace
+        ),
     )
 
 
@@ -424,7 +437,9 @@ async def update_skill(
     try:
         data = rebuild_skill_zip_bytes(existing, req)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"failed to rebuild skill zip: {exc}")
+        raise HTTPException(
+            status_code=400, detail=f"failed to rebuild skill zip: {exc}"
+        )
 
     return _store_skill_zip(ns, data, source="update")
 
@@ -521,6 +536,10 @@ def _store_skill_zip(
         )
 
     name, version = _parse_upload_zip(data, original_filename or f"{source}.zip")
+    schema_descriptors = _extract_schema_descriptors(
+        data, skill_name=name, namespace=namespace
+    )
+    _register_schema_descriptors(schema_descriptors)
 
     target = ns_dir / f"{name}-{version}.zip"
     target.write_bytes(data)
@@ -542,7 +561,7 @@ def _store_skill_zip(
             status_code=500,
             detail=f"{source} succeeded but skill '{namespace}/{name}' not indexed",
         )
-    return SkillInfo(**info)
+    return SkillInfo(**info, output_schemas=schema_descriptors)
 
 
 @router.delete(
@@ -620,6 +639,187 @@ def _parse_upload_zip(data: bytes, original_filename: str) -> tuple[str, str]:
     name = validate_skill_name(name)
     version = validate_version(version) or ""
     return name, version
+
+
+def _normalized_member(name: str) -> str:
+    return name.replace("\\", "/")
+
+
+def _skill_root_from_members(names: list[str]) -> str:
+    meta_names = [
+        _normalized_member(name)
+        for name in names
+        if _normalized_member(name) == "_meta.json"
+        or _normalized_member(name).endswith("/_meta.json")
+    ]
+    if len(meta_names) != 1:
+        return ""
+    return meta_names[0][: -len("_meta.json")]
+
+
+def _extract_schema_descriptors(
+    data: bytes,
+    *,
+    skill_name: str,
+    namespace: str = "default",
+) -> list[SchemaDescriptor]:
+    """Load package-authored schema files declared by ``_meta.json``.
+
+    Each declaration has ``schema_id`` and ``path``. Inline schema bodies are
+    intentionally rejected so an execution-time planner can never smuggle a
+    schema into the registry through request content.
+    """
+
+    with zipfile.ZipFile(io.BytesIO(data), "r") as archive:
+        names = archive.namelist()
+        root = _skill_root_from_members(names)
+        if not root and "_meta.json" not in {_normalized_member(n) for n in names}:
+            return []
+        meta_name = f"{root}_meta.json"
+        try:
+            meta = json.loads(archive.read(meta_name).decode("utf-8"))
+        except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=400, detail=f"invalid _meta.json: {exc}"
+            ) from exc
+        declarations = meta.get("output_schemas") or []
+        if not isinstance(declarations, list):
+            raise HTTPException(status_code=400, detail="output_schemas must be a list")
+
+        descriptors: list[SchemaDescriptor] = []
+        seen: set[str] = set()
+        normalized_names = {_normalized_member(name): name for name in names}
+        for index, declaration in enumerate(declarations):
+            if not isinstance(declaration, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"output_schemas[{index}] must be an object",
+                )
+            if "schema" in declaration:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"output_schemas[{index}] must reference a package file, not inline schema",
+                )
+            schema_id = str(declaration.get("schema_id") or "").strip()
+            relative_path = _normalized_member(str(declaration.get("path") or ""))
+            windows_absolute = (
+                len(relative_path) >= 3
+                and relative_path[1] == ":"
+                and relative_path[2] == "/"
+            )
+            if (
+                not relative_path
+                or relative_path.startswith(("/", "../"))
+                or "/../" in relative_path
+                or windows_absolute
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"output_schemas[{index}] has an unsafe or empty path",
+                )
+            member = f"{root}{relative_path}"
+            original_member = normalized_names.get(member)
+            if original_member is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"output schema file not found in skill zip: {relative_path}",
+                )
+            try:
+                schema_body = json.loads(archive.read(original_member).decode("utf-8"))
+                descriptor = SchemaDescriptor(
+                    schema_id=schema_id,
+                    schema=schema_body,
+                    schema_digest=declaration.get("schema_digest"),
+                    owner=f"skill:{namespace}/{skill_name}",
+                    description=str(declaration.get("description") or ""),
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"invalid output schema {schema_id or index}: {exc}",
+                ) from exc
+            if descriptor.schema_id in seen:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"duplicate output schema declaration: {descriptor.schema_id}",
+                )
+            seen.add(descriptor.schema_id)
+            descriptors.append(descriptor)
+        return descriptors
+
+
+def _schema_registry_url() -> str:
+    return (
+        os.getenv("AGENT_SCHEMA_REGISTRY_URL")
+        or os.getenv("AgentRegistry")
+        or "http://biz-orchestrator-registry.dac.svc.cluster.local:8000"
+    ).rstrip("/")
+
+
+def _register_schema_descriptors(descriptors: list[SchemaDescriptor]) -> None:
+    """Publish descriptors before storing the skill archive."""
+
+    for descriptor in descriptors:
+        payload = descriptor.model_dump_json(by_alias=True).encode("utf-8")
+        request = urllib.request.Request(
+            f"{_schema_registry_url()}/schemas",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=SCHEMA_REGISTRY_TIMEOUT_SEC
+            ) as response:
+                if response.status not in (200, 201):
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"schema registry returned HTTP {response.status}",
+                    )
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:1000]
+            status = 409 if exc.code == 409 else 502
+            raise HTTPException(
+                status_code=status,
+                detail=f"schema registration failed for {descriptor.schema_id}: {detail}",
+            ) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            reason = getattr(exc, "reason", None) or str(exc)
+            raise HTTPException(
+                status_code=503,
+                detail=f"schema registry unavailable for {descriptor.schema_id}: {reason}",
+            ) from exc
+
+
+def register_indexed_schema_descriptors(idx: SkillIndex) -> tuple[int, int]:
+    """Idempotently register declarations from skills already present on disk."""
+
+    packages = 0
+    descriptors = 0
+    for namespace in idx.list_namespaces():
+        for skill in idx.list_skills(namespace):
+            for version in skill.get("available_versions") or [skill.get("version")]:
+                path = idx.resolve_zip(namespace, skill["name"], version)
+                if path is None:
+                    continue
+                try:
+                    found = _extract_schema_descriptors(
+                        path.read_bytes(),
+                        skill_name=skill["name"],
+                        namespace=namespace,
+                    )
+                    _register_schema_descriptors(found)
+                except Exception:
+                    logger.exception(
+                        "[SkillHub][Schema] failed to register %s/%s@%s",
+                        namespace,
+                        skill["name"],
+                        version,
+                    )
+                    continue
+                packages += 1
+                descriptors += len(found)
+    return packages, descriptors
 
 
 def _find_latest(idx: SkillIndex, namespace: str, name: str) -> dict | None:

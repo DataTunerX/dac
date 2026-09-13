@@ -36,6 +36,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ADD . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
+RUN uv pip install --python /app/.venv/bin/python --no-deps \
+    /app/sdks/agent_contracts-0.1.0-py3-none-any.whl
 
 # extract_pdf / skill_sdk.tool.pdf need PyMuPDF with native libs — ensure present and importable
 RUN --mount=type=cache,target=/root/.cache/uv \

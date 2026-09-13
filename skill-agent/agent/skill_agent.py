@@ -25,6 +25,7 @@ import re
 import time as _time
 from abc import ABC
 from dataclasses import dataclass
+from pathlib import Path
 from typing import (
     Any,
     AsyncIterable,
@@ -74,6 +75,19 @@ from langfuse.langchain import CallbackHandler
 from model_sdk import ModelManager
 from pydantic import BaseModel, Field, ValidationError
 from typing_extensions import override
+from agent_contracts import (
+    AgentRuntimeStatus,
+    HealthState,
+    PROTOCOL_VERSION,
+    ParticipantTask,
+    TaskError as V2TaskError,
+    TaskResult as V2TaskResult,
+    TaskResultStatus as V2TaskResultStatus,
+    SchemaDescriptor,
+    SchemaReference,
+    UnknownSchemaError,
+    core_schema_registry,
+)
 
 from . import broadcast_capability_check as sg_broadcast
 from .agent_card_resolve import resolve_agent_card_by_planner_name
@@ -96,6 +110,8 @@ from .task_results import (
     DispatchLedger,
 )
 from .tool_call_utils import invoke_llm_with_tool
+from .local_task_executor import LocalTaskExecutor
+from .participant_executor import ParticipantExecutor
 
 try:
     from skill_sdk.skill.runner import SkillRunner
@@ -2690,7 +2706,10 @@ class SkillAgentExecutor(AgentExecutor):
     _SKILL_LIST_HEADER = "本地技能执行器，可在本进程内直接运行以下技能："
     _MAX_DESC_PREVIEW_LINES = 30
 
-    def build_dynamic_agent_card_fields(self) -> tuple[str, list[AgentSkill]]:
+    def build_dynamic_agent_card_fields(
+        self,
+        registered_schemas: Optional[Dict[str, list[SchemaReference]]] = None,
+    ) -> tuple[str, list[AgentSkill]]:
         runner = self._skill_runner
         lister = getattr(runner, "lister", None) if runner is not None else None
         try:
@@ -2708,12 +2727,16 @@ class SkillAgentExecutor(AgentExecutor):
                 continue
             lines.append(f"- {name}: {desc_inline}")
             try:
+                schema_tags = [
+                    f"output-schema:{ref.schema_id}@{ref.schema_digest}"
+                    for ref in (registered_schemas or {}).get(name, [])
+                ]
                 agent_skills.append(
                     AgentSkill(
                         id=name,
                         name=name,
                         description=desc_raw or desc_inline,
-                        tags=[name, "local skill", "skill sdk"],
+                        tags=[name, "local skill", "skill sdk", *schema_tags],
                         examples=[],
                         input_modes=["text", "text/plain"],
                         output_modes=["text", "text/plain"],
@@ -2751,6 +2774,172 @@ class SkillAgentExecutor(AgentExecutor):
             if name and version:
                 out[name] = version
         return out
+
+    def get_declared_output_schemas(self) -> Dict[str, list[SchemaDescriptor]]:
+        """Read package-authored schema declarations from successfully loaded skills."""
+
+        runner = self._skill_runner
+        lister = getattr(runner, "lister", None) if runner is not None else None
+        try:
+            skills = list(getattr(lister, "skills", None) or [])
+        except Exception:
+            return {}
+        declared: Dict[str, list[SchemaDescriptor]] = {}
+        for skill in skills:
+            name = str(getattr(skill, "name", "") or "").strip()
+            raw_base_dir = str(getattr(skill, "base_dir", "") or "").strip()
+            if not raw_base_dir:
+                continue
+            base_dir = Path(raw_base_dir)
+            meta_path = base_dir / "_meta.json"
+            if not name or not meta_path.is_file():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                entries = meta.get("output_schemas") or []
+                if not isinstance(entries, list):
+                    raise ValueError("output_schemas must be a list")
+                for entry in entries:
+                    if not isinstance(entry, dict) or "schema" in entry:
+                        raise ValueError("output schema must reference a package file")
+                    relative = Path(str(entry.get("path") or ""))
+                    if relative.is_absolute() or ".." in relative.parts:
+                        raise ValueError(f"unsafe output schema path: {relative}")
+                    schema_path = (base_dir / relative).resolve()
+                    if base_dir.resolve() not in schema_path.parents:
+                        raise ValueError(f"output schema escapes skill root: {relative}")
+                    descriptor = SchemaDescriptor(
+                        schema_id=str(entry.get("schema_id") or ""),
+                        schema=json.loads(schema_path.read_text(encoding="utf-8")),
+                        schema_digest=entry.get("schema_digest"),
+                        owner=f"skill:{name}",
+                        description=str(entry.get("description") or ""),
+                    )
+                    declared.setdefault(name, []).append(descriptor)
+            except Exception as exc:
+                logger.warning(
+                    "[LocalSkill][Schema] ignored invalid declaration | skill=%s error=%s",
+                    name,
+                    exc,
+                )
+        return declared
+
+    def resolve_registered_output_schemas(
+        self,
+    ) -> Dict[str, list[SchemaReference]]:
+        """Return only local declarations whose exact digest exists in registry."""
+
+        resolved: Dict[str, list[SchemaReference]] = {}
+        client = AgentRegistryClient(timeout=5)
+        for skill_name, descriptors in self.get_declared_output_schemas().items():
+            for descriptor in descriptors:
+                try:
+                    registered = SchemaDescriptor.model_validate(
+                        client.resolve_schema(descriptor.schema_id)
+                    )
+                    if registered.schema_digest != descriptor.schema_digest:
+                        raise ValueError(
+                            f"digest mismatch: package={descriptor.schema_digest} "
+                            f"registry={registered.schema_digest}"
+                        )
+                    resolved.setdefault(skill_name, []).append(
+                        SchemaReference(
+                            schema_id=registered.schema_id,
+                            schema_digest=registered.schema_digest,
+                            owner=registered.owner,
+                            skill_name=skill_name,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[LocalSkill][Schema] not advertised | skill=%s schema=%s error=%s",
+                        skill_name,
+                        descriptor.schema_id,
+                        exc,
+                    )
+        return resolved
+
+    def build_runtime_status(
+        self,
+        agent_card: AgentCard,
+        *,
+        readiness_generation: int,
+        registered_schemas: Optional[Dict[str, list[SchemaReference]]] = None,
+    ) -> AgentRuntimeStatus:
+        """Build health from the actual loaded skill and usable tool inventory."""
+
+        skills = self.get_loaded_skill_versions()
+        ready_tools: list[str] = []
+        unavailable_tools: list[str] = []
+        if self._skill_runner is not None:
+            ready_tools, unavailable_tools = LocalTaskExecutor.runtime_tool_inventory(
+                self._skill_runner
+            )
+        card_payload = (
+            agent_card.model_dump(mode="json")
+            if hasattr(agent_card, "model_dump")
+            else json.loads(agent_card.json())
+        )
+        card_revision = "sha256:" + hashlib.sha256(
+            json.dumps(
+                card_payload, sort_keys=True, separators=(",", ":"), default=str
+            ).encode("utf-8")
+        ).hexdigest()
+        schema_refs = [
+            ref
+            for skill_name in sorted(registered_schemas or {})
+            for ref in (registered_schemas or {})[skill_name]
+        ]
+        manifest_payload = {
+            "skills": skills,
+            "ready_tools": ready_tools,
+            "unavailable_tools": unavailable_tools,
+            "output_schemas": [
+                {"schema_id": ref.schema_id, "schema_digest": ref.schema_digest}
+                for ref in schema_refs
+            ],
+            "lead_supported": True,
+            "participant_supported": True,
+        }
+        manifest_version = "sha256:" + hashlib.sha256(
+            json.dumps(
+                manifest_payload, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+
+        runner_ready = self._skill_runner is not None
+        skills_state = (
+            HealthState.READY
+            if skills
+            else HealthState.DEGRADED if runner_ready else HealthState.UNAVAILABLE
+        )
+        tools_state = HealthState.DEGRADED if unavailable_tools else (
+            HealthState.READY if runner_ready else HealthState.UNKNOWN
+        )
+        # Construction proves the local runner exists, but it does not prove a
+        # live model round-trip. Phase 3 adds active model health checks; until
+        # then the aggregate readiness must remain degraded rather than overclaim.
+        agent_ready = (
+            HealthState.DEGRADED if runner_ready else HealthState.UNAVAILABLE
+        )
+        return AgentRuntimeStatus(
+            protocol_version=PROTOCOL_VERSION,
+            agent_id=str(agent_card.url),
+            agent_url=str(agent_card.url),
+            card_revision=card_revision,
+            capability_manifest_version=manifest_version,
+            supported_protocol_versions=[PROTOCOL_VERSION, "legacy"],
+            agent_ready=agent_ready,
+            skills_state=skills_state,
+            tools_state=tools_state,
+            model_state=HealthState.UNKNOWN,
+            loaded_skills=sorted(skills),
+            ready_tools=ready_tools,
+            unavailable_tools=unavailable_tools,
+            registered_output_schemas=schema_refs,
+            recent_execution_health=HealthState.UNKNOWN,
+            readiness_generation=max(0, readiness_generation),
+        )
 
     # ------------------------------------------------------------------
     # Data-flow logging (mirrors orchestrator-agent)
@@ -5171,6 +5360,167 @@ satisfactory=False,
         )
         await updater.complete(message=new_agent_text_message("", context_id=task.context_id))
 
+    async def handle_participant_task(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        metadata: dict,
+    ) -> None:
+        """Execute one V2 participant contract without entering orchestration."""
+
+        a2a_task = context.current_task
+        if not a2a_task:
+            a2a_task = new_task(context.message)
+            await event_queue.enqueue_event(a2a_task)
+        updater = TaskUpdater(event_queue, a2a_task.id, a2a_task.context_id)
+
+        raw_contract = metadata.get("participant_task")
+        if not isinstance(raw_contract, dict):
+            raw_contract = metadata
+        try:
+            participant_task = ParticipantTask.model_validate(raw_contract)
+        except ValidationError as exc:
+            invalid_result = V2TaskResult(
+                protocol_version=PROTOCOL_VERSION,
+                collaboration_id=str(metadata.get("collaboration_id") or "invalid"),
+                task_id=str(metadata.get("task_id") or "invalid"),
+                agent_name=self._self_planner_agent_name(),
+                status=V2TaskResultStatus.FAILED,
+                error=V2TaskError(
+                    code="invalid_participant_task",
+                    message=str(exc),
+                ),
+                retryable=False,
+            )
+            await updater.add_artifact(
+                [TextPart(text=invalid_result.model_dump_json())],
+                name="participant-task-result",
+            )
+            await updater.complete(
+                message=new_agent_text_message("", context_id=a2a_task.context_id)
+            )
+            return
+
+        self._progress_context = {
+            "run_id": participant_task.trace.run_id,
+            "user_id": str(metadata.get("user_id") or ""),
+            "agent_id": self.agent_id,
+        }
+
+        async def participant_progress(
+            event: str,
+            *,
+            message: str,
+            status: str = "running",
+            task_id: Optional[int] = None,
+            extra: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            await self._emit_progress(
+                updater,
+                event,
+                message=message,
+                status=status,
+                task_id=task_id,
+                extra={"execution_mode": "participant", **(extra or {})},
+            )
+
+        await participant_progress(
+            "participant_task_started",
+            message=f"participant task {participant_task.task_id} started",
+            extra={"collaboration_id": participant_task.collaboration_id},
+        )
+        runner = await self._ensure_skill_runner()
+        if runner is None:
+            result = V2TaskResult(
+                protocol_version=PROTOCOL_VERSION,
+                collaboration_id=participant_task.collaboration_id,
+                task_id=participant_task.task_id,
+                agent_name=self._self_planner_agent_name(),
+                status=V2TaskResultStatus.FAILED,
+                error=V2TaskError(
+                    code="skill_runtime_unavailable",
+                    message="local SkillRunner is unavailable",
+                ),
+                retryable=True,
+            )
+        else:
+            schema_registry = core_schema_registry()
+            unresolved_schemas: list[str] = []
+            for expected in participant_task.expected_outputs:
+                try:
+                    schema_registry.resolve(
+                        expected.schema_id,
+                        schema_digest_value=expected.schema_digest,
+                    )
+                    continue
+                except UnknownSchemaError:
+                    pass
+                try:
+                    raw_descriptor = await AgentRegistryClient().aresolve_schema(
+                        expected.schema_id
+                    )
+                    schema_registry.register(
+                        SchemaDescriptor.model_validate(raw_descriptor)
+                    )
+                    schema_registry.resolve(
+                        expected.schema_id,
+                        schema_digest_value=expected.schema_digest,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[Participant] output schema resolution failed | schema=%s error=%s",
+                        expected.schema_id,
+                        exc,
+                    )
+                    unresolved_schemas.append(expected.schema_id)
+
+            if unresolved_schemas:
+                result = V2TaskResult(
+                    protocol_version=PROTOCOL_VERSION,
+                    collaboration_id=participant_task.collaboration_id,
+                    task_id=participant_task.task_id,
+                    agent_name=self._self_planner_agent_name(),
+                    status=V2TaskResultStatus.BLOCKED,
+                    missing_capabilities=[
+                        f"output_schema:{schema_id}"
+                        for schema_id in sorted(set(unresolved_schemas))
+                    ],
+                    error=V2TaskError(
+                        code="output_schema_unavailable",
+                        message="one or more expected output schemas could not be resolved",
+                    ),
+                    retryable=True,
+                )
+            else:
+                local_executor = LocalTaskExecutor(
+                    skill_runner=runner,
+                    agent_name=self._self_planner_agent_name(),
+                    schema_registry=schema_registry,
+                )
+                result = await ParticipantExecutor(local_executor).execute(
+                    participant_task,
+                    user_id=str(metadata.get("user_id") or ""),
+                    progress_callback=participant_progress,
+                )
+
+        await participant_progress(
+            "participant_task_finished",
+            message=f"participant task {participant_task.task_id} {result.status}",
+            status="done" if result.status in {"success", "partial"} else "fail",
+            extra={
+                "collaboration_id": participant_task.collaboration_id,
+                "result_status": result.status,
+                "retryable": result.retryable,
+            },
+        )
+        await updater.add_artifact(
+            [TextPart(text=result.model_dump_json())],
+            name="participant-task-result",
+        )
+        await updater.complete(
+            message=new_agent_text_message("", context_id=a2a_task.context_id)
+        )
+
     # ------------------------------------------------------------------
     # Main execute — full orchestration flow
     # ------------------------------------------------------------------
@@ -5189,6 +5539,10 @@ satisfactory=False,
         # pre-plan and capability-check requests carry no pool, and the executor
         # is process-wide, so a stale pool would otherwise be reused.
         self._init_routing_pool_from_metadata(metadata)
+
+        if metadata.get("execution_mode") == "participant":
+            await self.handle_participant_task(context, event_queue, metadata)
+            return
 
         if isinstance(metadata, dict) and metadata.get("message_type") == CAPABILITY_CHECK_MESSAGE_TYPE:
             await self.handle_capability_check(context, event_queue, query)

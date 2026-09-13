@@ -120,10 +120,13 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         # on process exit. Safe no-op when the feature is off.
         atexit.register(skill_executor.shutdown_skill_runner)
 
-        # Compose agent_card.description / skills from the loaded skill
-        # inventory. When the runner could not load anything, fall back to the
-        # description in agent_card.json so the card is never empty.
-        dynamic_description, dynamic_skills = skill_executor.build_dynamic_agent_card_fields()
+        # Compose agent_card.description / skills only from the loaded runtime
+        # inventory. An empty runner publishes no capabilities rather than
+        # falling back to unverified static card claims.
+        registered_schemas = skill_executor.resolve_registered_output_schemas()
+        dynamic_description, dynamic_skills = skill_executor.build_dynamic_agent_card_fields(
+            registered_schemas
+        )
         if dynamic_skills:
             agent_card.description = dynamic_description
             agent_card.skills = dynamic_skills
@@ -133,13 +136,10 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
                 len(dynamic_skills), len(dynamic_description),
             )
         else:
-            fallback_desc = data.get("description") or dynamic_description
-            agent_card.description = fallback_desc
-            raw_skills = data.get("skills") or []
-            agent_card.skills = [AgentSkill(**s) for s in raw_skills]
+            agent_card.description = dynamic_description
+            agent_card.skills = []
             logger.warning(
-                "[LocalSkill][Card] no skills loaded — falling back to agent_card.json "
-                "(static_skills=%d)", len(agent_card.skills),
+                "[LocalSkill][Card] no skills loaded; publishing an empty runtime inventory"
             )
 
         skill_executor.agent_card = agent_card
@@ -155,13 +155,21 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         register_agent = (os.getenv("REGISTER_AGENT", "true").strip().lower() not in ("false", "0", "no"))
         registry: Optional[RedisRegistry] = None
         heartbeat_service: Optional[HeartbeatService] = None
+        readiness_generation = 1
         if not register_agent:
             logger.info("REGISTER_AGENT is disabled, agent will not register to Redis")
         else:
             registry = RedisRegistry(host=redis_host, port=redis_port, db=redis_db, password=password)
             heartbeat_service = HeartbeatService(registry, interval=heartbeat_interval)
             heartbeat_service.start()
-            if heartbeat_service.register_agent(agent_card):
+            runtime_status = skill_executor.build_runtime_status(
+                agent_card,
+                readiness_generation=readiness_generation,
+                registered_schemas=registered_schemas,
+            )
+            if heartbeat_service.register_agent(
+                agent_card, runtime_status=runtime_status
+            ):
                 logger.info(
                     "Agent registered to Redis with heartbeat (interval: %ss)",
                     heartbeat_interval,
@@ -199,6 +207,7 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
         _sync_lock = threading.Lock()
 
         def _on_skills_changed(changed):
+            nonlocal readiness_generation
             with _sync_lock:
                 logger.info(
                     "[SkillSync] applying %d change(s): %s",
@@ -209,21 +218,40 @@ def main(host, port, agent_card, redis_host, redis_port, redis_db, password, pro
                 except Exception:  # noqa: BLE001
                     logger.exception("[SkillSync] reload_skill_runner failed")
                     return
+                registered_schemas = {}
                 try:
-                    desc, skills = skill_executor.build_dynamic_agent_card_fields()
+                    registered_schemas = (
+                        skill_executor.resolve_registered_output_schemas()
+                    )
+                    desc, skills = skill_executor.build_dynamic_agent_card_fields(
+                        registered_schemas
+                    )
                     if skills:
                         agent_card.description = desc
                         agent_card.skills = skills
+                    else:
+                        agent_card.description = desc
+                        agent_card.skills = []
                 except Exception:  # noqa: BLE001
                     logger.exception("[SkillSync] rebuilding agent card failed")
                 # Re-register so the refreshed card (new skill list) is pushed to
                 # Redis. HeartbeatService.register_agent updates its in-memory
                 # copy too, so heartbeats keep advertising the new card.
                 try:
+                    readiness_generation += 1
+                    runtime_status = skill_executor.build_runtime_status(
+                        agent_card,
+                        readiness_generation=readiness_generation,
+                        registered_schemas=registered_schemas,
+                    )
                     if heartbeat_service is not None:
-                        heartbeat_service.register_agent(agent_card)
+                        heartbeat_service.register_agent(
+                            agent_card, runtime_status=runtime_status
+                        )
                     elif registry is not None:
-                        registry.register_agent(agent_card)
+                        registry.register_agent(
+                            agent_card, runtime_status=runtime_status
+                        )
                     logger.info(
                         "[SkillSync] agent card refreshed and re-registered "
                         "(skills=%d)", len(agent_card.skills or []),

@@ -19,9 +19,14 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if not .Values.redis.external.host }}
+      {{- if or (not .Values.redis.external.host) .Values.bizOrchestratorRegistry.enabled }}
       initContainers:
+        {{- if not .Values.redis.external.host }}
         {{- include "dac.initWait" (list (dict "name" "redis" "host" (printf "%s.%s.svc.cluster.local" (include "dac.redis.serviceName" .) .Release.Namespace) "port" (.Values.redis.port | toString))) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.bizOrchestratorRegistry.enabled }}
+        {{- include "dac.initWait" (list (dict "name" "agent-registry" "host" (printf "%s.%s.svc.cluster.local" (include "dac.bizOrchestratorRegistry.serviceName" .) .Release.Namespace) "port" (.Values.bizOrchestratorRegistry.service.port | toString))) | nindent 8 }}
+        {{- end }}
       {{- end }}
       containers:
         - name: biz-skill-agent
@@ -38,6 +43,8 @@ spec:
               value: {{ .Values.bizSkillAgent.config.agentName | quote }}
             - name: REGISTER_AGENT
               value: {{ .Values.bizSkillAgent.config.registerAgent | quote }}
+            - name: AgentRegistry
+              value: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.bizOrchestratorRegistry.serviceName" .) .Release.Namespace .Values.bizOrchestratorRegistry.service.port | quote }}
             - name: LOCAL_SKILL_MAX_STEPS
               value: {{ .Values.bizSkillAgent.config.maxSteps | quote }}
             - name: LOCAL_SKILL_CMD_TIMEOUT_SEC

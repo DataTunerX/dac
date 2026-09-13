@@ -1,0 +1,18 @@
+[project]
+name = "agent-contracts"
+version = "0.1.0"
+description = "Versioned DAC multi-agent protocol contracts and validators"
+requires-python = ">=3.9"
+dependencies = [
+    "pydantic>=2.11,<3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_contracts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

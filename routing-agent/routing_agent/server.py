@@ -56,6 +56,7 @@ from langfuse.langchain import CallbackHandler
 from . import candidate_shortlist
 from .agentregistry_client import AgentRegistryClient
 from .dataservices_client import DataServicesClient, CreateHistoryRequest, HistoryMessage, SearchHistoryRequest
+from .protocol_v2 import capability_report_legacy_view, parse_capability_report
 from .tool_call_utils import invoke_llm_with_tool, extract_tool_call_result
 
 
@@ -2017,6 +2018,12 @@ class RoutingAgent(BaseAgent):
                 full_response = full_response.strip()
 
                 response_data = json.loads(full_response)
+                if response_data.get("protocol_version"):
+                    report = parse_capability_report(response_data)
+                    response_data = {
+                        **response_data,
+                        **capability_report_legacy_view(report),
+                    }
                 rp = response_data.get("route_path") or []
                 rps = response_data.get("route_paths") or []
                 if not rps and rp:

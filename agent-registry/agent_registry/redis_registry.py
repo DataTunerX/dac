@@ -1,15 +1,27 @@
+import asyncio
+import hashlib
 import json
+import logging
 import os
-import redis
 import socket
 import threading
 import time
-import asyncio
-import logging
-from datetime import datetime
-from typing import Dict, Optional, List, Any, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
+
+import redis
 from a2a.types import AgentCard
+from agent_contracts import (
+    CORE_SCHEMA_DESCRIPTORS,
+    AgentDiscoveryRecord,
+    AgentIndexStatus,
+    AgentRuntimeStatus,
+    HealthState,
+    IndexState,
+    SchemaConflictError,
+    SchemaDescriptor,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,10 +48,21 @@ class RedisRegistry:
         self.db = db
         self.registry_key = "expert_agents"
         self.heartbeat_key = "agent_heartbeats"
+        self.runtime_status_key = "agent_runtime_status:v2"
+        self.index_status_key = "agent_index_status:v2"
+        self.index_generation_key = "agent_index_generation:v2"
+        self.schema_registry_key = "agent_output_schemas:v2"
+        self.alias_key = "agent_aliases:v2"
+        self.aliases_by_id_key = "agent_aliases_by_id:v2"
         self.lock = threading.Lock()
         self.agents: List[AgentCard] = []
         self._enable_keyspace_notifications()
+        self._register_core_schemas()
         self._load_initial_agents()
+
+    def _register_core_schemas(self) -> None:
+        for descriptor in CORE_SCHEMA_DESCRIPTORS:
+            self.register_schema(descriptor)
 
     def _enable_keyspace_notifications(self):
         try:
@@ -50,24 +73,251 @@ class RedisRegistry:
             logger.error("Please run manually: redis-cli config set notify-keyspace-events AKE")
 
     def _load_initial_agents(self):
-        self.agents = self.list_agents()
+        loaded_agents = self.list_agents()
+        self.agents = []
+        for agent in loaded_agents:
+            try:
+                self.register_aliases(str(agent.url), [str(agent.name)])
+            except ValueError as exc:
+                logger.error(
+                    "Agent registration rejected during startup due to alias "
+                    "conflict | url=%s error=%s",
+                    agent.url,
+                    exc,
+                )
+                self.remove_agent(str(agent.url), reason="alias_conflict")
+                continue
+            self.agents.append(agent)
         logger.info(f"Loaded {len(self.agents)} agents from Redis")
 
-    def _update_agents_on_event(self, event_type: str, agent_url: str, agent: Optional[AgentCard]):
+    def _update_agents_on_event(
+        self,
+        event_type: str,
+        agent_url: str,
+        agent: Optional[AgentCard],
+    ) -> bool:
         """Update the in-memory agents list based on events."""
         if event_type == "add":
-            if agent and not any(a.url == agent_url for a in self.agents):
-                self.agents.append(agent)
-                logger.info(f"Added agent: {agent_url}, self.agents={self.agents}")
+            if agent is None:
+                return False
+            try:
+                self.register_aliases(agent_url, [str(agent.name)])
+            except ValueError as exc:
+                logger.error(
+                    "Agent registration rejected due to alias conflict | url=%s error=%s",
+                    agent_url,
+                    exc,
+                )
+                self.remove_agent(agent_url, reason="alias_conflict")
+                return False
+            self.agents = [item for item in self.agents if item.url != agent_url]
+            self.agents.append(agent)
+            logger.info("Added or refreshed agent: %s", agent_url)
         elif event_type == "remove":
             self.agents = [a for a in self.agents if a.url != agent_url]
             logger.info(f"Removed agent: {agent_url}, , self.agents={self.agents}")
+        return True
 
     def _serialize_agent(self, agent: AgentCard) -> str:
-        return agent.json() if hasattr(agent, 'json') else json.dumps(agent.__dict__)
+        if hasattr(agent, "model_dump_json"):
+            return agent.model_dump_json()
+        return agent.json() if hasattr(agent, "json") else json.dumps(agent.__dict__)
 
     def _deserialize_agent(self, data: str) -> AgentCard:
         return AgentCard(**json.loads(data))
+
+    @staticmethod
+    def _model_json(value: Any) -> str:
+        if hasattr(value, "model_dump_json"):
+            return value.model_dump_json(by_alias=True)
+        if hasattr(value, "json"):
+            return value.json()
+        return json.dumps(value, ensure_ascii=False, default=str)
+
+    @staticmethod
+    def _card_dict(agent: AgentCard) -> Dict[str, Any]:
+        if hasattr(agent, "model_dump"):
+            return agent.model_dump(mode="json")
+        return json.loads(agent.json())
+
+    @classmethod
+    def _card_revision(cls, agent: AgentCard) -> str:
+        payload = json.dumps(
+            cls._card_dict(agent), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+    def register_schema(self, descriptor: SchemaDescriptor) -> SchemaDescriptor:
+        """Store an immutable descriptor, rejecting changed content at one ID."""
+
+        inserted = self.redis.hsetnx(
+            self.schema_registry_key,
+            descriptor.schema_id,
+            self._model_json(descriptor),
+        )
+        if inserted:
+            return descriptor
+        raw = self.redis.hget(self.schema_registry_key, descriptor.schema_id)
+        if not raw:
+            raise RuntimeError(
+                f"schema {descriptor.schema_id} disappeared during registration"
+            )
+        existing = SchemaDescriptor.model_validate_json(raw)
+        if existing.schema_digest != descriptor.schema_digest:
+            raise SchemaConflictError(
+                f"immutable schema conflict for {descriptor.schema_id}: "
+                f"{existing.schema_digest} != {descriptor.schema_digest}"
+            )
+        return existing
+
+    def get_schema(self, schema_id: str) -> Optional[SchemaDescriptor]:
+        raw = self.redis.hget(self.schema_registry_key, schema_id)
+        return SchemaDescriptor.model_validate_json(raw) if raw else None
+
+    def list_schemas(self) -> List[SchemaDescriptor]:
+        descriptors = []
+        for raw in self.redis.hvals(self.schema_registry_key):
+            try:
+                descriptors.append(SchemaDescriptor.model_validate_json(raw))
+            except Exception:
+                logger.exception("Invalid schema descriptor stored in Redis")
+        return sorted(descriptors, key=lambda item: item.schema_id)
+
+    def put_runtime_status(self, status: AgentRuntimeStatus) -> AgentRuntimeStatus:
+        self.redis.hset(
+            self.runtime_status_key,
+            status.agent_url,
+            self._model_json(status),
+        )
+        return status
+
+    @staticmethod
+    def _normalize_alias(alias: str) -> str:
+        return alias.strip().casefold()
+
+    def register_aliases(self, canonical_agent_id: str, aliases: List[str]) -> None:
+        canonical_agent_id = canonical_agent_id.strip()
+        clean = sorted({alias.strip() for alias in aliases if alias.strip()})
+        if not canonical_agent_id:
+            raise ValueError("canonical_agent_id is required")
+        for alias in clean:
+            existing = self.resolve_agent_alias(alias)
+            if existing and existing != canonical_agent_id:
+                raise ValueError(
+                    f"agent alias {alias!r} already belongs to {existing}"
+                )
+        previous = self.aliases_for(canonical_agent_id)
+        pipe = self.redis.pipeline()
+        for alias in previous:
+            pipe.hdel(self.alias_key, self._normalize_alias(alias))
+        for alias in clean:
+            pipe.hset(self.alias_key, self._normalize_alias(alias), canonical_agent_id)
+        pipe.hset(self.aliases_by_id_key, canonical_agent_id, json.dumps(clean))
+        pipe.execute()
+
+    def aliases_for(self, canonical_agent_id: str) -> List[str]:
+        raw = self.redis.hget(self.aliases_by_id_key, canonical_agent_id)
+        if not raw:
+            return []
+        try:
+            aliases = json.loads(raw)
+            return [str(alias) for alias in aliases if str(alias).strip()]
+        except (TypeError, ValueError):
+            logger.warning("Invalid alias record for %s", canonical_agent_id)
+            return []
+
+    def resolve_agent_alias(self, alias: str) -> Optional[str]:
+        return self.redis.hget(self.alias_key, self._normalize_alias(alias))
+
+    def remove_aliases(self, canonical_agent_id: str, pipe: Any = None) -> None:
+        aliases = self.aliases_for(canonical_agent_id)
+        target = pipe or self.redis.pipeline()
+        for alias in aliases:
+            target.hdel(self.alias_key, self._normalize_alias(alias))
+        target.hdel(self.aliases_by_id_key, canonical_agent_id)
+        if pipe is None:
+            target.execute()
+
+    def get_runtime_status(self, agent_url: str) -> Optional[AgentRuntimeStatus]:
+        raw = self.redis.hget(self.runtime_status_key, agent_url)
+        if not raw:
+            return None
+        try:
+            return AgentRuntimeStatus.model_validate_json(raw)
+        except Exception:
+            logger.exception("Invalid runtime status stored for %s", agent_url)
+            return None
+
+    def set_agent_index_status(
+        self,
+        agent_url: str,
+        state: IndexState,
+        *,
+        error: Optional[str] = None,
+    ) -> AgentIndexStatus:
+        generation = int(self.redis.incr(self.index_generation_key))
+        status = AgentIndexStatus(
+            protocol_version="multi-agent-v2",
+            agent_url=agent_url,
+            state=state,
+            generation=generation,
+            error=error,
+        )
+        self.redis.hset(
+            self.index_status_key,
+            agent_url,
+            self._model_json(status),
+        )
+        return status
+
+    def get_agent_index_status(self, agent_url: str) -> AgentIndexStatus:
+        raw = self.redis.hget(self.index_status_key, agent_url)
+        if raw:
+            try:
+                return AgentIndexStatus.model_validate_json(raw)
+            except Exception:
+                logger.exception("Invalid index status stored for %s", agent_url)
+        return AgentIndexStatus(protocol_version="multi-agent-v2", agent_url=agent_url)
+
+    def discovery_records(self) -> List[AgentDiscoveryRecord]:
+        """Join cards with status, heartbeat freshness, and vector-index state."""
+
+        now = datetime.now(timezone.utc).timestamp()
+        timeout = self._heartbeat_timeout_sec()
+        records: List[AgentDiscoveryRecord] = []
+        for agent in self.get_agents():
+            agent_url = str(agent.url)
+            last_heartbeat = self.redis.zscore(self.heartbeat_key, agent_url)
+            age_ms = (
+                max(0, int((now - float(last_heartbeat)) * 1000))
+                if last_heartbeat is not None
+                else None
+            )
+            fresh = age_ms is not None and age_ms <= int(timeout * 1000)
+            status = self.get_runtime_status(agent_url)
+            if status is None:
+                status = AgentRuntimeStatus(
+                    protocol_version="multi-agent-v2",
+                    agent_id=agent_url,
+                    agent_url=agent_url,
+                    card_revision=self._card_revision(agent),
+                    capability_manifest_version="unknown",
+                    supported_protocol_versions=["legacy"],
+                    agent_ready=HealthState.UNKNOWN,
+                )
+            records.append(
+                AgentDiscoveryRecord(
+                    protocol_version="multi-agent-v2",
+                    canonical_agent_id=agent_url,
+                    aliases=self.aliases_for(agent_url) or [str(agent.name)],
+                    agent_card=self._card_dict(agent),
+                    runtime_status=status,
+                    heartbeat_fresh=fresh,
+                    heartbeat_age_ms=age_ms,
+                    index_status=self.get_agent_index_status(agent_url),
+                )
+            )
+        return records
 
     def get_agent(self, agent_url: str) -> Optional[AgentCard]:
         if not self.redis.hexists(self.registry_key, agent_url):
@@ -131,8 +381,11 @@ class RedisRegistry:
             return False
         try:
             pipe = self.redis.pipeline()
+            self.remove_aliases(agent_url, pipe=pipe)
             pipe.hdel(self.registry_key, agent_url)
             pipe.zrem(self.heartbeat_key, agent_url)
+            pipe.hdel(self.runtime_status_key, agent_url)
+            pipe.hdel(self.index_status_key, agent_url)
             pipe.delete(f"{self.registry_key}:{agent_url}")
             results = pipe.execute()
             self.agents = [a for a in self.agents if a.url != agent_url]
@@ -201,8 +454,11 @@ class RedisRegistry:
         if expired_agents:
             pipe = self.redis.pipeline()
             for url in expired_agents:
+                self.remove_aliases(url, pipe=pipe)
                 pipe.hdel(self.registry_key, url)
                 pipe.zrem(self.heartbeat_key, url)
+                pipe.hdel(self.runtime_status_key, url)
+                pipe.hdel(self.index_status_key, url)
                 pipe.delete(f"{self.registry_key}:{url}")
                 expired += 1
             pipe.execute()
@@ -311,7 +567,11 @@ class RedisRegistry:
 
                         try:
                             agent = self.get_agent(agent_url) if event == "add" else None
-                            self._update_agents_on_event(event, agent_url, agent)
+                            accepted = self._update_agents_on_event(
+                                event, agent_url, agent
+                            )
+                            if not accepted:
+                                continue
                             result = callback(event, agent_url, agent)
                             if asyncio.iscoroutine(result):
                                 asyncio.create_task(result)
@@ -450,4 +710,3 @@ class CleanupService(threading.Thread):
 
     def stop(self):
         self._running = False
-

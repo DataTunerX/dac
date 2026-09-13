@@ -7,6 +7,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Optional, List, Any
 from a2a.types import AgentCard
+from agent_contracts import AgentRuntimeStatus
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,20 +32,74 @@ class RedisRegistry:
         )
         self.registry_key = "expert_agents"
         self.heartbeat_key = "agent_heartbeats"
+        self.runtime_status_key = "agent_runtime_status:v2"
+        self.alias_key = "agent_aliases:v2"
+        self.aliases_by_id_key = "agent_aliases_by_id:v2"
         self.lock = threading.Lock()
 
     def _serialize_agent(self, agent: AgentCard) -> str:
-        return agent.json() if hasattr(agent, 'json') else json.dumps(agent.__dict__)
+        if hasattr(agent, "model_dump_json"):
+            return agent.model_dump_json()
+        return agent.json() if hasattr(agent, "json") else json.dumps(agent.__dict__)
 
     def _deserialize_agent(self, data: str) -> AgentCard:
         return AgentCard(**json.loads(data))
 
-    def register_agent(self, agent: AgentCard) -> bool:
+    @staticmethod
+    def _serialize_status(status: AgentRuntimeStatus) -> str:
+        return status.model_dump_json()
+
+    def register_agent(
+        self,
+        agent: AgentCard,
+        runtime_status: Optional[AgentRuntimeStatus] = None,
+    ) -> bool:
         agent_id = agent.url
         try:
+            alias = str(agent.name).strip()
+            existing_alias = (
+                self.redis.hget(self.alias_key, alias.casefold()) if alias else None
+            )
+            if existing_alias and existing_alias != agent_id:
+                logger.error(
+                    "Registration rejected: alias %r already belongs to %s",
+                    alias,
+                    existing_alias,
+                )
+                return False
+            previous_aliases = []
+            raw_previous_aliases = self.redis.hget(
+                self.aliases_by_id_key, agent_id
+            )
+            if raw_previous_aliases:
+                try:
+                    previous_aliases = json.loads(raw_previous_aliases)
+                except (TypeError, ValueError):
+                    logger.warning("Invalid prior alias record for %s", agent_id)
             pipe = self.redis.pipeline()
             pipe.hset(self.registry_key, agent_id, self._serialize_agent(agent))
             pipe.zadd(self.heartbeat_key, {agent_id: datetime.now().timestamp()})
+            if alias:
+                for previous_alias in previous_aliases:
+                    normalized = str(previous_alias).strip().casefold()
+                    if (
+                        normalized
+                        and normalized != alias.casefold()
+                        and self.redis.hget(self.alias_key, normalized) == agent_id
+                    ):
+                        pipe.hdel(self.alias_key, normalized)
+                pipe.hset(self.alias_key, alias.casefold(), agent_id)
+                pipe.hset(
+                    self.aliases_by_id_key,
+                    agent_id,
+                    json.dumps([alias], ensure_ascii=False),
+                )
+            if runtime_status is not None:
+                pipe.hset(
+                    self.runtime_status_key,
+                    agent_id,
+                    self._serialize_status(runtime_status),
+                )
             pipe.set(f"{self.registry_key}:{agent_id}", "1")
             results = pipe.execute()
                 
@@ -62,8 +117,18 @@ class RedisRegistry:
     def unregister_agent(self, agent_url: str) -> bool:
         try:
             pipe = self.redis.pipeline()
+            raw_aliases = self.redis.hget(self.aliases_by_id_key, agent_url)
+            if raw_aliases:
+                try:
+                    aliases = json.loads(raw_aliases)
+                except (TypeError, ValueError):
+                    aliases = []
+                for alias in aliases:
+                    pipe.hdel(self.alias_key, str(alias).strip().casefold())
+            pipe.hdel(self.aliases_by_id_key, agent_url)
             pipe.hdel(self.registry_key, agent_url)
             pipe.zrem(self.heartbeat_key, agent_url)
+            pipe.hdel(self.runtime_status_key, agent_url)
             pipe.delete(f"{self.registry_key}:{agent_url}")
             results = pipe.execute()
 
@@ -95,13 +160,20 @@ class HeartbeatService(threading.Thread):
         self.interval = interval
         self._running = False
         self._agents = {}
+        self._runtime_statuses: Dict[str, AgentRuntimeStatus] = {}
         self.last_registration_check = time.time()
         self.registration_check_interval = 30
 
-    def register_agent(self, agent: AgentCard) -> bool:
-        success = self.registry.register_agent(agent)
+    def register_agent(
+        self,
+        agent: AgentCard,
+        runtime_status: Optional[AgentRuntimeStatus] = None,
+    ) -> bool:
+        success = self.registry.register_agent(agent, runtime_status=runtime_status)
         if success:
             self._agents[agent.url] = agent
+            if runtime_status is not None:
+                self._runtime_statuses[agent.url] = runtime_status
             logger.info(f"Agent registered to heartbeat service: {agent.url}")
         return success
 
@@ -109,6 +181,7 @@ class HeartbeatService(threading.Thread):
         if agent_url in self._agents:
             del self._agents[agent_url]
             logger.info(f"Agent removed from heartbeat service: {agent_url}")
+        self._runtime_statuses.pop(agent_url, None)
         return self.registry.unregister_agent(agent_url)
 
     def run(self):
@@ -145,6 +218,13 @@ class HeartbeatService(threading.Thread):
             
             for agent_url in agent_urls:
                 pipe.zadd(self.registry.heartbeat_key, {agent_url: timestamp})
+                runtime_status = self._runtime_statuses.get(agent_url)
+                if runtime_status is not None:
+                    pipe.hset(
+                        self.registry.runtime_status_key,
+                        agent_url,
+                        self.registry._serialize_status(runtime_status),
+                    )
             
             results = pipe.execute()
             logger.debug(f"Heartbeat update results: {len(results)} operations")
@@ -166,7 +246,10 @@ class HeartbeatService(threading.Thread):
             for i, agent_url in enumerate(agent_urls):
                 if not registration_status[i] and agent_url in self._agents:
                     agent_card = self._agents[agent_url]
-                    if self.registry.register_agent(agent_card):
+                    if self.registry.register_agent(
+                        agent_card,
+                        runtime_status=self._runtime_statuses.get(agent_url),
+                    ):
                         re_registered_count += 1
                         logger.warning(f"Auto-recovered registration for: {agent_url}")
                     else:
@@ -181,6 +264,16 @@ class HeartbeatService(threading.Thread):
     def stop(self):
         self._running = False
         logger.info("Heartbeat service stopped")
+
+    def update_runtime_status(self, status: AgentRuntimeStatus) -> None:
+        """Publish a readiness change without changing the registered card."""
+
+        self._runtime_statuses[status.agent_url] = status
+        self.registry.redis.hset(
+            self.registry.runtime_status_key,
+            status.agent_url,
+            self.registry._serialize_status(status),
+        )
 
     def graceful_shutdown(self, agent_url: str = None):
         if agent_url:

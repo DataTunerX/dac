@@ -18,6 +18,7 @@ import httpx
 from a2a.client import A2AClient
 from a2a.types import AgentCard, MessageSendParams, SendStreamingMessageRequest
 from pydantic import BaseModel, Field
+from agent_contracts import CapabilityReportV2, capability_report_legacy_view
 
 from .agentregistry_client import AgentRegistryClient
 from .a2a_client import get_response_text as default_get_response_text
@@ -275,6 +276,12 @@ async def send_capability_check(
                 full_response = full_response[:-3]
             full_response = full_response.strip()
             response_data = json.loads(full_response)
+            if response_data.get("protocol_version"):
+                report = CapabilityReportV2.model_validate(response_data)
+                response_data = {
+                    **response_data,
+                    **capability_report_legacy_view(report),
+                }
             rp = response_data.get("route_path") or []
             rps = response_data.get("route_paths") or []
             if not rps and rp:

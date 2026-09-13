@@ -15,6 +15,10 @@ def _registry_with_fake_redis():
     reg = object.__new__(RedisRegistry)
     reg.registry_key = "expert_agents"
     reg.heartbeat_key = "agent_heartbeats"
+    reg.runtime_status_key = "agent_runtime_status:v2"
+    reg.index_status_key = "agent_index_status:v2"
+    reg.alias_key = "agent_aliases:v2"
+    reg.aliases_by_id_key = "agent_aliases_by_id:v2"
     reg.agents = []
     reg.redis = MagicMock()
     return reg
@@ -39,7 +43,7 @@ def test_cleanup_expired_purges_missing_heartbeat_score(monkeypatch):
     reg.redis.zscore.side_effect = _zscore
     pipe = MagicMock()
     reg.redis.pipeline.return_value = pipe
-    pipe.execute.return_value = [1, 1, 1]
+    pipe.execute.return_value = [1] * 8
     reg.agents = [
         SimpleNamespace(url=orphan),
         SimpleNamespace(url=alive),
@@ -62,7 +66,7 @@ def test_cleanup_expired_purges_stale_heartbeat(monkeypatch):
     reg.redis.zscore.return_value = now - 120  # > 30s
     pipe = MagicMock()
     reg.redis.pipeline.return_value = pipe
-    pipe.execute.return_value = [1, 1, 1]
+    pipe.execute.return_value = [1] * 8
     reg.agents = [SimpleNamespace(url=stale)]
 
     assert reg.cleanup_expired() == 1

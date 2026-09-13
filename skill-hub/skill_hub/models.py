@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agent_contracts import SchemaDescriptor
 from pydantic import BaseModel, Field
 
 DEFAULT_NAMESPACE = "default"
@@ -29,6 +30,7 @@ class SkillInfo(BaseModel):
         default_factory=list,
         description="All known versions for this skill, newest first",
     )
+    output_schemas: list[SchemaDescriptor] = Field(default_factory=list)
 
 
 class CreateSkillRequest(BaseModel):
@@ -42,9 +44,7 @@ class CreateSkillRequest(BaseModel):
     """
 
     name: str = Field(..., description="Skill name (SKILL.md frontmatter)")
-    description: str = Field(
-        ..., description="Short summary (SKILL.md frontmatter)"
-    )
+    description: str = Field(..., description="Short summary (SKILL.md frontmatter)")
     detail: str = Field(
         default="",
         description="Full instructions / markdown body after SKILL.md frontmatter",
@@ -105,6 +105,7 @@ class SkillDetail(BaseModel):
     )
     scripts: list[SkillScriptInfo] = Field(default_factory=list)
     resource_dirs: list[str] = Field(default_factory=list)
+    output_schemas: list[SchemaDescriptor] = Field(default_factory=list)
 
 
 class NamespaceInfo(BaseModel):

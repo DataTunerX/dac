@@ -885,7 +885,9 @@ Each `TaskNode` contains:
 {
   "task_id": "task-1",
   "objective": "Retrieve museum registration facts for the named objects",
-  "assigned_agent": "Wwybsj-TDB-Agent",
+  "operation": "retrieve",
+  "assigned_agent_id": "http://wwybsj-tdb-agent.default.svc.cluster.local:10100",
+  "assigned_agent_name": "Wwybsj-TDB-Agent",
   "execution_target": "local",
   "depends_on": [],
   "required_inputs": [],
@@ -992,6 +994,7 @@ Before completion, the lead verifies:
   "collaboration_id": "uuid",
   "task_id": "task-2",
   "objective": "Retrieve comparable Han tomb jade evidence",
+  "operation": "retrieve",
   "inputs": {
     "object_types": ["jade cicada", "jade suit pieces", "jade bi"]
   },
@@ -2113,17 +2116,30 @@ The empirical review resolves the following decisions:
    criteria; routing accuracy alone is insufficient.
 6. Candidate planning: pre-make-plan is retired by V2 lead selection.
 
-The following questions remain and must be settled in Phase 1:
+Phase 1 settles the remaining implementation decisions as follows:
 
-1. Whether the existing registry service owns canonical aliases directly or
-   consumes an authoritative alias source maintained elsewhere.
-2. The maximum inline context, result, and artifact sizes before content must be
-   stored by reference.
-3. The persistence backend, retention, and redaction policy for Execution Flow,
-   participant evidence, and artifacts. The lead emits task events; the trace
-   sink persists them, and routing does not become the execution-ledger owner.
-4. The minimum package-authored capability metadata required for canary versus
-   fields temporarily derived from `SKILL.md`.
+1. The existing agent registry owns canonical identity and aliases. The
+   canonical ID is the exact AgentCard URL, preserving the identity already
+   used by Redis and A2A dispatch. Agent names are case-insensitive aliases and
+   alias collisions fail closed. Routing resolves names through the registry;
+   names are not independent identities.
+2. Inline task context is limited to 256 KiB, structured task-result data to
+   1 MiB, best-effort textual drafts to 64 KiB, and registered schemas to
+   256 KiB. Binary artifacts have no inline form in V2 and are always carried by
+   `ArtifactReference`. Larger context or results must also be stored and passed
+   by reference.
+3. The lead owns event sequence and emits append-only `ExecutionEventV2`
+   records. The configured trace sink persists event envelopes; it must exclude
+   credentials and raw binary content and retain only artifact references for
+   oversized values. A durable trace-sink adapter and its deployment retention
+   setting are a Phase 5 canary prerequisite. Routing never owns or rewrites the
+   execution ledger.
+4. Automatic V2 canary eligibility requires package-authored skill name and
+   version, operations, accepted input schema IDs, produced output schema IDs
+   and digests, data domains, required tools, and side effects. `SKILL.md` text
+   remains useful for recall and display but is not authoritative capability
+   metadata. A skill lacking these declarations may be invoked explicitly in
+   participant mode, but it cannot satisfy automatic V2 executability gates.
 
 ## 30. Review Checklist
 

@@ -25,6 +25,8 @@ RUN --mount=type=bind,source=uv.lock,target=uv.lock \
 # Installing separately from its dependencies allows optimal layer caching
 ADD . /app
 RUN uv sync --frozen --no-dev --no-editable
+RUN uv pip install --python /app/.venv/bin/python --no-deps \
+    /app/sdks/agent_contracts-0.1.0-py3-none-any.whl
 
 
 # stage 2

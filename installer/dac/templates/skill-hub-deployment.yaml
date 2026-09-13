@@ -91,6 +91,10 @@ spec:
             # real langfuse instance is wired up.
             - name: LANGFUSE_ENABLED
               value: {{ .Values.skillHub.config.langfuseEnabled | quote }}
+            - name: AGENT_SCHEMA_REGISTRY_URL
+              value: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "dac.bizOrchestratorRegistry.serviceName" .) .Release.Namespace .Values.bizOrchestratorRegistry.service.port | quote }}
+            - name: SCHEMA_REGISTRY_SYNC_INTERVAL_SEC
+              value: {{ .Values.skillHub.config.schemaRegistrySyncIntervalSec | quote }}
             {{- if $persistEnabled }}
             - name: SKILLS_DIR
               value: {{ $mountPath | quote }}

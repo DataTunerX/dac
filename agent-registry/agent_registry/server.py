@@ -14,9 +14,16 @@ from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from urllib.parse import unquote
 from a2a.types import AgentCard
+from agent_contracts import (
+    AgentDiscoveryRecord,
+    AgentRuntimeStatus,
+    IndexState,
+    SchemaConflictError,
+    SchemaDescriptor,
+)
 from .vector_client import SearchResult, VectorClient, Document, serialize_object
 import asyncio
 from typing import Any, Dict
@@ -33,6 +40,11 @@ collection_name = os.getenv('COLLECTION_NAME', 'agent_cards')
 
 class AgentListResponse(BaseModel):
     agent_cards: List[AgentCard]
+    agents: List[AgentDiscoveryRecord] = Field(default_factory=list)
+
+
+class SchemaListResponse(BaseModel):
+    schemas: List[SchemaDescriptor]
 
 class SearchRequest(BaseModel):
     query: str
@@ -47,8 +59,10 @@ def create_vector_client():
     data_services_url = os.getenv('DATA_SERVICES', 'http://data-services.dac.svc.cluster.local:8000')
     return VectorClient(base_url=data_services_url)
 
-def add_agent_to_vector_db(agent_url: str, agent: AgentCard):
+def add_agent_to_vector_db(agent_url: str, agent: AgentCard, registry=None):
     try:
+        if registry is not None:
+            registry.set_agent_index_status(agent_url, IndexState.PENDING)
         vector_client = create_vector_client()
         
         agent_content = f"""
@@ -71,10 +85,16 @@ def add_agent_to_vector_db(agent_url: str, agent: AgentCard):
         )
         
         logger.info(f"Successfully added agent '{agent.name}' to vector database")
+        if registry is not None:
+            registry.set_agent_index_status(agent_url, IndexState.INDEXED)
         return result
         
     except Exception as e:
         logger.error(f"Failed to add agent '{agent.name}' to vector database: {e}")
+        if registry is not None:
+            registry.set_agent_index_status(
+                agent_url, IndexState.FAILED, error=str(e)[:1000]
+            )
         return None
 
 def remove_agent_from_vector_db(agent_url: str, agent: AgentCard):
@@ -94,12 +114,12 @@ def remove_agent_from_vector_db(agent_url: str, agent: AgentCard):
         logger.error(f"Failed to delete agent {agent_url} from vector database: {e}")
         return None
 
-def change_logger(event_type, agent_url, agent):
+def change_logger(event_type, agent_url, agent, registry=None):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     if event_type == "add":
         logger.info(f"[{timestamp}] ADDED Agent: {agent_url}, Details: {agent.name} | Description: {agent.description}")
-        add_agent_to_vector_db(agent_url, agent)
+        add_agent_to_vector_db(agent_url, agent, registry=registry)
     elif event_type == "remove":
         logger.info(f"[{timestamp}] REMOVED Agent: {agent_url}")
         remove_agent_from_vector_db(agent_url, agent)
@@ -138,9 +158,10 @@ def sync_existing_agents_to_vector_db(registry):
             if not agent:
                 continue
             if _agent_exists_in_vector_db(agent_url):
+                registry.set_agent_index_status(agent_url, IndexState.INDEXED)
                 skipped += 1
                 continue
-            add_agent_to_vector_db(agent_url, agent)
+            add_agent_to_vector_db(agent_url, agent, registry=registry)
             added += 1
         if added > 0 or skipped > 0:
             logger.info(f"Startup sync: added {added} agent(s) to vector DB, skipped {skipped} (already present)")
@@ -170,10 +191,43 @@ def create_fastapi_app(registry):
         """Get all agents"""
         try:
             agents = registry.get_agents()
-            return {"agent_cards": agents}
+            return {"agent_cards": agents, "agents": registry.discovery_records()}
         except Exception as e:
             logger.error(f"Error getting agents: {e}")
             raise HTTPException(status_code=500, detail="Internal server error")
+
+    @app.get("/agents/discovery", response_model=List[AgentDiscoveryRecord])
+    async def discover_agents():
+        return registry.discovery_records()
+
+    @app.get("/agents/resolve-alias")
+    async def resolve_agent_alias(alias: str = Query(...)):
+        canonical_agent_id = registry.resolve_agent_alias(alias)
+        if canonical_agent_id is None:
+            raise HTTPException(status_code=404, detail=f"unknown agent alias: {alias}")
+        return {"alias": alias, "canonical_agent_id": canonical_agent_id}
+
+    @app.put("/agents/runtime-status", response_model=AgentRuntimeStatus)
+    async def put_runtime_status(status: AgentRuntimeStatus):
+        return registry.put_runtime_status(status)
+
+    @app.get("/schemas", response_model=SchemaListResponse)
+    async def list_schemas():
+        return {"schemas": registry.list_schemas()}
+
+    @app.get("/schemas/resolve", response_model=SchemaDescriptor)
+    async def resolve_schema(schema_id: str = Query(...)):
+        descriptor = registry.get_schema(schema_id)
+        if descriptor is None:
+            raise HTTPException(status_code=404, detail=f"unknown schema_id: {schema_id}")
+        return descriptor
+
+    @app.post("/schemas", response_model=SchemaDescriptor, status_code=201)
+    async def register_schema(descriptor: SchemaDescriptor):
+        try:
+            return registry.register_schema(descriptor)
+        except SchemaConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.delete("/agents")
     async def delete_agent(url: str = Query(..., description="Exact agent card URL to purge")):
@@ -230,7 +284,9 @@ def serve_mcp(host, port, transport, redis_host, redis_port, redis_db, password)
     sync_existing_agents_to_vector_db(registry)
 
     logger.info('Starting watch redis changes')
-    watcher = registry.watch_changes(change_logger)
+    watcher = registry.watch_changes(
+        lambda event, url, agent: change_logger(event, url, agent, registry)
+    )
     logger.info(f"The watcher thread is active.: {watcher.is_alive()}")
 
     mcp = FastMCP('agent-cards', host=host, port=port)
@@ -274,7 +330,9 @@ def serve_api(host, port, redis_host, redis_port, redis_db, password):
     sync_existing_agents_to_vector_db(registry)
 
     logger.info('Starting watch redis changes')
-    watcher = registry.watch_changes(change_logger)
+    watcher = registry.watch_changes(
+        lambda event, url, agent: change_logger(event, url, agent, registry)
+    )
     logger.info(f"The watcher thread is active.: {watcher.is_alive()}")
 
     app = create_fastapi_app(registry)
@@ -299,7 +357,9 @@ def serve_both(mcp_host, mcp_port, mcp_transport, api_host, api_port, redis_host
     sync_existing_agents_to_vector_db(registry)
 
     logger.info('Starting watch redis changes')
-    watcher = registry.watch_changes(change_logger)
+    watcher = registry.watch_changes(
+        lambda event, url, agent: change_logger(event, url, agent, registry)
+    )
     logger.info(f"The watcher thread is active.: {watcher.is_alive()}")
 
     # Start MCP server in a separate thread

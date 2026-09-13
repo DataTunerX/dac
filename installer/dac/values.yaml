@@ -988,6 +988,9 @@ skillHub:
     # -- Silence the transitive langfuse "client disabled" log from skill_sdk.
     #    Set to "true" only if a real langfuse instance is configured.
     langfuseEnabled: "false"
+    # -- Re-register package-authored output schemas after registry restarts.
+    #    Set to "0" to disable periodic synchronization.
+    schemaRegistrySyncIntervalSec: "60"
     # -- Override SKILLS_DIR when persistence.enabled=false. Empty = image
     #    default (/app/skills/). Ignored when persistence is enabled (mountPath
     #    is always used as SKILLS_DIR then).

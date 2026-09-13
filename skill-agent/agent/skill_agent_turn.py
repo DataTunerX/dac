@@ -158,6 +158,10 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
         # is process-wide, so a stale pool would otherwise be reused.
         self._init_routing_pool_from_metadata(metadata)
 
+        if metadata.get("execution_mode") == "participant":
+            await self.handle_participant_task(context, event_queue, metadata)
+            return
+
         # ---- Step 0: Capability check fast-path ----
         if isinstance(metadata, dict) and metadata.get(
             "message_type"

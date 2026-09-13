@@ -26,7 +26,11 @@ import uvicorn
 from fastapi import FastAPI
 from uvicorn.config import LOGGING_CONFIG
 
-from .api import register_exception_handlers, router
+from .api import (
+    register_exception_handlers,
+    register_indexed_schema_descriptors,
+    router,
+)
 from .index import SkillIndex
 from .watcher import watch_skills_dir
 
@@ -58,6 +62,30 @@ async def lifespan(app: FastAPI):
     index = SkillIndex(skills_dir)
     index.reload()
     watcher: asyncio.Task[None] | None = None
+    schema_sync: asyncio.Task[None] | None = None
+
+    async def sync_schemas() -> None:
+        raw_interval = os.getenv("SCHEMA_REGISTRY_SYNC_INTERVAL_SEC", "60")
+        try:
+            interval = max(5.0, float(raw_interval))
+        except ValueError:
+            interval = 60.0
+        while True:
+            try:
+                packages, descriptors = await asyncio.to_thread(
+                    register_indexed_schema_descriptors, index
+                )
+                logger.info(
+                    "[SkillHub][Schema] sync complete packages=%d descriptors=%d",
+                    packages,
+                    descriptors,
+                )
+            except Exception:
+                logger.exception("[SkillHub][Schema] periodic sync failed")
+            await asyncio.sleep(interval)
+
+    if os.getenv("SCHEMA_REGISTRY_SYNC_INTERVAL_SEC", "60").strip() != "0":
+        schema_sync = asyncio.create_task(sync_schemas())
     if _env_bool("SKILLS_AUTO_RELOAD", True):
         watcher = asyncio.create_task(watch_skills_dir(index))
     else:
@@ -69,6 +97,12 @@ async def lifespan(app: FastAPI):
             watcher.cancel()
             try:
                 await watcher
+            except asyncio.CancelledError:
+                pass
+        if schema_sync is not None:
+            schema_sync.cancel()
+            try:
+                await schema_sync
             except asyncio.CancelledError:
                 pass
         if index is not None:

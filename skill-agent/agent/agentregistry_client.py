@@ -10,6 +10,7 @@ import asyncio
 import aiohttp
 from aiohttp import ClientTimeout
 import os
+import urllib.request
 
 
 class SearchType(str, Enum):
@@ -126,3 +127,23 @@ class AgentRegistryClient:
             raise ValueError("agent_url is required")
         endpoint = f"/agents?url={quote(agent_url.strip(), safe='')}"
         return await self._amake_request("DELETE", endpoint)
+
+    async def aresolve_schema(self, schema_id: str) -> Dict[str, Any]:
+        if not (schema_id or "").strip():
+            raise ValueError("schema_id is required")
+        endpoint = f"/schemas/resolve?schema_id={quote(schema_id.strip(), safe='')}"
+        return await self._amake_request("GET", endpoint)
+
+    def resolve_schema(self, schema_id: str) -> Dict[str, Any]:
+        """Resolve a descriptor during startup/card refresh without an event loop."""
+
+        if not (schema_id or "").strip():
+            raise ValueError("schema_id is required")
+        endpoint = f"/schemas/resolve?schema_id={quote(schema_id.strip(), safe='')}"
+        request = urllib.request.Request(
+            f"{self.base_url}/{endpoint.lstrip('/')}",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
