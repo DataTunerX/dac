@@ -682,7 +682,7 @@ Parse intent
 Routing must recognize an explicit request such as:
 
 ```text
-Must use All-in-One-TDB-Agent to answer this question.
+Must use Wwybsj-TDB-Agent to answer this question.
 ```
 
 Rules:
@@ -1536,14 +1536,24 @@ return normalized reason codes, and support bounded alternate-skill recovery.
 
 ## 22. Testing Strategy
 
-### 22.1 Golden routing corpus
+### 22.1 Golden evaluation corpus
 
-Create an annotated corpus from real observed runs and synthetic edge cases.
+Build a versioned annotated corpus from real observed runs and synthetic edge
+cases. Corpus construction is part of Phase 3, not a separate Phase 2.5 gate.
+Phase 3 starts with 10 to 15 reviewed anchor cases and expands them while the
+capability implementation exposes ambiguities. Before Phase 3 exits, the corpus
+should contain approximately 50 to 70 semantic cases and 250 to 350 labeled
+agent-case evaluations, subject to the coverage requirements below.
 
 Each case records:
 
 - Query and relevant history.
 - Explicit agent directive, if any.
+- Normalized capability requirements, including mandatory data domains,
+  operations, output schemas, tools, side effects, and evidence constraints.
+- Exact candidate capability-manifest versions and runtime-readiness fixtures.
+- Expected per-agent lead eligibility, ownership, missing requirements, allowed
+  contributions, and deterministic validation errors.
 - Expected lead.
 - Allowed contributors.
 - Forbidden selections.
@@ -1552,9 +1562,20 @@ Each case records:
 - Required evidence.
 - Expected degraded or failure behavior.
 
+Capability labels are completed and evaluated in Phase 3. Expected-lead,
+forbidden-selection, specialist-precision, and candidate-recall labels use the
+same cases but become Phase 4 gates. Exact numeric fit scores are not golden
+labels; changing only a fit score must never change a hard-gated eligibility
+decision.
+
+The completed Phase 3 corpus must cover every deployed agent with positive lead
+cases where lead mode is supported, contributor-only cases where contribution is
+supported, and hard negatives. Every declared data domain, operation, output
+schema, required tool, and side-effect class needs both a satisfiable case and a
+mandatory-gap case.
+
 Initial real cases should include:
 
-- Explicit All-in-One agent request.
 - Wwybsj, Art History, and History lead-selection case.
 - Contributor-only multi-domain query.
 - Agent with unrelated skills loaded through watch-all.
@@ -1728,7 +1749,8 @@ Deliverables:
 
 - Approve this architecture and protocol ownership.
 - Capture current-tag, Git-verified main, and exact deployed-image behavior for
-  the golden corpus; do not treat an untraceable image as main-branch source.
+  baseline evidence and candidate seed cases; do not treat an untraceable image
+  as main-branch source.
 - Record baseline routing accuracy, collaboration completion, latency, retries,
   model calls, tokens, A2A calls, cost, throughput, and tool failures.
 - Record both the deployed `CROSS_SG_MAX_HOP=2` behavior and a diagnostic replay
@@ -1746,7 +1768,8 @@ Deliverables:
 Exit criteria:
 
 - Reviewers agree that routing selects scope and the lead owns execution.
-- Golden cases have expected lead and contributor annotations.
+- Traceable baseline evidence and candidate seed cases are recorded. Complete
+  capability and routing annotations are Phase 3 and Phase 4 work respectively.
 - Baseline reports include p50/p95 latency, call counts, tokens, cost, result
   retention, and planned-task visibility.
 - No routing or execution behavior changes.
@@ -1840,6 +1863,8 @@ Exit criteria:
 
 Deliverables:
 
+- Define the versioned corpus schema, capability taxonomy, label-review process,
+  and 10 to 15 initial anchor cases before tuning capability behavior.
 - Generate capability reports from loaded skills and live tools.
 - Separate lead eligibility from participant contributions.
 - Replace arithmetic confidence gating with hard executability rules.
@@ -1847,9 +1872,13 @@ Deliverables:
 - Publish health from loaded skills, live tools, model checks, and normalized
   execution outcomes; add contradiction validation.
 - Correct main-branch capability tests that currently bless false handlers.
+- Expand the anchor set to the completed capability corpus and retain a reviewed
+  holdout set that was not used to tune capability prompts.
 
 Exit criteria:
 
+- The completed capability corpus meets the coverage rules in §22.1 and passes
+  the capability acceptance criteria in §23.2.
 - Agents missing a required data domain are not complete handlers.
 - Contribution outputs map to real requirements or downstream inputs.
 - Eligibility is derived by hard gates; numeric fit never rescues a mandatory
@@ -1957,7 +1986,7 @@ Exit criteria:
 
 Recommended PR boundaries:
 
-1. Golden corpus, replay harness, and baseline report.
+1. Controlled replay harness and baseline report with traceable evidence seeds.
 2. Legacy result retention keyed by task ID.
 3. Hop/budget skip events and terminal task states.
 4. SkillSync known-unavailable state and backoff.
@@ -1966,12 +1995,14 @@ Recommended PR boundaries:
 7. Nested-broadcast suppression behind an independent flag after replay.
 8. Shared `agent_contracts` package, output schemas, and health contracts.
 9. Participant mode and local task execution.
-10. CapabilityReportV2, manifest intersection, and capability correctness.
-11. Routing intent, lead selection, contributor scope, and LeadAssignment.
-12. Lead DAG planner, validator, and scheduler.
-13. Recovery, alternate assignment, and final validation.
-14. Execution Flow V2 and trace integration.
-15. Helm configuration, fixed-pool shadow/canary, and rollback documentation.
+10. Capability corpus schema, taxonomy, and 10 to 15 reviewed anchor cases.
+11. CapabilityReportV2, manifest intersection, and capability correctness.
+12. Completed capability corpus, holdout evaluation, and Phase 3 gate report.
+13. Routing intent, lead selection, contributor scope, and LeadAssignment.
+14. Lead DAG planner, validator, and scheduler.
+15. Recovery, alternate assignment, and final validation.
+16. Execution Flow V2 and trace integration.
+17. Helm configuration, fixed-pool shadow/canary, and rollback documentation.
 16. Contributor expansion and default-rollout gate.
 
 Do not combine capability scoring, routing policy, and DAG execution in one PR.
