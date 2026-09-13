@@ -2,6 +2,7 @@
 
 import os
 import sys
+import threading
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -19,8 +20,11 @@ def _registry_with_fake_redis():
     reg.index_status_key = "agent_index_status:v2"
     reg.alias_key = "agent_aliases:v2"
     reg.aliases_by_id_key = "agent_aliases_by_id:v2"
+    reg.alias_conflicts_key = "agent_alias_conflicts:v2"
+    reg.lock = threading.RLock()
     reg.agents = []
     reg.redis = MagicMock()
+    reg._reconcile_aliases = MagicMock()
     return reg
 
 

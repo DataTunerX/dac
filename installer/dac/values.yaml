@@ -57,6 +57,14 @@ global:
     # -- Embedding vector dimensions
     dims: "1024"
 
+# Authentication for writes to the immutable output-schema registry. Read
+# endpoints remain available to agents. By default Helm creates and retains a
+# generated token; set existingSecret to use a separately managed Secret.
+schemaRegistry:
+  auth:
+    existingSecret: ""
+    tokenKey: "token"
+
 # =============================================================================
 # Middleware - Built-in single-node StatefulSet instances
 # Set <svc>.external.host to use an external instance (built-in deploy is skipped).

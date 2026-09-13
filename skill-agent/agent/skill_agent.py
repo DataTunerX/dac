@@ -85,8 +85,10 @@ from agent_contracts import (
     TaskResultStatus as V2TaskResultStatus,
     SchemaDescriptor,
     SchemaReference,
+    SkillSchemaDeclarationError,
     UnknownSchemaError,
     core_schema_registry,
+    load_output_schema_descriptors,
 )
 
 from . import broadcast_capability_check as sg_broadcast
@@ -1783,6 +1785,8 @@ class SkillAgentExecutor(AgentExecutor):
         self._skill_runner: "SkillRunner | None" = None
         self._skill_runner_initialised = False
         self._skill_runner_lock = asyncio.Lock()
+        self._participant_schema_registry = core_schema_registry()
+        self._participant_schema_lock = asyncio.Lock()
         self._log_skill_executor_config()
 
         # Planner
@@ -2633,6 +2637,33 @@ class SkillAgentExecutor(AgentExecutor):
             logger.exception("[LocalSkill][Init] failed to initialise SkillRunner")
             return None
 
+    @staticmethod
+    def _new_participant_skill_runner(base_runner: Any, max_steps: int) -> Any:
+        """Build an isolated per-task runner over immutable loaded skills."""
+
+        if SkillRunner is None:
+            raise RuntimeError("SkillRunner is unavailable")
+        return SkillRunner(
+            llm=base_runner.llm,
+            skills=list(base_runner.lister.skills),
+            max_steps=max_steps,
+            cmd_timeout_sec=base_runner.cmd_timeout_sec,
+            make_plan_max_attempts=base_runner.make_plan_max_attempts,
+            plan_and_run_max_attempts=base_runner.plan_and_run_max_attempts,
+            max_concurrency=base_runner.max_concurrency,
+            code_execution=base_runner.code_execution,
+            allow_destructive_commands=base_runner.allow_destructive_commands,
+            blocked_commands=base_runner.blocked_commands,
+            extra_destructive_patterns=base_runner.destructive_flag_patterns,
+            tool_registry=base_runner._tool_registry,
+            use_skill_search=base_runner.use_skill_search,
+            skill_search_batch_size=base_runner.skill_search_batch_size,
+            skill_search_max_concurrent=base_runner.skill_search_max_concurrent,
+            skill_search_max_steps=base_runner.skill_search_max_steps,
+            skill_search_max_retries=base_runner.skill_search_max_retries,
+            compaction=base_runner._compaction_config,
+        )
+
     def preload_skill_runner(self) -> "SkillRunner | None":
         if self._skill_runner_initialised:
             return self._skill_runner
@@ -2796,26 +2827,22 @@ class SkillAgentExecutor(AgentExecutor):
                 continue
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                entries = meta.get("output_schemas") or []
-                if not isinstance(entries, list):
-                    raise ValueError("output_schemas must be a list")
-                for entry in entries:
-                    if not isinstance(entry, dict) or "schema" in entry:
-                        raise ValueError("output schema must reference a package file")
-                    relative = Path(str(entry.get("path") or ""))
-                    if relative.is_absolute() or ".." in relative.parts:
-                        raise ValueError(f"unsafe output schema path: {relative}")
-                    schema_path = (base_dir / relative).resolve()
+
+                def read_schema(relative_path: str) -> bytes:
+                    schema_path = (base_dir / relative_path).resolve()
                     if base_dir.resolve() not in schema_path.parents:
-                        raise ValueError(f"output schema escapes skill root: {relative}")
-                    descriptor = SchemaDescriptor(
-                        schema_id=str(entry.get("schema_id") or ""),
-                        schema=json.loads(schema_path.read_text(encoding="utf-8")),
-                        schema_digest=entry.get("schema_digest"),
-                        owner=f"skill:{name}",
-                        description=str(entry.get("description") or ""),
-                    )
-                    declared.setdefault(name, []).append(descriptor)
+                        raise SkillSchemaDeclarationError(
+                            f"output schema escapes skill root: {relative_path}"
+                        )
+                    return schema_path.read_bytes()
+
+                descriptors = load_output_schema_descriptors(
+                    meta,
+                    read_schema=read_schema,
+                    owner=f"skill:{name}",
+                )
+                if descriptors:
+                    declared[name] = descriptors
             except Exception as exc:
                 logger.warning(
                     "[LocalSkill][Schema] ignored invalid declaration | skill=%s error=%s",
@@ -5360,6 +5387,146 @@ satisfactory=False,
         )
         await updater.complete(message=new_agent_text_message("", context_id=task.context_id))
 
+    def _participant_schema_cache(self):
+        registry = getattr(self, "_participant_schema_registry", None)
+        if registry is None:
+            registry = core_schema_registry()
+            self._participant_schema_registry = registry
+        if getattr(self, "_participant_schema_lock", None) is None:
+            self._participant_schema_lock = asyncio.Lock()
+        return registry
+
+    async def _resolve_participant_schemas(
+        self,
+        participant_task: ParticipantTask,
+    ) -> tuple[Any, list[str]]:
+        """Resolve once per process; the enclosing task owns the deadline."""
+
+        schema_registry = self._participant_schema_cache()
+        unresolved: list[str] = []
+        async with self._participant_schema_lock:
+            for expected in participant_task.expected_outputs:
+                try:
+                    schema_registry.resolve(
+                        expected.schema_id,
+                        schema_digest_value=expected.schema_digest,
+                    )
+                    continue
+                except UnknownSchemaError:
+                    pass
+                try:
+                    raw_descriptor = await AgentRegistryClient().aresolve_schema(
+                        expected.schema_id
+                    )
+                    schema_registry.register(
+                        SchemaDescriptor.model_validate(raw_descriptor)
+                    )
+                    schema_registry.resolve(
+                        expected.schema_id,
+                        schema_digest_value=expected.schema_digest,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[Participant] output schema resolution failed | "
+                        "schema=%s error=%s",
+                        expected.schema_id,
+                        exc,
+                    )
+                    unresolved.append(expected.schema_id)
+        return schema_registry, sorted(set(unresolved))
+
+    @staticmethod
+    def _participant_deadline_result(
+        participant_task: ParticipantTask,
+        agent_name: str,
+    ) -> V2TaskResult:
+        return V2TaskResult(
+            protocol_version=PROTOCOL_VERSION,
+            collaboration_id=participant_task.collaboration_id,
+            task_id=participant_task.task_id,
+            agent_name=agent_name,
+            status=V2TaskResultStatus.FAILED,
+            error=V2TaskError(
+                code="deadline_exceeded",
+                message=(
+                    "participant deadline exceeded after "
+                    f"{participant_task.constraints.deadline_ms}ms"
+                ),
+            ),
+            retryable=True,
+        )
+
+    async def _execute_participant_contract(
+        self,
+        participant_task: ParticipantTask,
+        *,
+        user_id: str,
+        progress_callback: Callable[..., Awaitable[None]],
+    ) -> V2TaskResult:
+        agent_name = self._self_planner_agent_name()
+        try:
+            async with asyncio.timeout(
+                participant_task.constraints.deadline_ms / 1000
+            ):
+                await progress_callback(
+                    "participant_task_started",
+                    message=f"participant task {participant_task.task_id} started",
+                    extra={"collaboration_id": participant_task.collaboration_id},
+                )
+                runner = await self._ensure_skill_runner()
+                if runner is None:
+                    return V2TaskResult(
+                        protocol_version=PROTOCOL_VERSION,
+                        collaboration_id=participant_task.collaboration_id,
+                        task_id=participant_task.task_id,
+                        agent_name=agent_name,
+                        status=V2TaskResultStatus.FAILED,
+                        error=V2TaskError(
+                            code="skill_runtime_unavailable",
+                            message="local SkillRunner is unavailable",
+                        ),
+                        retryable=True,
+                    )
+
+                schema_registry, unresolved_schemas = (
+                    await self._resolve_participant_schemas(participant_task)
+                )
+                if unresolved_schemas:
+                    return V2TaskResult(
+                        protocol_version=PROTOCOL_VERSION,
+                        collaboration_id=participant_task.collaboration_id,
+                        task_id=participant_task.task_id,
+                        agent_name=agent_name,
+                        status=V2TaskResultStatus.BLOCKED,
+                        missing_capabilities=[
+                            f"output_schema:{schema_id}"
+                            for schema_id in unresolved_schemas
+                        ],
+                        error=V2TaskError(
+                            code="output_schema_unavailable",
+                            message=(
+                                "one or more expected output schemas could not be resolved"
+                            ),
+                        ),
+                        retryable=True,
+                    )
+
+                local_executor = LocalTaskExecutor(
+                    skill_runner=runner,
+                    agent_name=agent_name,
+                    schema_registry=schema_registry,
+                    runner_factory=self._new_participant_skill_runner,
+                )
+                return await ParticipantExecutor(local_executor).execute(
+                    participant_task,
+                    user_id=user_id,
+                    progress_callback=progress_callback,
+                )
+        except TimeoutError:
+            return self._participant_deadline_result(participant_task, agent_name)
+        except asyncio.CancelledError:
+            raise
+
     async def handle_participant_task(
         self,
         context: RequestContext,
@@ -5424,84 +5591,11 @@ satisfactory=False,
                 extra={"execution_mode": "participant", **(extra or {})},
             )
 
-        await participant_progress(
-            "participant_task_started",
-            message=f"participant task {participant_task.task_id} started",
-            extra={"collaboration_id": participant_task.collaboration_id},
+        result = await self._execute_participant_contract(
+            participant_task,
+            user_id=str(metadata.get("user_id") or ""),
+            progress_callback=participant_progress,
         )
-        runner = await self._ensure_skill_runner()
-        if runner is None:
-            result = V2TaskResult(
-                protocol_version=PROTOCOL_VERSION,
-                collaboration_id=participant_task.collaboration_id,
-                task_id=participant_task.task_id,
-                agent_name=self._self_planner_agent_name(),
-                status=V2TaskResultStatus.FAILED,
-                error=V2TaskError(
-                    code="skill_runtime_unavailable",
-                    message="local SkillRunner is unavailable",
-                ),
-                retryable=True,
-            )
-        else:
-            schema_registry = core_schema_registry()
-            unresolved_schemas: list[str] = []
-            for expected in participant_task.expected_outputs:
-                try:
-                    schema_registry.resolve(
-                        expected.schema_id,
-                        schema_digest_value=expected.schema_digest,
-                    )
-                    continue
-                except UnknownSchemaError:
-                    pass
-                try:
-                    raw_descriptor = await AgentRegistryClient().aresolve_schema(
-                        expected.schema_id
-                    )
-                    schema_registry.register(
-                        SchemaDescriptor.model_validate(raw_descriptor)
-                    )
-                    schema_registry.resolve(
-                        expected.schema_id,
-                        schema_digest_value=expected.schema_digest,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[Participant] output schema resolution failed | schema=%s error=%s",
-                        expected.schema_id,
-                        exc,
-                    )
-                    unresolved_schemas.append(expected.schema_id)
-
-            if unresolved_schemas:
-                result = V2TaskResult(
-                    protocol_version=PROTOCOL_VERSION,
-                    collaboration_id=participant_task.collaboration_id,
-                    task_id=participant_task.task_id,
-                    agent_name=self._self_planner_agent_name(),
-                    status=V2TaskResultStatus.BLOCKED,
-                    missing_capabilities=[
-                        f"output_schema:{schema_id}"
-                        for schema_id in sorted(set(unresolved_schemas))
-                    ],
-                    error=V2TaskError(
-                        code="output_schema_unavailable",
-                        message="one or more expected output schemas could not be resolved",
-                    ),
-                    retryable=True,
-                )
-            else:
-                local_executor = LocalTaskExecutor(
-                    skill_runner=runner,
-                    agent_name=self._self_planner_agent_name(),
-                    schema_registry=schema_registry,
-                )
-                result = await ParticipantExecutor(local_executor).execute(
-                    participant_task,
-                    user_id=str(metadata.get("user_id") or ""),
-                    progress_callback=participant_progress,
-                )
 
         await participant_progress(
             "participant_task_finished",

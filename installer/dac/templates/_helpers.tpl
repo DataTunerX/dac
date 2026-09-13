@@ -70,6 +70,11 @@ app.kubernetes.io/name: {{ .name }}
 app.kubernetes.io/component: {{ .name }}
 {{- end }}
 
+{{/* Secret holding the internal schema-registry writer bearer token. */}}
+{{- define "dac.schemaRegistryAuthSecretName" -}}
+{{- default (printf "%s-schema-registry-auth" (include "dac.bizOrchestratorRegistry.serviceName" .)) .Values.schemaRegistry.auth.existingSecret -}}
+{{- end }}
+
 {{/* ==== Service name helpers ==== */}}
 
 {{- define "dac.mysql.serviceName" -}}

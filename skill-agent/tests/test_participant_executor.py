@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import sys
 from dataclasses import dataclass
@@ -109,8 +110,16 @@ def _execute(runner: _Runner, task: ParticipantTask):
         skill_runner=runner,
         agent_name="Fixture-Agent",
         schema_registry=_registry(),
+        runner_factory=_runner_factory,
     )
     return asyncio.run(ParticipantExecutor(local).execute(task))
+
+
+def _runner_factory(base: _Runner, max_steps: int) -> _Runner:
+    runner = copy.copy(base)
+    runner.max_steps = max_steps
+    runner._runner_tools = list(base._runner_tools)
+    return runner
 
 
 @pytest.mark.parametrize(
@@ -158,7 +167,7 @@ def test_participant_preserves_best_draft_as_partial() -> None:
     assert result.limitations
 
 
-def test_invalid_structured_output_is_retained_and_marked_partial() -> None:
+def test_invalid_structured_output_is_removed_from_evidence() -> None:
     runner = _Runner(
         {
             "status": "completed",
@@ -168,9 +177,70 @@ def test_invalid_structured_output_is_retained_and_marked_partial() -> None:
         }
     )
     result = _execute(runner, _task("lookup"))
-    assert result.status == "partial"
-    assert result.outputs[0].data == {"kind": "lookup"}
+    assert result.status == "failed"
+    assert result.outputs == []
     assert any("invalid_output_data" in item for item in result.invalid_outputs)
+
+
+def test_duplicate_outputs_are_removed_from_evidence() -> None:
+    output = {
+        "name": "result",
+        "schema_id": "test.fixture/v1",
+        "data": {"kind": "lookup", "value": "one"},
+    }
+    runner = _Runner(
+        {
+            "status": "completed",
+            "final_answer": json.dumps({"outputs": [output, output]}),
+            "tool_history": [],
+        }
+    )
+
+    result = _execute(runner, _task("lookup"))
+
+    assert result.status == "failed"
+    assert result.outputs == []
+    assert any("duplicate_output_name" in item for item in result.invalid_outputs)
+
+
+@pytest.mark.parametrize("include_valid_output", [False, True])
+def test_schema_mismatch_is_not_retryable(include_valid_output: bool) -> None:
+    outputs = [
+        {
+            "name": "result",
+            "schema_id": "wrong.fixture/v1",
+            "schema_digest": "sha256:" + "0" * 64,
+            "data": {"kind": "lookup", "value": "wrong schema"},
+        }
+    ]
+    task = _task("lookup")
+    if include_valid_output:
+        task.expected_outputs.append(
+            ExpectedOutput(name="second", schema_id="test.fixture/v1")
+        )
+        outputs.append(
+            {
+                "name": "second",
+                "schema_id": "test.fixture/v1",
+                "data": {"kind": "lookup", "value": "usable"},
+            }
+        )
+    runner = _Runner(
+        {
+            "status": "completed",
+            "final_answer": json.dumps({"outputs": outputs}),
+            "tool_history": [],
+        }
+    )
+
+    result = _execute(runner, task)
+
+    assert result.status == ("partial" if include_valid_output else "failed")
+    assert [output.name for output in result.outputs] == (
+        ["second"] if include_valid_output else []
+    )
+    assert any("output_schema_mismatch" in item for item in result.invalid_outputs)
+    assert result.retryable is False
 
 
 def test_fenced_json_is_parsed() -> None:
@@ -228,6 +298,67 @@ def test_deadline_is_propagated_to_local_execution() -> None:
     assert result.status == "failed"
     assert result.error.code == "deadline_exceeded"
     assert result.retryable is True
+
+
+def test_caller_cancellation_is_not_swallowed() -> None:
+    runner = _Runner(
+        {"status": "completed", "final_answer": "too late"},
+        delay=1,
+    )
+    local = LocalTaskExecutor(
+        skill_runner=runner,
+        agent_name="Fixture-Agent",
+        schema_registry=_registry(),
+        runner_factory=_runner_factory,
+    )
+
+    async def cancel_execution() -> None:
+        execution = asyncio.create_task(
+            ParticipantExecutor(local).execute(_task("lookup"))
+        )
+        await asyncio.sleep(0)
+        execution.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await execution
+
+    asyncio.run(cancel_execution())
+
+
+def test_unknown_output_schema_returns_structured_block() -> None:
+    runner = _Runner({"status": "completed", "final_answer": "not called"})
+    task = _task("lookup")
+    task.expected_outputs[0].schema_id = "missing.output/v1"
+    local = LocalTaskExecutor(
+        skill_runner=runner,
+        agent_name="Fixture-Agent",
+        schema_registry=SchemaRegistry(),
+        runner_factory=_runner_factory,
+    )
+
+    result = asyncio.run(ParticipantExecutor(local).execute(task))
+
+    assert result.status == "blocked"
+    assert result.error.code == "output_schema_unavailable"
+    assert result.task_id == task.task_id
+    assert runner.queries == []
+
+
+def test_step_metric_does_not_hide_runner_overrun() -> None:
+    runner = _Runner(
+        {
+            "status": "completed",
+            "skill": "fixture-skill",
+            "final_answer": json.dumps(
+                {"result": {"kind": "lookup", "value": "done"}}
+            ),
+            "tool_history": [{"tool": "tdb_query"}] * 5,
+        }
+    )
+
+    result = _execute(runner, _task("lookup", max_local_steps=2))
+
+    assert result.metrics.local_steps == 5
+    assert runner.max_steps == 20
 
 
 def test_unavailable_tool_is_removed_from_runtime_and_execution(monkeypatch) -> None:

@@ -74,6 +74,11 @@ from .schemas import (
     core_schema_registry,
     schema_digest,
 )
+from .skill_manifest import (
+    SkillSchemaDeclarationError,
+    load_output_schema_descriptors,
+    normalize_schema_path,
+)
 from .validation import (
     ContractValidationError,
     ValidationIssue,
@@ -141,6 +146,7 @@ __all__ = [
     "SchemaDescriptor",
     "SchemaReference",
     "SchemaRegistry",
+    "SkillSchemaDeclarationError",
     "TaskError",
     "TaskMetrics",
     "TaskNode",
@@ -156,6 +162,8 @@ __all__ = [
     "core_schema_registry",
     "ensure_supported_protocol",
     "json_size_bytes",
+    "load_output_schema_descriptors",
+    "normalize_schema_path",
     "protocol_major",
     "require_valid",
     "schema_digest",

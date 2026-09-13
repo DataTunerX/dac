@@ -247,6 +247,13 @@ def validate_dag(
                 continue
             upstream = nodes.get(binding.source_task_id or "")
             if upstream is None:
+                issues.append(
+                    ValidationIssue(
+                        "missing_input_source_task",
+                        f"input references unknown task {binding.source_task_id}",
+                        f"tasks[{index}].required_inputs[{binding_index}]",
+                    )
+                )
                 continue
             if binding.source_task_id not in task.depends_on:
                 issues.append(

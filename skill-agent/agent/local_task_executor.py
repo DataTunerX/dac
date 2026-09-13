@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
-import os
 import time
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -24,13 +22,9 @@ from agent_contracts import (
     truncate_utf8,
 )
 
+from .tool_readiness import partition_ready
+
 ProgressCallback = Callable[..., Awaitable[None]]
-
-_TOOL_ENV_REQUIREMENTS = {
-    "tavily_search": ("TAVILY_API_KEY",),
-    "tavily_extract": ("TAVILY_API_KEY",),
-}
-
 
 class LocalTaskExecutor:
     """Run exactly one assigned task through the process-local SkillRunner."""
@@ -41,10 +35,12 @@ class LocalTaskExecutor:
         skill_runner: Any,
         agent_name: str,
         schema_registry: SchemaRegistry,
+        runner_factory: Callable[[Any, int], Any],
     ) -> None:
         self.skill_runner = skill_runner
         self.agent_name = agent_name
         self.schema_registry = schema_registry
+        self.runner_factory = runner_factory
 
     @staticmethod
     def _task_query(task: ParticipantTask) -> str:
@@ -74,26 +70,33 @@ class LocalTaskExecutor:
             for tool in (getattr(skill_runner, "_runner_tools", None) or [])
         }
         names.discard("")
-        unavailable = {
-            name
-            for name, required_env in _TOOL_ENV_REQUIREMENTS.items()
-            if name in names
-            and any(not os.getenv(key, "").strip() for key in required_env)
-        }
-        return sorted(names - unavailable), sorted(unavailable)
+        return partition_ready(names)
 
-    @classmethod
-    def _without_unavailable_tools(cls, skill_runner: Any) -> Any:
-        runner = copy.copy(skill_runner)
-        ready, _ = cls.runtime_tool_inventory(skill_runner)
+    def _isolated_runner(self, max_steps: int) -> Any:
+        runner = self.runner_factory(self.skill_runner, max_steps)
+        if runner is self.skill_runner:
+            raise RuntimeError("participant runner factory returned the shared runner")
+        ready, _ = self.runtime_tool_inventory(runner)
         ready_set = set(ready)
         if hasattr(runner, "_runner_tools"):
             runner._runner_tools = [
                 tool
-                for tool in (getattr(skill_runner, "_runner_tools", None) or [])
+                for tool in (getattr(runner, "_runner_tools", None) or [])
                 if getattr(tool, "name", None) in ready_set
             ]
         return runner
+
+    def _unresolved_output_schemas(self, task: ParticipantTask) -> list[str]:
+        unresolved = []
+        for expected in task.expected_outputs:
+            try:
+                self.schema_registry.resolve(
+                    expected.schema_id,
+                    schema_digest_value=expected.schema_digest,
+                )
+            except LookupError:
+                unresolved.append(expected.schema_id)
+        return sorted(set(unresolved))
 
     def _outputs_from_answer(
         self,
@@ -170,13 +173,33 @@ class LocalTaskExecutor:
         started = time.perf_counter()
         required_skill = (task.constraints.required_skill or "").strip()
         attempted_skills: list[str] = []
-        task_runner = self._without_unavailable_tools(self.skill_runner)
+        unresolved_schemas = self._unresolved_output_schemas(task)
+        if unresolved_schemas:
+            return TaskResult(
+                protocol_version=PROTOCOL_VERSION,
+                collaboration_id=task.collaboration_id,
+                task_id=task.task_id,
+                agent_name=self.agent_name,
+                status=TaskResultStatus.BLOCKED,
+                missing_capabilities=[
+                    f"output_schema:{schema_id}" for schema_id in unresolved_schemas
+                ],
+                error=TaskError(
+                    code="output_schema_unavailable",
+                    message="one or more expected output schemas are unavailable",
+                ),
+                retryable=True,
+                metrics=TaskMetrics(
+                    duration_ms=int((time.perf_counter() - started) * 1000)
+                ),
+            )
         configured_steps = int(getattr(self.skill_runner, "max_steps", 0) or 0)
-        task_runner.max_steps = (
+        effective_steps = (
             min(configured_steps, task.constraints.max_local_steps)
             if configured_steps > 0
             else task.constraints.max_local_steps
         )
+        task_runner: Any = None
 
         async def run_local() -> Dict[str, Any]:
             if required_skill:
@@ -213,6 +236,7 @@ class LocalTaskExecutor:
             return result
 
         try:
+            task_runner = self._isolated_runner(effective_steps)
             runner_result = await asyncio.wait_for(
                 run_local(), timeout=task.constraints.deadline_ms / 1000
             )
@@ -234,19 +258,7 @@ class LocalTaskExecutor:
                 ),
             )
         except asyncio.CancelledError:
-            return TaskResult(
-                protocol_version=PROTOCOL_VERSION,
-                collaboration_id=task.collaboration_id,
-                task_id=task.task_id,
-                agent_name=self.agent_name,
-                status=TaskResultStatus.CANCELLED,
-                error=TaskError(code="cancelled", message="participant task cancelled"),
-                retryable=False,
-                metrics=TaskMetrics(
-                    duration_ms=int((time.perf_counter() - started) * 1000),
-                    attempted_skills=attempted_skills,
-                ),
-            )
+            raise
         except Exception as exc:
             return TaskResult(
                 protocol_version=PROTOCOL_VERSION,
@@ -263,12 +275,37 @@ class LocalTaskExecutor:
                     attempted_skills=attempted_skills,
                 ),
             )
+        finally:
+            close = getattr(task_runner, "close", None) if task_runner else None
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
         raw_status = str(runner_result.get("status") or "").strip().lower()
         answer = str(runner_result.get("final_answer") or "").strip()
         tool_history = runner_result.get("tool_history") or []
-        outputs = self._outputs_from_answer(task, answer)
         duration_ms = int((time.perf_counter() - started) * 1000)
+        try:
+            outputs = self._outputs_from_answer(task, answer)
+        except LookupError as exc:
+            return TaskResult(
+                protocol_version=PROTOCOL_VERSION,
+                collaboration_id=task.collaboration_id,
+                task_id=task.task_id,
+                agent_name=self.agent_name,
+                status=TaskResultStatus.FAILED,
+                error=TaskError(
+                    code="output_schema_unavailable",
+                    message=str(exc) or "an output schema became unavailable",
+                ),
+                retryable=True,
+                metrics=TaskMetrics(
+                    duration_ms=duration_ms,
+                    attempted_skills=attempted_skills,
+                ),
+            )
         metrics = TaskMetrics(
             duration_ms=duration_ms,
             tool_calls=sum(
@@ -276,7 +313,7 @@ class LocalTaskExecutor:
                 for item in tool_history
                 if isinstance(item, dict) and item.get("tool")
             ),
-            local_steps=min(len(tool_history), task.constraints.max_local_steps),
+            local_steps=len(tool_history),
             attempted_skills=attempted_skills,
         )
 

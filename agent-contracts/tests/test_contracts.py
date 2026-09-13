@@ -16,16 +16,20 @@ from agent_contracts import (
     ExecutionEventV2,
     ExecutionState,
     ExpectedOutput,
+    InputBinding,
+    InputSource,
     ParticipantTask,
     SchemaConflictError,
     SchemaDataValidationError,
     SchemaDescriptor,
     SchemaRegistry,
+    SkillSchemaDeclarationError,
     TaskNode,
     TaskOutput,
     TaskResult,
     adapt_legacy_capability_response,
     core_schema_registry,
+    load_output_schema_descriptors,
     validate_capability_report,
     validate_dag,
     validate_event_transition,
@@ -363,6 +367,84 @@ def test_dag_rejects_undeclared_operation_and_exhausted_attempt() -> None:
         "attempt_budget_exhausted",
         "participant_operation_not_advertised",
     }
+
+
+def test_dag_rejects_input_bound_to_unknown_task() -> None:
+    task = TaskNode(
+        task_id="task-2",
+        objective="summarize missing evidence",
+        operation="summarize",
+        assigned_agent_id="http://lead",
+        execution_target="local",
+        required_inputs=[
+            InputBinding(
+                name="evidence",
+                source=InputSource.TASK_OUTPUT,
+                source_task_id="task-missing",
+                source_output_name="claims",
+            )
+        ],
+        expected_outputs=[
+            ExpectedOutput(name="claims", schema_id="dac.claim-evidence/v1")
+        ],
+    )
+    issues = validate_dag(
+        [task],
+        contributors=[],
+        lead_agent_id="http://lead",
+        schema_registry=core_schema_registry(),
+        budget=ExecutionBudget(),
+    )
+    assert {issue.code for issue in issues} == {"missing_input_source_task"}
+
+
+def test_skill_schema_declarations_use_package_files() -> None:
+    files = {
+        "schemas/result.json": '{"type":"object","required":["id"]}',
+    }
+    descriptors = load_output_schema_descriptors(
+        {
+            "output_schemas": [
+                {
+                    "schema_id": "museum.result/v1",
+                    "path": "schemas/result.json",
+                }
+            ]
+        },
+        read_schema=files.__getitem__,
+        owner="skill:default/museum",
+    )
+    assert descriptors[0].schema_id == "museum.result/v1"
+    assert descriptors[0].schema_digest.startswith("sha256:")
+
+    with pytest.raises(SkillSchemaDeclarationError, match="package file"):
+        load_output_schema_descriptors(
+            {
+                "output_schemas": [
+                    {
+                        "schema_id": "museum.result/v1",
+                        "path": "schemas/result.json",
+                        "schema": {"type": "object"},
+                    }
+                ]
+            },
+            read_schema=files.__getitem__,
+            owner="skill:default/museum",
+        )
+
+
+@pytest.mark.parametrize("path", ["../result.json", "/tmp/result.json", "C:\\result.json"])
+def test_skill_schema_declarations_reject_unsafe_paths(path: str) -> None:
+    with pytest.raises(SkillSchemaDeclarationError, match="unsafe"):
+        load_output_schema_descriptors(
+            {
+                "output_schemas": [
+                    {"schema_id": "museum.result/v1", "path": path}
+                ]
+            },
+            read_schema=lambda _path: '{"type":"object"}',
+            owner="skill:default/museum",
+        )
 
 
 def test_artifacts_reject_inline_data_uris() -> None:

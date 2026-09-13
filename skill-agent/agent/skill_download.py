@@ -68,6 +68,7 @@ from .skill_download_refs import (
     parse_skills_env,
     sanitize_skill_name,
 )
+from .tool_readiness import missing_environment
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +290,7 @@ def download_skills(
     if overwrite is None:
         overwrite = _env_truthy(os.getenv("SKILL_DOWNLOAD_OVERWRITE"), default=False)
 
-    if not (os.getenv("TAVILY_API_KEY") or "").strip():
+    if missing_environment("tavily-search"):
         before = len(refs)
         refs = [r for r in refs if r.name.lower() != "tavily-search"]
         if len(refs) < before:

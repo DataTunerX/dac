@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -38,6 +39,8 @@ def _registry() -> RedisRegistry:
     registry.schema_registry_key = "agent_output_schemas:v2"
     registry.alias_key = "agent_aliases:v2"
     registry.aliases_by_id_key = "agent_aliases_by_id:v2"
+    registry.alias_conflicts_key = "agent_alias_conflicts:v2"
+    registry.lock = threading.RLock()
     registry.agents = []
     registry.redis = MagicMock()
     return registry
@@ -104,34 +107,49 @@ def test_schema_registration_is_atomic_and_immutable() -> None:
         )
 
 
-def test_registry_owns_case_insensitive_aliases() -> None:
+def test_registry_derives_case_insensitive_aliases_atomically() -> None:
     registry = _registry()
-    _install_hash(registry)
-    registry.redis.pipeline.side_effect = None
+    registry.agents = [_card()]
     pipe = MagicMock()
     registry.redis.pipeline.return_value = pipe
-    registry.register_aliases("http://museum", ["Museum-Agent"])
-    pipe.execute.assert_called_once()
-    pipe.hset.assert_any_call(registry.alias_key, "museum-agent", "http://museum")
+    registry._reconcile_aliases()
 
-    registry.redis.hget.side_effect = lambda key, field: (
-        "http://other" if key == registry.alias_key else None
+    pipe.execute.assert_called_once()
+    pipe.delete.assert_called_once_with(
+        registry.alias_key,
+        registry.aliases_by_id_key,
+        registry.alias_conflicts_key,
     )
-    with pytest.raises(ValueError, match="already belongs"):
-        registry.register_aliases("http://museum", ["Museum-Agent"])
+    pipe.hset.assert_any_call(
+        registry.alias_key, "museum-agent", "http://museum.default:10100"
+    )
+
+
+def test_registry_keeps_conflicting_cards_and_marks_alias_ambiguous() -> None:
+    registry = _registry()
+    registry.agents = [_card("http://museum-a"), _card("http://museum-b")]
+    pipe = MagicMock()
+    registry.redis.pipeline.return_value = pipe
+
+    registry._reconcile_aliases()
+
+    pipe.hset.assert_called_once_with(
+        registry.alias_conflicts_key,
+        "museum-agent",
+        json.dumps(["http://museum-a", "http://museum-b"]),
+    )
+    assert [card.url for card in registry.agents] == [
+        "http://museum-a",
+        "http://museum-b",
+    ]
 
 
 def test_discovery_synthesizes_unknown_health_for_legacy_card(monkeypatch) -> None:
     registry = _registry()
     card = _card()
     registry.get_agents = MagicMock(return_value=[card])
-    registry.get_runtime_status = MagicMock(return_value=None)
-    registry.get_agent_index_status = MagicMock(
-        side_effect=lambda url: __import__("agent_contracts").AgentIndexStatus(
-            protocol_version=PROTOCOL_VERSION, agent_url=url
-        )
-    )
-    registry.redis.zscore.return_value = None
+    registry.redis.zmscore.return_value = [None]
+    registry.redis.hmget.return_value = [None]
     monkeypatch.setenv("HEARTBEAT_TIMEOUT_SEC", "30")
 
     record = registry.discovery_records()[0]
@@ -144,7 +162,7 @@ def test_discovery_synthesizes_unknown_health_for_legacy_card(monkeypatch) -> No
 
 def test_discovery_keeps_heartbeat_and_index_health_independent(monkeypatch) -> None:
     registry = _registry()
-    _install_hash(registry)
+    values = _install_hash(registry)
     card = _card()
     registry.get_agents = MagicMock(return_value=[card])
     status = AgentRuntimeStatus(
@@ -157,9 +175,18 @@ def test_discovery_keeps_heartbeat_and_index_health_independent(monkeypatch) -> 
         readiness_generation=7,
     )
     registry.put_runtime_status(status)
-    registry.redis.zscore.return_value = datetime.now(timezone.utc).timestamp() - 3
+    registry.redis.zmscore.return_value = [
+        datetime.now(timezone.utc).timestamp() - 3
+    ]
     registry.redis.incr.return_value = 11
     registry.set_agent_index_status(card.url, "failed", error="embedding unavailable")
+    registry.redis.hmget.side_effect = lambda key, _urls: {
+        registry.runtime_status_key: [
+            values[(registry.runtime_status_key, card.url)]
+        ],
+        registry.aliases_by_id_key: [json.dumps([card.name])],
+        registry.index_status_key: [values[(registry.index_status_key, card.url)]],
+    }[key]
     monkeypatch.setenv("HEARTBEAT_TIMEOUT_SEC", "30")
 
     record = registry.discovery_records()[0]
@@ -195,41 +222,39 @@ def test_card_refresh_replaces_stale_in_memory_card() -> None:
     refreshed = _card()
     refreshed.name = "Museum-Agent-v2"
     registry.agents = [old]
-    registry.register_aliases = MagicMock()
+    registry._reconcile_aliases = MagicMock()
 
     assert registry._update_agents_on_event("add", refreshed.url, refreshed) is True
     assert registry.agents == [refreshed]
-    registry.register_aliases.assert_called_once_with(
-        refreshed.url, ["Museum-Agent-v2"]
-    )
+    registry._reconcile_aliases.assert_called_once_with()
 
 
-def test_watcher_side_alias_conflict_rejects_card() -> None:
+def test_watcher_side_alias_conflict_never_purges_card() -> None:
     registry = _registry()
-    card = _card()
-    registry.register_aliases = MagicMock(
-        side_effect=ValueError("alias already belongs to another agent")
-    )
+    old = _card("http://museum-old")
+    card = _card("http://museum-new")
+    registry.agents = [old]
+    registry._reconcile_aliases = MagicMock()
     registry.remove_agent = MagicMock(return_value=True)
 
-    assert registry._update_agents_on_event("add", card.url, card) is False
-    assert registry.agents == []
-    registry.remove_agent.assert_called_once_with(card.url, reason="alias_conflict")
+    assert registry._update_agents_on_event("add", card.url, card) is True
+    assert registry.agents == [old, card]
+    registry.remove_agent.assert_not_called()
+    registry._reconcile_aliases.assert_called_once_with()
 
 
-def test_startup_alias_conflict_rejects_card() -> None:
+def test_startup_alias_conflict_is_order_independent_and_non_destructive() -> None:
     registry = _registry()
-    card = _card()
-    registry.list_agents = MagicMock(return_value=[card])
-    registry.register_aliases = MagicMock(
-        side_effect=ValueError("alias already belongs to another agent")
-    )
+    cards = [_card("http://museum-b"), _card("http://museum-a")]
+    registry.list_agents = MagicMock(return_value=cards)
+    registry._reconcile_aliases = MagicMock()
     registry.remove_agent = MagicMock(return_value=True)
 
     registry._load_initial_agents()
 
-    assert registry.agents == []
-    registry.remove_agent.assert_called_once_with(card.url, reason="alias_conflict")
+    assert registry.agents == cards
+    registry.remove_agent.assert_not_called()
+    registry._reconcile_aliases.assert_called_once_with()
 
 
 def test_startup_vector_reconciliation_marks_existing_document_indexed(
@@ -251,7 +276,7 @@ def test_startup_vector_reconciliation_marks_existing_document_indexed(
     )
 
 
-def test_schema_api_resolves_and_rejects_immutable_conflict() -> None:
+def test_schema_api_resolves_and_rejects_immutable_conflict(monkeypatch) -> None:
     descriptor = SchemaDescriptor(
         schema_id="museum.record/v1",
         owner="tests",
@@ -261,7 +286,9 @@ def test_schema_api_resolves_and_rejects_immutable_conflict() -> None:
     registry.get_schema.return_value = descriptor
     registry.list_schemas.return_value = [descriptor]
     registry.register_schema.side_effect = SchemaConflictError("immutable conflict")
+    registry.alias_conflicts_for.return_value = []
     client = TestClient(create_fastapi_app(registry))
+    monkeypatch.setenv("AGENT_SCHEMA_REGISTRY_WRITE_TOKEN", "schema-writer")
 
     resolved = client.get(
         "/schemas/resolve", params={"schema_id": descriptor.schema_id}
@@ -272,6 +299,55 @@ def test_schema_api_resolves_and_rejects_immutable_conflict() -> None:
     assert schemas[0]["schema_id"] == descriptor.schema_id
 
     conflict = client.post(
-        "/schemas", json=descriptor.model_dump(mode="json", by_alias=True)
+        "/schemas",
+        json=descriptor.model_dump(mode="json", by_alias=True),
+        headers={"Authorization": "Bearer schema-writer"},
     )
     assert conflict.status_code == 409
+
+
+def test_schema_api_rejects_unauthenticated_writes(monkeypatch) -> None:
+    descriptor = SchemaDescriptor(
+        schema_id="museum.record/v1",
+        owner="tests",
+        schema={"type": "object"},
+    )
+    registry = MagicMock()
+    client = TestClient(create_fastapi_app(registry))
+    body = descriptor.model_dump(mode="json", by_alias=True)
+
+    monkeypatch.delenv("AGENT_SCHEMA_REGISTRY_WRITE_TOKEN", raising=False)
+    assert client.post("/schemas", json=body).status_code == 503
+
+    monkeypatch.setenv("AGENT_SCHEMA_REGISTRY_WRITE_TOKEN", "schema-writer")
+    assert client.post("/schemas", json=body).status_code == 401
+    registry.register_schema.assert_not_called()
+
+
+def test_legacy_agent_listing_does_not_load_discovery_metadata() -> None:
+    registry = MagicMock()
+    registry.get_agents.return_value = []
+    client = TestClient(create_fastapi_app(registry))
+
+    response = client.get("/agents")
+
+    assert response.status_code == 200
+    assert response.json() == {"agent_cards": []}
+    registry.discovery_records.assert_not_called()
+
+
+def test_alias_endpoint_reports_ambiguity_without_selecting_a_winner() -> None:
+    registry = MagicMock()
+    registry.alias_conflicts_for.return_value = ["http://a", "http://b"]
+    client = TestClient(create_fastapi_app(registry))
+
+    response = client.get(
+        "/agents/resolve-alias", params={"alias": "Museum-Agent"}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["canonical_agent_ids"] == [
+        "http://a",
+        "http://b",
+    ]
+    registry.resolve_agent_alias.assert_not_called()

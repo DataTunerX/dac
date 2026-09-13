@@ -210,6 +210,54 @@ def test_get_skill_detail_missing_404(client):
     assert client.get("/namespaces/team-a/skills/nope/detail").status_code == 404
 
 
+def test_get_skill_detail_tolerates_legacy_schema_metadata(client, skills_dir):
+    archive = skills_dir / "team-a" / "report-1.1.0.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
+        zipped.writestr(
+            "_meta.json",
+            json.dumps(
+                {
+                    "slug": "report",
+                    "version": "1.1.0",
+                    "output_schemas": {"legacy": "not-a-list"},
+                }
+            ),
+        )
+        zipped.writestr(
+            "SKILL.md",
+            "---\nname: report\ndescription: Report\n---\n\nLegacy package.\n",
+        )
+
+    response = client.get("/namespaces/team-a/skills/report/detail")
+
+    assert response.status_code == 200
+    assert response.json()["output_schemas"] == []
+
+
+def test_get_skill_detail_caches_one_zip_revision(client, monkeypatch):
+    from skill_sdk.skill.loader import SkillLoader
+
+    from skill_hub import api
+
+    api._load_skill_detail_package.cache_clear()
+    original_load = SkillLoader.load
+    calls = 0
+
+    def counted_load(self, path):
+        nonlocal calls
+        calls += 1
+        return original_load(self, path)
+
+    monkeypatch.setattr(SkillLoader, "load", counted_load)
+
+    first = client.get("/namespaces/team-a/skills/report/detail")
+    second = client.get("/namespaces/team-a/skills/report/detail")
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert calls == 1
+
+
 def test_download_missing_returns_404(client):
     assert client.get("/nonexistent.zip").status_code == 404
     assert client.get("/namespaces/team-a/skills/nonexistent.zip").status_code == 404
@@ -357,7 +405,7 @@ def test_upload_rejects_absolute_output_schema_path(client, skills_dir):
             files={"file": (archive.name, handle, "application/zip")},
         )
     assert response.status_code == 400
-    assert "unsafe or empty path" in response.json()["error"]
+    assert "unsafe or empty output schema path" in response.json()["error"]
 
 
 def test_schema_registry_timeout_is_reported_as_unavailable(monkeypatch):
@@ -373,10 +421,58 @@ def test_schema_registry_timeout_is_reported_as_unavailable(monkeypatch):
         "urlopen",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("timed out")),
     )
+    monkeypatch.setenv("AGENT_SCHEMA_REGISTRY_WRITE_TOKEN", "schema-writer")
     with pytest.raises(HTTPException) as caught:
         api._register_schema_descriptors([descriptor])
     assert caught.value.status_code == 503
     assert "timed out" in str(caught.value.detail)
+
+
+def test_schema_registry_write_requires_configured_credentials(monkeypatch):
+    from skill_hub import api
+
+    descriptor = SchemaDescriptor(
+        schema_id="museum.auth-required/v1",
+        owner="tests",
+        schema={"type": "object"},
+    )
+    monkeypatch.delenv("AGENT_SCHEMA_REGISTRY_WRITE_TOKEN", raising=False)
+
+    with pytest.raises(HTTPException) as caught:
+        api._register_schema_descriptors([descriptor])
+
+    assert caught.value.status_code == 503
+
+
+def test_schema_registry_write_uses_bearer_token(monkeypatch):
+    from skill_hub import api
+
+    descriptor = SchemaDescriptor(
+        schema_id="museum.auth/v1",
+        owner="tests",
+        schema={"type": "object"},
+    )
+    observed = {}
+
+    class _Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def _urlopen(request, **_kwargs):
+        observed["authorization"] = request.get_header("Authorization")
+        return _Response()
+
+    monkeypatch.setenv("AGENT_SCHEMA_REGISTRY_WRITE_TOKEN", "schema-writer")
+    monkeypatch.setattr(api.urllib.request, "urlopen", _urlopen)
+
+    api._register_schema_descriptors([descriptor])
+
+    assert observed["authorization"] == "Bearer schema-writer"
 
 
 def test_upload_to_default_lands_in_default_dir(client, skills_dir):

@@ -1,21 +1,12 @@
-import json
-import os
 import logging
-from pathlib import Path
-import numpy as np
-import pandas as pd
-import requests
+import os
+import secrets
 from datetime import datetime
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.utilities.logging import get_logger
-import click
-from .redis_registry import RedisRegistry, CleanupService
-from fastapi import FastAPI, HTTPException, Depends, Query
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
 from typing import List, Optional
-from pydantic import BaseModel, Field
 from urllib.parse import unquote
+
+import click
+import uvicorn
 from a2a.types import AgentCard
 from agent_contracts import (
     AgentDiscoveryRecord,
@@ -24,9 +15,13 @@ from agent_contracts import (
     SchemaConflictError,
     SchemaDescriptor,
 )
-from .vector_client import SearchResult, VectorClient, Document, serialize_object
-import asyncio
-from typing import Any, Dict
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel
+
+from .redis_registry import CleanupService, RedisRegistry
+from .vector_client import Document, SearchResult, VectorClient, serialize_object
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,7 +35,6 @@ collection_name = os.getenv('COLLECTION_NAME', 'agent_cards')
 
 class AgentListResponse(BaseModel):
     agent_cards: List[AgentCard]
-    agents: List[AgentDiscoveryRecord] = Field(default_factory=list)
 
 
 class SchemaListResponse(BaseModel):
@@ -54,6 +48,24 @@ class SearchRequest(BaseModel):
     hybrid_threshold: float = 0.1
     fulltext_weight: Optional[float] = 0.5
     vector_weight: Optional[float] = 0.5
+
+
+def require_schema_registry_writer(
+    authorization: Optional[str] = Header(default=None),
+) -> None:
+    """Require the internal bearer token for immutable schema publication."""
+
+    expected = os.getenv("AGENT_SCHEMA_REGISTRY_WRITE_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="schema registry writes are disabled until authentication is configured",
+        )
+    scheme, _, supplied = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(
+        supplied.strip(), expected
+    ):
+        raise HTTPException(status_code=401, detail="invalid schema registry credentials")
 
 def create_vector_client():
     data_services_url = os.getenv('DATA_SERVICES', 'http://data-services.dac.svc.cluster.local:8000')
@@ -191,7 +203,7 @@ def create_fastapi_app(registry):
         """Get all agents"""
         try:
             agents = registry.get_agents()
-            return {"agent_cards": agents, "agents": registry.discovery_records()}
+            return {"agent_cards": agents}
         except Exception as e:
             logger.error(f"Error getting agents: {e}")
             raise HTTPException(status_code=500, detail="Internal server error")
@@ -202,6 +214,15 @@ def create_fastapi_app(registry):
 
     @app.get("/agents/resolve-alias")
     async def resolve_agent_alias(alias: str = Query(...)):
+        conflicts = registry.alias_conflicts_for(alias)
+        if conflicts:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": f"ambiguous agent alias: {alias}",
+                    "canonical_agent_ids": conflicts,
+                },
+            )
         canonical_agent_id = registry.resolve_agent_alias(alias)
         if canonical_agent_id is None:
             raise HTTPException(status_code=404, detail=f"unknown agent alias: {alias}")
@@ -222,7 +243,12 @@ def create_fastapi_app(registry):
             raise HTTPException(status_code=404, detail=f"unknown schema_id: {schema_id}")
         return descriptor
 
-    @app.post("/schemas", response_model=SchemaDescriptor, status_code=201)
+    @app.post(
+        "/schemas",
+        response_model=SchemaDescriptor,
+        status_code=201,
+        dependencies=[Depends(require_schema_registry_writer)],
+    )
     async def register_schema(descriptor: SchemaDescriptor):
         try:
             return registry.register_schema(descriptor)
@@ -426,7 +452,7 @@ def main(command, host, port, transport, redis_host, redis_port, redis_db, passw
         
         print(f"Successfully create collection {collection_name}, result = {result}")
 
-    except Exception as e:
+    except Exception:
         raise ValueError(f'Failed to create collection when start agentregistry: {collection_name}')
 
     print(f"Starting {command}")

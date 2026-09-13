@@ -7,6 +7,7 @@ This module keeps the transport layer (FastAPI) separate from the index logic
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -15,9 +16,14 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 
-from agent_contracts import SchemaDescriptor
+from agent_contracts import (
+    SchemaDescriptor,
+    SkillSchemaDeclarationError,
+    load_output_schema_descriptors,
+)
 from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -40,6 +46,43 @@ logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 256 * 1024 * 1024  # 256 MiB safety cap for uploaded zips.
 SCHEMA_REGISTRY_TIMEOUT_SEC = 10
+
+
+@lru_cache(maxsize=256)
+def _load_skill_detail_package(
+    zip_path_value: str,
+    mtime_ns: int,
+    size: int,
+    namespace: str,
+    skill_name: str,
+):
+    """Load one immutable ZIP revision once for repeated detail requests."""
+
+    del mtime_ns, size  # Values are cache-key material.
+    from skill_sdk.skill.loader import SkillLoader
+
+    zip_path = Path(zip_path_value)
+    loader = SkillLoader()
+    try:
+        skill = loader.load(zip_path)
+        try:
+            schemas = _extract_schema_descriptors(
+                zip_path.read_bytes(),
+                skill_name=skill.name,
+                namespace=namespace,
+            )
+        except HTTPException as exc:
+            logger.warning(
+                "[SkillHub][Schema] legacy package has no usable declarations | "
+                "skill=%s/%s detail=%s",
+                namespace,
+                skill_name,
+                exc.detail,
+            )
+            schemas = []
+        return skill, tuple(schemas)
+    finally:
+        loader.close()
 
 
 def _require_index() -> SkillIndex:
@@ -253,17 +296,21 @@ async def get_skill_detail(
         raise HTTPException(status_code=404, detail=detail)
 
     resolved = idx.resolved_version(ns, clean_name, clean_version) or ""
-    from skill_sdk.skill.loader import SkillLoader
+    stat = zip_path.stat()
 
-    loader = SkillLoader()
     try:
-        skill = loader.load(zip_path)
+        skill, output_schemas = await asyncio.to_thread(
+            _load_skill_detail_package,
+            str(zip_path.resolve()),
+            stat.st_mtime_ns,
+            stat.st_size,
+            ns,
+            clean_name,
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=400, detail=f"invalid skill zip: {exc}"
         ) from exc
-    finally:
-        loader.close()
 
     # Prefer list summary for available_versions / download_url when present.
     summary = _find_latest(idx, ns, clean_name) or {}
@@ -292,9 +339,7 @@ async def get_skill_detail(
             for s in (skill.scripts or [])
         ],
         resource_dirs=list(skill.resource_dirs or []),
-        output_schemas=_extract_schema_descriptors(
-            zip_path.read_bytes(), skill_name=skill.name, namespace=namespace
-        ),
+        output_schemas=output_schemas,
     )
 
 
@@ -441,7 +486,7 @@ async def update_skill(
             status_code=400, detail=f"failed to rebuild skill zip: {exc}"
         )
 
-    return _store_skill_zip(ns, data, source="update")
+    return await asyncio.to_thread(_store_skill_zip, ns, data, source="update")
 
 
 @router.post(
@@ -474,7 +519,7 @@ async def create_skill(namespace: str, body: CreateSkillRequest) -> SkillInfo:
         allowed_tools=body.allowed_tools or [],
     )
     data = build_skill_zip_bytes(req)
-    return _store_skill_zip(ns, data, source="create")
+    return await asyncio.to_thread(_store_skill_zip, ns, data, source="create")
 
 
 @router.post(
@@ -505,7 +550,13 @@ async def upload_skill(
             detail=f"upload too large (limit {MAX_UPLOAD_BYTES} bytes)",
         )
 
-    return _store_skill_zip(ns, data, source="upload", original_filename=file.filename)
+    return await asyncio.to_thread(
+        _store_skill_zip,
+        ns,
+        data,
+        source="upload",
+        original_filename=file.filename,
+    )
 
 
 def _store_skill_zip(
@@ -543,6 +594,7 @@ def _store_skill_zip(
 
     target = ns_dir / f"{name}-{version}.zip"
     target.write_bytes(data)
+    _load_skill_detail_package.cache_clear()
     logger.info(
         "[SkillHub] %s skill ns=%s name=%s version=%s file=%s size=%d",
         source,
@@ -597,6 +649,7 @@ async def delete_namespace_skill(
 
     resolved = idx.resolved_version(ns, clean_name, clean_version) or ""
     zip_path.unlink(missing_ok=True)
+    _load_skill_detail_package.cache_clear()
     logger.info(
         "[SkillHub] deleted skill ns=%s name=%s resolved_version=%s file=%s",
         ns,
@@ -682,70 +735,22 @@ def _extract_schema_descriptors(
             raise HTTPException(
                 status_code=400, detail=f"invalid _meta.json: {exc}"
             ) from exc
-        declarations = meta.get("output_schemas") or []
-        if not isinstance(declarations, list):
-            raise HTTPException(status_code=400, detail="output_schemas must be a list")
-
-        descriptors: list[SchemaDescriptor] = []
-        seen: set[str] = set()
         normalized_names = {_normalized_member(name): name for name in names}
-        for index, declaration in enumerate(declarations):
-            if not isinstance(declaration, dict):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"output_schemas[{index}] must be an object",
-                )
-            if "schema" in declaration:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"output_schemas[{index}] must reference a package file, not inline schema",
-                )
-            schema_id = str(declaration.get("schema_id") or "").strip()
-            relative_path = _normalized_member(str(declaration.get("path") or ""))
-            windows_absolute = (
-                len(relative_path) >= 3
-                and relative_path[1] == ":"
-                and relative_path[2] == "/"
-            )
-            if (
-                not relative_path
-                or relative_path.startswith(("/", "../"))
-                or "/../" in relative_path
-                or windows_absolute
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"output_schemas[{index}] has an unsafe or empty path",
-                )
-            member = f"{root}{relative_path}"
-            original_member = normalized_names.get(member)
+
+        def read_schema(relative_path: str) -> bytes:
+            original_member = normalized_names.get(f"{root}{relative_path}")
             if original_member is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"output schema file not found in skill zip: {relative_path}",
-                )
-            try:
-                schema_body = json.loads(archive.read(original_member).decode("utf-8"))
-                descriptor = SchemaDescriptor(
-                    schema_id=schema_id,
-                    schema=schema_body,
-                    schema_digest=declaration.get("schema_digest"),
-                    owner=f"skill:{namespace}/{skill_name}",
-                    description=str(declaration.get("description") or ""),
-                )
-            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"invalid output schema {schema_id or index}: {exc}",
-                ) from exc
-            if descriptor.schema_id in seen:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"duplicate output schema declaration: {descriptor.schema_id}",
-                )
-            seen.add(descriptor.schema_id)
-            descriptors.append(descriptor)
-        return descriptors
+                raise FileNotFoundError(relative_path)
+            return archive.read(original_member)
+
+        try:
+            return load_output_schema_descriptors(
+                meta,
+                read_schema=read_schema,
+                owner=f"skill:{namespace}/{skill_name}",
+            )
+        except SkillSchemaDeclarationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _schema_registry_url() -> str:
@@ -759,12 +764,23 @@ def _schema_registry_url() -> str:
 def _register_schema_descriptors(descriptors: list[SchemaDescriptor]) -> None:
     """Publish descriptors before storing the skill archive."""
 
+    if not descriptors:
+        return
+    write_token = os.getenv("AGENT_SCHEMA_REGISTRY_WRITE_TOKEN", "").strip()
+    if not write_token:
+        raise HTTPException(
+            status_code=503,
+            detail="schema registry write authentication is not configured",
+        )
     for descriptor in descriptors:
         payload = descriptor.model_dump_json(by_alias=True).encode("utf-8")
         request = urllib.request.Request(
             f"{_schema_registry_url()}/schemas",
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {write_token}",
+                "Content-Type": "application/json",
+            },
             method="POST",
         )
         try:

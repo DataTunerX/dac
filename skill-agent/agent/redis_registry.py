@@ -1,11 +1,11 @@
 import json
-import redis
-import threading
 import logging
+import threading
 import time
-import asyncio
 from datetime import datetime
-from typing import Dict, Optional, List, Any
+from typing import Dict, List, Optional
+
+import redis
 from a2a.types import AgentCard
 from agent_contracts import AgentRuntimeStatus
 
@@ -33,8 +33,6 @@ class RedisRegistry:
         self.registry_key = "expert_agents"
         self.heartbeat_key = "agent_heartbeats"
         self.runtime_status_key = "agent_runtime_status:v2"
-        self.alias_key = "agent_aliases:v2"
-        self.aliases_by_id_key = "agent_aliases_by_id:v2"
         self.lock = threading.Lock()
 
     def _serialize_agent(self, agent: AgentCard) -> str:
@@ -56,44 +54,9 @@ class RedisRegistry:
     ) -> bool:
         agent_id = agent.url
         try:
-            alias = str(agent.name).strip()
-            existing_alias = (
-                self.redis.hget(self.alias_key, alias.casefold()) if alias else None
-            )
-            if existing_alias and existing_alias != agent_id:
-                logger.error(
-                    "Registration rejected: alias %r already belongs to %s",
-                    alias,
-                    existing_alias,
-                )
-                return False
-            previous_aliases = []
-            raw_previous_aliases = self.redis.hget(
-                self.aliases_by_id_key, agent_id
-            )
-            if raw_previous_aliases:
-                try:
-                    previous_aliases = json.loads(raw_previous_aliases)
-                except (TypeError, ValueError):
-                    logger.warning("Invalid prior alias record for %s", agent_id)
             pipe = self.redis.pipeline()
             pipe.hset(self.registry_key, agent_id, self._serialize_agent(agent))
             pipe.zadd(self.heartbeat_key, {agent_id: datetime.now().timestamp()})
-            if alias:
-                for previous_alias in previous_aliases:
-                    normalized = str(previous_alias).strip().casefold()
-                    if (
-                        normalized
-                        and normalized != alias.casefold()
-                        and self.redis.hget(self.alias_key, normalized) == agent_id
-                    ):
-                        pipe.hdel(self.alias_key, normalized)
-                pipe.hset(self.alias_key, alias.casefold(), agent_id)
-                pipe.hset(
-                    self.aliases_by_id_key,
-                    agent_id,
-                    json.dumps([alias], ensure_ascii=False),
-                )
             if runtime_status is not None:
                 pipe.hset(
                     self.runtime_status_key,
@@ -117,15 +80,6 @@ class RedisRegistry:
     def unregister_agent(self, agent_url: str) -> bool:
         try:
             pipe = self.redis.pipeline()
-            raw_aliases = self.redis.hget(self.aliases_by_id_key, agent_url)
-            if raw_aliases:
-                try:
-                    aliases = json.loads(raw_aliases)
-                except (TypeError, ValueError):
-                    aliases = []
-                for alias in aliases:
-                    pipe.hdel(self.alias_key, str(alias).strip().casefold())
-            pipe.hdel(self.aliases_by_id_key, agent_url)
             pipe.hdel(self.registry_key, agent_url)
             pipe.zrem(self.heartbeat_key, agent_url)
             pipe.hdel(self.runtime_status_key, agent_url)

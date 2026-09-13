@@ -34,6 +34,11 @@ spec:
               value: {{ include "dac.dataServices.url" . | quote }}
             - name: COLLECTION_NAME
               value: {{ .Values.bizOrchestratorRegistry.config.collectionName | quote }}
+            - name: AGENT_SCHEMA_REGISTRY_WRITE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dac.schemaRegistryAuthSecretName" . }}
+                  key: {{ .Values.schemaRegistry.auth.tokenKey }}
           args:
             {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizOrchestratorRegistry.config.redisDb) | nindent 12 }}
           resources:
