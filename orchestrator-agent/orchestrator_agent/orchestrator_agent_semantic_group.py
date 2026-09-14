@@ -68,7 +68,11 @@ from .tool_call_utils import invoke_llm_with_tool, safe_langfuse_flush
 # SG Orchestrator 和 skill-agent 是同一注册中心中的对等智能体，双向协作，
 # 通过 A2A 协议传输 Execution Flow 状态地图。
 from .execution_flow import (
-    ExecutionTask, is_execution_flow_frame, render_execution_flow_md, render_execution_flow_table,
+    ExecutionTask,
+    is_execution_flow_frame,
+    render_execution_flow_md,
+    render_execution_flow_table,
+    strip_execution_flow_lines,
 )
 
 try:
@@ -3916,6 +3920,24 @@ class OrchestratorAgent(BaseAgent):
         return is_execution_flow_frame(text)
 
     @staticmethod
+    def _execution_flow_log_meta(text: str) -> str:
+        """Compact log fields for an EF frame; never dump full result/task."""
+        raw = (text or "").lstrip()
+        prefix = "[[DAC_EXECUTION_FLOW]] "
+        if not raw.startswith(prefix):
+            return "unparsed"
+        try:
+            data = json.loads(raw[len(prefix):])
+            if not isinstance(data, dict):
+                return f"chars={len(text or '')}"
+            return (
+                f"execution_id={data.get('execution_id')} agent={data.get('agent')} "
+                f"stage={data.get('stage')} parent={data.get('parent_execution_id')}"
+            )
+        except Exception:
+            return f"chars={len(text or '')}"
+
+    @staticmethod
     def build_answer_frame(
         event: str,
         *,
@@ -4053,25 +4075,43 @@ class OrchestratorAgent(BaseAgent):
                     if ft:
                         result_segments.append(ft)
                 return
-            # ── Execution Flow: collect peer's EF frames ──
+            # ── Execution Flow: collect peer's EF frames and forward to UI ──
             # Peer agents emit [[DAC_EXECUTION_FLOW]] frames via A2A artifact.
-            # We collect them here so the caller can merge them into the local
-            # execution state map.  These frames are NOT forwarded to the
-            # progress updater to avoid polluting the UI stream.
+            # Collect for the local execution state map AND forward to updater
+            # (artifact name="execution-flow") so routing / apiserver / UI can
+            # render the execution map.  Do not mix them into progress artifacts.
             if OrchestratorAgent.is_execution_flow_frame(s):
                 ef_task = ExecutionTask.from_frame(s)
                 if ef_task is not None:
                     peer_execution_flow_tasks.append(ef_task)
+                if updater is not None:
+                    await updater.add_artifact(
+                        [TextPart(text=s + "\n")],
+                        name="execution-flow",
+                    )
+                    logger.info(
+                        "[ExecutionFlow][SG-Orch] forward peer frame %s",
+                        OrchestratorAgent._execution_flow_log_meta(s),
+                    )
                 return
             # Handle inline EF frames: [[DAC_EXECUTION_FLOW]] may appear mid-line
             # when the peer agent doesn't emit a newline before the frame.  Strip
-            # the frame, parse it, and keep only the clean text.
+            # the frame, parse it, forward it, and keep only the clean text.
             ef_idx = s.find("[[DAC_EXECUTION_FLOW]] ")
             if ef_idx >= 0:
                 ef_line = s[ef_idx:]
                 ef_task = ExecutionTask.from_frame(ef_line)
                 if ef_task is not None:
                     peer_execution_flow_tasks.append(ef_task)
+                if updater is not None:
+                    await updater.add_artifact(
+                        [TextPart(text=ef_line if ef_line.endswith("\n") else ef_line + "\n")],
+                        name="execution-flow",
+                    )
+                    logger.info(
+                        "[ExecutionFlow][SG-Orch] forward inline peer frame %s",
+                        OrchestratorAgent._execution_flow_log_meta(ef_line),
+                    )
                 clean_text = s[:ef_idx].strip()
                 if clean_text:
                     result_segments.append(clean_text)
@@ -4096,7 +4136,9 @@ class OrchestratorAgent(BaseAgent):
             await handle_line(line_buf)
 
         body = OrchestratorAgent._finalize_a2a_collected_text(result_segments, summary_text)
-        return OrchestratorAgent.strip_progress_lines(body), peer_execution_flow_tasks
+        body = OrchestratorAgent.strip_progress_lines(body)
+        body = strip_execution_flow_lines(body)
+        return body, peer_execution_flow_tasks
 
     def current_agent_label(self) -> str:
         return (self.agent_id or self.semantic_group_id or self.agent_name or "sg_orchestrator").strip()
@@ -4388,7 +4430,18 @@ class OrchestratorAgent(BaseAgent):
                 summary_text: Optional[str] = None
                 async for chunk in stream_response:
                     result = self.get_response_text(chunk)
-                    if result == "" or self.is_progress_frame(result):
+                    if result == "" or self.is_progress_frame(result) or self.is_execution_flow_frame(result):
+                        if self.is_execution_flow_frame(result):
+                            logger.info(
+                                "[ExecutionFlow][SG-Orch][non_stream] drop EF from LLM body %s",
+                                self._execution_flow_log_meta(result),
+                            )
+                        continue
+                    ef_idx = result.find("[[DAC_EXECUTION_FLOW]] ") if isinstance(result, str) else -1
+                    if ef_idx >= 0:
+                        clean_text = result[:ef_idx].strip()
+                        if clean_text:
+                            agent_knowledge.append(clean_text)
                         continue
                     if self.is_summary_artifact(result):
                         parsed = self.parse_summary_artifact(result)
@@ -4411,6 +4464,8 @@ class OrchestratorAgent(BaseAgent):
                         continue
                     agent_knowledge.append(result)
                 finalized = self._finalize_a2a_collected_text(agent_knowledge, summary_text)
+                finalized = self.strip_progress_lines(finalized)
+                finalized = strip_execution_flow_lines(finalized)
                 if summary_text is not None:
                     logger.info(
                         "[DACSummary][SG-Orch][non_stream] using summary from agent=%s, discarded %d raw chunks",
@@ -5420,6 +5475,35 @@ class OrchestratorAgent(BaseAgent):
                                     name=task_name,
                                 )
                                 continue
+                            if self.is_execution_flow_frame(agent_step_knowledge):
+                                await updater.add_artifact(
+                                    [TextPart(text=agent_step_knowledge)],
+                                    name="execution-flow",
+                                )
+                                logger.info(
+                                    "[ExecutionFlow][SG-Orch][a2a_tasks] forward EF task_id=%s agent=%s %s",
+                                    task.id,
+                                    task.agent,
+                                    self._execution_flow_log_meta(agent_step_knowledge),
+                                )
+                                continue
+                            if isinstance(agent_step_knowledge, str):
+                                ef_idx = agent_step_knowledge.find("[[DAC_EXECUTION_FLOW]] ")
+                                if ef_idx >= 0:
+                                    ef_line = agent_step_knowledge[ef_idx:]
+                                    await updater.add_artifact(
+                                        [TextPart(text=ef_line if ef_line.endswith("\n") else ef_line + "\n")],
+                                        name="execution-flow",
+                                    )
+                                    logger.info(
+                                        "[ExecutionFlow][SG-Orch][a2a_tasks] forward inline EF task_id=%s agent=%s %s",
+                                        task.id,
+                                        task.agent,
+                                        self._execution_flow_log_meta(ef_line),
+                                    )
+                                    agent_step_knowledge = agent_step_knowledge[:ef_idx].strip()
+                                    if not agent_step_knowledge:
+                                        continue
                             if self.is_summary_artifact(agent_step_knowledge):
                                 parsed = self.parse_summary_artifact(agent_step_knowledge)
                                 if parsed is not None:
@@ -5439,6 +5523,9 @@ class OrchestratorAgent(BaseAgent):
                         agent_steps_knowledge_str = self._finalize_a2a_collected_text(
                             agent_steps_raw,
                             summary_text,
+                        )
+                        agent_steps_knowledge_str = strip_execution_flow_lines(
+                            self.strip_progress_lines(agent_steps_knowledge_str)
                         )
                         if summary_text is not None:
                             logger.info(
@@ -6951,12 +7038,34 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             task: The ExecutionTask to emit as a frame.
         """
         if updater is None:
+            logger.info(
+                "[ExecutionFlow][SG-Orch] skip emit updater=None execution_id=%s",
+                getattr(task, "execution_id", ""),
+            )
             return
         frame = task.to_frame()
         await updater.add_artifact(
             [TextPart(text=frame)],
             name="execution-flow",
         )
+        logger.info(
+            "[ExecutionFlow][SG-Orch] emit own frame execution_id=%s agent=%s stage=%s parent=%s",
+            task.execution_id,
+            task.agent,
+            task.stage,
+            task.parent_execution_id,
+        )
+
+    async def _reemit_parented_peer_execution_flow(
+        self,
+        updater: Optional[Any],
+        peer_tasks: list["ExecutionTask"],
+    ) -> None:
+        """Re-send peer EF frames after parent_execution_id is attached for UI tree nesting."""
+        if updater is None:
+            return
+        for pt in peer_tasks:
+            await self._emit_execution_flow(updater, pt)
 
     @staticmethod
     def _member_capability_flag(name: str, *, default: bool = False) -> bool:
@@ -8419,12 +8528,15 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 )
                 execution_flow_tasks.append(own_ef_task)
                 await self._emit_execution_flow(updater, own_ef_task)
-                # 将 expert 的根任务链接到当前 own task
+                # 将 expert 的根任务链接到当前 own task，并重发以便 UI 建树
+                parented_expert: list[ExecutionTask] = []
                 for et in expert_ef_tasks:
                     if et.parent_execution_id is None:
                         et.parent_execution_id = exec_id
                         et.delegated_by = agent_name
+                        parented_expert.append(et)
                     execution_flow_tasks.append(et)
+                await self._reemit_parented_peer_execution_flow(updater, parented_expert)
                 logger.info(
                     "[ExecutionFlow] recorded | agent=%s turn=1 stage=pre_exec "
                     "role=initiator task_preview=%s expert_ef_tasks=%d",
@@ -8655,12 +8767,15 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                     )
                     execution_flow_tasks.append(delegate_ef_task)
                     await self._emit_execution_flow(updater, delegate_ef_task)
-                    # Step 3: 给 peer 的根任务设置 parent_execution_id，然后合并
+                    # Step 3: 给 peer 的根任务设置 parent_execution_id，然后合并并重发
+                    parented_peer: list[ExecutionTask] = []
                     for pt in peer_ef_tasks:
                         if pt.parent_execution_id is None:
                             pt.parent_execution_id = exec_id
                             pt.delegated_by = agent.agent_name
+                            parented_peer.append(pt)
                         execution_flow_tasks.append(pt)
+                    await self._reemit_parented_peer_execution_flow(updater, parented_peer)
                     logger.info(
                         "[ExecutionFlow] recorded | agent=%s turn=1 stage=pre_exec "
                         "role=delegatee task_preview=%s peer_ef_tasks=%d",
@@ -11203,11 +11318,14 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             _delta_ef_tasks.append(delegate_ef_task)
             if progress_updater is not None:
                 await self._emit_execution_flow(progress_updater, delegate_ef_task)
+            parented_peer: list[ExecutionTask] = []
             for pt in peer_ef_tasks:
                 if pt.parent_execution_id is None:
                     pt.parent_execution_id = exec_id
                     pt.delegated_by = agent.agent_name
+                    parented_peer.append(pt)
                 _delta_ef_tasks.append(pt)
+            await self._reemit_parented_peer_execution_flow(progress_updater, parented_peer)
             if progress_updater is not None:
                 await self.emit_progress(
                     progress_updater,

@@ -675,6 +675,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                     user_id=user_id,
                 )
                 turn_records[-1]["execution_flow_tasks"].append(ts_task)
+                await self._emit_execution_flow(updater, ts_task)
                 # Record final_answer as formal ExecutionTask
                 fa_task = ExecutionTask(
                     execution_id=f"final-answer-t{total_turns}",
@@ -692,6 +693,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                     user_id=user_id,
                 )
                 turn_records[-1]["execution_flow_tasks"].append(fa_task)
+                await self._emit_execution_flow(updater, fa_task)
                 logger.info(
                     "[TurnLoop] answer satisfactory after %d turn(s) — exiting",
                     total_turns,
@@ -730,6 +732,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 user_id=user_id,
             )
             turn_records[-1]["execution_flow_tasks"].append(ts_task)
+            await self._emit_execution_flow(updater, ts_task)
 
             # ── Retry guard: gap outside the capability boundary ──
             # If the evaluator judged the missing information as NOT obtainable
@@ -797,6 +800,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                     user_id=user_id,
                 )
                 turn_records[-1]["execution_flow_tasks"].append(fa_task)
+                await self._emit_execution_flow(updater, fa_task)
                 break
 
             failure_context = (
@@ -902,6 +906,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
                 "delegate_results": {},
                 "execution_flow_tasks": [fa_task],
             })
+            await self._emit_execution_flow(updater, fa_task)
 
         # ==================================================================
         # Step 6 (summarize already done in the loop): final_answer is set

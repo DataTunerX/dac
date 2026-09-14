@@ -83,6 +83,7 @@ from .execution_flow import (
     ExecutionTask,
     is_execution_flow_frame,
     render_execution_flow_md,
+    strip_execution_flow_lines,
 )
 from .dataservices_client import (
     CreateHistoryRequest,
@@ -4021,6 +4022,29 @@ class SkillAgentExecutor(AgentExecutor):
         """
         frame = execution_task.to_frame()
         await updater.add_artifact([TextPart(text=frame)], name="execution-flow")
+        logger.info(
+            "[ExecutionFlow][Skill] emit execution_id=%s agent=%s stage=%s parent=%s",
+            execution_task.execution_id,
+            execution_task.agent,
+            execution_task.stage,
+            execution_task.parent_execution_id,
+        )
+
+    async def _reemit_parented_peer_execution_flow(
+        self,
+        updater: Optional[TaskUpdater],
+        peer_tasks: list["ExecutionTask"],
+    ) -> None:
+        """Re-send peer EF frames after ``parent_execution_id`` is attached.
+
+        The peer already streamed the same ``execution_id`` with ``parent=null``.
+        Frontend upserts by id, so this rewrite hangs those nodes under the
+        wrapper in the execution tree.
+        """
+        if updater is None:
+            return
+        for pt in peer_tasks:
+            await self._emit_execution_flow(updater, pt)
 
     async def _record_none_execution_task(
         self,
@@ -5291,10 +5315,12 @@ class SkillAgentExecutor(AgentExecutor):
 
             # Point G: mid-exec delegate task Execution Flow emit
             mg_ef_id = f"mid-del-{task.id}-{agent_name}-t{turn}-r{mid_exec_round}"
+            parented_peer: list[ExecutionTask] = []
             for pt in peer_ef_tasks:
                 if pt.parent_execution_id is None:
                     pt.parent_execution_id = mg_ef_id
                     pt.delegated_by = self._self_planner_agent_name()
+                    parented_peer.append(pt)
             mg_ef_task = ExecutionTask(
                 execution_id=mg_ef_id,
                 turn=turn,
@@ -5313,9 +5339,8 @@ class SkillAgentExecutor(AgentExecutor):
             execution_flow_tasks.append(mg_ef_task)
             execution_flow_tasks.extend(peer_ef_tasks)
             if updater is not None:
-                # Emit delegate task to A2A artifact (peer frames already
-                # forwarded by _delegate_to_peer's _handle_line).
                 await self._emit_execution_flow(updater, mg_ef_task)
+                await self._reemit_parented_peer_execution_flow(updater, parented_peer)
 
             if updater is not None:
                 await self._emit_progress(
@@ -5437,7 +5462,8 @@ class SkillAgentExecutor(AgentExecutor):
                                 name="progress",
                             )
                         return
-                    # Collect peer's Execution Flow frames
+                    # Collect peer's Execution Flow frames. Never keep them in body text
+                    # that later goes to the LLM or the user-facing answer.
                     if self._is_execution_flow_frame(s):
                         ef_task = ExecutionTask.from_frame(s)
                         if ef_task is not None:
@@ -5448,6 +5474,33 @@ class SkillAgentExecutor(AgentExecutor):
                                 [TextPart(text=s + "\n")],
                                 name="execution-flow",
                             )
+                            logger.info(
+                                "[ExecutionFlow][Skill] forward peer frame execution_id=%s agent=%s stage=%s",
+                                getattr(ef_task, "execution_id", None),
+                                getattr(ef_task, "agent", None),
+                                getattr(ef_task, "stage", None),
+                            )
+                        return
+                    ef_idx = s.find("[[DAC_EXECUTION_FLOW]] ")
+                    if ef_idx >= 0:
+                        ef_line = s[ef_idx:]
+                        ef_task = ExecutionTask.from_frame(ef_line)
+                        if ef_task is not None:
+                            peer_execution_flow_tasks.append(ef_task)
+                        if updater is not None:
+                            await updater.add_artifact(
+                                [TextPart(text=ef_line if ef_line.endswith("\n") else ef_line + "\n")],
+                                name="execution-flow",
+                            )
+                            logger.info(
+                                "[ExecutionFlow][Skill] forward inline peer frame execution_id=%s agent=%s stage=%s",
+                                getattr(ef_task, "execution_id", None),
+                                getattr(ef_task, "agent", None),
+                                getattr(ef_task, "stage", None),
+                            )
+                        clean_text = s[:ef_idx].strip()
+                        if clean_text:
+                            result_segments.append(clean_text)
                         return
                     result_segments.append(s)
 
@@ -5463,8 +5516,8 @@ class SkillAgentExecutor(AgentExecutor):
                     await _handle_line(line_buf)
 
                 full_response = "\n".join(result_segments).strip()
-                # Strip any remaining progress lines from the body (belt-and-suspenders)
-                full_response = self._strip_progress_lines(full_response)
+                # Strip any remaining progress / EF lines from the body (belt-and-suspenders)
+                full_response = strip_execution_flow_lines(self._strip_progress_lines(full_response))
                 logger.info(
                     "[Cross-SG][Delegate] result from %s | chars=%d",
                     target_card.name,
@@ -7420,10 +7473,12 @@ class SkillAgentExecutor(AgentExecutor):
                 # Merge peer's Execution Flow — only set parent_execution_id
                 # on the peer's root tasks (those without a parent already).
                 pre_ef_id = f"pre-{task_item.id}-{agent_name}-t{turn}"
+                parented_peer: list[ExecutionTask] = []
                 for pt in peer_ef_tasks:
                     if pt.parent_execution_id is None:
                         pt.parent_execution_id = pre_ef_id
                         pt.delegated_by = self._self_planner_agent_name()
+                        parented_peer.append(pt)
                 pre_ef_task = ExecutionTask(
                     execution_id=pre_ef_id,
                     turn=turn,
@@ -7441,9 +7496,10 @@ class SkillAgentExecutor(AgentExecutor):
                 )
                 execution_flow_tasks.append(pre_ef_task)
                 execution_flow_tasks.extend(peer_ef_tasks)
-                # Emit delegate task to A2A artifact (peer frames already
-                # forwarded by _delegate_to_peer's _handle_line).
+                # Emit wrapper first, then rewrite parented peer roots so the UI
+                # tree is wrapper → nested internal execution (not two flat roots).
                 await self._emit_execution_flow(updater, pre_ef_task)
+                await self._reemit_parented_peer_execution_flow(updater, parented_peer)
                 is_fail = result.startswith("Delegation failed:") or result.startswith("Execution error:") or not result.strip()
                 self._tasks_status_list.append({
                     "id": task_item.id,

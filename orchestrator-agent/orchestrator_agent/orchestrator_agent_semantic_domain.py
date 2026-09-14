@@ -77,6 +77,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 PROGRESS_FRAME_PREFIX = "[[DAC_PROGRESS]] "
+EXECUTION_FLOW_FRAME_PREFIX = "[[DAC_EXECUTION_FLOW]] "
 SUMMARY_FRAME_PREFIX = "[[DAC_SUMMARY]] "
 
 # Planner: upstream orchestration outcomes (metadata.extra_context), not RAG knowledge.
@@ -2457,6 +2458,35 @@ class OrchestratorAgent(BaseAgent):
         return isinstance(text, str) and text.lstrip().startswith(PROGRESS_FRAME_PREFIX)
 
     @staticmethod
+    def is_execution_flow_frame(text: str) -> bool:
+        """EF frames must not mix into LLM body; prefix is distinct from DAC Progress."""
+        return isinstance(text, str) and text.lstrip().startswith(EXECUTION_FLOW_FRAME_PREFIX)
+
+    @classmethod
+    def strip_execution_flow_lines(cls, text: str) -> str:
+        """Remove EF frame lines so they cannot pollute LLM prompts or user answers."""
+        if not text:
+            return ""
+        lines = [line for line in text.splitlines() if not cls.is_execution_flow_frame(line)]
+        return "\n".join(lines).strip()
+
+    @classmethod
+    def peel_execution_flow_text(cls, text: str) -> tuple[str, Optional[str]]:
+        """Split mixed text into (clean_body, ef_frame_or_none)."""
+        if not isinstance(text, str) or not text:
+            return text or "", None
+        if cls.is_execution_flow_frame(text):
+            return "", text if text.endswith("\n") else text + "\n"
+        idx = text.find(EXECUTION_FLOW_FRAME_PREFIX)
+        if idx < 0:
+            return text, None
+        clean = text[:idx].strip()
+        ef = text[idx:]
+        if not ef.endswith("\n"):
+            ef += "\n"
+        return clean, ef
+
+    @staticmethod
     def _truncate_progress_message(text: str, limit: int = 320) -> str:
         raw = (text or "").replace("\n", " ").strip()
         if len(raw) <= limit:
@@ -2764,8 +2794,19 @@ class OrchestratorAgent(BaseAgent):
                                 agent_name,
                             )
                             continue
+                        clean_text, ef_frame = self.peel_execution_flow_text(result)
+                        if ef_frame is not None:
+                            # Non-stream path has no updater; drop EF so it does not leak into LLM text.
+                            logger.info(
+                                "[ExecutionFlow][SD-Orchestrator][a2a_non_stream] drop EF from LLM body target=%s chars=%d",
+                                agent_name,
+                                len(ef_frame),
+                            )
+                            if not clean_text:
+                                continue
+                            result = clean_text
                         agent_knowledge.append(result)
-                return " ".join(agent_knowledge)
+                return self.strip_execution_flow_lines(" ".join(agent_knowledge))
 
             except Exception as e:
                 logger.error(f"An error occurred: {e}")
@@ -3375,6 +3416,21 @@ class OrchestratorAgent(BaseAgent):
                                 if self.debug == 1:
                                     think.append(agent_step_knowledge)
                                 continue
+                            clean_text, ef_frame = self.peel_execution_flow_text(agent_step_knowledge)
+                            if ef_frame is not None:
+                                logger.info(
+                                    "[ExecutionFlow][SD-Orchestrator][a2a_tasks] forward EF task_id=%s agent=%s chars=%d",
+                                    task.id,
+                                    task.agent,
+                                    len(ef_frame),
+                                )
+                                await updater.add_artifact(
+                                    [TextPart(text=ef_frame)],
+                                    name="execution-flow",
+                                )
+                                if not clean_text:
+                                    continue
+                                agent_step_knowledge = clean_text
                             if self.debug == 1:
                                 agent_knowledge_step = f"{agent_step_knowledge} \n"
                                 await updater.add_artifact(
@@ -3384,7 +3440,9 @@ class OrchestratorAgent(BaseAgent):
                                 think.append(agent_knowledge_step)
                             agent_steps_knowledge.append(agent_step_knowledge)
 
-                        agent_steps_knowledge_str = "\n".join(agent_steps_knowledge)
+                        agent_steps_knowledge_str = self.strip_execution_flow_lines(
+                            "\n".join(agent_steps_knowledge)
+                        )
                         log_size_trace(
                             "task-result-stream",
                             retry_count=retry_count,
@@ -3455,6 +3513,7 @@ class OrchestratorAgent(BaseAgent):
                 else:
                     try:
                         agent_result = await self.a2a_non_stream(task.description, task.agent)
+                        agent_result = self.strip_execution_flow_lines(agent_result or "")
                         agent_knowledge_step = f"Task [{task.id}]: {task.description}; \nResult:\n {agent_result} \n"
                         log_size_trace(
                             "task-result-non-stream",

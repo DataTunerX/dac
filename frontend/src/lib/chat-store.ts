@@ -7,7 +7,8 @@ import { shouldShowProgressItem } from "@/lib/chat-progress"
 import { parseHistoryThink } from "@/lib/history-think"
 import { parseChatSSELine } from "@/lib/parse-chat-sse"
 import { type ChatMessage, type ConversationHistoryResponse } from "@/components/chat/chat-message-types"
-import { stripModelLeakTags } from "@/lib/strip-model-leak-tags"
+import { upsertExecutionFlowTask, type ExecutionFlowTask } from "@/lib/execution-flow"
+import { stripDacProtocolLines, stripModelLeakTags } from "@/lib/strip-model-leak-tags"
 import { clearClientSession, redirectToLogin } from "@/lib/auth-session"
 import { authFetch } from "@/lib/auth-fetch"
 import { REFRESH_CHAT_LIST_EVENT, RUN_ID_RECONCILED_EVENT, type NewChatEventDetail } from "@/lib/events"
@@ -22,6 +23,8 @@ export interface SessionState {
   isLoading: boolean
   isStreaming: boolean
   streamProgressList: ChatProgressPayload[]
+  /** Live Execution Flow tasks for the current run; frozen onto the last assistant message when the stream ends. */
+  streamExecutionFlowList: ExecutionFlowTask[]
   /** Wall-clock ms when the current stream started; survives session switches. */
   streamStartedAt: number | null
   /** Frozen thinking duration (seconds) after stream ends. */
@@ -39,6 +42,7 @@ interface SessionInternals {
   streamPending: { content: string; reasoning: string }
   streamFlushTimer: ReturnType<typeof setTimeout> | null
   streamProgressBacking: ChatProgressPayload[]
+  streamExecutionFlowBacking: ExecutionFlowTask[]
 }
 
 const EMPTY_STREAM_PENDING: Readonly<SessionInternals["streamPending"]> = Object.freeze({
@@ -156,6 +160,7 @@ function getInternals(runId: string): SessionInternals {
       streamPending: { content: "", reasoning: "" },
       streamFlushTimer: null,
       streamProgressBacking: [],
+      streamExecutionFlowBacking: [],
     }
     internals.set(runId, s)
   }
@@ -177,6 +182,7 @@ const EMPTY_SESSION: SessionState = {
   isLoading: false,
   isStreaming: false,
   streamProgressList: [],
+  streamExecutionFlowList: [],
   streamStartedAt: null,
   thinkingElapsedSec: null,
 }
@@ -297,12 +303,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
       isLoading: true,
       isStreaming: true,
       streamProgressList: [],
+      streamExecutionFlowList: [],
       streamStartedAt: Date.now(),
       thinkingElapsedSec: null,
     })
 
     const int = getInternals(runId)
     int.streamProgressBacking = []
+    int.streamExecutionFlowBacking = []
     int.streamPending = { content: "", reasoning: "" }
 
     await processChatRequest(runId, [...session.messages, userMsg])
@@ -366,14 +374,26 @@ export const useChatStore = create<ChatStore>((set, get) => {
               ? (rawProgress as ChatProgressPayload[])
               : undefined
           const parsedThink = parseHistoryThink(think)
+          if (parsedThink.executionFlowList.length > 0) {
+            console.info(
+              "[ExecutionFlow] history think parsed",
+              "run_id=",
+              runId,
+              "count=",
+              parsedThink.executionFlowList.length,
+            )
+          }
           return {
             id: `${runId}-${i}`,
             role,
-            content: stripModelLeakTags(content),
+            content: stripDacProtocolLines(stripModelLeakTags(content)),
             reasoning_content: parsedThink.reasoning || reasoning || "",
             ...((progressList && progressList.length > 0)
               ? { progressList }
               : (parsedThink.progressList.length > 0 ? { progressList: parsedThink.progressList } : {})),
+            ...(parsedThink.executionFlowList.length > 0
+              ? { executionFlowList: parsedThink.executionFlowList }
+              : {}),
           }
         })
         .filter((x): x is Message => Boolean(x))
@@ -411,12 +431,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
       isLoading: true,
       isStreaming: true,
       streamProgressList: [],
+      streamExecutionFlowList: [],
       streamStartedAt: Date.now(),
       thinkingElapsedSec: null,
     })
 
     const int = getInternals(runId)
     int.streamProgressBacking = []
+    int.streamExecutionFlowBacking = []
     int.streamPending = { content: "", reasoning: "" }
 
     await processChatRequest(runId, messagesHistory)
@@ -432,12 +454,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
       isLoading: true,
       isStreaming: true,
       streamProgressList: [],
+      streamExecutionFlowList: [],
       streamStartedAt: Date.now(),
       thinkingElapsedSec: null,
     })
 
     const int = getInternals(runId)
     int.streamProgressBacking = []
+    int.streamExecutionFlowBacking = []
     int.streamPending = { content: "", reasoning: "" }
 
     await processChatRequest(runId, [userMsg])
@@ -481,8 +505,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
         if (a.role === "assistant") {
           msgs[idx] = {
             ...a,
-            content: stripModelLeakTags((a.content || "") + content),
-            reasoning_content: stripModelLeakTags((a.reasoning_content || "") + reasoning),
+            content: stripDacProtocolLines(stripModelLeakTags((a.content || "") + content)),
+            reasoning_content: stripDacProtocolLines(stripModelLeakTags((a.reasoning_content || "") + reasoning)),
           }
         }
         return { sessions: { ...state.sessions, [runId]: { ...prev, messages: msgs } } }
@@ -500,6 +524,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
     function pushProgress(payload: ChatProgressPayload) {
       int.streamProgressBacking = [...int.streamProgressBacking, payload]
       patchSession(sessionKey(), { streamProgressList: int.streamProgressBacking })
+    }
+
+    function pushExecutionFlow(payload: ExecutionFlowTask) {
+      int.streamExecutionFlowBacking = upsertExecutionFlowTask(int.streamExecutionFlowBacking, payload)
+      patchSession(sessionKey(), { streamExecutionFlowList: int.streamExecutionFlowBacking })
+      console.info(
+        "[ExecutionFlow] sse upsert",
+        payload.execution_id,
+        payload.agent,
+        payload.stage,
+        "parent=",
+        payload.parent_execution_id,
+        "count=",
+        int.streamExecutionFlowBacking.length,
+      )
     }
 
     try {
@@ -569,6 +608,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }
             continue
           }
+          if (result.kind === "execution-flow") {
+            lastEventType = ""
+            if (myReqSeq === getInternals(sessionKey()).requestSeq) {
+              pushExecutionFlow(result.payload)
+            }
+            continue
+          }
           if (result.kind === "done") {
             done = true
             break
@@ -590,6 +636,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const pendingReasoning = int.streamPending.reasoning
       int.streamPending = { content: "", reasoning: "" }
       const frozen = [...int.streamProgressBacking]
+      const frozenExecutionFlow = [...int.streamExecutionFlowBacking]
+      if (frozenExecutionFlow.length > 0) {
+        console.info("[ExecutionFlow] freeze on complete count=", frozenExecutionFlow.length)
+      }
 
       const runId = sessionKey()
       set((state) => {
@@ -600,23 +650,60 @@ export const useChatStore = create<ChatStore>((set, get) => {
         if (last?.role === "assistant") {
           msgs[msgs.length - 1] = {
             ...last,
-            content: stripModelLeakTags((last.content || "") + pendingContent),
-            reasoning_content: stripModelLeakTags(
+            content: stripDacProtocolLines(stripModelLeakTags((last.content || "") + pendingContent)),
+            reasoning_content: stripDacProtocolLines(stripModelLeakTags(
               (last.reasoning_content || "") + pendingReasoning
-            ),
+            )),
             ...(frozen.length > 0 ? { progressList: frozen } : {}),
+            ...(frozenExecutionFlow.length > 0 ? { executionFlowList: frozenExecutionFlow } : {}),
           }
         }
         return {
           sessions: {
             ...state.sessions,
-            [runId]: { ...prev, messages: msgs, streamProgressList: [] },
+            [runId]: {
+              ...prev,
+              messages: msgs,
+              streamProgressList: [],
+              streamExecutionFlowList: [],
+            },
           },
         }
       })
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") {
-        console.log("Stream aborted")
+        console.info("[Chat] stream aborted")
+        // Keep progress + EF on the last assistant message so stop() does not drop the map.
+        const frozen = [...int.streamProgressBacking]
+        const frozenExecutionFlow = [...int.streamExecutionFlowBacking]
+        if (frozenExecutionFlow.length > 0) {
+          console.info("[ExecutionFlow] freeze on abort count=", frozenExecutionFlow.length)
+        }
+        const abortRunId = sessionKey()
+        set((state) => {
+          if (myReqSeq !== getInternals(abortRunId).requestSeq) return state
+          const prev = state.sessions[abortRunId] ?? EMPTY_SESSION
+          const msgs = [...prev.messages]
+          const last = msgs[msgs.length - 1]
+          if (last?.role === "assistant") {
+            msgs[msgs.length - 1] = {
+              ...last,
+              ...(frozen.length > 0 ? { progressList: frozen } : {}),
+              ...(frozenExecutionFlow.length > 0 ? { executionFlowList: frozenExecutionFlow } : {}),
+            }
+          }
+          return {
+            sessions: {
+              ...state.sessions,
+              [abortRunId]: {
+                ...prev,
+                messages: msgs,
+                streamProgressList: [],
+                streamExecutionFlowList: [],
+              },
+            },
+          }
+        })
         return
       }
       console.error("Chat failed", err)
@@ -678,6 +765,7 @@ export const EMPTY_SESSION_STATE: Readonly<SessionState> = Object.freeze({
   isLoading: false,
   isStreaming: false,
   streamProgressList: [],
+  streamExecutionFlowList: [],
   streamStartedAt: null,
   thinkingElapsedSec: null,
 })
@@ -691,6 +779,7 @@ function shallowEq(a: SessionState, b: SessionState): boolean {
     a.isLoading === b.isLoading &&
     a.isStreaming === b.isStreaming &&
     a.streamProgressList === b.streamProgressList &&
+    a.streamExecutionFlowList === b.streamExecutionFlowList &&
     a.streamStartedAt === b.streamStartedAt &&
     a.thinkingElapsedSec === b.thinkingElapsedSec
   )

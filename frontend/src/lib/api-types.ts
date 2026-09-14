@@ -401,6 +401,9 @@ export interface ChatProgressPayload {
   [key: string]: unknown
 }
 
+/** SSE `event: execution-flow` payload (ExecutionTask JSON, schema_version=v1). */
+export type { ExecutionFlowTask as ExecutionFlowTaskPayload } from "@/lib/execution-flow"
+
 export type ConversationResponse = {
   id: string
   title: string

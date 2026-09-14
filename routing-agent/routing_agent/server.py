@@ -2204,8 +2204,37 @@ class RoutingAgent(BaseAgent):
         return isinstance(text, str) and text.lstrip().startswith("[[DAC_PROGRESS]] ")
 
     @staticmethod
+    def is_execution_flow_frame(text: str) -> bool:
+        """EF uses a distinct prefix from DAC Progress; must be checked before is_internal_dac_frame."""
+        return isinstance(text, str) and text.lstrip().startswith("[[DAC_EXECUTION_FLOW]] ")
+
+    @staticmethod
     def is_internal_dac_frame(text: str) -> bool:
         return isinstance(text, str) and text.lstrip().startswith("[[DAC_")
+
+    @classmethod
+    def strip_execution_flow_lines(cls, text: str) -> str:
+        """Remove EF frame lines from aggregated answer / LLM text."""
+        if not text:
+            return ""
+        lines = [line for line in text.splitlines() if not cls.is_execution_flow_frame(line)]
+        return "\n".join(lines).strip()
+
+    @classmethod
+    def peel_execution_flow_text(cls, text: str) -> tuple[str, Optional[str]]:
+        """Split mixed text into (clean_body, ef_frame_or_none)."""
+        if not isinstance(text, str) or not text:
+            return text or "", None
+        if cls.is_execution_flow_frame(text):
+            return "", text if text.endswith("\n") else text + "\n"
+        idx = text.find("[[DAC_EXECUTION_FLOW]] ")
+        if idx < 0:
+            return text, None
+        clean = text[:idx].strip()
+        ef = text[idx:]
+        if not ef.endswith("\n"):
+            ef += "\n"
+        return clean, ef
 
     @staticmethod
     def build_answer_frame(
@@ -3718,6 +3747,13 @@ class RoutingAgent(BaseAgent):
                             if progress_callback is not None:
                                 await progress_callback(text)
                             continue
+                        clean_text, ef_frame = self.peel_execution_flow_text(text)
+                        if ef_frame is not None:
+                            if progress_callback is not None:
+                                await progress_callback(ef_frame)
+                            if not clean_text:
+                                continue
+                            text = clean_text
                         if self.is_answer_frame(text):
                             data = self.parse_answer_frame(text) or {}
                             payload = data.get("payload") or {}
@@ -3732,7 +3768,7 @@ class RoutingAgent(BaseAgent):
                         if self.is_internal_dac_frame(text):
                             continue
                         parts.append(text)
-                return final_answer_text or "".join(answer_parts).strip() or "".join(parts).strip()
+                return final_answer_text or "".join(answer_parts).strip() or self.strip_execution_flow_lines("".join(parts).strip())
         except Exception as e:
             logger.error(f"Multi-root dispatch failed for agent {agent_card.name}: {e}")
             return f"[Error: {agent_card.name} 未能完成任务 - {e}]"
@@ -4041,7 +4077,7 @@ class RoutingAgentExecutor(AgentExecutor):
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self._progress_context: Dict[str, str] = {"run_id": "", "user_id": "", "agent_id": ""}
-        self._history_progress_frames: List[str] = []
+        self._history_think_frames: List[str] = []
 
     @staticmethod
     def _history_async_enabled() -> bool:
@@ -4072,26 +4108,76 @@ class RoutingAgentExecutor(AgentExecutor):
             return ""
         return text if text.endswith("\n") else (text + "\n")
 
-    def _append_history_progress_frame(self, text: str) -> None:
+    @staticmethod
+    def _execution_flow_log_meta(text: str) -> str:
+        raw = (text or "").lstrip()
+        prefix = "[[DAC_EXECUTION_FLOW]] "
+        if not raw.startswith(prefix):
+            return "unparsed"
+        try:
+            data = json.loads(raw[len(prefix):])
+            if not isinstance(data, dict):
+                return f"chars={len(text or '')}"
+            return (
+                f"execution_id={data.get('execution_id')} agent={data.get('agent')} "
+                f"stage={data.get('stage')} parent={data.get('parent_execution_id')}"
+            )
+        except Exception:
+            return f"chars={len(text or '')}"
+
+    def _append_history_think_frame(self, text: str) -> None:
+        # Persist both DAC Progress and Execution Flow into history.think.
+        # They share the column but stay isolated by exact prefix.
         if not text:
             return
-        if not self.agent.is_progress_frame(text):
+        if not (
+            self.agent.is_progress_frame(text)
+            or self.agent.is_execution_flow_frame(text)
+        ):
             return
-        self._history_progress_frames.append(self._normalize_progress_frame_text(text))
+        self._history_think_frames.append(self._normalize_progress_frame_text(text))
 
     def _build_history_progress_think(self) -> str:
-        return "".join(self._history_progress_frames).strip()
+        """Persist DAC Progress + Execution Flow frames in think (arrival order)."""
+        return "".join(self._history_think_frames).strip()
 
     async def _emit_progress_text(self, updater: TaskUpdater, text: str) -> None:
         if not text:
             return
-        self._append_history_progress_frame(text)
+        self._append_history_think_frame(text)
         if not self._progress_stream_enabled():
             return
         await updater.add_artifact(
             [TextPart(text=text)],
             name=f'{self.agent.agent_name}-result',
         )
+
+    async def _emit_execution_flow_text(self, updater: TaskUpdater, text: str) -> None:
+        """Forward [[DAC_EXECUTION_FLOW]] frames independently of DAC Progress.
+
+        Uses artifact name ``execution-flow`` (same as skill-agent / orchestrator)
+        and is not gated by ENABLE_ROUTING_PROGRESS_STREAM.
+        """
+        if not text:
+            return
+        frame = text if text.endswith("\n") else text + "\n"
+        self._append_history_think_frame(frame)
+        await updater.add_artifact(
+            [TextPart(text=frame)],
+            name="execution-flow",
+        )
+        logger.info(
+            "[ExecutionFlow][Routing] emit %s think_frames=%d",
+            self._execution_flow_log_meta(frame),
+            len(self._history_think_frames),
+        )
+
+    async def _emit_upstream_dac_frame(self, updater: TaskUpdater, text: str) -> None:
+        """Dispatch an upstream DAC frame to the matching emit path."""
+        if self.agent.is_execution_flow_frame(text):
+            await self._emit_execution_flow_text(updater, text)
+            return
+        await self._emit_progress_text(updater, text)
 
     async def _emit_progress(
         self,
@@ -4253,10 +4339,13 @@ class RoutingAgentExecutor(AgentExecutor):
             async with ds_client.session_context() as client:
                 await client.create_history(create_request)
             logger.info(
-                "[HistoryFlow] persist-success owner=%s run_id=%s answer_len=%d",
+                "[HistoryFlow] persist-success owner=%s run_id=%s answer_len=%d think_len=%d progress_frames=%d ef_frames=%d",
                 history_owner_agent_id,
                 run_id,
                 len(final_answer or ""),
+                len(think or ""),
+                (think or "").count("[[DAC_PROGRESS]] "),
+                (think or "").count("[[DAC_EXECUTION_FLOW]] "),
             )
         except Exception as e:
             logger.error("[History] Persist final conversation at routing failed: %s", e)
@@ -4278,7 +4367,7 @@ class RoutingAgentExecutor(AgentExecutor):
             query=query,
             final_answer=final_answer,
             history_owner_agent_id=history_owner_agent_id,
-            # Keep ordered DAC_PROGRESS frames in think for history inspection.
+            # Keep ordered DAC_PROGRESS + DAC_EXECUTION_FLOW frames in think for history replay.
             think=think,
         )
 
@@ -4344,7 +4433,7 @@ class RoutingAgentExecutor(AgentExecutor):
         multi_plan = None
         route_paths: Optional[list[dict]] = None
         execution_meta: dict = {}
-        self._history_progress_frames = []
+        self._history_think_frames = []
 
         # ── Emit query_received progress so the UI immediately shows "processing" ──
         await self._emit_progress(
@@ -4541,13 +4630,19 @@ class RoutingAgentExecutor(AgentExecutor):
                     trace_id,
                     history_owner_agent_id,
                     propagated_history,
-                    lambda text: self._emit_progress_text(updater, text),
+                    lambda text: self._emit_upstream_dac_frame(updater, text),
                     self.agent.agent_name,
                 ):
                     if chunk:
                         if self.agent.is_progress_frame(chunk):
                             await self._emit_progress_text(updater, chunk)
                             continue
+                        clean_text, ef_frame = self.agent.peel_execution_flow_text(chunk)
+                        if ef_frame is not None:
+                            await self._emit_execution_flow_text(updater, ef_frame)
+                            if not clean_text:
+                                continue
+                            chunk = clean_text
                         if self.agent.is_internal_dac_frame(chunk):
                             continue
                         aggregated_parts.append(chunk)
@@ -4557,7 +4652,7 @@ class RoutingAgentExecutor(AgentExecutor):
                             payload={"text": chunk},
                             status="running",
                         )
-                aggregated = "".join(aggregated_parts).strip()
+                aggregated = self.agent.strip_execution_flow_lines("".join(aggregated_parts).strip())
                 if aggregated:
                     await self._emit_progress(
                         updater,
@@ -4779,6 +4874,12 @@ class RoutingAgentExecutor(AgentExecutor):
                                 if self.agent.is_progress_frame(result):
                                     await self._emit_progress_text(updater, result)
                                     continue
+                                clean_text, ef_frame = self.agent.peel_execution_flow_text(result)
+                                if ef_frame is not None:
+                                    await self._emit_execution_flow_text(updater, ef_frame)
+                                    if not clean_text:
+                                        continue
+                                    result = clean_text
                                 if self.agent.is_answer_frame(result):
                                     # In single-root mode, the root SG owns the business summary.
                                     # RoutingAgent only republishes that answer in its own DAC_ANSWER envelope.
@@ -4835,7 +4936,7 @@ class RoutingAgentExecutor(AgentExecutor):
                                 if self.agent.is_internal_dac_frame(result):
                                     continue
                                 raw_answer_parts.append(result)
-                        raw_stream_think = "".join(raw_answer_parts).strip()
+                        raw_stream_think = self.agent.strip_execution_flow_lines("".join(raw_answer_parts).strip())
                         streamed_answer = "".join(streamed_answer_parts).strip()
                         if not saw_final_answer_frame:
                             fallback_text = streamed_answer or raw_stream_think
