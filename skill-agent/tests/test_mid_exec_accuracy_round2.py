@@ -546,6 +546,28 @@ TEST_CASES: list[dict] = [
         "del": "",
         "sg": "- project-agent（项目管理与排期）\n- ui-agent（UI/UX建议）\n- estimation-agent（工时评估）",
     },
+    {
+        "id": "U2-21",
+        "cat": "unstructured",
+        "desc": "第二轮 mid-exec：成文结论仍在，仅『理论上还能再深入』",
+        "exp_task_type": "unstructured",
+        "exp_needs_help": False,
+        "query": "总结这份年度财报的经营情况",
+        "own": "[Task#1]: 已产出结构化总结：营收+18%、净利率12%、三大业务线拆分、主要风险4条、管理层展望。结论完整成文，可回答原始问题。\n[Mid-exec round 2 自检]: 若继续，理论上还能加入汇率敏感性、同业对标、分析师预期对比。",
+        "del": "",
+        "sg": "- finance-agent（财务分析）\n- analyst-agent（分析师预期）\n- research-agent（行业研究）",
+    },
+    {
+        "id": "U2-22",
+        "cat": "unstructured",
+        "desc": "第二轮：已委派过且下游无增量，本层结论仍完整",
+        "exp_task_type": "unstructured",
+        "exp_needs_help": False,
+        "query": "review一下这个订单取消函数的逻辑，有没有bug",
+        "own": "[Task#1]: 代码Review完成。结论：2个Bug（库存回滚未检查、退款未等待结果），1个改进建议。修复方案已给出。",
+        "del": "[code-agent]: EMPTY 无额外发现。已审查完毕，不构成新的可执行缺口。",
+        "sg": "- code-agent（代码深度审查）\n- security-agent（安全审计）\n- test-agent（自动化测试）",
+    },
 
     # ── Group: needs_help = True (10 cases) ──────────────────
 

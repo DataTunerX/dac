@@ -1370,3 +1370,232 @@ class TestDAGCyclePrevention:
         assert "agent-b" not in agent_names_in_ef, "不应该有回环 agent-b"
         assert "agent-c" in agent_names_in_ef, "应该有本地 agent-c"
         assert len(ef) == 1
+
+
+# ── mid-exec 本地执行：把 prior-round EF 注入 SkillAgent.query ──────────
+
+
+class TestComposeMidExecSelfQuery:
+    """锁定 compose_mid_exec_self_query：当前任务在前，EF 在后。"""
+
+    def test_empty_ef_returns_task_only(self):
+        q = SkillAgentExecutor.compose_mid_exec_self_query(
+            "查询该用户的订单详情",
+            execution_flow=None,
+            current_agent=_SELF,
+        )
+        assert q == "查询该用户的订单详情"
+        assert "执行流水账" not in q
+
+    def test_empty_list_ef_returns_task_only(self):
+        q = SkillAgentExecutor.compose_mid_exec_self_query(
+            "查询该用户的订单详情",
+            execution_flow=[],
+            current_agent=_SELF,
+        )
+        assert q == "查询该用户的订单详情"
+
+    def test_prior_rounds_land_in_query_after_current_task(self):
+        prior = [
+            ExecutionTask(
+                "own-1-self-agent-t1", 1, "pre_exec", _SELF, "initiator",
+                "按姓名查用户", "未找到精确 user_id", "",
+                None, None, "run-abc", "trace-xyz", "u-1",
+            ),
+            ExecutionTask(
+                "mid-del-2-order-agent-t1-r1", 1, "mid_exec_round_1",
+                "order-agent", "delegatee",
+                "用姓名张三查 user_id",
+                "查到 user_id=U-9001，共 3 条订单",
+                "本层缺 user_id",
+                None, _SELF, "run-abc", "trace-xyz", "u-1",
+            ),
+            ExecutionTask(
+                "mid-del-3-product-agent-t1-r2", 1, "mid_exec_round_2",
+                "product-agent", "delegatee",
+                "用商品ID查名称",
+                "商品ID P-77 → 无线耳机",
+                "缺商品名",
+                None, _SELF, "run-abc", "trace-xyz", "u-1",
+            ),
+        ]
+        task = "用已获得的关联键查询该用户订单详情"
+        q = SkillAgentExecutor.compose_mid_exec_self_query(
+            task, prior, current_agent=_SELF,
+        )
+        assert q.startswith(f"当前任务: {task}")
+        assert q.index("当前任务:") < q.index("【执行流水账】")
+        assert "U-9001" in q
+        assert "order-agent" in q
+        assert "无线耳机" in q
+        assert "product-agent" in q
+        assert "补充执行 · 第1轮" in q
+        assert "补充执行 · 第2轮" in q
+        assert "执行流水账" in q
+
+    def test_dict_rows_accepted_like_dispatch_ctx(self):
+        """dispatch_ctx['execution_flow'] 是 dict 列表，不是 ExecutionTask。"""
+        rows = [
+            ExecutionTask(
+                "mid-del-2-order-agent-t1-r1", 1, "mid_exec_round_1",
+                "order-agent", "delegatee", "查 user_id",
+                "user_id=U-9001", "", None, _SELF,
+            ).to_dict(),
+        ]
+        q = SkillAgentExecutor.compose_mid_exec_self_query("查订单", rows)
+        assert "U-9001" in q
+        assert "当前任务: 查订单" in q
+
+
+class TestMidExecSelfDispatchPassesEF:
+    """走真实 _dispatch_mid_exec_delegation，断言 SkillAgent.query 吃到了 prior EF。"""
+
+    @pytest.mark.asyncio
+    async def test_skillagent_query_contains_round1_join_key(self):
+        captured: dict[str, str] = {}
+
+        class _CapturingSkillAgent:
+            def __init__(self, **kw):
+                captured["query"] = kw.get("query") or ""
+                self.reason_code = ""
+
+            async def run(self):
+                yield "local lookup ok"
+
+        inst = object.__new__(SkillAgentExecutor)
+        inst.metadata = {}
+        inst.agent_id = _SELF
+        inst._self_planner_agent_name = MagicMock(return_value=_SELF)
+        inst._log_data_flow = MagicMock()
+        inst._emit_progress = AsyncMock()
+        inst._emit_execution_flow = AsyncMock()
+        inst._record_none_execution_task = AsyncMock()
+        inst._delegate_to_peer = AsyncMock()
+        inst._reemit_parented_peer_execution_flow = AsyncMock()
+
+        from agent.skill_agent import PlannerTask, TaskList
+
+        synth = "查询该用户的订单详情"
+        plan = TaskList(
+            thought_process="round3 local after mapping",
+            original_query="张三买了什么",
+            tasks=[PlannerTask(id=10, description=synth, agent=_SELF, depends_on=[])],
+        )
+        self_card = AgentCard(
+            name=_SELF, description="self", url="http://self", version="1",
+            skills=[AgentSkill(
+                id="x", name="x", description="x", tags=[], examples=[],
+                input_modes=["text"], output_modes=["text"],
+            )],
+            capabilities=AgentCapabilities(),
+            default_input_modes=["text", "text/plain"],
+            default_output_modes=["text", "text/plain"],
+        )
+        prior_ef = [
+            ExecutionTask(
+                "own-1-self-agent-t1", 1, "pre_exec", _SELF, "initiator",
+                "按姓名查用户", "姓名张三，本地无 user_id", "",
+                None, None, "run-r3", "trace-r3", "u-1",
+            ),
+            ExecutionTask(
+                "mid-del-2-order-agent-t1-r1", 1, "mid_exec_round_1",
+                "order-agent", "delegatee",
+                "用姓名张三查 user_id",
+                "映射成功 user_id=U-9001",
+                "缺 join key",
+                None, _SELF, "run-r3", "trace-r3", "u-1",
+            ),
+        ]
+        dispatch_ctx = {
+            "executed_tasks": [],
+            "already_delegated": [
+                {"target_sg": "order-agent", "result": "映射成功 user_id=U-9001", "status": "ok"},
+            ],
+            "mid_exec_round": 3,
+            "synthesized_query": synth,
+            "detection_reason": "已拿到 user_id，本层可自查",
+            "execution_flow": [t.to_dict() for t in prior_ef],
+        }
+
+        with patch("agent.skill_agent.SkillAgent", _CapturingSkillAgent):
+            mid_del, mid_self, hop, ef_out = await inst._dispatch_mid_exec_delegation(
+                plan=plan,
+                target_cards=[self_card],
+                user_id="u-1",
+                run_id="run-r3",
+                trace_id="trace-r3",
+                current_hop=4,
+                delegation_chain=[],
+                upstream_context=dispatch_ctx,
+                updater=MagicMock(),
+                skill_runner=MagicMock(),
+                metadata={"run_id": "run-r3"},
+                turn=1,
+                detection_reason="已拿到 user_id，本层可自查",
+            )
+
+        query = captured.get("query") or ""
+        assert query, "SkillAgent 必须收到 query"
+        assert query.startswith("当前任务: 查询该用户的订单详情")
+        assert "【执行流水账】" in query
+        assert "U-9001" in query, "R1 的 join key 必须出现在本地 SkillAgent.query 里"
+        assert "order-agent" in query
+        assert "映射成功" in query
+        assert "U-9001" not in synth
+        assert mid_self[_SELF] == "local lookup ok"
+        assert mid_del == {}
+        assert hop == 4
+        assert any(t.execution_id.startswith("mid-self-10-") for t in ef_out)
+
+    @pytest.mark.asyncio
+    async def test_no_ef_keeps_query_equal_to_synthesized_query(self):
+        captured: dict[str, str] = {}
+
+        class _CapturingSkillAgent:
+            def __init__(self, **kw):
+                captured["query"] = kw.get("query") or ""
+                self.reason_code = ""
+
+            async def run(self):
+                yield "ok"
+
+        inst = object.__new__(SkillAgentExecutor)
+        inst.metadata = {}
+        inst.agent_id = _SELF
+        inst._self_planner_agent_name = MagicMock(return_value=_SELF)
+        inst._log_data_flow = MagicMock()
+        inst._emit_progress = AsyncMock()
+        inst._emit_execution_flow = AsyncMock()
+        inst._record_none_execution_task = AsyncMock()
+        inst._delegate_to_peer = AsyncMock()
+
+        from agent.skill_agent import PlannerTask, TaskList
+
+        synth = "补查本地库存"
+        plan = TaskList(
+            thought_process="no prior ef",
+            original_query="库存?",
+            tasks=[PlannerTask(id=1, description=synth, agent=_SELF, depends_on=[])],
+        )
+        self_card = AgentCard(
+            name=_SELF, description="self", url="http://self", version="1",
+            skills=[AgentSkill(
+                id="x", name="x", description="x", tags=[], examples=[],
+                input_modes=["text"], output_modes=["text"],
+            )],
+            capabilities=AgentCapabilities(),
+            default_input_modes=["text", "text/plain"],
+            default_output_modes=["text", "text/plain"],
+        )
+        with patch("agent.skill_agent.SkillAgent", _CapturingSkillAgent):
+            await inst._dispatch_mid_exec_delegation(
+                plan=plan,
+                target_cards=[self_card],
+                user_id="u", run_id="r", trace_id="t",
+                current_hop=3,
+                delegation_chain=[],
+                upstream_context={"mid_exec_round": 1, "execution_flow": []},
+                skill_runner=MagicMock(),
+                metadata={},
+            )
+        assert captured["query"] == synth

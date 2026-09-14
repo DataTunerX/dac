@@ -5072,6 +5072,51 @@ class SkillAgentExecutor(AgentExecutor):
             logger.warning("[MidExec][Plan][DetectDirect] mid-exec plan failed: %s", e)
             return None
 
+    @staticmethod
+    def compose_mid_exec_self_query(
+        task_description: str,
+        execution_flow: list | None = None,
+        *,
+        current_agent: str = "",
+    ) -> str:
+        """Build the SkillAgent query for a mid-exec local (self) task.
+
+        The current-round ``synthesized_query`` stays in front so skill
+        selection still keys off the actual ask. Prior-round Execution Flow
+        is appended as a factual ledger (same snapshot dispatched to remote
+        delegatees). Empty EF → return the task description unchanged.
+        """
+        task = (task_description or "").strip()
+        ef_md = ""
+        if execution_flow:
+            try:
+                ef_md = (
+                    render_execution_flow_md(
+                        execution_flow,
+                        agent=current_agent,
+                        current_agent=current_agent,
+                        show_children=False,
+                    )
+                    or ""
+                ).strip()
+            except Exception:
+                logger.warning(
+                    "[MidExec][SelfExec] failed to render execution_flow for local query",
+                    exc_info=True,
+                )
+                ef_md = ""
+        if not ef_md:
+            return task
+        if not task:
+            return ef_md
+        return (
+            f"当前任务: {task}\n\n"
+            "【执行流水账】\n"
+            "以下为截至本轮之前已发生的执行事实，仅用于理解关联键和已查到的值；"
+            "不是本轮要回答的问题。\n\n"
+            f"{ef_md}"
+        )
+
     async def _execute_mid_exec_self_task(
         self,
         task_description: str,
@@ -5079,13 +5124,24 @@ class SkillAgentExecutor(AgentExecutor):
         skill_runner: "SkillRunner | None",
         metadata: dict,
         updater: Optional[Any] = None,
+        execution_flow: list | None = None,
     ) -> str:
         """Execute a task locally as self during mid-exec delegation.
 
         Reuses the same :class:`SkillAgent` local execution path as the main
         task loop, but does not consume a hop or build a delegation chain.
+
+        ``execution_flow`` is the dispatch-time snapshot (prior rounds only).
+        It is rendered into the SkillAgent query so local skills can read
+        join keys from earlier mid-exec rounds — the same facts a remote
+        delegatee sees via ``upstream_context["execution_flow"]``.
         """
         self_name = self._self_planner_agent_name()
+        query = self.compose_mid_exec_self_query(
+            task_description,
+            execution_flow,
+            current_agent=self_name,
+        )
 
         # --- Data Flow: self-exec task start ---
         self._log_data_flow(
@@ -5093,17 +5149,19 @@ class SkillAgentExecutor(AgentExecutor):
             description=f"Mid-exec self-execution Task #{task_id} → 本地 {self_name} 执行",
             source_id=self.agent_id,
             target_id=f"{self_name} (in-process)",
-            payload_chars=len(task_description or ""),
-            payload_preview=(task_description or "")[:1000],
+            payload_chars=len(query or ""),
+            payload_preview=(query or "")[:1000],
             metadata_extra={
                 "task_id": task_id,
                 "task_desc_chars": len(task_description or ""),
+                "query_chars": len(query or ""),
+                "ef_injected": bool(execution_flow) and query != (task_description or "").strip(),
             },
         )
 
         local_agent = SkillAgent(
             skill_runner=skill_runner,
-            query=task_description,
+            query=query,
             metadata=metadata,
             current_task_id=task_id,
             agent_id=self.agent_id,
@@ -5232,6 +5290,7 @@ class SkillAgentExecutor(AgentExecutor):
                     skill_runner=skill_runner,
                     metadata=metadata,
                     updater=updater,
+                    execution_flow=(upstream_context or {}).get("execution_flow"),
                 )
                 self_results[agent_name] = result
                 # Point F: mid-exec self task Execution Flow emit

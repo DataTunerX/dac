@@ -404,6 +404,16 @@ TEST_CASES = [
      "query":"总结这份年度财报的经营情况",
      "own":"[Task#1]: 已产出结构化总结：营收+18%、净利率12%、三大业务线拆分、主要风险4条、管理层展望。结论完整成文，可回答原始问题。若要继续，理论上还能加入分析师预期对比、汇率敏感性等角度。",
      "del":"","sg":"- finance-agent\n- analyst-agent\n- research-agent"},
+    # ── 多轮：成文后再来一轮仍不该喊缺口 ──
+    {"id":48,"cat":"complex_doc","desc":"第二轮 mid-exec：成文结论仍在，仅加『理论上还能再深入』→ 非缺口","exp":False,
+     "query":"总结这份年度财报的经营情况",
+     "own":"[Task#1]: 已产出结构化总结：营收+18%、净利率12%、三大业务线拆分、主要风险4条、管理层展望。结论完整成文，可回答原始问题。\n[Mid-exec round 2 自检]: 若继续，理论上还能加入汇率敏感性、同业对标、分析师预期对比。",
+     "del":"","sg":"- finance-agent\n- analyst-agent\n- research-agent"},
+    {"id":49,"cat":"complex_doc","desc":"第二轮：已委派过且下游无增量，本层结论仍完整 → 非缺口","exp":False,
+     "query":"review一下这个订单取消函数的逻辑，有没有bug",
+     "own":"[Task#1]: 代码Review完成。结论：2个Bug（库存回滚未检查、退款未等待结果），1个改进建议。修复方案已给出。",
+     "del":"[code-agent]: EMPTY 无额外发现。已审查完毕，不构成新的可执行缺口。",
+     "sg":"- code-agent\n- security-agent\n- test-agent"},
 ]
 
 
