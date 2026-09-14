@@ -581,7 +581,83 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
             )
 
             if eval_result.satisfactory:
-                final_answer = eval_result.answer
+                # Debug: log last-turn vs accumulated task_results
+                _last_tr = turn_records[-1]["task_results"]
+                _acc_tr = _accumulated_task_results(turn_records)
+                _acc_dr = _accumulated_delegate_results(turn_records)
+                logger.info(
+                    "[TurnLoop] satisfactory → _summarize | "
+                    "turn=%d total_turns=%d "
+                    "last_turn_task_count=%d acc_task_count=%d "
+                    "last_turn_task_ids=%s acc_task_ids=%s",
+                    total_turns,
+                    len(turn_records),
+                    len(_last_tr),
+                    len(_acc_tr),
+                    list(_last_tr.keys()),
+                    list(_acc_tr.keys()),
+                )
+                for _tid, _res in _last_tr.items():
+                    logger.info(
+                        "[TurnLoop] last_turn_task[%d] len=%d preview=%s",
+                        _tid,
+                        len(_res or ""),
+                        (_res or "")[:200],
+                    )
+                if self.summarize_enabled is False:
+                    # Extra verbosity when passthrough is active — helps
+                    # diagnose why results may appear duplicated.
+                    _all_ids = list(_acc_tr.keys())
+                    _all_keys = list((turn_records[-1].get("task_results") or {}).keys())
+                    logger.info(
+                        "[TurnLoop] PASSTHROUGH-DEBUG | "
+                        "summarize_enabled=%s turn=%d "
+                        "tr[-1] keys=%s acc_tr keys=%s "
+                        "dr keys=%s acc_dr keys=%s",
+                        self.summarize_enabled,
+                        total_turns,
+                        _all_keys,
+                        _all_ids,
+                        list((turn_records[-1].get("delegate_results") or {}).keys()),
+                        list(_acc_dr.keys()),
+                    )
+                    # Dump EVERY turn's raw task_results so we can tell if
+                    # two turns returned the same content.
+                    for _ti, _tr in enumerate(turn_records):
+                        _tr_tr = _tr.get("task_results") or {}
+                        logger.info(
+                            "[TurnLoop] PASSTHROUGH-DEBUG turn_record[%d] "
+                            "turn=%d task_count=%d task_ids=%s",
+                            _ti,
+                            _tr.get("turn"),
+                            len(_tr_tr),
+                            list(_tr_tr.keys()),
+                        )
+                        for _tid, _res in _tr_tr.items():
+                            logger.info(
+                                "[TurnLoop] PASSTHROUGH-DEBUG "
+                                "turn_record[%d].task[%d] len=%d "
+                                "hash=%s preview=%s",
+                                _ti,
+                                _tid,
+                                len(_res or ""),
+                                hash(_res),
+                                (_res or "")[:200],
+                            )
+                # Only pass the last turn's task_results — previous unsatisfactory
+                # turns are noise in passthrough mode (the LLM path gets full
+                # context via execution_flow_tasks anyway).
+                final_answer = await self._summarize(
+                    original_query=query,
+                    task_results=turn_records[-1]["task_results"],
+                    delegate_results=_accumulated_delegate_results(turn_records),
+                    upstream_context=upstream_context,
+                    user_id=user_id,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    execution_flow_tasks=_accumulated_execution_flow_tasks(turn_records),
+                    agent_role="delegatee" if is_delegated else "initiator",
+                )
                 # Record turn_summary as formal ExecutionTask (success)
                 ts_task = ExecutionTask(
                     execution_id=f"turn-summary-t{total_turns}",
@@ -655,6 +731,74 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
             )
             turn_records[-1]["execution_flow_tasks"].append(ts_task)
 
+            # ── Retry guard: gap outside the capability boundary ──
+            # If the evaluator judged the missing information as NOT obtainable
+            # by further execution (e.g. the result explicitly lacks an ability
+            # that no agent in the pool declares), retrying would deterministically
+            # fail.  Stop the loop here and summarise from what we have, instead of
+            # burning the remaining turns and still producing the same answer.
+            if not eval_result.gap_obtainable:
+                logger.warning(
+                    "[TurnLoop] turn %d not satisfactory BUT gap_obtainable=False — "
+                    "stopping retries (unobtainable gap) | missing_info=%s",
+                    total_turns,
+                    eval_result.missing_info,
+                )
+                await self._emit_progress(
+                    updater,
+                    "turn_no_retry",
+                    message=(
+                        f"Turn {total_turns}: 缺失信息超出可获取范围，"
+                        f"停止重试并以当前结果作答 — {reason_text}"
+                    ),
+                    status="done",
+                    extra={
+                        "turn": total_turns,
+                        "gap_obtainable": False,
+                        "missing_info": eval_result.missing_info,
+                        "rationale": eval_result.rationale,
+                    },
+                )
+                # --- Data Flow: summary input (unobtainable gap) ---
+                self._log_summary_input(
+                    task_results=_accumulated_task_results(turn_records),
+                    delegate_results=_accumulated_delegate_results(turn_records),
+                    extra_desc=(
+                        f"forced, unobtainable gap at turn {total_turns}"
+                    ),
+                )
+                # Reuse the evaluator's answer as the final answer when it
+                # exists — it already reflects the factual results and does not
+                # fabricate for the missing part.  Fall back to _summarize.
+                final_answer = eval_result.answer or await self._summarize(
+                    original_query=query,
+                    task_results=turn_records[-1]["task_results"],
+                    delegate_results=_accumulated_delegate_results(turn_records),
+                    upstream_context=upstream_context,
+                    user_id=user_id,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    execution_flow_tasks=_accumulated_execution_flow_tasks(turn_records),
+                    agent_role="delegatee" if is_delegated else "initiator",
+                )
+                fa_task = ExecutionTask(
+                    execution_id=f"final-answer-t{total_turns}-nogap",
+                    turn=total_turns,
+                    stage="final_answer",
+                    agent=self._self_planner_agent_name(),
+                    role="initiator",
+                    task="最终答案",
+                    result=final_answer,
+                    reason=f"缺失信息不可获取，提前收尾：{eval_result.missing_info}",
+                    parent_execution_id=None,
+                    delegated_by=None,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                )
+                turn_records[-1]["execution_flow_tasks"].append(fa_task)
+                break
+
             failure_context = (
                 f"【上轮评估反馈】当前信息不足以完整回答用户问题。"
                 f"缺失信息：{eval_result.missing_info}"
@@ -725,7 +869,7 @@ class SkillAgentExecutorWithTurns(SkillAgentExecutor):
 
             final_answer = await self._summarize(
                 original_query=query,
-                task_results=_accumulated_task_results(turn_records),
+                task_results=turn_records[-1]["task_results"],
                 delegate_results=_accumulated_delegate_results(turn_records),
                 upstream_context=upstream_context,
                 user_id=user_id,

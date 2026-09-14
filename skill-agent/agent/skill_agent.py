@@ -727,8 +727,9 @@ def _format_skills_for_capability_check(skills: Optional[List[Any]]) -> str:
 
 class DelegationDetectionResult(BaseModel):
     model_config = {"extra": "ignore"}
+    task_type: Literal["structured", "unstructured"] = Field(description="Task type classification. structured=数据库查询、表字段检索、记录查找等有明确字段边界的数据操作；unstructured=文档总结、文本分析、代码审查、翻译、内容生成等无标准答案的分析性任务")
     needs_help: bool = Field(description="Whether another SG's help is needed")
-    synthesized_query: str = Field(description="Scoped sub-query for the downstream SG.")
+    synthesized_query: str = Field(description="Scoped sub-query for the downstream SG. Required for structured tasks. For unstructured tasks it is also a NECESSARY CONDITION of needs_help=true: if you cannot write an executable sub-query, there is no clear gap and needs_help must be false.")
     target_sgs: List[str] = Field(default_factory=list, description="SG names that should supplement the data gap. Fill when needs_help=true; final selection uses capability_check. Names must be selected from the provided SG list, do NOT invent non-existent SG names.")
     reason: str = Field(description="Why additional data is needed")
 
@@ -772,6 +773,20 @@ class SummaryEvaluationResult(BaseModel):
     )
     missing_info: str = Field(
         description="When satisfactory=false, describe what information is still missing and should be retrieved in the next turn. When satisfactory=true, set to empty string."
+    )
+    gap_obtainable: bool = Field(
+        default=True,
+        description=(
+            "Only meaningful when satisfactory=false. Whether the missing information could "
+            "plausibly be obtained by executing further steps. "
+            "true = the gap is retrievable by more work (another agent holds the data, a query can fetch it, "
+            "a missing join key can be resolved). "
+            "false = the gap lies outside the capability boundary and no amount of re-execution can produce it "
+            "(e.g. the result explicitly states it lacks that ability and no agent in the collaboration pool "
+            "declares it; or it requires real-time/external data that is unavailable). "
+            "Note: a bare mention in the result that it lacks an ability is NOT by itself reason to set false — "
+            "if another agent could supply it, set true. Set true when satisfactory=true."
+        ),
     )
     rationale: str = Field(
         description="One-sentence reason for the evaluation decision (e.g. why the answer is sufficient or insufficient)"
@@ -1606,6 +1621,9 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 - 输入模态与技能不匹配（技能只处理文本，输入是图片）记为不可用。
 - 该步骤不需要输入时 required 为空、ratio = 1.0。
 - **时间表达式规则**："本月"、"今天"、"本周"、"最近"、"上月"等时间表达式是自包含输入，直接记为已匹配。系统知道当前日期，执行时自然会按时间筛选，不需要调用方补精确起止日期。
+- evidence_strength：
+  · solid：依据来自问题原文中的具体值（如"张三"）、用户附件中的具体文件、或技能正文中明确声明的输入条件与支持的输入格式
+  · speculative：仅能根据 Agent 描述或问题上下文推断输入是否可用
 
 ### D 信息覆盖
 - 定义：该步骤要读写的信息需求项，技能的数据源 / 知识源里有多少。
@@ -1616,6 +1634,9 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 - 特例 2：该步骤不需要访问任何外部数据 / 知识（纯生成、纯转换、对上游产物的加工），required 为空、ratio = 1.0。
 - 特例 3：信息项属于正文声明主题的子项（"年假"属于"请假制度"），可记命中，但整体证据等级不得高于 B。
 - D 判断的是"技能是否拥有这类信息源"，不判断"具体答案是否一定在里面"。记录可能不存在属于数据实例问题，写入 risks，不影响分值。
+- evidence_strength：
+  · solid：依据来自技能正文中的明确字段列表、数据格式说明、覆盖主题清单及明确的排除项声明；如果正文明确写"不包含 X"，X 记未命中的依据也是 solid
+  · speculative：正文仅有概括描述（如"可查询订单信息"、"公司内部文档问答"）而无具体字段/主题清单；或完全依赖 Agent 描述做推断
 
 ### O 操作能力
 - 定义：该步骤要做的变换，技能能不能做。
@@ -1630,6 +1651,9 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 - 打分：列出期望产出项（含形态要求：列表、数量、图表、摘要、译文、标签）；逐项判断技能能否输出该项及该形态；R = 可产出项 / 期望项。
 - R 只判"能不能产出这个形态的结果"，不判质量。
 - **R 部分匹配规则**：当该步骤不是最终步骤（is_final=false）或 Agent 只在链中贡献部分步骤时，期望产出项只需匹配"步骤描述中的核心产出类型"，不要额外要求最终结果的完整语义。示例：query="Rust 电子产品周边"，step1 描述为"筛选电子类商品列表"，则 R 只需判"电子商品列表"，不要求产出项必须包含"Rust 相关"。
+- evidence_strength：
+  · solid：依据来自技能正文中明确的输出字段、返回格式、输出形态说明
+  · speculative：正文仅有概括描述（如"返回查询结果"）而无具体输出格式；或完全依赖 Agent 描述
 
 ### C 约束满足
 - 定义：问题里显式或隐含的限定条件，技能能满足多少。
@@ -1637,6 +1661,10 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 - 没有约束时 required 为空、ratio = 1.0。
 - 正文没有声明能满足的约束（如未声明支持英文、未声明实时同步）记为不满足，不得推断。
 - **时间约束不拆分**：问题中有"本月/今天/最近/实时"等时间限定，且技能有时间字段+筛选工具（如 grep、awk sort）时，约束视为可满足（ratio=1.0），仅在 risks 里提示"非实时/快照数据可能不是最新状态"。只有当技能明确说"不包含时间字段"或"不支持按时间筛选"时才记未命中。
+- evidence_strength：
+  · solid：依据来自技能正文明确声明的数据同步周期、读写权限、数据范围、支持的语言/版本等
+  · speculative：未找到对应声明的约束判断（如正文未声明支持英文，仅因工具可处理文本就推测"英文可处理"）
+  · 正文没有声明能满足的约束记为不满足，evidence_strength 仍可标 solid（不满足的依据是"正文未声明"这一事实而非推测）
 
 ## 四、打分总则
 
@@ -1645,7 +1673,7 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 - 正文明确"不包含 / 不支持 / 不覆盖"的内容，对应项直接记未命中或 0。
 - 各维度独立核对各自的清单，不允许为了让总分好看而调整某个维度。
 - 每条 evidence 必须是原文引用并注明来源类别，如："技能正文：用户数据中不包含订单信息"、"问题原文：张三"。
-- 五个条件缺一不可，程序会把它们相乘：任何一项为 0，该步骤即不可完成。你只需如实给出每一项。
+- **evidence_strength 强制要求**：每个 RatioCheck 必须标注 evidence_strength = solid 或 speculative。不能所有维度都标 solid 或都标 speculative，必须逐个维度独立判断。
 - **多维度/多子任务查询规则**：当 query 明确列出多个维度或子任务（"从 A、B、C 三个维度排查"），必须为每个维度各建至少一个步骤。本 Agent 不覆盖的维度同样建步骤，但对应的 D=0/1 或 O=0。不允许只建自己能做的维度然后判 h=true。
 
 ## 五、证据等级（整体一个，不进乘法）
@@ -1668,7 +1696,9 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 
 ## 七、程序侧公式（供你理解结果含义，不需要你计算）
 
-  步骤能力分 = (I + D + O + R + C) / 5（算术平均）
+  步骤能力分 = weighted-arithmetic-mean(I,D,O,R,C)
+    solid 维度权重=1.0，speculative 维度权重=0.1
+    O 维度始终 solid（三档评分有明确的声明或无声明依据）
   can_handle = 各步骤能力分的算术平均达到阈值，且没有本 Agent 无法自行产出的 upstream / missing 输入
   can_contribute = can_handle，或存在某一步能力分达到阈值且其产出被需要
   confidence = 能独立完成时取 step_score 均值；只能贡献时取贡献步骤能力分最大值；都不能时为 0
@@ -1679,17 +1709,17 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 用户问题："张三买了哪些东西"
 
 步骤 1（用户名 → user_id，lookup，is_final=false）
-  I: required=[用户名] matched=[用户名] ratio=1.0         依据：问题原文"张三"
-  D: required=[用户名, 用户ID] matched=[用户名, 用户ID] ratio=1.0   依据：技能正文字段列表
-  O: 1.0                                                  依据：技能正文 grep 示例
-  R: required=[user_id] matched=[user_id] ratio=1.0
-  C: required=[] matched=[] ratio=1.0
+  I: required=[用户名] matched=[用户名] ratio=1.0 evidence_strength=solid  依据：问题原文"张三"
+  D: required=[用户名, 用户ID] matched=[用户名, 用户ID] ratio=1.0 evidence_strength=solid  依据：技能正文字段列表
+  O: 1.0                                                                    依据：技能正文 grep 示例
+  R: required=[user_id] matched=[user_id] ratio=1.0 evidence_strength=solid
+  C: required=[] matched=[] ratio=1.0 evidence_strength=solid
 步骤 2（user_id → 商品列表，lookup，is_final=true；inputs: user_id source=upstream）
-  I: required=[user_id] matched=[user_id] ratio=1.0       上游产出，由本 Agent 步骤 1 提供
-  D: required=[订单, 商品] matched=[] ratio=0.0           依据：技能正文"用户数据中不包含订单信息"
+  I: required=[user_id] matched=[user_id] ratio=1.0 evidence_strength=solid  上游产出，由本 Agent 步骤 1 提供
+  D: required=[订单, 商品] matched=[] ratio=0.0 evidence_strength=solid      依据：技能正文"用户数据中不包含订单信息"
   O: 1.0
-  R: required=[商品列表] matched=[] ratio=0.0
-  C: required=[] matched=[] ratio=1.0
+  R: required=[商品列表] matched=[] ratio=0.0 evidence_strength=solid
+  C: required=[] matched=[] ratio=1.0 evidence_strength=solid
 evidence_grade: A
 contribution: "输入 username=张三，输出 user_id，供步骤 2 查询订单使用"
 missing_requirements: ["订单 / 购买记录数据（步骤 2）"]
@@ -1712,7 +1742,7 @@ reason: "步骤 1（用户名→user_id）：I=1/1 D=2/2 O=1.0 R=1/1 C=1.0，字
 ---
 输出要求：
 - 只输出一个纯 JSON 对象，**不要使用 ```json 代码块包裹**，直接输出 JSON 文本。
-- 每个 RatioCheck（input_match / data_coverage / result_match / constraint_satisfaction）必须同时给出 required（字符串数组）、matched（字符串数组）、ratio（数字，0~1）。
+- 每个 RatioCheck（input_match / data_coverage / result_match / constraint_satisfaction）必须同时给出 required（字符串数组）、matched（字符串数组）、ratio（数字，0~1）、evidence_strength（字符串，solid 或 speculative）。
 - operation_capability 只能是 1.0、0.7 或 0。
 - 不要输出 can_handle、can_contribute、confidence。
 
@@ -2602,10 +2632,20 @@ SUMMARIZE_EVAL_SYSTEM_PROMPT = (
     "**你需要做的事情**\n"
     "1. 撰写回答正文（填入 answer 字段）。\n"
     "2. 判断当前信息是否足以完整回答用户问题（填入 satisfactory 字段）：\n"
-    "   - 如果足以回答 → satisfactory=true，missing_info 设为空字符串。\n"
+    "   - 如果足以回答 → satisfactory=true，missing_info 设为空字符串，gap_obtainable 设为 true。\n"
     "   - 如果不足以回答 → satisfactory=false，missing_info 中说明缺少什么信息，"
     "需要在下轮执行中补充获取（例如：'缺少模块 X 的运行日志'、'数据库 Y 的配置信息未返回'）。\n"
-    "3. 简要说明本次评估的决策理由（填入 rationale 字段，一句话即可）。\n\n"
+    "3. 【当 satisfactory=false 时必须做】判断缺失信息是否「可通过再执行获得」（填入 gap_obtainable 字段）：\n"
+    "   - gap_obtainable=true：该缺口可以靠继续执行拿到——例如数据在某个其他 agent 手里、"
+    "缺少关联键但可先查询得到、需要补充某个可查的数据源。\n"
+    "   - gap_obtainable=false：该缺口超出当前能力边界，再执行也拿不到——例如结果已明确声明不具备该能力"
+    "且协作池中没有 agent 声明可提供该能力；或该数据需要实时/外部来源而不可能取得。\n"
+    "   自检方法：「如果让执行方再做一轮，它真的能拿到这个信息吗？」\n"
+    "   → 能 → true；→ 不能（明知再跑也没用）→ false。\n"
+    "   ⚠ 重要：结果里仅凭一句「本 skill 不具备 X 能力」不足以判 false；"
+    "若其他 agent 有可能提供 X，仍应判 true。只有确认「无人能提供」时才判 false。\n"
+    "   ⚠ 若一轮重试已完成且有充分证据表明该缺口不可获得，应判 false，避免无意义的反复重试。\n"
+    "4. 简要说明本次评估的决策理由（填入 rationale 字段，一句话即可）。\n\n"
     "**判断 satisfactory 的核心原则**\n"
     "你需要严格区分两类信息：\n"
     "- 实质性结果：用户请求的数据、分析结论、操作产出等。\n"
@@ -2831,11 +2871,15 @@ def _build_agent_summarize_prompt(
     delegate_results: dict[str, str] | None = None,
     current_agent: str = "",
     agent_role: str = "initiator",
+    custom_system_prompt: str | None = None,
 ) -> tuple[str, str]:
     """Build (system, human) prompts for ``_summarize``.
 
     Same factual context as ``_build_summarize_eval_prompt``; the human
     message asks for a direct answer instead of a tool call.
+
+    When *custom_system_prompt* is provided, it replaces the default
+    ``AGENT_SUMMARIZE_SYSTEM_PROMPT``.
     """
     context = _render_summary_execution_context(
         original_query,
@@ -2846,14 +2890,15 @@ def _build_agent_summarize_prompt(
         agent_role=agent_role,
     )
     human_prompt = context + "\n\n请直接输出答案："
+    system_prompt = custom_system_prompt or AGENT_SUMMARIZE_SYSTEM_PROMPT
     _log_built_summary_prompt(
         "skill-agent-summarize",
-        system_prompt=AGENT_SUMMARIZE_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         human_prompt=human_prompt,
         current_agent=current_agent,
         agent_role=agent_role,
     )
-    return AGENT_SUMMARIZE_SYSTEM_PROMPT, human_prompt
+    return system_prompt, human_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -2908,6 +2953,20 @@ class SkillAgentExecutor(AgentExecutor):
 
         # Orchestration LLM (for summary, mid-exec detection, etc.)
         self._orchestration_llm = None
+
+        # Summarize configuration (from env vars, see _summarize decision tree)
+        self.summarize_enabled: bool = (
+            os.getenv("SUMMARIZE_ENABLED", "true").strip().lower()
+            in ("true", "1", "yes")
+        )
+        self.summarize_prompt: str | None = (
+            os.getenv("SUMMARIZE_CUSTOM_PROMPT", "").strip() or None
+        )
+        logger.info(
+            "[Summarize] config loaded | enabled=%s custom_prompt_chars=%s",
+            self.summarize_enabled,
+            len(self.summarize_prompt) if self.summarize_prompt else 0,
+        )
 
         # Progress context
         self._progress_context: dict = {}
@@ -4120,7 +4179,11 @@ class SkillAgentExecutor(AgentExecutor):
         trace_id: str = "",
         delegation_chain: Optional[list[str]] = None,
     ) -> Optional[dict]:
-        """Mid-execution Step 1: detect whether a data gap still exists via LLM reasoning."""
+        """Mid-execution Step 1: detect whether a data gap still exists via LLM reasoning.
+
+        Includes task-type classification (structured vs unstructured) to apply
+        domain-appropriate gap detection rules.  Structured tasks follow strict
+        field-level gap rules; unstructured tasks use a higher bar for delegation."""
         # ── Log entry context ──
         _collab_names = [getattr(c, "name", "?") for c in (collaborator_cards or [])]
         _chain_preview = SkillAgentExecutor._format_dag_chain(delegation_chain or [])
@@ -4163,7 +4226,51 @@ class SkillAgentExecutor(AgentExecutor):
         prompt = (
             "你是一个多 agent 协作的数据缺口检测器。基于已有的执行结果和原始问题，"
             "判断是否还需要其他领域的补充数据。\n\n"
-            "核心判断逻辑：\n"
+            # ═══════════════════════════════════════════════════════════════
+            "## 步骤 0：任务类型分类（必须在所有判断之前完成）\n\n"
+            "根据原始问题和本层执行结果的特征，将任务归类为 structured 或 unstructured。\n\n"
+            "**structured（结构化数据查询）的判断特征：**\n"
+            "- 问题涉及数据库表、SQL 查询、字段查找、记录检索、ID 关联\n"
+            "- 期望的答案是有限数据集（如某人的订单列表、某商品的统计值、某条件的筛选结果）\n"
+            "- 执行结果以字段-值对、表格、记录列表或统计数字呈现\n"
+            "- 有明确的数据边界：「查到了哪些字段」vs「还缺哪些字段」\n"
+            "- 典型关键词：查询、查找、列表、多少、哪些、统计、汇总、筛选、关联\n\n"
+            "**unstructured（非结构化处理）的判断特征：**\n"
+            "- 问题涉及文档总结、文本分析、代码审查、翻译、内容生成、知识问答\n"
+            "- 期望的答案是开放性叙述（段落式分析、评判性结论、描述性总结）\n"
+            "- 执行结果以描述性段落文本呈现，而非字段-值行列表\n"
+            "- 答案没有「穷尽」的概念——始终可以从不同角度、不同深度做补充，但这不代表「有缺口」\n"
+            "- 典型关键词：分析、总结、审查、解释、翻译、评估、建议、判断\n\n"
+            "**分类方法（按此程序执行，不要靠关键词或题型印象判断）：**\n"
+            "只看原始问题那一段（分类时不要读「本层自身执行结果」）。执行下面这个判定程序：\n\n"
+            "第1步：写出答案模板。\n"
+            "   把原始问题改写成一句带空白的回答句，例如"
+            "「这个任务的答案是：____」或「结论是：____」。\n\n"
+            "第2步：问一句——「这个答案本身，是不是已经存在、只等取回？」\n"
+            "   → 是：答案是一个值 / 列表 / 记录集，本来就记在某处，取回即可 → **structured**\n"
+            "   → 否：答案谁都没有记录过，必须由人依据取回的数据推导、权衡、下结论 → **unstructured**\n\n"
+            "判别示范（只看判断过程，不要记题型）：\n"
+            "   · 「A 的供应商是谁、库存多少」→ 答案「供应商__、库存__」"
+            "→ 这两个值本来就记在系统里 → structured\n"
+            "   · 「这份代码有哪些安全风险」→ 答案「存在__风险」"
+            "→ 没有任何地方记录过这个结论，要靠人判定 → unstructured\n\n"
+            "⚠ 最关键的陷阱（此处判错最多，务必执行）：\n"
+            "   本层如果声明「缺少 XX 数据 / 某个字段没拿到」，这只说明 **XX 数据存在**，"
+            "**不等于答案存在**。二者必须分开问：\n"
+            "     数据存在？ → 多数情况都是「是」（否则没法查），但这不决定分类。\n"
+            "     答案存在？ → 只有这个问题决定分类。\n"
+            "   自检：把所有声明缺失的数据也都拿到手之后，答案是不是就自动成型了？\n"
+            "     → 是 → structured；→ 否（还要人下判断）→ unstructured。\n\n"
+            "⚠ 另一条禁令：禁止用「本层结果里有没有字段/记录/日志」当依据。"
+            "能力缺失导致中断时，中间结果必然只剩已核实的数据片段，"
+            "这是中断的副产物，与任务类型无关。\n\n"
+            "**分类自检方法：**\n"
+            "问自己：「这个任务的执行结果，有没有一个客观的标准来判断它是否'完整'？」\n"
+            "→ 如果答案是「有」→ structured（比如：缺了某个字段、缺了某张表的数据）\n"
+            "→ 如果答案是「没有」→ unstructured（比如：一个文档分析永远可以更深入，但已有的分析已经是对原始问题的充分回答）\n\n"
+            "请先确定 task_type，然后根据类型选择下面的判定规则。\n\n"
+            # ═══════════════════════════════════════════════════════════════
+            "## 步骤 1a：结构化数据缺口的判定规则（仅当 task_type=structured 时适用）\n\n"
             "1）首先分析本层自身执行结果，判断当前结果是否足以完整回答原始问题。\n"
             "2）如果本层结果是空结果（如 'not found'、'查询结果为空'、'0 条记录'、'no records'），"
             "不能因此直接拒绝委派。需要进一步判断：\n"
@@ -4178,9 +4285,10 @@ class SkillAgentExecutor(AgentExecutor):
             "structured_control 里已有可传递的关联键，且明确缺外域字段，"
             "应 needs_help=true，synthesized_query 必须带上这些关联键。\n"
             "5）outcome=partial 或 reason_code=data_sovereignty_gap 时，一律 needs_help=true。\n"
-            "6）只有当本层结果明确表示：原始问题中的实体或概念在自身数据域中确实不存在，"
-            "且没有任何其他 agent 可能拥有该数据时，才返回 needs_help=false。\n\n"
-            "synthesized_query 书写规则（强制）：\n"
+            "6）needs_help=false 的条件：当本层结果已覆盖原始问题所有必需的域，"
+            "且参考下方的 SG 技能列表，没有其他 agent 声明的技能范围能补充本层缺失的数据时，"
+            "才返回 needs_help=false。注意：不需要证明「绝对没有 agent 有」，只需判断列表中没有匹配的即可。\n\n"
+            "**structured synthesized_query 书写规则（强制）：**\n"
             "- 只写下游 SG 本轮需要交付的子问题：关联键 + 缺失字段；\n"
             "- 当没有关联键时，传递原始问题中的实体信息（姓名、ID、关键词等）作为查询线索；\n"
             "- 禁止复述完整原题；禁止写入其它域目标或整题扩写；\n"
@@ -4193,24 +4301,77 @@ class SkillAgentExecutor(AgentExecutor):
             "  → 说明写错了域，这是本层域内的问题，下游 SG 没有对应的技能。\n"
             "  正确做法：先看下方「SG 技能列表」中 target_sgs 的技能，确认它们能处理什么类型的问题，\n"
             "  然后 synthesized_query 只写这些技能能直接处理的内容。\n\n"
-            "重要约束：\n"
+            # ═══════════════════════════════════════════════════════════════
+            "## 步骤 1b：非结构化任务缺口的判定规则（仅当 task_type=unstructured 时适用）\n\n"
+            "核心原则：非结构化任务（文档总结、文本分析、代码审查、翻译等）没有「标准答案」，"
+            "「完成」意味着给出了对原始问题的实质性、有结构的回答，而非穷尽了所有可能的角度。\n\n"
+            "**前置条件（在判定任何缺口之前必须先通过）：**\n"
+            "非结构化任务只承认「明确数据缺口」。要判定 needs_help=true，"
+            "你必须先能写出一个下游 SG 用其自身技能可直接执行的具体子问题。\n"
+            "自检方法：先在心里写出 synthesized_query，再问「这句话能让下游 SG 直接开工吗？」\n"
+            "→ 写得出来 → 这是明确缺口，继续用下面的 A/B 条件判定；\n"
+            "→ 写不出来，只能说「可以更深入」「可以补充某方面的分析」→ 这是开放式思考方向，"
+            "不是数据缺口，直接返回 needs_help=false。\n"
+            "⚠ 非结构化任务不存在「无限可补充」意义上的缺口：任何分析在理论上都能做得更深，"
+            "但这不构成委派理由。写不出明确子问题，就等于没有缺口。\n\n"
+            "**触发 needs_help=true 的条件（较严格，只有以下情况才委派）：**\n"
+            "A）本层结果明确声明了具体的、可查证的缺失项，"
+            "且下方 SG 技能列表中确有 agent 能填补该项。\n"
+            "   示例：执行结果说「代码审查完成了安全部分，但缺少合规性审计」，"
+            "且下方有 compliance-agent → 可委派。\n"
+            "   反例：执行结果是一个完整的产品描述翻译，但「术语库 agent 可能有更精确译法」"
+            "→ 这不是明确的缺失项，不委派。\n"
+            "   ⚠ 但请注意区分「泛指」与「已点名具体缺失项」——后者是明确缺口：\n"
+            "   · 泛指（不委派）：翻译已完整交付，只是笼统认为「术语库也许有更准的说法」，"
+            "说不出具体是哪个词有问题 → needs_help=false。\n"
+            "   · 已点名（委派）：结果明确指出「术语 X、Y 的确切译法未能确定」，"
+            "且下方有 terminology-agent 可查证这些具体术语 → needs_help=true，"
+            "因为 gap 已被收敛成可执行的子问题。\n\n"
+            "B）本层结果明确表示「不具备该能力」或「能力域错误」，"
+            "且原始问题中的实体或概念在它域可能存在。\n"
+            "   示例：order-agent 收到了「审查 payment_service.py 的安全漏洞」，"
+            "返回「不具备代码审查能力」→ 应委派给 code-agent。\n\n"
+            "**触发 needs_help=false 的条件（以下任一成立就不委派）：**\n"
+            "I）本层已经返回了一个成文的、有逻辑结构的分析/总结/审查/翻译结论。\n"
+            "   「成文」指结果中包含实质性的内容（不是空壳、不是纯报错、不是仅声明能力不足）。\n"
+            "   「有逻辑结构」指结果有完整的叙事或分析框架（不是零散片段）。\n"
+            "   这时即使理论上「可以更深入」，也应返回 needs_help=false。\n\n"
+            "II）原始问题是一个不需要外部数据的自包含任务（如纯翻译、纯格式化、纯生成）。\n"
+            "   示例：「把这段文字翻译成英文」—— 翻译已完成即 needs_help=false。\n\n"
+            "III）本层结果对原始问题的核心诉求已给出充分回答，只是缺少次要补充信息。\n"
+            "    示例：「分析这份报告的核心内容」→ 本层已提取并归纳了全文要点。\n"
+            "    即使「报告中提到的某法规的精确引用条款」没有展开，也不属于必须委派的缺口。\n\n"
+            "**unstructured 场景下 outcome=partial 的含义不同：**\n"
+            "- 非结构化任务中 outcome=partial 是常态（任何分析都是'部分'的），不是强制委派信号。\n"
+            "- 只有当 partial 的原因是一个具体的、可查证的能力缺失时（见条件 A），才委派。\n\n"
+            "**unstructured 场景下的 synthesized_query（强制）：**\n"
+            "- synthesized_query 是 needs_help=true 的**必要条件**：写不出它，就不算明确缺口，"
+            "needs_help 必须为 false。\n"
+            "- 判定顺序固定为：先写 synthesized_query，再据此决定 needs_help。"
+            "禁止先判 needs_help=true 再回头补一个空泛的描述。\n"
+            "- 上文「前置条件」中的反例（「术语库 agent 可能有更精确译法」）就是典型："
+            "这类说法写不出可执行子问题，因此不构成缺口，needs_help=false。\n"
+            "- synthesized_query 必须从下游 SG 视角编写，描述一个下游 SG 能用自己的技能独立完成的子问题。\n"
+            "- 【严禁】用「补充某方面的分析」「进一步深入」「完善相关评估」这类开放式表述充数——"
+            "它们不是可执行子问题，等同于没写；此时应返回 needs_help=false。\n\n"
+            # ═══════════════════════════════════════════════════════════════
+            "## 通用重要约束（两种类型均适用）\n\n"
             "- 不要依据 SG 的自描述文案选择目标；最终远程 SG 由后续标准 "
             "capability_check 全量广播（成员能力证据）决定；\n"
-            "- 即使下方 SG 名称列表为空，只要存在数据缺口，仍应 "
-            "needs_help=true；\n"
             "- 当 needs_help=true 时，target_sgs 应填写你认为可补充数据的 SG 名称。\n"
             "  最终远程 SG 由后续标准 capability_check 全量广播决定，此处的 target_sgs 用于辅助性提示。\n"
             "- target_sgs 中的名称必须从上方列表中的 SG 名称中精确选取，不得编造不存在的 SG 名称。\n"
             "- 【关键】如果「已完成委托结果」中显示某个 SG 返回了空结果或标记为 EMPTY，"
             "说明该 SG 无法为此问题提供数据。此时 target_sgs 不要再次包含该 SG 名称，"
             "应尝试委托给列表中其他不同的 SG（agent）。\n\n"
-            "注意: 如果已有结果已经能完整回答原始问题，应返回 needs_help=false。\n\n"
-            f"原始问题（仅供判断缺口，勿整段写入 synthesized_query）：{query}\n\n"
+            # ═══════════════════════════════════════════════════════════════
+            f"原始问题：{query}\n\n"
             f"本层自身执行结果：\n{own_text}\n\n"
             f"已完成委托结果：\n{del_text}\n\n"
             f"可委托的 SG 名称列表（仅供参考，非选人依据）：\n{sg_options}\n\n"
-            f"SG 技能列表（必须参考，用于编写域正确的 synthesized_query）：\n{sg_skills_info}\n\n"
-            "请调用 detect_delegation_needs 工具来输出结果。"
+            f"SG 技能列表（用于判断缺口和编写 synthesized_query）：\n{sg_skills_info}\n\n"
+            "请调用 detect_delegation_needs 工具来输出结果。\n"
+            "注意：task_type 字段必须首先填写，且必须选择 structured 或 unstructured 之一。\n"
             "当 needs_help=true 时，reason 字段必须说明具体缺了什么数据、为什么需要补充。"
         )
 
@@ -4275,17 +4436,25 @@ class SkillAgentExecutor(AgentExecutor):
             wants_help = data_dict.get("needs_help", False)
             if not wants_help:
                 logger.info(
-                    "[MidExec][Detect] LLM verdict: no help needed | reason=%s",
+                    "[MidExec][Detect] LLM verdict: no help needed | task_type=%s reason=%s",
+                    (data_dict.get("task_type") or "?"),
                     (data_dict.get("reason") or "")[:120],
                 )
                 return None
             result = {
                 "needs_help": True,
+                "task_type": data_dict.get("task_type") or "unstructured",
                 "synthesized_query": data_dict.get("synthesized_query", ""),
                 "target_sgs": data_dict.get("target_sgs", []),
                 "reason": data_dict.get("reason", ""),
                 "source": "llm_detection",
             }
+            logger.info(
+                "[MidExec][Detect] LLM verdict: needs help | task_type=%s target_sgs=%s reason=%s",
+                (data_dict.get("task_type") or "?"),
+                (data_dict.get("target_sgs") or [])[:5],
+                (data_dict.get("reason") or "")[:120],
+            )
             return result
         except Exception as e:
             logger.error("[MidExec][Detect] LLM detection failed: %s", e)
@@ -5821,6 +5990,7 @@ class SkillAgentExecutor(AgentExecutor):
                     "rationale: 评估决策的一句话理由。"
                     "cot_analysis: 思维链分析过程，包含对问题诉求的拆解、答案覆盖度的逐条核验、"
                     "实质性结果 vs 解释说明的区分、以及最终的客观判断结论。"
+                    "gap_obtainable: satisfactory=false 时，缺失信息是否可通过再执行获得。"
                 ),
                 args_schema=SummaryEvaluationResult,
                 func=None,
@@ -5867,6 +6037,15 @@ class SkillAgentExecutor(AgentExecutor):
             satisfactory = bool(result_data.get("satisfactory", False))
             missing_info = result_data.get("missing_info", "").strip()
             rationale = result_data.get("rationale", "").strip()
+            # gap_obtainable: only meaningful when satisfactory=False.
+            # Default True (assume retryable) so a missing/failed field never
+            # silently suppresses a legitimate retry.
+            try:
+                gap_obtainable = bool(result_data.get("gap_obtainable", True))
+            except (TypeError, ValueError):
+                gap_obtainable = True
+            if satisfactory:
+                gap_obtainable = True
 
             # 结构兜底：若 answer 为空，即使 LLM 判为 true 也无法使用，强制改为不充分
             if not answer:
@@ -5884,6 +6063,7 @@ class SkillAgentExecutor(AgentExecutor):
                 satisfactory=satisfactory,
                 missing_info=missing_info,
                 rationale=rationale,
+                gap_obtainable=gap_obtainable,
                 cot_analysis=result_data.get("cot_analysis", ""),
             )
 
@@ -5915,12 +6095,102 @@ class SkillAgentExecutor(AgentExecutor):
     ) -> str:
         """Use LLM to summarize all task results into a final answer.
 
+        Behaviour is governed by a 3-layer decision tree (highest priority first):
+
+        1. ``SUMMARIZE_ENABLED=false`` → **passthrough** (force-off for all agents)
+        2. ``agent_role == "delegatee"`` → **passthrough** (delegated never summarizes)
+        3. initiator (summarization enabled) → **LLM summarization**
+           - ``SUMMARIZE_CUSTOM_PROMPT`` non-empty → custom system prompt
+           - ``SUMMARIZE_CUSTOM_PROMPT`` empty → default ``SUMMARIZE_CORE_PRINCIPLES``
+
         Prompt context is built by :func:`_build_agent_summarize_prompt`
         (Execution Flow markdown, not a JSON dump of ``upstream_context``).
         """
         own_text, del_text = _format_own_and_delegate_text(
             task_results, delegate_results,
         )
+        # Passthrough uses raw results *without* [Task#N] prefix (which is
+        # only intended as LLM-context scaffolding, never user-facing output).
+        # Also filter out system placeholder values (NONE tasks, skipped
+        # dependent tasks) so they don't leak to users.
+        _SYS_PLACEHOLDERS = {NONE_TASK_UNASSIGNED_RESULT, DEPENDENT_TASK_SKIP_DESCRIPTION}
+        passthrough = "\n\n".join(
+            r for r in (task_results or {}).values()
+            if r and r not in _SYS_PLACEHOLDERS
+        )
+        if delegate_results:
+            del_passthrough = "\n\n".join(
+                r for r in delegate_results.values()
+                if r and r not in _SYS_PLACEHOLDERS
+            )
+            if del_passthrough:
+                passthrough += "\n\n" + del_passthrough
+
+        # ── Debug: log every result value being joined into passthrough ──
+        _tr_values = [v for v in (task_results or {}).values() if v]
+        _tr_keys = list((task_results or {}).keys())
+        _dr_values = [v for v in (delegate_results or {}).values() if v]
+        _dr_keys = list((delegate_results or {}).keys())
+        logger.info(
+            "[Summary] PASSTHROUGH-DEBUG | "
+            "enabled=%s role=%s tr_count=%d tr_keys=%s "
+            "dr_count=%d dr_keys=%s passthrough_len=%d",
+            self.summarize_enabled,
+            agent_role,
+            len(_tr_values),
+            _tr_keys,
+            len(_dr_values),
+            _dr_keys,
+            len(passthrough),
+        )
+        for i, v in enumerate(_tr_values):
+            _dup = ""
+            if _tr_values.count(v) > 1:
+                _dup = " (DUPLICATE — same value appears %d times total)" % _tr_values.count(v)
+            logger.info(
+                "[Summary] PASSTHROUGH-DEBUG tr[%d/%d] len=%d hash=%s%s preview=%s",
+                i + 1,
+                len(_tr_values),
+                len(v),
+                hash(v),
+                _dup,
+                v[:300],
+            )
+        if _tr_values and len(set(_tr_values)) < len(_tr_values):
+            logger.warning(
+                "[Summary] PASSTHROUGH-DEBUG DUPLICATE DETECTED | "
+                "unique=%d total=%d — passthrough will contain repeated content",
+                len(set(_tr_values)),
+                len(_tr_values),
+            )
+
+        # ── Rule 1: SUMMARIZE_ENABLED force-off → passthrough ──
+        if not self.summarize_enabled:
+            logger.info(
+                "[Summary] passthrough (SUMMARIZE_ENABLED=false) | "
+                "own_chars=%d del_chars=%d agent_role=%s",
+                len(own_text), len(del_text), agent_role,
+            )
+            return passthrough
+
+        # ── Rule 2: delegatee never summarizes ──
+        if agent_role == "delegatee":
+            logger.info(
+                "[Summary] passthrough (delegatee) | "
+                "own_chars=%d del_chars=%d",
+                len(own_text), len(del_text),
+            )
+            return passthrough
+
+        # ── Rule 3: initiator (summarization enabled) → LLM summarization ──
+        # Summarize regardless of whether delegation actually occurred.
+        logger.info(
+            "[Summary] LLM summarize (initiator) | "
+            "own_chars=%d del_chars=%d custom_prompt=%s",
+            len(own_text), len(del_text),
+            bool(self.summarize_prompt),
+        )
+
         current_agent, default_role = self._summary_prompt_agent_meta()
         system_prompt, human_prompt = _build_agent_summarize_prompt(
             original_query,
@@ -5931,6 +6201,7 @@ class SkillAgentExecutor(AgentExecutor):
             delegate_results=delegate_results,
             current_agent=current_agent,
             agent_role=agent_role or default_role,
+            custom_system_prompt=self.summarize_prompt,
         )
 
         try:
@@ -6136,7 +6407,7 @@ class SkillAgentExecutor(AgentExecutor):
                             "missing_requirements（缺失项列表，无缺失时为 []）、"
                             "risks（风险列表，无风险时为 []）、"
                             "reason（结构化理由）。"
-                            "每个步骤的 RatioCheck 必须同时给出 required、matched、ratio。"
+                            "每个步骤的 RatioCheck 必须同时给出 required、matched、ratio、evidence_strength。"
                         )
                     )
                     continue
@@ -7373,6 +7644,7 @@ class SkillAgentExecutor(AgentExecutor):
                 break
 
             reason_text = (detection.get("reason") or "")[:400]
+            detected_task_type = detection.get("task_type") or "unknown"
             target_sgs = list(detection.get("target_sgs") or [])
             # Filter out LLM-hallucinated agent names that don't exist in collaborator pool
             if target_sgs and collaborator_cards_list:
@@ -7391,6 +7663,7 @@ class SkillAgentExecutor(AgentExecutor):
                 status="running",
                 extra={
                     "needs_help": True,
+                    "task_type": detected_task_type,
                     "reason": reason_text,
                     "target_sgs": target_sgs,
                     "round": mid_exec_round + 1,
@@ -7401,6 +7674,32 @@ class SkillAgentExecutor(AgentExecutor):
             synthesized_query = detection.get("synthesized_query", "")
             soft_target_hints = list(detection.get("target_sgs") or [])
             if not synthesized_query:
+                if detected_task_type == "unstructured":
+                    # 非结构化任务：写不出可执行子问题 ⇒ 不构成明确缺口。
+                    # 提示词已把「能写出 synthesized_query」设为 needs_help=true 的
+                    # 必要条件；此处做防御性收敛：按「无明确缺口」正常结束，
+                    # 不再进入下游选人/规划（它们均以非空 query 为前提）。
+                    # 非结构化任务在理论上永远可以「更深入」，因此不允许以
+                    # 开放式理由继续委派，否则会无限追数据。
+                    logger.info(
+                        "[MidExec] unstructured task with empty synthesized_query "
+                        "→ treated as no clear gap, exiting mid-exec loop"
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_no_clear_gap",
+                        message=(
+                            "Mid-exec: 非结构化任务未发现明确数据缺口，"
+                            "无需补充数据"
+                        ),
+                        status="done",
+                        extra={
+                            "round": mid_exec_round + 1,
+                            "reason": "no_clear_gap_unstructured",
+                            "task_type": detected_task_type,
+                        },
+                    )
+                    break
                 await self._emit_progress(
                     updater,
                     "mid_exec_empty_query",

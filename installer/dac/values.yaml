@@ -730,6 +730,11 @@ bizSkillAgent:
     # -- Builtin platform skill-agent only. Maximum mid-execution rounds
     #    (env: CROSS_SG_MID_EXEC_ROUNDS)
     crossSGMidExecRounds: "5"
+    # -- Summarize configuration for the skill-agent.
+    #    summarizeEnabled: "true" = auto (4-layer decision tree), "false" = force-off passthrough.
+    #    summarizeCustomPrompt: user-defined system prompt, overrides the built-in default.
+    summarizeEnabled: "true"
+    summarizeCustomPrompt: ""
   service:
     type: ClusterIP
     # -- A2A protocol port

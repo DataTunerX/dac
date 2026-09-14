@@ -67,6 +67,8 @@ func (u *agentContainerUsecase) Create(ctx context.Context, req *domain.CreateAg
 		OrchestratorAgentMaxLoops: req.OrchestratorAgentMaxLoops,
 		SkillAgentMaxLoops:        req.SkillAgentMaxLoops,
 		CrossSGMaxHop:             req.CrossSGMaxHop,
+		SummarizeEnabled:          req.SummarizeEnabled,
+		SummarizeCustomPrompt:     req.SummarizeCustomPrompt,
 	}
 
 	// Create in repository
@@ -136,6 +138,12 @@ func (u *agentContainerUsecase) Update(ctx context.Context, namespace, name stri
 	}
 	if req.CrossSGMaxHop != nil {
 		existing.CrossSGMaxHop = *req.CrossSGMaxHop
+	}
+	if req.SummarizeEnabled != nil {
+		existing.SummarizeEnabled = *req.SummarizeEnabled
+	}
+	if req.SummarizeCustomPrompt != nil {
+		existing.SummarizeCustomPrompt = *req.SummarizeCustomPrompt
 	}
 
 	if err := validateCrossSGMaxHop(existing.CrossSGMaxHop); err != nil {

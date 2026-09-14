@@ -497,6 +497,10 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MID_EXEC_ROUNDS", Value: dacConfig.CrossSGMidExecRounds})
 	}
 	envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: resolveCrossSGMaxHop(dac, dacConfig)})
+	envs = appendNonEmptyEnv(envs,
+		corev1.EnvVar{Name: "SUMMARIZE_ENABLED", Value: dac.Spec.SummarizeEnabled},
+		corev1.EnvVar{Name: "SUMMARIZE_CUSTOM_PROMPT", Value: dac.Spec.SummarizeCustomPrompt},
+	)
 
 	return envs
 }
@@ -1666,6 +1670,10 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MID_EXEC_ROUNDS", Value: dacConfig.CrossSGMidExecRounds})
 	}
 	envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: resolveCrossSGMaxHop(dac, dacConfig)})
+	envs = appendNonEmptyEnv(envs,
+		corev1.EnvVar{Name: "SUMMARIZE_ENABLED", Value: dac.Spec.SummarizeEnabled},
+		corev1.EnvVar{Name: "SUMMARIZE_CUSTOM_PROMPT", Value: dac.Spec.SummarizeCustomPrompt},
+	)
 	return envs
 }
 

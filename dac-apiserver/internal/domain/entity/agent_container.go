@@ -5,9 +5,10 @@ import "time"
 // AgentContainer represents a data agent container in the domain
 type AgentContainer struct {
 	// Metadata
-	Name      string
-	Namespace string
-	Labels    map[string]string
+	Name            string
+	Namespace       string
+	Labels          map[string]string
+	ResourceVersion string // K8s optimistic-concurrency token; required for Update
 
 	// Spec
 	DACType                   string
@@ -19,6 +20,8 @@ type AgentContainer struct {
 	OrchestratorAgentMaxLoops string
 	SkillAgentMaxLoops        string
 	CrossSGMaxHop             string
+	SummarizeEnabled          string
+	SummarizeCustomPrompt     string
 
 	// Status
 	ActiveDataDescriptors []ActiveDataDescriptor

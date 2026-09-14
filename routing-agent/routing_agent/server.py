@@ -494,6 +494,251 @@ def _chain_log_suffix(resp: "CapabilityCheckResponse") -> str:
     return ", ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Capability Check Report — structured Markdown for LLM plan comparison
+# ---------------------------------------------------------------------------
+# 这些函数负责将 CapabilityCheckResponse 中的 I/D/O/R/C 五维度评分、
+# evidence_strength（实据/推算）标注、checklist 逐项匹配详情，
+# 渲染为一份结构化、高可读性的 Markdown 报告。
+#
+# 报告设计参考了两份设计文档：
+#   - CAPABILITY_EVALUATION_SCORING_DESIGN.md（I/D/O/R/C 五维度模型）
+#   - CAPABILITY_WEIGHTED_SCORING_DESIGN.md（evidence_strength 加权方案）
+#
+# 报告渲染后注入 _llm_select_best_plan() 的比较 prompt 中，
+# 让 LLM 在做 Pre-Make-Plan 选优时，能同时看到：
+#   1. 每个候选 Agent 的 TaskList 规划（已有）
+#   2. 每个候选 Agent 的 capabilty check 步骤明细（新增）
+# ---------------------------------------------------------------------------
+
+
+# 证据强度的中文标签，用于报告表格的「强度」列。
+# solid=实据 → 评分来自技能正文的明确声明（字段列表、主题清单等）
+# speculative=推算 → 评分来自 Agent 描述或上下文推断
+_SCORE_STRENGTH_LABEL: dict[str, str] = {"solid": "实据", "speculative": "推算"}
+
+# 操作能力（O 维度）三档评分的中文说明。
+_O_LABEL: dict[float, str] = {
+    1.0: "可直接执行",
+    0.7: "可组合完成",
+    0.0: "不能做",
+}
+
+
+def _build_checklist_detail(required: list[str], matched: list[str]) -> str:
+    """将 required/matched 清单渲染为紧凑的逐项标记字符串。
+
+    格式：``✅ item_a  ✅ item_b  ❌ item_c``
+    用途：嵌入 Markdown 表格的「匹配详情」列，让 LLM 一眼看到
+          每个维度的逐项匹配情况。
+
+    超过 5 项的清单会被截断并以 ``...(+N项)`` 收尾，
+    避免表格列过宽影响 LLM token 窗口。
+
+    Args:
+        required: 该维度的所需项清单（列表不能为空）。
+        matched: 所需项中已命中的子集。
+
+    Returns:
+        紧凑的逐项标记字符串；required 为空时返回 "无要求"。
+    """
+    if not required:
+        return "无要求"
+
+    matched_set = set(matched)
+    item_parts: list[str] = []
+
+    # 最多展示前 5 项，保证表格列宽度可控。
+    for item in required[:5]:
+        mark = "✅" if item in matched_set else "❌"
+        item_parts.append(f"{mark} {item}")
+
+    if len(required) > 5:
+        item_parts.append(f"...(+{len(required) - 5}项)")
+
+    return "  ".join(item_parts)
+
+
+def _render_capability_report(agent_name: str, resp: "CapabilityCheckResponse") -> str:
+    """将 CapabilityCheckResponse 渲染为结构化 Markdown 能力报告。
+
+    报告结构（每 Agent 一份）：
+
+    - **Header**：can_handle / can_contribute / confidence / 证据等级 / handle_score / 可贡献步
+    - **元信息**：contribution 说明、缺失需求、风险提示
+    - **Per-Step 维度表**：每个步骤一张表格，5 行对应 I/D/O/R/C，
+      每行含分数、证据强度（实据/推算）、required/matched 逐项详情
+    - **步骤小结**：step_score、是否可贡献、证据引用
+
+    Design rationale（参考 CAPABILITY_WEIGHTED_SCORING_DESIGN.md §2）：
+    - D/R 维度标记为「推算」时，说明该 Agent 的技能声明中没有
+      具体的数据字段/主题清单或输出格式说明，这些维度的评分
+      可信度较低，LLM 在比较时应谨慎对待。
+    - O 维度始终「实据」——操作能力的三档评分（1.0/0.7/0.0）
+      总是基于明确的正文声明或明确的不支持声明。
+    - I/C 维度通常有明确的输入来源和约束声明，多数为「实据」。
+
+    对于非链式评分的 legacy 响应（无 steps 字段），
+    回退为纯文本摘要。
+
+    Args:
+        agent_name: Agent 的显示名称。
+        resp: capability check 的响应对象。
+
+    Returns:
+        单份 Agent 的 Markdown 能力报告字符串。
+    """
+    logger.info(
+        "[CapReport] rendering report | agent=%s | chain_scored=%s | steps=%d",
+        agent_name,
+        getattr(resp, "is_chain_scored", False),
+        len(getattr(resp, "steps", None) or []),
+    )
+
+    # ── 非链式评分的 legacy 响应：纯文本回退 ──
+    if not getattr(resp, "is_chain_scored", False) or not (getattr(resp, "steps", None) or []):
+        logger.info(
+            "[CapReport] agent=%s is legacy (no chain steps), producing plain summary",
+            agent_name,
+        )
+        verdict = (
+            f"can_handle={resp.can_handle}, "
+            f"can_contribute={resp.can_contribute}, "
+            f"confidence={resp.confidence:.2f}"
+        )
+        extra = ""
+        reason = getattr(resp, "reason", None)
+        if reason:
+            extra = f"\n> 理由: {reason}"
+        return (
+            f"#### Agent: {agent_name}\n\n"
+            f"**能力判定**: {verdict} (非链式评分，无步骤明细){extra}\n"
+        )
+
+    steps: list[dict] = resp.steps or []
+    evidence_grade = resp.evidence_grade or "?"
+    contributing_steps = set(resp.contributing_steps or [])
+
+    # 统计各维度的 evidence_strength 分布，用于观测日志。
+    _strength_counts: dict[str, dict[str, int]] = {}
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+        for dim_key in ("I", "D", "R", "C"):
+            ck = (s.get("checklists", {}) or {}).get(dim_key, {}) or {}
+            strength = ck.get("evidence_strength", "?")
+            _strength_counts.setdefault(dim_key, {}).setdefault(strength, 0)
+            _strength_counts[dim_key][strength] += 1
+
+    logger.info(
+        "[CapReport] agent=%s | evidence_strength distribution: %s",
+        agent_name,
+        {k: dict(v) for k, v in _strength_counts.items()},
+    )
+
+    # ── 组装 Markdown ──
+    lines: list[str] = []
+
+    # Header: Agent 名称 + 能力小结一行
+    lines.append(f"#### Agent: {agent_name}")
+    verdict_parts: list[str] = [
+        f"can_handle={resp.can_handle}",
+        f"can_contribute={resp.can_contribute}",
+        f"confidence={resp.confidence:.2f}",
+        f"证据等级={evidence_grade}",
+        f"handle_score={resp.handle_score:.3f}",
+    ]
+    if contributing_steps:
+        verdict_parts.append(f"可贡献步骤={sorted(contributing_steps)}")
+    lines.append(f"**能力小结**: {' | '.join(verdict_parts)}")
+
+    # 元信息：contribution / 缺失需求 / 风险
+    if resp.contribution:
+        lines.append(f"> 贡献说明: {resp.contribution}")
+    if resp.missing_requirements:
+        missing_str = ", ".join(str(m) for m in resp.missing_requirements)
+        lines.append(f"> 缺失需求: {missing_str}")
+    if resp.risks:
+        risks_str = "; ".join(str(r) for r in resp.risks[:3])
+        lines.append(f"> 风险提示: {risks_str}")
+
+    # ── 逐步骤的维度表 ──
+    total_steps = len(steps)
+    for s in steps:
+        if not isinstance(s, dict):
+            continue
+
+        sid = s.get("step_id", "?")
+        desc = str(s.get("description") or s.get("operation") or "").strip()
+        op = s.get("operation", "?")
+        is_final = s.get("is_final", False)
+        final_label = "**最终输出**" if is_final else "中间步骤"
+
+        checklists: dict = s.get("checklists", {}) or {}
+        scores: dict = s.get("scores", {}) or {}
+        s_score_val = float(s.get("step_score", 0.0) or 0.0)
+        evidence_texts: list = s.get("evidence", []) or []
+        outputs: list = s.get("outputs", []) or []
+        # constraints 仅用于日志观测，表格中通过 C 维度的 checklist 体现。
+
+        # 步骤标题
+        lines.append(f"\n##### 步骤 {sid}/{total_steps}: {desc or '(无描述)'}")
+        lines.append(f"操作 `{op}` | {final_label} | 产出: {outputs or '(无)'}")
+
+        # 维度比对表
+        lines.append("")
+        lines.append("| 维度   | 分    | 强度 | 匹配详情 |")
+        lines.append("|--------|-------|------|----------|")
+
+        # I — 输入匹配
+        i_ck = checklists.get("I", {})
+        i_strength = _SCORE_STRENGTH_LABEL.get(i_ck.get("evidence_strength", ""), "?")
+        i_detail = _build_checklist_detail(i_ck.get("required", []) or [], i_ck.get("matched", []) or [])
+        lines.append(f"| I 输入 | {scores.get('I', 0):.2f}  | {i_strength} | {i_detail} |")
+
+        # D — 信息覆盖
+        d_ck = checklists.get("D", {})
+        d_strength = _SCORE_STRENGTH_LABEL.get(d_ck.get("evidence_strength", ""), "?")
+        d_detail = _build_checklist_detail(d_ck.get("required", []) or [], d_ck.get("matched", []) or [])
+        lines.append(f"| D 数据 | {scores.get('D', 0):.2f}  | {d_strength} | {d_detail} |")
+
+        # O — 操作能力（始终实据）
+        o_val = scores.get("O", 0)
+        o_text = _O_LABEL.get(o_val, str(o_val))
+        lines.append(f"| O 操作 | {o_val:.1f}  | 实据 | {o_text} |")
+
+        # R — 结果匹配
+        r_ck = checklists.get("R", {})
+        r_strength = _SCORE_STRENGTH_LABEL.get(r_ck.get("evidence_strength", ""), "?")
+        r_detail = _build_checklist_detail(r_ck.get("required", []) or [], r_ck.get("matched", []) or [])
+        lines.append(f"| R 结果 | {scores.get('R', 0):.2f}  | {r_strength} | {r_detail} |")
+
+        # C — 约束满足
+        c_ck = checklists.get("C", {})
+        c_req = c_ck.get("required", []) or []
+        c_strength = _SCORE_STRENGTH_LABEL.get(c_ck.get("evidence_strength", ""), "?")
+        if not c_req:
+            c_detail = "无约束"
+        else:
+            c_detail = _build_checklist_detail(c_req, c_ck.get("matched", []) or [])
+        lines.append(f"| C 约束 | {scores.get('C', 0):.2f}  | {c_strength} | {c_detail} |")
+
+        # 步骤小结：step_score + 是否可贡献 + 证据引用
+        contrib_mark = " ★可贡献" if sid in contributing_steps else ""
+        lines.append(f"\n→ 步骤分: **{s_score_val:.3f}**{contrib_mark}")
+        if evidence_texts:
+            for ev in evidence_texts[:2]:
+                ev_text = str(ev)[:200]
+                lines.append(f"  > 依据: {ev_text}")
+
+    report = "\n".join(lines)
+    logger.info(
+        "[CapReport] agent=%s report rendered | chars=%d | steps=%d",
+        agent_name, len(report), total_steps,
+    )
+    return report
+
+
 def _log_capability_respond(resp: "CapabilityCheckResponse") -> None:
     """One line per agent: wait/latency + verdict + scores + reason."""
     if resp.can_handle:
@@ -2936,49 +3181,102 @@ class RoutingAgent(BaseAgent):
         run_id: str,
         trace_id: str,
     ) -> tuple[AgentCard, CapabilityCheckResponse]:
-        """Use an LLM to compare task plans from multiple agents and pick the best.
+        """Use an LLM to compare task plans **and** capability check results.
 
-        Each candidate agent has independently produced a ``TaskList`` for the same
-        query.  The LLM compares the plans and selects the agent whose decomposition
-        best matches the query's intent.
+        Each candidate has:
+        - a ``TaskList`` (from pre-make-plan): the agent's own plan decomposition
+        - a ``CapabilityCheckResponse`` (from capability check): per-step I/D/O/R/C
+          scores with evidence_strength annotations
+
+        The LLM sees BOTH — it compares planning quality AND capability data
+        (which agent has stronger evidence, higher coverage scores, reliable
+        operation capability, etc.) before selecting the most suitable root.
+
+        This addresses the problem where two agents produce similar TaskLists
+        but one has solid evidence (field lists, operation examples) while
+        the other is making guesses based on vague descriptions.
         """
-        # ── Build candidate context ──
-        plans_text_parts: list[str] = []
-        for idx, (card, _, plan) in enumerate(candidates_with_plans):
+        # ── Build candidate context: TaskList + Capability Report ──
+        candidate_blocks: list[str] = []
+        candidate_names: list[str] = []
+        total_report_chars = 0
+
+        for idx, (card, resp, plan) in enumerate(candidates_with_plans):
             tasks = plan.get("tasks", [])
             tasks_text = json.dumps(tasks, ensure_ascii=False, indent=2)
-            plans_text_parts.append(
-                f"### Agent {idx + 1}: {card.name}\n"
-                f"Description: {card.description}\n"
-                f"Planned tasks:\n{tasks_text}"
+
+            # Render the structured capability report (I/D/O/R/C per-step).
+            cap_report = _render_capability_report(card.name, resp)
+            total_report_chars += len(cap_report)
+
+            block = (
+                f"### Candidate {idx + 1}: {card.name}\n\n"
+                f"**Agent Description**: {card.description or '(无)'}\n\n"
+                f"---\n\n"
+                f"#### Pre-Make-Plan TaskList (该 Agent 自行规划的任务分解):\n"
+                f"{tasks_text}\n\n"
+                f"---\n\n"
+                f"#### Capability Check Report (能力检查五维度评分明细):\n"
+                f"{cap_report}"
             )
-        plans_text = "\n\n".join(plans_text_parts)
+            candidate_blocks.append(block)
+            candidate_names.append(card.name)
+
+        candidates_text = "\n\n" + ("=" * 60) + "\n\n".join(candidate_blocks)
 
         logger.info(
-            "[PreMakePlan][LLM] comparing %d candidate plans for query: %s\n%s",
+            "[PreMakePlan][LLM] comparing %d candidates | agents=%s | "
+            "cap_report_chars=%d | query=%s",
             len(candidates_with_plans),
-            query,
-            plans_text,
+            candidate_names,
+            total_report_chars,
+            (query or "")[:120],
         )
 
-        # ── CoT prompt ──
+        # Log the full prompt candidate section at DEBUG level for post-hoc analysis.
+        logger.debug(
+            "[PreMakePlan][LLM] candidate context:\n%s",
+            candidates_text,
+        )
+
+        # ── CoT prompt with capability check guidance ──
         prompt = (
-            "你是一个路由评估专家。你的任务是：给定一个用户问题，以及多个 Agent 各自为该问题"
-            "生成的 task 规划（TaskList），比较这些规划，选出最合理的一个 Agent。\n\n"
+            "你是一个路由评估专家。你的任务是：给定一个用户问题，以及多个候选 Agent 的"
+            "**规划（TaskList）** 和 **能力检查报告（Capability Check Report）**，"
+            "综合比较，选出最合适的根 Agent。\n\n"
             "请按以下步骤推理（思考过程写入 thought 字段）：\n\n"
             "## Step 1 — 理解问题\n"
             "用户问题的核心意图是什么？要回答这个问题，必须获取哪些数据或完成哪些操作？\n\n"
             "## Step 2 — 逐个评估\n"
-            "对每个 Agent 的规划，从以下角度评估：\n"
-            "a) 覆盖度：规划是否覆盖了 Step 1 中识别的核心需求？有无遗漏或冗余？\n"
-            "b) 合理性：任务划分粒度是否合适？任务之间的依赖关系是否正确？\n"
-            "c) 自洽性：每个子任务分配的 agent 与该 Agent 的 description 是否匹配？\n"
-            "d) 整体印象：该规划是否能高效、准确地回答用户问题？\n\n"
+            "对每个候选 Agent，从两个维度交叉评估：\n\n"
+            "### 2a) 规划质量（TaskList）\n"
+            "- 覆盖度：规划是否覆盖了 Step 1 中识别的核心需求？有无遗漏或冗余？\n"
+            "- 合理性：任务划分粒度是否合适？任务之间的依赖关系是否正确？\n"
+            "- 自洽性：每个子任务分配的 agent 与该 Agent 的 description 是否匹配？\n\n"
+            "### 2b) 能力实证（Capability Check Report）\n"
+            "Capability Check Report 展示了每个 Agent 在 I/D/O/R/C 五个维度的分步评分。"
+            "重点关注以下信号：\n"
+            "- **证据强度（「实据」vs「推算」）**：\n"
+            "  ·「实据」表示该维度的评分来自技能正文的明确声明（字段列表、操作命令、输出格式等）\n"
+            "  ·「推算」表示该维度没有明确的文本依据，评分来自 Agent 描述或上下文推断，可信度较低\n"
+            "  · 尤其注意 D（数据覆盖）和 R（结果匹配）维度：如果这两个维度是「推算」，"
+            "说明该 Agent 可能并不真正拥有所需的数据字段/输出形态，只是基于领域名称做了推测\n"
+            "- **操作能力（O 维度）**：1.0=可直接执行、0.7=可组合完成、0.0=不能做\n"
+            "  · O=0.7 表示没有现成路径，执行存在不确定性\n"
+            "- **逐项匹配详情（✅/❌ 清单）**：看到 ❌ 的项是该 Agent 明确无法覆盖的\n"
+            "- **can_handle / confidence / handle_score**：Agent 对自己能否独立完成的自评\n"
+            "- **证据等级（A/B/C/D）**：A=全部有文本依据，D=缺乏依据\n"
+            "- **可贡献步骤**：Agent 具体能完成哪些子步骤（★可贡献 标记）\n\n"
             "## Step 3 — 比较与选择\n"
-            "横向比较各 Agent 的规划，选出最优的一个。如果有多个规划质量接近，优先选择"
-            "覆盖度更完整、任务划分更清晰的。\n\n"
+            "横向比较各 Agent，综合规划质量和能力实证选出最优。原则：\n"
+            "- 如果两个 Agent 的 TaskList 质量接近，优先选择能力实证更强（实据更多、"
+            "confidence 更高、证据等级更高）的那个\n"
+            "- 如果一个 Agent 的 TaskList 看起来很完整但 Capability Check 显示"
+            "关键维度（D/R）都是「推算」，说明这个规划可能基于不准确的前提\n"
+            "- 如果一个 Agent 的 TaskList 看起来简单但 Capability Check 显示"
+            "所有维度都是「实据」且有明确的 ✅ 清单，这种更可信\n\n"
             f"用户问题：{query}\n\n"
-            f"各 Agent 的规划：\n{plans_text}\n\n"
+            f"候选 Agent 的规划与能力报告：\n{candidates_text}\n\n"
             "请调用 select_best_plan 工具输出你的选择。"
         )
 

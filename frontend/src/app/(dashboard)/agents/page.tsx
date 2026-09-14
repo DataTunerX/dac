@@ -12,7 +12,8 @@ import {
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { api } from "@/lib/api";
-import { listAllAgentContainers } from "@/lib/agents-api";
+import { listAllAgentContainers, updateAgent } from "@/lib/agents-api";
+import type { AgentContainerResponse } from "@/lib/api-types";
 import { apiFetcherWithParams, apiFetcher } from "@/lib/swr";
 import { AGENTS_LIST_KEY } from "@/lib/swr-keys";
 import { filterListByQuery } from "@/lib/filter-list-by-query";
@@ -57,6 +58,7 @@ import {
   Bot,
   Layers,
   Eye,
+  Pencil,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -261,6 +263,7 @@ type AgentCardProps = {
   isLoadingSg: boolean;
   onOpen: (agent: Agent) => void;
   onDelete: (id: string, ns: string) => void;
+  onEdit: (agent: Agent) => void;
 };
 
 const AgentCard = memo(function AgentCard({
@@ -269,6 +272,7 @@ const AgentCard = memo(function AgentCard({
   isLoadingSg,
   onOpen,
   onDelete,
+  onEdit,
 }: AgentCardProps) {
   return (
     <Card
@@ -299,6 +303,23 @@ const AgentCard = memo(function AgentCard({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <StatusBadge status={a.status} />
+            {a.dataSourceType === "skill" && (
+              <RbacWrapper requiredPermission="agent:update">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-content-muted hover:bg-blue-50 hover:text-blue-600"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEdit(a);
+                }}
+                title="编辑"
+                aria-label="编辑"
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              </RbacWrapper>
+            )}
             <RbacWrapper requiredPermission="agent:delete">
               <Button
                 variant="ghost"
@@ -394,6 +415,10 @@ export default function AgentsPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteNamespace, setDeleteNamespace] = useState<string>("default");
   const [isDeleting, setIsDeleting] = useState(false);
+  // Edit state
+  const [editingAgent, setEditingAgent] = useState<AgentContainerResponse | null>(null);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
@@ -542,6 +567,8 @@ export default function AgentsPage() {
           orchestratorAgentMaxLoops: data.orchestratorAgentMaxLoops || "2",
           skillAgentMaxLoops: data.skillAgentMaxLoops || "2",
           crossSGMaxHop: data.crossSGMaxHop || "5",
+          summarizeEnabled: data.summarizeEnabled || "true",
+          summarizeCustomPrompt: data.summarizeCustomPrompt || "",
         };
         await api.post(`/namespaces/${data.namespace}/agents`, payload);
         toast.success("智能体创建成功");
@@ -624,6 +651,81 @@ export default function AgentsPage() {
     },
     [router],
   );
+
+  const openEdit = useCallback((agent: Agent) => {
+    // Only skill-type agents support editing
+    if (agent.dataSourceType !== "skill") {
+      toast.error("当前仅 Skill 类型智能体支持编辑")
+      return
+    }
+    const raw = agent.raw as AgentContainerResponse | undefined
+    if (!raw?.name || !raw?.namespace) {
+      toast.error("无法加载智能体详情")
+      return
+    }
+    setEditingAgent(raw)
+    setIsEditOpen(true)
+  }, [])
+
+  const handleUpdate = async (data: CreateAgentPayload) => {
+    if (isSubmittingEdit || !editingAgent) return
+    setIsSubmittingEdit(true)
+    try {
+      const skills = (data.skills || [])
+        .map((s) => {
+          const id = (s.id || "").trim() || (s.name || "").trim();
+          const name = (s.name || "").trim() || id;
+          const description = (s.description || "").trim();
+          const tags = (s.tags || "")
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean);
+          const examples = (s.examples || "")
+            .split("\n")
+            .map((t) => t.trim())
+            .filter(Boolean);
+          return { id, name, description, tags, examples };
+        })
+        .filter((s) => s.id && s.name);
+
+      const llm = data.expertModel || data.plannerModel || "";
+      await updateAgent(editingAgent.namespace, editingAgent.name, {
+        dacType: "skill",
+        agentCard: {
+          name: data.name,
+          description: data.description || "",
+          skills,
+        },
+        dataPolicy: {
+          dataSourceType: "",
+          semanticGroupID: "",
+          sourceNameSelector: [],
+        },
+        skillPolicy: data.skillPolicy ?? { skills: [] },
+        model: {
+          plannerLLM: llm,
+          expertLLM: llm,
+          embedding: "embedding-config",
+        },
+        expertAgentMaxSteps: data.expertAgentMaxSteps || "10",
+        orchestratorAgentMaxLoops: data.orchestratorAgentMaxLoops || "2",
+        skillAgentMaxLoops: data.skillAgentMaxLoops || "2",
+        crossSGMaxHop: data.crossSGMaxHop || "5",
+        summarizeEnabled: data.summarizeEnabled || "true",
+        summarizeCustomPrompt: data.summarizeCustomPrompt || "",
+      })
+      toast.success("智能体更新成功")
+      setIsEditOpen(false)
+      setEditingAgent(null)
+      fetchData()
+    } catch (err: unknown) {
+      console.error("Update agent failed", err)
+      const e = err as { response?: { data?: { message?: string } } }
+      toast.error(e.response?.data?.message || "更新失败，请检查配置")
+    } finally {
+      setIsSubmittingEdit(false)
+    }
+  }
 
   const clearFilters = () => {
     setSearchQuery("");
@@ -834,6 +936,19 @@ export default function AgentsPage() {
                         >
                           <Eye className="h-4 w-4" />
                         </Button>
+                        {a.dataSourceType === "skill" && (
+                          <RbacWrapper requiredPermission="agent:update">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEdit(a)}
+                            title="编辑"
+                            aria-label="编辑"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          </RbacWrapper>
+                        )}
                         <RbacWrapper requiredPermission="agent:delete">
                           <Button
                             variant="ghost"
@@ -864,6 +979,7 @@ export default function AgentsPage() {
               isLoadingSg={isLoadingSg}
               onOpen={openDetail}
               onDelete={openDelete}
+              onEdit={openEdit}
             />
           ))}
         </div>
@@ -883,6 +999,18 @@ export default function AgentsPage() {
         onOpenChange={setIsCreateOpen}
         onSubmit={handleCreate}
       />
+
+      {editingAgent && (
+        <CreateAgentDialog
+          open={isEditOpen}
+          onOpenChange={(open) => {
+            setIsEditOpen(open)
+            if (!open) setEditingAgent(null)
+          }}
+          initialValues={editingAgent}
+          onSubmit={handleUpdate}
+        />
+      )}
 
       <AlertDialog
         open={!!deleteId}

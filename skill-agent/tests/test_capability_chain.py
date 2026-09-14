@@ -1,9 +1,11 @@
 """Unit tests for capability_chain scoring and aggregation.
 
-Arithmetic-mean scoring (post-refactor)
-=======================================
-step_score  = (I + D + O + R + C) / 5          # arithmetic mean, no zero gating
-handle_score = mean(step_scores)                # arithmetic mean across steps
+Weighted-arithmetic-mean scoring (evidence_strength)
+====================================================
+step_score  = weighted-arithmetic-mean(I, D, O, R, C)
+              solid dimensions weight=1.0, speculative dimensions weight=0.1
+              O is always solid.
+handle_score = mean(step_scores)
 """
 
 import pytest
@@ -30,9 +32,19 @@ from agent.capability_chain import (
 FULL = {"required": ["x"], "matched": ["x"], "ratio": 1.0}
 
 
-def rc(required: list[str], matched: list[str]) -> RatioCheck:
+def rc(
+    required: list[str],
+    matched: list[str],
+    *,
+    evidence_strength: str = "solid",
+) -> RatioCheck:
     n = len(required)
-    return RatioCheck(required=required, matched=matched, ratio=len(matched) / n if n else 1.0)
+    return RatioCheck(
+        required=required,
+        matched=matched,
+        ratio=len(matched) / n if n else 1.0,
+        evidence_strength=evidence_strength,
+    )
 
 
 def step(
@@ -94,21 +106,149 @@ def am(*vals: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Basic step_score
+# Basic step_score — weighted
 # ---------------------------------------------------------------------------
 
-def test_step_score_is_arithmetic_mean_of_five_dimensions():
-    # I=0.5 D=1.0 O=0.7 R=1.0 C=0.5 → (3.7/5) = 0.74
+def test_step_score_all_solid_matches_legacy():
+    """All dimensions solid: same as unweighted arithmetic mean."""
     s = step(1, is_final=True, I=rc(["a", "b"], ["a"]), D=rc(["x"], ["x"]), O=0.7,
              R=rc(["r"], ["r"]), C=rc(["c1", "c2"], ["c1"]))
+    # (0.5*1.0 + 1.0*1.0 + 0.7*1.0 + 1.0*1.0 + 0.5*1.0) / 5.0 = 3.7/5 = 0.74
     assert step_score(s) == pytest.approx(0.74)
 
 
-def test_zero_dimension_does_not_zero_step():
-    """Arithmetic mean: a single zero dimension pulls the score down but not to zero."""
-    s = step(1, is_final=True, D=rc(["订单"], []))
-    # I=1 D=0 O=1 R=1 C=1 → 4/5 = 0.8
+def test_speculative_dr_downweighted():
+    """D and R speculative — their values barely influence the step score."""
+    # I=1.0(solid), D=0.0(spec), O=1.0(solid), R=0.0(spec), C=1.0(solid)
+    s = step(1, is_final=True,
+             I=rc(["x"], ["x"], evidence_strength="solid"),
+             D=rc(["订单", "商品"], [], evidence_strength="speculative"),
+             O=1.0,
+             R=rc(["商品列表"], [], evidence_strength="speculative"),
+             C=rc([], [], evidence_strength="solid"))
+    # weighted: 1.0*1.0 + 0.0*0.1 + 1.0*1.0 + 0.0*0.1 + 1.0*1.0 = 3.0
+    # total_weight: 1.0+0.1+1.0+0.1+1.0 = 3.2
+    # step_score = 3.0/3.2 = 0.9375
+    assert step_score(s) == pytest.approx(0.9375)
+
+
+def test_speculative_dr_full_scores_dont_overinflate():
+    """Even with D/R=1.0 speculative, score barely budges from I/O/C baseline."""
+    # I=1.0(solid) D=1.0(spec) O=1.0(solid) R=1.0(spec) C=1.0(solid)
+    s = step(1, is_final=True,
+             I=rc(["x"], ["x"], evidence_strength="solid"),
+             D=rc(["x"], ["x"], evidence_strength="speculative"),
+             O=1.0,
+             R=rc(["x"], ["x"], evidence_strength="speculative"),
+             C=rc(["x"], ["x"], evidence_strength="solid"))
+    # weighted: 1.0+0.1+1.0+0.1+1.0 = 3.2, total=3.2 → 1.0
+    assert step_score(s) == pytest.approx(1.0)
+
+
+def test_speculative_dr_zero_barely_hurts():
+    """D/R=0 speculative, I/O/C=1.0 solid: score stays high."""
+    s = step(1, is_final=True,
+             I=rc(["x"], ["x"], evidence_strength="solid"),
+             D=rc(["订单"], [], evidence_strength="speculative"),
+             O=1.0,
+             R=rc(["商品列表"], [], evidence_strength="speculative"),
+             C=rc(["x"], ["x"], evidence_strength="solid"))
+    # weighted: 1.0+0+1.0+0+1.0 = 3.0, total=3.2 → 0.9375
+    assert step_score(s) == pytest.approx(0.9375)
+
+
+def test_solid_zero_still_hurts():
+    """D=0 solid (explicit exclusion) — full zero impact on weighted mean."""
+    s = step(1, is_final=True,
+             I=rc(["x"], ["x"], evidence_strength="solid"),
+             D=rc(["订单"], [], evidence_strength="solid"),  # explicit exclusion
+             O=1.0,
+             R=rc(["x"], ["x"], evidence_strength="solid"),
+             C=rc(["x"], ["x"], evidence_strength="solid"))
+    # weighted: 1.0+0+1.0+1.0+1.0 = 4.0, total=5.0 → 0.8
     assert step_score(s) == pytest.approx(0.8)
+
+
+def test_operation_capability_always_solid():
+    """O dimension is always solid regardless of context."""
+    # I/O/C solid, D/R speculative. O=0.7 should weigh fully.
+    s = step(1, is_final=True,
+             I=rc(["x"], ["x"], evidence_strength="solid"),
+             D=rc(["x"], ["x"], evidence_strength="speculative"),
+             O=0.7,
+             R=rc(["x"], ["x"], evidence_strength="speculative"),
+             C=rc(["x"], ["x"], evidence_strength="solid"))
+    # weighted: 1.0+0.1+0.7+0.1+1.0 = 2.9, total=3.2 → 0.90625
+    assert step_score(s) == pytest.approx(0.90625)
+
+
+def test_stability_speculative_dr_range():
+    """D/R speculative: score range shrinks dramatically.
+
+    With unweighted mean, D/R=0 or 1 causes ±0.20 swing.
+    With weighted mean (speculative D/R), same swing is only ±0.03.
+    """
+    # pessimistic: D=0, R=0, I/O/C=1.0
+    s_pess = step(1, is_final=True,
+                  I=rc(["x"], ["x"], evidence_strength="solid"),
+                  D=rc(["x"], [], evidence_strength="speculative"),
+                  O=1.0,
+                  R=rc(["x"], [], evidence_strength="speculative"),
+                  C=rc(["x"], ["x"], evidence_strength="solid"))
+    # optimistic: D=1.0, R=1.0
+    s_opt = step(1, is_final=True,
+                 I=rc(["x"], ["x"], evidence_strength="solid"),
+                 D=rc(["x"], ["x"], evidence_strength="speculative"),
+                 O=1.0,
+                 R=rc(["x"], ["x"], evidence_strength="speculative"),
+                 C=rc(["x"], ["x"], evidence_strength="solid"))
+
+    assert step_score(s_pess) == pytest.approx(0.9375)
+    assert step_score(s_opt) == pytest.approx(1.0)
+    # swing is only 0.0625
+
+
+def test_partial_speculative_mix():
+    """Two speculative, three solid: the solid dimensions dominate."""
+    # I=0.5(solid), D=1.0(spec), O=0.7(solid), R=1.0(spec), C=0.5(solid)
+    s = step(1, is_final=True,
+             I=rc(["a", "b"], ["a"], evidence_strength="solid"),
+             D=rc(["x"], ["x"], evidence_strength="speculative"),
+             O=0.7,
+             R=rc(["r"], ["r"], evidence_strength="speculative"),
+             C=rc(["c1", "c2"], ["c1"], evidence_strength="solid"))
+    # weighted: 0.5*1.0 + 1.0*0.1 + 0.7*1.0 + 1.0*0.1 + 0.5*1.0
+    #          = 0.5 + 0.1 + 0.7 + 0.1 + 0.5 = 1.9
+    # total: 1.0+0.1+1.0+0.1+1.0 = 3.2
+    # = 1.9/3.2 = 0.59375
+    assert step_score(s) == pytest.approx(0.59375)
+
+
+def test_missing_evidence_strength_defaults_to_speculative():
+    """LLM forgets to output evidence_strength → default speculative (0.1)."""
+    s = StepEvaluation.model_validate(
+        {
+            "step_id": 1,
+            "description": "",
+            "operation": "lookup",
+            "is_final": True,
+            "inputs": [{"name": "x", "source": "query"}],
+            "outputs": ["y"],
+            "constraints": [],
+            "input_match": {"required": ["x"], "matched": ["x"], "ratio": 1.0},
+            "data_coverage": {"required": ["f"], "matched": ["f"], "ratio": 1.0},
+            "operation_capability": 1.0,
+            "result_match": {"required": ["y"], "matched": ["y"], "ratio": 1.0},
+            "constraint_satisfaction": {"required": [], "matched": [], "ratio": 1.0},
+            "evidence": [],
+        }
+    )
+    # evidence_strength defaults to "speculative" → all RatioChecks get 0.1
+    # weighted: 1.0*0.1 + 1.0*0.1 + 1.0*1.0 + 1.0*0.1 + 1.0*0.1
+    #          = 0.1+0.1+1.0+0.1+0.1 = 1.4
+    # total: 0.1+0.1+1.0+0.1+0.1 = 1.4
+    # = 1.0
+    assert step_score(s) == pytest.approx(1.0)
 
 
 def test_operation_capability_snaps_to_allowed_levels():
@@ -130,6 +270,8 @@ def test_ratio_is_clamped():
 
 # ---------------------------------------------------------------------------
 # Design doc case 12.1: user-agent, "张三买了哪些东西"
+# All dimensions solid: field list, explicit exclusion, grep example.
+# Expected: same results as before (weighted formula with all solid == legacy).
 # ---------------------------------------------------------------------------
 
 def case_user_agent() -> CapabilityChainResult:
@@ -144,12 +286,13 @@ def case_user_agent() -> CapabilityChainResult:
 
 def test_case_12_1_user_agent_contributes_step_1_with_full_confidence():
     agg = aggregate(case_user_agent(), threshold=0.7)
-    # s1: (1+1+1+1+1)/5=1.0   s2: (1+0+1+0+1)/5=0.6   handle = 0.8 > 0.7
+    # s1: all solid, (1+1+1+1+1)/5=1.0   s2: all solid, (1+0+1+0+1)/5=0.6
+    # handle = 0.8 ≥ 0.7, no external dep
     assert agg.handle_score == pytest.approx(0.8)
-    assert agg.can_handle is True  # both steps avg above threshold, no external dep
+    assert agg.can_handle is True
     assert agg.can_contribute is True
     assert agg.confidence == pytest.approx(0.8)
-    assert agg.contributing_steps == [1]  # s2=0.6 < 0.7
+    assert agg.contributing_steps == [1]
     assert agg.has_external_dependency is False
     assert agg.contribution.startswith("输入 username=张三")
     assert agg.missing_requirements == ["订单/购买记录数据（步骤 2）"]
@@ -173,10 +316,10 @@ def test_case_12_2_order_agent_contributes_final_step_but_depends_on_user_id():
     agg = aggregate(case_order_agent(), threshold=0.7)
     # s1: (1+0+1+0+1)/5=0.6   s2: (1+1+1+1+1)/5=1.0   handle=0.8≥0.7
     assert agg.handle_score == pytest.approx(0.8)
-    assert agg.can_handle is True  # arithmetic mean passes, no external dep (upstream from internal step)
+    assert agg.can_handle is True
     assert agg.can_contribute is True
-    assert agg.confidence == pytest.approx(0.8)  # handle_score when can_handle=True
-    assert agg.contributing_steps == [2]  # s1=0.6 < 0.7 excluded
+    assert agg.confidence == pytest.approx(0.8)
+    assert agg.contributing_steps == [2]
     assert agg.missing_requirements == ["user_id"]
 
 
@@ -217,8 +360,8 @@ def test_case_12_4_constraint_failure_contributing():
     # s1.inputs has source="upstream" at step_id=1 → external dependency → can_handle=False
     assert agg.has_external_dependency is True
     assert agg.can_handle is False
-    assert agg.can_contribute is True  # s1=0.9 ≥ 0.7, s2 excluded
-    assert agg.confidence == pytest.approx(0.9)  # max contributing: s1=0.9
+    assert agg.can_contribute is True
+    assert agg.confidence == pytest.approx(0.9)
     assert agg.contributing_steps == [1]
     assert agg.contribution == ""
 
@@ -237,10 +380,10 @@ def test_case_12_5_unstructured_qa_contributes_first_final_step():
                            contribution="输入 入职时间=去年，输出 年假天数及出处，对应最终结果的年假部分"),
                     threshold=0.7)
     # s1: (1+1+1+1+1)/5=1.0  s2: (1+0+1+1+1)/5=0.8  handle=0.9≥0.7
-    assert agg.can_handle is True  # arithmetic mean passes
+    assert agg.can_handle is True
     assert agg.can_contribute is True
-    assert agg.confidence == pytest.approx(0.9)  # handle_score when can_handle=True
-    assert agg.contributing_steps == [1, 2]  # both ≥ 0.7
+    assert agg.confidence == pytest.approx(0.9)
+    assert agg.contributing_steps == [1, 2]
 
 
 # ---------------------------------------------------------------------------
@@ -264,25 +407,23 @@ def test_case_12_6_contract_review_contributes_steps_1_and_3():
     assert agg.step_scores[2] == pytest.approx(0.6)
     assert agg.step_scores[3] == pytest.approx(0.94)
     # handle = (1.0+0.6+0.94)/3 = 0.847 ≥ 0.7
-    # external_dep: s3 inputs have source="upstream" at step_id=3, prior steps exist → not external
-    assert agg.can_handle is True  # arithmetic mean passes, no external dep
+    assert agg.can_handle is True
     assert agg.can_contribute is True
-    assert agg.contributing_steps == [1, 3]  # s2=0.6 < 0.7 excluded
-    assert agg.confidence == pytest.approx(0.85)  # handle_score rounded to 2dp
+    assert agg.contributing_steps == [1, 3]
+    assert agg.confidence == pytest.approx(0.85)
     assert agg.has_external_dependency is False
 
 
 # ---------------------------------------------------------------------------
-# Rule details
+# Rule details (unchanged behaviour)
 # ---------------------------------------------------------------------------
 
 def test_can_handle_requires_no_unresolved_upstream_input():
-    # step_id=1 with source="upstream" → external dependency → can_handle=False
     s = step(1, is_final=True, inputs=[("user_id", "upstream")], outputs=["商品列表"],
              I=rc(["user_id"], ["user_id"]), D=rc(["订单"], ["订单"]), R=rc(["商品列表"], ["商品列表"]))
     agg = aggregate(result([s], contribution="需补齐 user_id，输出商品列表，对应最终结果"),
                     threshold=0.7)
-    assert agg.handle_score == pytest.approx(1.0)  # all 1.0s
+    assert agg.handle_score == pytest.approx(1.0)
     assert agg.has_external_dependency is True
     assert agg.can_handle is False
     assert agg.can_contribute is True
@@ -291,23 +432,17 @@ def test_can_handle_requires_no_unresolved_upstream_input():
 
 def test_missing_input_source_blocks_handle():
     s = step(1, is_final=True, inputs=[("订单号", "missing")], I=rc(["订单号"], []))
-    # I=0 D=1 O=1 R=1 C=1 → 0.8. source="missing" → external. can_handle=False
+    # I=0 D=1 O=1 R=1 C=1 → (0+1+1+1+1)/5 = 0.8. source="missing" → external. can_handle=False
     agg = aggregate(result([s]), threshold=0.7)
     assert agg.can_handle is False
-    # contributing: step score 0.8 ≥ 0.7 → contributing=[1]
-    # But R is defaulted (same as I which is rc(["x"],["x"]) for no R provided, so R=1.0)
-    # Actually the `step()` helper uses `R=I` as fallback. I=rc(["订单号"],[]) → ratio=0
-    # So: I=0 D=1 O=1 R=0 C=1 → (0+1+1+0+1)/5 = 0.6 < 0.7
+    # R defaults same as I (rc(["订单号"], [])) → ratio=0 → R=0
+    # I=0 D=1 O=1 R=0 C=1 → 0.6 < 0.7
     # contributing=[] → can_contribute=False
     assert agg.can_contribute is False
 
 
 def test_empty_contribution_still_allows_contribute():
-    """即使 contribution 为空，只要 contributing steps 非空就判 can_contribute=True。
-
-    contribution 字段是 LLM 的元信息输出，LLM 经常忘记填。can_contribute 的核心信号
-    是 contributing_steps（纯算术计算），不依赖 contribution 是否非空。
-    """
+    """即使 contribution 为空，只要 contributing steps 非空就判 can_contribute=True。"""
     r = case_user_agent()
     r.contribution = ""
     agg = aggregate(r, threshold=0.7)
@@ -324,12 +459,11 @@ def test_can_handle_implies_can_contribute_even_without_contribution_text():
 
 
 def test_any_step_with_sufficient_score_is_contributing():
-    """任何步骤能力分 ≥ 阈值就是贡献者，不验证下游是否真的需要。"""
     s1 = step(1, is_final=False, outputs=["orphan"], inputs=[("a", "query")], I=rc(["a"], ["a"]))
     s2 = step(2, is_final=True, inputs=[("b", "missing")], I=rc(["b"], []), outputs=["answer"])
     # s1: (1+1+1+1+1)/5 = 1.0  s2: (0+1+1+0+1)/5 = 0.6
     agg = aggregate(result([s1, s2], contribution="输入 a，输出 orphan，无人使用"), threshold=0.7)
-    assert agg.contributing_steps == [1]  # s2=0.6 < 0.7 excluded
+    assert agg.contributing_steps == [1]
     assert agg.can_contribute is True
 
 
@@ -376,11 +510,11 @@ def test_parse_chain_result_accepts_raw_tool_args_and_ignores_extras():
                 "outputs": ["user_id"],
                 "constraints": [],
                 "evidence": ["技能正文：grep 张三 data/users.txt"],
-                "input_match": {"required": ["username"], "matched": ["username"], "ratio": 1.0},
-                "data_coverage": {"required": ["用户名"], "matched": ["用户名"], "ratio": "1.0"},
+                "input_match": {"required": ["username"], "matched": ["username"], "ratio": 1.0, "evidence_strength": "solid"},
+                "data_coverage": {"required": ["用户名"], "matched": ["用户名"], "ratio": "1.0", "evidence_strength": "solid"},
                 "operation_capability": 1,
-                "result_match": {"required": ["user_id"], "matched": ["user_id"], "ratio": 1.0},
-                "constraint_satisfaction": {"required": [], "matched": [], "ratio": 1.0},
+                "result_match": {"required": ["user_id"], "matched": ["user_id"], "ratio": 1.0, "evidence_strength": "solid"},
+                "constraint_satisfaction": {"required": [], "matched": [], "ratio": 1.0, "evidence_strength": "solid"},
             }
         ],
         "contribution": "",
@@ -397,7 +531,7 @@ def test_parse_chain_result_accepts_raw_tool_args_and_ignores_extras():
     assert agg.confidence == pytest.approx(1.0)
 
 
-def test_steps_payload_contains_scores_and_checklists():
+def test_steps_payload_contains_scores_checklists_and_evidence_strength():
     r = case_user_agent()
     agg = aggregate(r, threshold=0.7)
     payload = agg.steps_payload(r)
@@ -406,3 +540,65 @@ def test_steps_payload_contains_scores_and_checklists():
     # s2: I=1.0 D=0 R=0 → (1+0+1+0+1)/5 = 0.6
     assert payload[1]["step_score"] == pytest.approx(0.6)
     assert payload[1]["checklists"]["D"]["required"] == ["订单", "商品"]
+    # evidence_strength should be in the checklists output
+    assert payload[0]["checklists"]["I"] == {
+        "required": ["username"], "matched": ["username"], "evidence_strength": "solid",
+    }
+    assert payload[1]["checklists"]["D"]["evidence_strength"] == "solid"
+
+
+# ---------------------------------------------------------------------------
+# Weighted scoring: regression — design-doc cases unchanged with all solid
+# ---------------------------------------------------------------------------
+
+def test_all_solid_weighted_matches_legacy_for_case_12_1():
+    """Case 12.1 with all solid: same handle_score / can_handle as before."""
+    agg = aggregate(case_user_agent(), threshold=0.7)
+    assert agg.handle_score == pytest.approx(0.8)
+    assert agg.can_handle is True
+
+
+def test_all_solid_weighted_matches_legacy_for_case_12_3():
+    """Case 12.3 with all solid: same handle_score as before."""
+    s = step(1, operation="aggregate", is_final=True, inputs=[("时间范围", "query")],
+             outputs=["商品", "销量", "排名"], I=rc(["时间范围"], ["时间范围"]),
+             D=rc(["商品名", "下单时间"], ["商品名", "下单时间"]), O=0.7,
+             R=rc(["商品", "销量", "排名"], ["商品", "销量", "排名"]), C=rc(["上个月"], ["上个月"]))
+    agg = aggregate(result([s]), threshold=0.7)
+    assert agg.handle_score == pytest.approx(0.94)
+    assert agg.can_handle is True
+
+
+# ---------------------------------------------------------------------------
+# Weighted scoring: end-to-end with speculative D/R
+# ---------------------------------------------------------------------------
+
+def test_speculative_dr_lowers_weight_but_preserves_handle():
+    """Speculative D/R doesn't ruin can_handle when I/O/C are strong."""
+    s1 = step(1, is_final=True, inputs=[("x", "query")], outputs=["y"],
+              I=rc(["x"], ["x"], evidence_strength="solid"),
+              D=rc(["f"], ["f"], evidence_strength="speculative"),
+              O=1.0,
+              R=rc(["y"], ["y"], evidence_strength="speculative"),
+              C=rc(["x"], ["x"], evidence_strength="solid"))
+    agg = aggregate(result([s1]), threshold=0.7)
+    # weighted: (1.0+0.1+1.0+0.1+1.0)/3.2 = 3.2/3.2 = 1.0
+    assert agg.handle_score == pytest.approx(1.0)
+    assert agg.can_handle is True
+
+
+def test_speculative_dr_weak_ioc_still_fails():
+    """When I/O/C are weak AND D/R are speculative, should still fail."""
+    s1 = step(1, is_final=True, inputs=[("x", "query")], outputs=["y"],
+              I=rc(["a", "b"], ["a"], evidence_strength="solid"),  # 0.5
+              D=rc(["f"], ["f"], evidence_strength="speculative"),  # 1.0 but weighted 0.1
+              O=0.7,                                                  # 0.7 solid
+              R=rc(["y"], [], evidence_strength="speculative"),      # 0.0 weighted 0.1
+              C=rc(["c1", "c2"], ["c1"], evidence_strength="solid")) # 0.5
+    # weighted: 0.5*1.0 + 1.0*0.1 + 0.7*1.0 + 0.0*0.1 + 0.5*1.0
+    #          = 0.5 + 0.1 + 0.7 + 0.0 + 0.5 = 1.8
+    # total: 1.0 + 0.1 + 1.0 + 0.1 + 1.0 = 3.2
+    # = 1.8/3.2 = 0.5625, rounded to 3dp → 0.562
+    agg = aggregate(result([s1]), threshold=0.7)
+    assert agg.handle_score == pytest.approx(0.562)
+    assert agg.can_handle is False

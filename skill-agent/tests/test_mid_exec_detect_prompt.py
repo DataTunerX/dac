@@ -52,7 +52,56 @@ def _build_llm():
 
 PROMPT_TEMPLATE = """你是一个多 agent 协作的数据缺口检测器。基于已有的执行结果和原始问题，判断是否还需要其他领域的补充数据。
 
-核心判断逻辑：
+## 步骤 0：任务类型分类（必须在所有判断之前完成）
+
+根据原始问题和本层执行结果的特征，将任务归类为 structured 或 unstructured。
+
+**structured（结构化数据查询）的判断特征：**
+- 问题涉及数据库表、SQL 查询、字段查找、记录检索、ID 关联
+- 期望的答案是有限数据集（如某人的订单列表、某商品的统计值、某条件的筛选结果）
+- 执行结果以字段-值对、表格、记录列表或统计数字呈现
+- 有明确的数据边界：「查到了哪些字段」vs「还缺哪些字段」
+- 典型关键词：查询、查找、列表、多少、哪些、统计、汇总、筛选、关联
+
+**unstructured（非结构化处理）的判断特征：**
+- 问题涉及文档总结、文本分析、代码审查、翻译、内容生成、知识问答
+- 期望的答案是开放性叙述（段落式分析、评判性结论、描述性总结）
+- 执行结果以描述性段落文本呈现，而非字段-值行列表
+- 答案没有「穷尽」的概念——始终可以从不同角度、不同深度做补充，但这不代表「有缺口」
+- 典型关键词：分析、总结、审查、解释、翻译、评估、建议、判断
+
+**分类方法（按此程序执行，不要靠关键词或题型印象判断）：**
+只看原始问题那一段（分类时不要读「本层自身执行结果」）。执行下面这个判定程序：
+
+第1步：写出答案模板。
+   把原始问题改写成一句带空白的回答句，例如「这个任务的答案是：____」或「结论是：____」。
+
+第2步：问一句——「这个答案本身，是不是已经存在、只等取回？」
+   → 是：答案是一个值 / 列表 / 记录集，本来就记在某处，取回即可 → **structured**
+   → 否：答案谁都没有记录过，必须由人依据取回的数据推导、权衡、下结论 → **unstructured**
+
+判别示范（只看判断过程，不要记题型）：
+   · 「A 的供应商是谁、库存多少」→ 答案「供应商__、库存__」→ 这两个值本来就记在系统里 → structured
+   · 「这份代码有哪些安全风险」→ 答案「存在__风险」→ 没有任何地方记录过这个结论，要靠人判定 → unstructured
+
+⚠ 最关键的陷阱（此处判错最多，务必执行）：
+   本层如果声明「缺少 XX 数据 / 某个字段没拿到」，这只说明 **XX 数据存在**，**不等于答案存在**。二者必须分开问：
+     数据存在？ → 多数情况都是「是」（否则没法查），但这不决定分类。
+     答案存在？ → 只有这个问题决定分类。
+   自检：把所有声明缺失的数据也都拿到手之后，答案是不是就自动成型了？
+     → 是 → structured；→ 否（还要人下判断）→ unstructured。
+
+⚠ 另一条禁令：禁止用「本层结果里有没有字段/记录/日志」当依据。能力缺失导致中断时，中间结果必然只剩已核实的数据片段，这是中断的副产物，与任务类型无关。
+
+**分类自检方法：**
+问自己：「这个任务的执行结果，有没有一个客观的标准来判断它是否'完整'？」
+→ 如果答案是「有」→ structured（比如：缺了某个字段、缺了某张表的数据）
+→ 如果答案是「没有」→ unstructured（比如：一个文档分析永远可以更深入，但已有的分析已经是对原始问题的充分回答）
+
+请先确定 task_type，然后根据类型选择下面的判定规则。
+
+## 步骤 1a：结构化数据缺口的判定规则（仅当 task_type=structured 时适用）
+
 1）首先分析本层自身执行结果，判断当前结果是否足以完整回答原始问题。
 2）如果本层结果是空结果（如 'not found'、'查询结果为空'、'0 条记录'、'no records'），不能因此直接拒绝委派。需要进一步判断：
    a) 本层 skill 说明或结果中是否提到了其他可用的技能/数据源/agent？
@@ -63,24 +112,78 @@ PROMPT_TEMPLATE = """你是一个多 agent 协作的数据缺口检测器。基�
    当本层没有具体标识符时，synthesized_query 应包含原始问题中的实体信息（如姓名、描述、关键词）作为查询线索，下游 agent 可自行完成映射或查询。
 4）部分成功也要委派：若结果写了 task fail / 无法确认，但正文或 structured_control 里已有可传递的关联键，且明确缺外域字段，应 needs_help=true，synthesized_query 必须带上这些关联键。
 5）outcome=partial 或 reason_code=data_sovereignty_gap 时，一律 needs_help=true。
-6）只有当本层结果明确表示：原始问题中的实体或概念在自身数据域中确实不存在，且没有任何其他 agent 可能拥有该数据时，才返回 needs_help=false。
+6）needs_help=false 的条件：当本层结果已覆盖原始问题所有必需的域，且参考下方的 SG 技能列表，没有其他 agent 声明的技能范围能补充本层缺失的数据时，才返回 needs_help=false。注意：不需要证明「绝对没有 agent 有」，只需判断列表中没有匹配的即可。
 
-synthesized_query 书写规则（强制）：
+**structured synthesized_query 书写规则（强制）：**
 - 只写下游 SG 本轮需要交付的子问题：关联键 + 缺失字段；
 - 当没有关联键时，传递原始问题中的实体信息（姓名、ID、关键词等）作为查询线索；
 - 禁止复述完整原题；禁止写入其它域目标或整题扩写；
 - 禁止要求下游去计算本层已有或本层负责的指标；
 - 下游拿到这句话应能直接执行并结束，无需理解整题其它部分。
+- 【关键】synthesized_query 必须从下游 SG 的视角编写，而非本层视角：
+  本层（delegator）的视角是「我需要什么数据」，下游 SG 的视角是「我能用自己的技能回答什么问题」。
+  synthesized_query 必须采用下游 SG 的视角：描述一个下游 SG 能用自己的技能独立完成的子问题。
+  自检方法：如果本层自己就能回答 synthesized_query 描述的问题，
+  → 说明写错了域，这是本层域内的问题，下游 SG 没有对应的技能。
+  正确做法：先看下方「SG 技能列表」中 target_sgs 的技能，确认它们能处理什么类型的问题，
+  然后 synthesized_query 只写这些技能能直接处理的内容。
 
-重要约束：
+## 步骤 1b：非结构化任务缺口的判定规则（仅当 task_type=unstructured 时适用）
+
+核心原则：非结构化任务（文档总结、文本分析、代码审查、翻译等）没有「标准答案」，
+「完成」意味着给出了对原始问题的实质性、有结构的回答，而非穷尽了所有可能的角度。
+
+**前置条件（在判定任何缺口之前必须先通过）：**
+非结构化任务只承认「明确数据缺口」。要判定 needs_help=true，你必须先能写出一个下游 SG 用其自身技能可直接执行的具体子问题。
+自检方法：先在心里写出 synthesized_query，再问「这句话能让下游 SG 直接开工吗？」
+→ 写得出来 → 这是明确缺口，继续用下面的 A/B 条件判定；
+→ 写不出来，只能说「可以更深入」「可以补充某方面的分析」→ 这是开放式思考方向，不是数据缺口，直接返回 needs_help=false。
+⚠ 非结构化任务不存在「无限可补充」意义上的缺口：任何分析在理论上都能做得更深，但这不构成委派理由。写不出明确子问题，就等于没有缺口。
+
+**触发 needs_help=true 的条件（较严格，只有以下情况才委派）：**
+A）本层结果明确声明了具体的、可查证的缺失项，且下方 SG 技能列表中确有 agent 能填补该项。
+   示例：执行结果说「代码审查完成了安全部分，但缺少合规性审计」，且下方有 compliance-agent → 可委派。
+   反例：执行结果是一个完整的产品描述翻译，但「术语库 agent 可能有更精确译法」→ 这不是明确的缺失项，不委派。
+   ⚠ 但请注意区分「泛指」与「已点名具体缺失项」——后者是明确缺口：
+   · 泛指（不委派）：翻译已完整交付，只是笼统认为「术语库也许有更准的说法」，说不出具体是哪个词有问题 → needs_help=false。
+   · 已点名（委派）：结果明确指出「术语 X、Y 的确切译法未能确定」，且下方有 terminology-agent 可查证这些具体术语 → needs_help=true，因为 gap 已被收敛成可执行的子问题。
+
+B）本层结果明确表示「不具备该能力」或「能力域错误」，且原始问题中的实体或概念在它域可能存在。
+   示例：order-agent 收到了「审查 payment_service.py 的安全漏洞」，返回「不具备代码审查能力」→ 应委派给 code-agent。
+
+**触发 needs_help=false 的条件（以下任一成立就不委派）：**
+I）本层已经返回了一个成文的、有逻辑结构的分析/总结/审查/翻译结论。
+   「成文」指结果中包含实质性的内容（不是空壳、不是纯报错、不是仅声明能力不足）。
+   「有逻辑结构」指结果有完整的叙事或分析框架（不是零散片段）。
+   这时即使理论上「可以更深入」，也应返回 needs_help=false。
+
+II）原始问题是一个不需要外部数据的自包含任务（如纯翻译、纯格式化、纯生成）。
+   示例：「把这段文字翻译成英文」—— 翻译已完成即 needs_help=false。
+
+III）本层结果对原始问题的核心诉求已给出充分回答，只是缺少次要补充信息。
+    示例：「分析这份报告的核心内容」→ 本层已提取并归纳了全文要点。
+    即使「报告中提到的某法规的精确引用条款」没有展开，也不属于必须委派的缺口。
+
+**unstructured 场景下 outcome=partial 的含义不同：**
+- 非结构化任务中 outcome=partial 是常态（任何分析都是'部分'的），不是强制委派信号。
+- 只有当 partial 的原因是一个具体的、可查证的能力缺失时（见条件 A），才委派。
+
+**unstructured 场景下的 synthesized_query（强制）：**
+- synthesized_query 是 needs_help=true 的**必要条件**：写不出它，就不算明确缺口，needs_help 必须为 false。
+- 判定顺序固定为：先写 synthesized_query，再据此决定 needs_help。禁止先判 needs_help=true 再回头补一个空泛的描述。
+- 上文「前置条件」中的反例（「术语库 agent 可能有更精确译法」）就是典型：这类说法写不出可执行子问题，因此不构成缺口，needs_help=false。
+- synthesized_query 必须从下游 SG 视角编写，描述一个下游 SG 能用自己的技能独立完成的子问题。
+- 【严禁】用「补充某方面的分析」「进一步深入」「完善相关评估」这类开放式表述充数——它们不是可执行子问题，等同于没写；此时应返回 needs_help=false。
+
+## 通用重要约束（两种类型均适用）
+
 - 不要依据 SG 的自描述文案选择目标；最终远程 SG 由后续标准 capability_check 全量广播（成员能力证据）决定；
-- 即使下方 SG 名称列表为空，只要存在数据缺口，仍应 needs_help=true；
 - 当 needs_help=true 时，target_sgs 应填写你认为可补充数据的 SG 名称。
   最终远程 SG 由后续标准 capability_check 全量广播决定，此处的 target_sgs 用于辅助性提示。
+- target_sgs 中的名称必须从上方列表中的 SG 名称中精确选取，不得编造不存在的 SG 名称。
+- 【关键】如果「已完成委托结果」中显示某个 SG 返回了空结果或标记为 EMPTY，说明该 SG 无法为此问题提供数据。此时 target_sgs 不要再次包含该 SG 名称，应尝试委托给列表中其他不同的 SG（agent）。
 
-注意: 如果已有结果已经能完整回答原始问题，应返回 needs_help=false。
-
-原始问题（仅供判断缺口，勿整段写入 synthesized_query）：{query}
+原始问题：{query}
 
 本层自身执行结果：
 {own_text}
@@ -91,7 +194,9 @@ synthesized_query 书写规则（强制）：
 可委托的 SG 名称列表（仅供参考，非选人依据）：
 {sg_options}
 
-请调用 detect_delegation_needs 工具来输出结果。当 needs_help=true 时，reason 字段必须说明具体缺了什么数据、为什么需要补充。"""
+请调用 detect_delegation_needs 工具来输出结果。
+注意：task_type 字段必须首先填写，且必须选择 structured 或 unstructured 之一。
+当 needs_help=true 时，reason 字段必须说明具体缺了什么数据、为什么需要补充。"""
 
 TEST_CASES = [
     # ==================== Structured DB ====================
@@ -252,7 +357,7 @@ TEST_CASES = [
      "query":"审查payment_service.py的安全性和依赖风险",
      "own":"[Task#1]: payment_service.py审查结果：代码本身无SQL注入和XSS风险。但代码导入了未审查的第三方库 payment-gateway-sdk==3.2.1，该库的安全性未验证。",
      "del":"","sg":"- security-agent\n- dependency-agent\n- code-agent\n- order-agent"},
-    {"id":38,"cat":"complex_doc","desc":"翻译文档中遇到专业术语，可能需要术语库agent","exp":True,
+    {"id":38,"cat":"complex_doc","desc":"翻译已点名具体术语无法确定译法，且有术语库agent可查 → 明确缺口","exp":True,
      "query":"把这份医疗设备说明书翻译成中文",
      "own":"[Task#1]: 说明书英文文本已提取1200字。翻译完成80%，但部分医学术语（如'endotracheal intubation'、'capnography'）无法确认准确中文译法。",
      "del":"","sg":"- medical-agent\n- terminology-agent\n- translate-agent\n- order-agent"},
@@ -286,6 +391,19 @@ TEST_CASES = [
      "query":"2024年全年用户增长趋势和留存率",
      "own":"[Task#1]: 订单系统可统计2024年有下单行为的用户数：Q1 1200, Q2 1500, Q3 1800, Q4 2100。但注册用户总数、未下单用户、留存率等指标订单数据不包含。",
      "del":"","sg":"- user-agent\n- analytics-agent\n- growth-agent\n- order-agent"},
+    # ── 泛指 vs 已点名 的边界（#38 的反向钉桩）──
+    # 本层已交付完整成文结论，只是笼统认为别处「也许能做得更好」，
+    # 说不出具体缺哪个词/哪条数据、也写不出可执行子问题 → 不是缺口。
+    # 若删掉此用例，「精修」就可能把泛指型也判成委派而无人发现。
+    {"id":46,"cat":"complex_doc","desc":"翻译已完整交付，仅泛指『术语库也许有更准说法』→ 开放式，非缺口","exp":False,
+     "query":"把这份医疗设备说明书翻译成中文",
+     "own":"[Task#1]: 说明书已全文翻译完成（1200字），术语按通用译法处理，行文通顺，已可直接使用。若追求极致，术语库 agent 也许有更精确的译法，但那属于锦上添花。",
+     "del":"","sg":"- medical-agent\n- terminology-agent\n- translate-agent\n- order-agent"},
+    # 开放式「还能更深入」型：结论已完整成文，理论上可继续扩展 → 非缺口。
+    {"id":47,"cat":"complex_doc","desc":"财报总结已完整成文，仅『理论上可更深入』→ 开放式，非缺口","exp":False,
+     "query":"总结这份年度财报的经营情况",
+     "own":"[Task#1]: 已产出结构化总结：营收+18%、净利率12%、三大业务线拆分、主要风险4条、管理层展望。结论完整成文，可回答原始问题。若要继续，理论上还能加入分析师预期对比、汇率敏感性等角度。",
+     "del":"","sg":"- finance-agent\n- analyst-agent\n- research-agent"},
 ]
 
 
@@ -360,7 +478,7 @@ async def main():
         print(f"\n{'─' * 80}")
         print(f"[#{tc['id']}] {s} | {tc['desc']} | cat={tc['cat']}")
         print(f"  Expected: {tc['exp']} | Actual: {actual}")
-        print(f"  Reason: {str(r.get('reason', ''))[:200]}")
+        print(f"  TaskType: {r.get('task_type', '?')} | Reason: {str(r.get('reason', ''))[:200]}")
         if r.get("synthesized_query"):
             print(f"  Query: {str(r['synthesized_query'])[:200]}")
         if r.get("target_sgs"):
@@ -371,6 +489,7 @@ async def main():
             "cat": tc["cat"],
             "exp": tc["exp"],
             "actual": actual,
+            "task_type": r.get("task_type", "?"),
             "match": match,
             "reason": r.get("reason", ""),
         })
@@ -384,7 +503,7 @@ async def main():
             if len(item) == 3:
                 print(f"  [#{item[0]}] {item[1]}: {item[2]}")
             else:
-                print(f"  [#{item[0]}] {item[1]} | expected={item[2]}, actual={item[3]}")
+                print(f"  [#{item[0]}] {item[1]} | expected={item[3]}, actual={item[2]}")
     print("\nCategory Breakdown:")
     for cat in ["structured_db", "unstructured_doc", "edge_case", "complex_db", "complex_doc", "complex_edge"]:
         cr = [r for r in results if r["cat"] == cat]

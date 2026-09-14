@@ -1,6 +1,8 @@
 """Capability-chain scoring for ``capability_check``.
 
-Implements the aggregation half of ``CAPABILITY_EVALUATION_SCORING_DESIGN.md``:
+Implements the aggregation half of ``CAPABILITY_EVALUATION_SCORING_DESIGN.md``
+and the weighted-dimension scoring defined in
+``CAPABILITY_WEIGHTED_SCORING_DESIGN.md``:
 
 * The LLM decomposes the query into a chain of steps and, for every step,
   scores five conjunctive dimensions (I / D / O / R / C) by listing the
@@ -8,10 +10,14 @@ Implements the aggregation half of ``CAPABILITY_EVALUATION_SCORING_DESIGN.md``:
   reports an evidence grade, a contribution statement, missing requirements
   and a structured reason.  The LLM does **not** output ``can_handle``,
   ``can_contribute`` or ``confidence``.
-* This module only performs arithmetic and rule mapping on that output:
+* This module only performs arithmetic and rule mapping on that output.
+* Per-dimension evidence_strength (solid / speculative) determines
+  dimension weights: solid=1.0, speculative=0.1.  The O dimension is
+  always solid (its three-level scoring is always based on a clear
+  declaration or lack thereof).
 
-      step_score   = I * D * O * R * C
-      handle_score = prod(step_score)
+      step_score   = weighted-arithmetic-mean(I/D/O/R/C)
+      handle_score = mean(step_scores)
       can_handle   = handle_score >= THRESHOLD and no unresolved upstream input
       can_contribute = can_handle or exists step with score >= THRESHOLD whose
                        output is needed (final or feeds a later step) and the
@@ -34,6 +40,14 @@ from pydantic import BaseModel, Field, field_validator
 logger = logging.getLogger(__name__)
 
 SCORE_VERSION = "capability-chain-v1"
+
+# Solid dimensions get full weight; speculative dimensions (D/R when
+# the skill body lacks concrete field / topic lists) are down-weighted
+# so that LLM guesswork on data coverage and result shape doesn't dominate
+# the step score.  See ``CAPABILITY_WEIGHTED_SCORING_DESIGN.md``.
+_DIMENSION_WEIGHT: dict[str, float] = {"solid": 1.0, "speculative": 0.1}
+# O dimension is always solid — its three-level scoring (1.0/0.7/0.0) is
+# always backed by a concrete declaration or a deliberate lack thereof.
 
 # Allowed values of the O (operation capability) dimension.
 OPERATION_LEVELS: tuple[float, ...] = (0.0, 0.7, 1.0)
@@ -83,6 +97,14 @@ class RatioCheck(BaseModel):
     required: list[str] = Field(default_factory=list, description="该维度所需项清单")
     matched: list[str] = Field(default_factory=list, description="所需项中已满足 / 命中的项")
     ratio: float = Field(description="命中项 / 所需项；所需项为空时为 1.0", ge=0.0, le=1.0)
+    evidence_strength: Literal["solid", "speculative"] = Field(
+        default="speculative",
+        description=(
+            "该维度评分的证据强度。solid=依据来自技能正文明确声明（字段列表、主题清单、"
+            "输出格式、排除项、数据同步周期等）；speculative=依据来自 Agent 描述或技能短"
+            "描述推断，正文中无对应具体声明。"
+        ),
+    )
 
     @field_validator("ratio", mode="before")
     @classmethod
@@ -162,22 +184,46 @@ class CapabilityChainResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def step_score(step: StepEvaluation) -> float:
-    """Arithmetic mean of I/D/O/R/C, no zero gating.
+def _weight_for(dimension: str, strength: str) -> float:
+    """Map ``evidence_strength`` to dimension weight.
 
-    Each dimension contributes independently to the average.  Multiple zero
-    dimensions naturally pull the score below the threshold (e.g. two zeros +
-    three 1.0s = 0.6 < 0.7), so explicit gating is unnecessary — the threshold
-    does the filtering.
+    Returns ``_DIMENSION_WEIGHT["speculative"]`` (0.1) when the LLM produces an
+    unrecognised or missing value, so malformed output never inflates the weight.
     """
-    vals = [
-        step.input_match.ratio,
-        step.data_coverage.ratio,
-        step.operation_capability,
-        step.result_match.ratio,
-        step.constraint_satisfaction.ratio,
+    w = _DIMENSION_WEIGHT.get(strength)
+    if w is None:
+        logger.warning(
+            "[CapabilityChain] dimension %s has invalid evidence_strength=%r, "
+            "defaulting to speculative (weight=%.2f)",
+            dimension, strength, _DIMENSION_WEIGHT.get("speculative", 0.1),
+        )
+        return _DIMENSION_WEIGHT.get("speculative", 0.1)
+    return w
+
+
+def step_score(step: StepEvaluation) -> float:
+    """Weighted-arithmetic-mean of I/D/O/R/C.
+
+    Solid dimensions carry full weight (1.0); speculative dimensions are
+    down-weighted to 0.1 so that LLM guesswork on data coverage (D) and
+    result shape (R) does not dominate the step score.
+
+    O is always solid — its three-level scoring (1.0 / 0.7 / 0.0) is always
+    backed by a concrete declaration or a deliberate lack thereof.
+    """
+    dims: list[tuple[float, float]] = [
+        (step.input_match.ratio, _weight_for("I", step.input_match.evidence_strength)),
+        (step.data_coverage.ratio, _weight_for("D", step.data_coverage.evidence_strength)),
+        (step.operation_capability, 1.0),  # O always solid
+        (step.result_match.ratio, _weight_for("R", step.result_match.evidence_strength)),
+        (
+            step.constraint_satisfaction.ratio,
+            _weight_for("C", step.constraint_satisfaction.evidence_strength),
+        ),
     ]
-    return sum(vals) / len(vals)
+    weighted_sum = sum(val * w for val, w in dims)
+    total_weight = sum(w for _, w in dims)
+    return weighted_sum / total_weight if total_weight > 0 else 0.0
 
 
 def _produced_by_earlier_step(name: str, current: StepEvaluation, steps: list[StepEvaluation]) -> bool:
@@ -232,12 +278,25 @@ class AggregatedCapability:
                     },
                     "step_score": round(self.step_scores.get(s.step_id, 0.0), 3),
                     "checklists": {
-                        "I": {"required": s.input_match.required, "matched": s.input_match.matched},
-                        "D": {"required": s.data_coverage.required, "matched": s.data_coverage.matched},
-                        "R": {"required": s.result_match.required, "matched": s.result_match.matched},
+                        "I": {
+                            "required": s.input_match.required,
+                            "matched": s.input_match.matched,
+                            "evidence_strength": s.input_match.evidence_strength,
+                        },
+                        "D": {
+                            "required": s.data_coverage.required,
+                            "matched": s.data_coverage.matched,
+                            "evidence_strength": s.data_coverage.evidence_strength,
+                        },
+                        "R": {
+                            "required": s.result_match.required,
+                            "matched": s.result_match.matched,
+                            "evidence_strength": s.result_match.evidence_strength,
+                        },
                         "C": {
                             "required": s.constraint_satisfaction.required,
                             "matched": s.constraint_satisfaction.matched,
+                            "evidence_strength": s.constraint_satisfaction.evidence_strength,
                         },
                     },
                     "evidence": list(s.evidence),

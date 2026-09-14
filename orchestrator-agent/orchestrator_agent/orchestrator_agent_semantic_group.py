@@ -1370,6 +1370,9 @@ SG_CHAIN_CAPABILITY_CHECK_PROMPT = """# 角色：SG Orchestrator 能力评估员
 - 列出所需输入项；I = 可用项 / 所需项。
 - 该步骤不需要输入时 required 为空、ratio = 1.0。
 - 时间表达式（"本月"、"今天"等）是自包含输入，直接记为已匹配。
+- evidence_strength：
+  · solid：依据来自问题原文中的具体值（如"张三"）、或 SG 描述/成员 SD 中明确声明的数据范围与输入条件
+  · speculative：仅能根据 Agent 名称或问题上下文推断输入是否可用
 
 ### D 信息覆盖
 - 该步骤要读写的数据实体/字段，本 SG 管理的数据里有多少。
@@ -1378,6 +1381,9 @@ SG_CHAIN_CAPABILITY_CHECK_PROMPT = """# 角色：SG Orchestrator 能力评估员
 - **SG 描述是核心决策依据**：描述写"订单域"则订单相关实体全命中；描述写"支付域"则支付相关实体全命中。
 - 特例：该步骤不需要访问任何外部数据（纯生成、纯转换），required 为空、ratio=1.0。
 - D 判断的是"SG 是否覆盖这类数据"，不判断"具体答案是否一定在里面"。记录可能不存在写入 risks。
+- evidence_strength：
+  · solid：依据来自 SG 描述/成员 SD 中的明确表名、字段列表、数据格式说明；SG 描述中声明"不包含 X"的排除项也属 solid
+  · speculative：SG 描述仅有概括描述（如"订单域"、"用户数据"）而无具体表/字段清单；或依赖 Agent 名称推断
 
 ### O 操作能力
 - 该步骤要做的变换，SG 的成员 SD 能不能做。
@@ -1387,20 +1393,33 @@ SG_CHAIN_CAPABILITY_CHECK_PROMPT = """# 角色：SG Orchestrator 能力评估员
 ### R 结果匹配
 - 该步骤要产出的项/形态，SG 能否输出。
 - R = 可产出项 / 期望项。
+- evidence_strength：
+  · solid：依据来自成员 SD 中的输出字段、返回格式、输出形态说明
+  · speculative：成员 SD 仅有概括描述（如"返回查询结果"）而无具体输出格式
 
 ### C 约束满足
 - 问题里显式或隐含的限定条件，SG 能满足多少。
 - 列出约束项：时效、权限、数据范围、规模、精度等；C = 满足项 / 约束项。
 - 没有约束时 required 为空、ratio=1.0。
+- evidence_strength：
+  · solid：依据来自 SG 描述/成员 SD 明确声明的数据同步周期、读写权限、数据范围等
+  · speculative：未找到对应声明的约束判断
+  · SG 描述未声明能满足的约束记为不满足，evidence_strength 仍可标 solid（不满足的依据是"未声明"这一事实）
 
-## 四、证据等级（整体一个）
+## 四、打分总则
+
+- SG 描述为评估核心依据。SG 描述没写的视为没有。禁止根据 Agent 名称或"同行业应该有"推断。
+- 各维度独立核对各自的清单，不允许为了让总分好看而调整某个维度。
+- **evidence_strength 强制要求**：每个 RatioCheck 必须标注 evidence_strength = solid 或 speculative。不能所有维度都标 solid 或都标 speculative，必须逐个维度独立判断。
+
+## 五、证据等级（整体一个，不进乘法）
 
 - A：依据全部来自 SG 描述 + 成员数据清单的明确内容。
 - B：主要来自明确内容，个别依赖 Agent 名称或行业常识推断。
 - C：主要依赖 Agent 名称推测，SG 描述无对应内容。
 - D：缺乏文本依据，含推测成分。
 
-## 五、contribution、missing_requirements、risks、reason
+## 六、contribution、missing_requirements、risks、reason
 
 - contribution：按三要素书写（输入→输出→用途）。不能贡献时留空。
   合格："输入 user_id，输出订单列表，供步骤 3 统计使用"。
@@ -1409,9 +1428,10 @@ SG_CHAIN_CAPABILITY_CHECK_PROMPT = """# 角色：SG Orchestrator 能力评估员
 - risks：不影响分值的风险提示。
 - reason：逐步骤一行，最后一句给整体结论。
 
-## 六、程序侧公式（供理解，不需计算）
+## 七、程序侧公式（供理解，不需计算）
 
-步骤能力分 = (I + D + O + R + C) / 5
+步骤能力分 = weighted-arithmetic-mean(I,D,O,R,C)
+  solid 维度权重=1.0，speculative 维度权重=0.1
 can_handle = 各步骤能力分均值达到阈值，且没有外部依赖
 can_contribute = can_handle，或存在某一步能力分达到阈值
 confidence = 能独立完成时取 handle_score；只能贡献时取最大 step_score；都不能时为 0
@@ -1431,7 +1451,7 @@ confidence = 能独立完成时取 handle_score；只能贡献时取最大 step_
 ---
 输出要求：
 - 只输出一个纯 JSON 对象，**不要使用 ```json 代码块包裹**，直接输出 JSON 文本。
-- 每个 RatioCheck（input_match / data_coverage / result_match / constraint_satisfaction）必须同时给出 required（字符串数组）、matched（字符串数组）、ratio（数字，0~1）。
+- 每个 RatioCheck（input_match / data_coverage / result_match / constraint_satisfaction）必须同时给出 required（字符串数组）、matched（字符串数组）、ratio（数字，0~1）、evidence_strength（字符串，solid 或 speculative）。
 - operation_capability 只能是 1.0、0.7 或 0。
 - 不要输出 can_handle、can_contribute、confidence。
 
@@ -1449,11 +1469,11 @@ confidence = 能独立完成时取 handle_score；只能贡献时取最大 step_
       ],
       "outputs": ["订单列表"],
       "constraints": ["只读"],
-      "input_match": {{"required": ["用户名"], "matched": ["用户名"], "ratio": 1.0}},
-      "data_coverage": {{"required": ["用户表", "订单表"], "matched": ["用户表", "订单表"], "ratio": 1.0}},
+      "input_match": {{"required": ["用户名"], "matched": ["用户名"], "ratio": 1.0, "evidence_strength": "solid"}},
+      "data_coverage": {{"required": ["用户表", "订单表"], "matched": ["用户表", "订单表"], "ratio": 1.0, "evidence_strength": "solid"}},
       "operation_capability": 1.0,
-      "result_match": {{"required": ["订单列表"], "matched": ["订单列表"], "ratio": 1.0}},
-      "constraint_satisfaction": {{"required": ["只读"], "matched": ["只读"], "ratio": 1.0}},
+      "result_match": {{"required": ["订单列表"], "matched": ["订单列表"], "ratio": 1.0, "evidence_strength": "solid"}},
+      "constraint_satisfaction": {{"required": ["只读"], "matched": ["只读"], "ratio": 1.0, "evidence_strength": "solid"}},
       "evidence": ["SG描述：订单域；成员SD：订单表包含订单ID/商品/金额/状态字段"]
     }}
   ],
