@@ -20,8 +20,12 @@ class OpenAICompatibleEmbedding(BaseEmbedding):
         provider: str,
         **kwargs: Any
     ):
-        # Initialize model_kwargs with any additional kwargs
+        # Ollama's OpenAI-compatible endpoint accepts text, not the token-id
+        # arrays LangChain sends when context-length checking is enabled.
+        # Keep this provider-specific so native OpenAI integrations retain
+        # LangChain's default token-aware behavior.
         model_kwargs = kwargs.copy()
+        model_kwargs.setdefault("check_embedding_ctx_length", False)
         
         super().__init__()
         self.provider = provider
