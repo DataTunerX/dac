@@ -67,8 +67,8 @@ class CacheEmbedding(Embeddings):
         try:
             return self._model_instance.embed_documents(truncate_texts_for_embedding(texts))
         except Exception as ex:
-            logging.exception(f"Failed to async embed documents texts")
-            raise ex
+            logger.exception("Failed to embed documents: %s", ex)
+            raise
 
 
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -76,8 +76,8 @@ class CacheEmbedding(Embeddings):
         try:
             return await self._model_instance.aembed_documents(truncate_texts_for_embedding(texts))
         except Exception as ex:
-            logging.exception(f"Failed to async embed documents text")
-            raise ex
+            logger.exception("Failed to asynchronously embed documents: %s", ex)
+            raise
 
 
     def embed_query(self, text: str) -> list[float]:
