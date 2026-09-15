@@ -22,6 +22,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Copy,
   Flag,
   GitBranch,
   Play,
@@ -30,12 +31,14 @@ import {
 } from "lucide-react"
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 import {
   buildExecutionTree,
   flattenTreeForTable,
   layoutExecutionForest,
   nodeStatusOf,
   originAgentOf,
+  renderExecutionMapMarkdown,
   stageLabel,
   treeRoleLabel,
   type ExecutionFlowTableRow,
@@ -60,6 +63,32 @@ const TABLE_COLUMNS: Array<{ key: keyof ExecutionFlowTask; label: string; minWid
   { key: "delegated_by", label: "delegated_by", minWidth: "8rem" },
 ]
 
+async function copyTextWithFallback(text: string, mount?: HTMLElement | null) {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard && typeof window !== "undefined" && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+      return
+    }
+  } catch {
+    // Dialogs / insecure contexts often reject clipboard.writeText.
+  }
+  if (typeof document === "undefined") throw new Error("clipboard unavailable")
+  const host = mount ?? document.body
+  const el = document.createElement("textarea")
+  el.value = text
+  el.setAttribute("readonly", "true")
+  el.style.position = "fixed"
+  el.style.top = "0"
+  el.style.left = "0"
+  el.style.opacity = "0"
+  host.appendChild(el)
+  el.focus()
+  el.select()
+  const ok = document.execCommand("copy")
+  host.removeChild(el)
+  if (!ok) throw new Error("copy failed")
+}
+
 export function ExecutionMapPanel({
   open,
   onOpenChange,
@@ -75,6 +104,7 @@ export function ExecutionMapPanel({
   const forest = useMemo(() => layoutExecutionForest(tree), [tree])
   const rows = useMemo(() => flattenTreeForTable(tree), [tree])
   const originAgent = useMemo(() => originAgentOf(tasks), [tasks])
+  const mapMarkdown = useMemo(() => renderExecutionMapMarkdown(tasks, isLive), [tasks, isLive])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [splitRatio, setSplitRatio] = useState(0.7)
@@ -149,7 +179,15 @@ export function ExecutionMapPanel({
     window.addEventListener("pointerup", onUp)
   }
 
-  const runId = tasks[0]?.run_id || ""
+  const copyMapMarkdown = useCallback(async () => {
+    try {
+      await copyTextWithFallback(mapMarkdown, splitRef.current)
+      toast.success("已复制执行地图")
+    } catch (error) {
+      console.error("Copy execution map failed", error)
+      toast.error("复制失败")
+    }
+  }, [mapMarkdown])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -162,11 +200,15 @@ export function ExecutionMapPanel({
             {isLive ? <span className="text-[11px] text-cta font-normal">实时更新中</span> : null}
           </DialogTitle>
           <div className="flex items-center gap-3">
-            {runId ? (
-              <span className="text-[11px] font-mono text-content-muted truncate max-w-[28rem]" title={runId}>
-                {runId}
-              </span>
-            ) : null}
+            <button
+              type="button"
+              className="h-8 w-8 inline-flex items-center justify-center rounded-md text-content-muted hover:bg-surface-muted hover:text-content"
+              onClick={() => void copyMapMarkdown()}
+              aria-label="复制执行地图"
+              title="复制执行地图"
+            >
+              <Copy className="w-4 h-4" />
+            </button>
             <DialogClose asChild>
               <button
                 type="button"

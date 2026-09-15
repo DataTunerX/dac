@@ -327,3 +327,70 @@ export function treeRoleLabel(task: ExecutionFlowTask, originAgent?: string | nu
   if (task.role === "initiator" && originAgent && task.agent !== originAgent) return "内部执行"
   return roleLabel(task.role)
 }
+
+/** Markdown of the same processed tree the execution map panel renders. */
+export function renderExecutionMapMarkdown(
+  tasks: readonly ExecutionFlowTask[],
+  isLive = false,
+): string {
+  const tree = buildExecutionTree(tasks)
+  const forest = layoutExecutionForest(tree)
+  const originAgent = originAgentOf(tasks)
+  const runId = tasks[0]?.run_id?.trim() || ""
+  const lines: string[] = ["# 执行地图", ""]
+  if (runId) {
+    lines.push(`Run ID: \`${runId}\``, "")
+  }
+  if (tree.length === 0) {
+    lines.push("暂无执行记录", "")
+    return lines.join("\n")
+  }
+
+  lines.push("- 起点 · 开始执行", "")
+  for (const group of forest.turnGroups) {
+    lines.push(`## 第 ${group.turn} 轮`, "")
+    for (const node of group.nodes) {
+      lines.push(...renderMapNodeMarkdown(node, originAgent, 0))
+    }
+    lines.push("")
+  }
+  if (forest.finalAnswers.length > 0) {
+    lines.push("## 最终答案", "")
+    for (const node of forest.finalAnswers) {
+      lines.push(...renderMapNodeMarkdown(node, originAgent, 0))
+    }
+    lines.push("")
+  }
+  lines.push(
+    isLive && forest.finalAnswers.length === 0
+      ? "- 终点（生成中） · 等待最终答案"
+      : "- 终点 · 执行结束",
+    "",
+  )
+  return lines.join("\n")
+}
+
+function renderMapNodeMarkdown(
+  node: ExecutionFlowTreeNode,
+  originAgent: string | null,
+  depth: number,
+): string[] {
+  const pad = "  ".repeat(depth)
+  const agent = node.agent === "NONE" ? "未派发" : node.agent
+  const delegated = node.delegated_by ? ` ← ${node.delegated_by}` : ""
+  const reason = node.reason.trim() ? ` · 原因 ${node.reason.trim().replace(/\s+/g, " ")}` : ""
+  const lines = [
+    `${pad}- **${agent}** · ${treeRoleLabel(node, originAgent)} · ${stageLabel(node.stage)}${delegated}${reason}`,
+  ]
+  if (node.task.trim()) lines.push(...markdownField("问题", node.task, `${pad}  `))
+  if (node.result.trim()) lines.push(...markdownField("答案", node.result, `${pad}  `))
+  for (const child of node.children) {
+    lines.push(...renderMapNodeMarkdown(child, originAgent, depth + 1))
+  }
+  return lines
+}
+
+function markdownField(label: string, text: string, indent: string): string[] {
+  const parts = text.trim().split(/\r?\n/)
+  return [`${indent}- ${label}：${parts[0]}`, ...parts.slice(1).map((line) => `${indent}  ${line}`)]
+}

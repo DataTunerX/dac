@@ -408,7 +408,7 @@ export function CreateAgentDialog({
     } else if (dataSourceType === "skill") {
       // skill 单容器默认：与设计示例对齐
       form.setValue("orchestratorAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
-      form.setValue("expertAgentMaxSteps", "10", { shouldDirty: false, shouldTouch: false })
+      form.setValue("expertAgentMaxSteps", "30", { shouldDirty: false, shouldTouch: false })
       form.setValue("skillAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
       // Only seed hop/mode when entering skill, otherwise a re-run would wipe user input (e.g. 3 → 5).
       if (!lastSkillInit.current) {
@@ -952,7 +952,7 @@ export function CreateAgentDialog({
           expertModel: llm,
           skills,
           skillPolicy: { skills: skillPolicySkills },
-          expertAgentMaxSteps: values.expertAgentMaxSteps || "10",
+          expertAgentMaxSteps: values.expertAgentMaxSteps || "30",
           orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "2",
           skillAgentMaxLoops: values.skillAgentMaxLoops || "2",
           crossSGMaxHop: values.agentMode === "single" ? "1" : values.crossSGMaxHop || "5",
@@ -1404,7 +1404,7 @@ export function CreateAgentDialog({
                             <FormLabel>最大步数</FormLabel>
                             <FormControl>
                               <Input
-                                placeholder="默认 10"
+                                placeholder="默认 30"
                                 {...field}
                                 disabled={isSubmitting}
                               />

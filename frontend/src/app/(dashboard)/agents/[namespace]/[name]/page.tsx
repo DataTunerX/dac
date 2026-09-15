@@ -120,7 +120,7 @@ export default function AgentDetailPage() {
         dataPolicy: { dataSourceType: "", semanticGroupID: "", sourceNameSelector: [] },
         skillPolicy: data.skillPolicy ?? { skills: [] },
         model: { plannerLLM: llm, expertLLM: llm, embedding: "embedding-config" },
-        expertAgentMaxSteps: data.expertAgentMaxSteps || "10",
+        expertAgentMaxSteps: data.expertAgentMaxSteps || "30",
         orchestratorAgentMaxLoops: data.orchestratorAgentMaxLoops || "2",
         skillAgentMaxLoops: data.skillAgentMaxLoops || "2",
         crossSGMaxHop: data.crossSGMaxHop || "5",

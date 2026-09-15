@@ -6,6 +6,7 @@ import {
   nodeStatusOf,
   parseExecutionFlowTask,
   originAgentOf,
+  renderExecutionMapMarkdown,
   stageSortKey,
   treeRoleLabel,
   upsertExecutionFlowTask,
@@ -413,5 +414,20 @@ describe("treeRoleLabel", () => {
         origin,
       ),
     ).toBe("发起者")
+  })
+})
+
+describe("renderExecutionMapMarkdown", () => {
+  it("renders the processed tree with nested delegatees", () => {
+    const md = renderExecutionMapMarkdown(snapshot)
+    expect(md).toContain("# 执行地图")
+    expect(md).toContain("- 起点 · 开始执行")
+    expect(md).toContain("## 第 1 轮")
+    expect(md).toContain("**user-agent** · 发起者 · 首次任务执行")
+    expect(md).toContain("**order-agent** · 被委派 · 首次任务执行 ← user-agent")
+    expect(md).toContain("  - **order-agent** · 内部执行 · 首次任务执行 ← user-agent")
+    expect(md).toContain("## 最终答案")
+    expect(md).toContain("- 终点 · 执行结束")
+    expect(md.indexOf("**user-agent**")).toBeLessThan(md.indexOf("**order-agent** · 被委派"))
   })
 })
