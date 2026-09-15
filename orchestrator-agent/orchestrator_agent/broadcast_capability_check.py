@@ -366,7 +366,9 @@ async def broadcast_capability_check(
         )
         for card in all_agent_cards
     ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    capability_timeout = float(os.getenv("BROADCAST_CAPABILITY_TIMEOUT", "120"))
+    tasks_with_timeout = [asyncio.wait_for(t, timeout=capability_timeout) for t in tasks]
+    results = await asyncio.gather(*tasks_with_timeout, return_exceptions=True)
 
     capable_agents: list[tuple[AgentCard, CapabilityCheckResponse]] = []
     for i, result in enumerate(results):
@@ -596,8 +598,10 @@ async def probe_agents_capability_concurrent(
             )
             return card, resp
 
+    capability_timeout = float(os.getenv("BROADCAST_CAPABILITY_TIMEOUT", "120"))
+    tasks_with_timeout = [asyncio.wait_for(_one(card), timeout=capability_timeout) for card in cards]
     gathered = await asyncio.gather(
-        *[_one(card) for card in cards],
+        *tasks_with_timeout,
         return_exceptions=True,
     )
 

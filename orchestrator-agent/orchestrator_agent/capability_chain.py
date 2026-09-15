@@ -353,7 +353,10 @@ def aggregate(result: CapabilityChainResult, threshold: float | None = None) -> 
         for i in s.inputs
     )
 
-    can_handle = bool(steps) and handle_score >= thr and not has_external_dependency
+    # can_handle 要求 **每一个步骤** 都达到阈值，而不是均值。
+    # 均值会掩盖个别低分步骤（如 step1=1.0, step2=0.4, thr=0.7，均值 0.7 过线但
+    # step2 实际不可执行），导致 Agent 声称"能独立完成"但某步实际上做不了。
+    can_handle = bool(steps) and all(s >= thr for s in scores.values()) and not has_external_dependency
 
     # Any step whose score reaches the threshold can contribute, regardless of
     # whether it is final or intermediate. The LLM's chain decomposition already

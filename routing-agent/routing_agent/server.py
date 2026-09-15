@@ -2594,7 +2594,9 @@ class RoutingAgent(BaseAgent):
             )
             for agent_card in all_agent_cards
         ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        capability_timeout = float(os.getenv("BROADCAST_CAPABILITY_TIMEOUT", "120"))
+        tasks_with_timeout = [asyncio.wait_for(t, timeout=capability_timeout) for t in tasks]
+        results = await asyncio.gather(*tasks_with_timeout, return_exceptions=True)
 
         capable_agents: list[tuple[AgentCard, CapabilityCheckResponse]] = []
         for i, result in enumerate(results):
@@ -2623,9 +2625,11 @@ class RoutingAgent(BaseAgent):
                 capable_agents.append((all_agent_cards[i], result))
 
         capable_agents.sort(key=lambda x: capability_select.sort_key(x[1]), reverse=True)
+        handlers = [c for c, r in capable_agents if getattr(r, "can_handle", False)]
+        contributors = [c for c, r in capable_agents if not getattr(r, "can_handle", False) and getattr(r, "can_contribute", False)]
         logger.info(
-            "[RoutePlan] ========== Planning complete: %d root(s) can handle ==========",
-            len(capable_agents),
+            "[RoutePlan] ========== Planning complete: %d handler(s), %d contributor(s) ==========",
+            len(handlers), len(contributors),
         )
         for i, (card, resp) in enumerate(capable_agents[:5], 1):
             rps = getattr(resp, "route_paths", None) or []
@@ -2639,9 +2643,10 @@ class RoutingAgent(BaseAgent):
                 )
                 for j, e in enumerate(rps[:5])
             )
+            role = "H" if getattr(resp, "can_handle", False) else "C"
             logger.info(
-                "[RoutePlan]   #%d %s | executable_paths=%d | %s",
-                i, card.name, len(rps), paths_str,
+                "[RoutePlan]   #%d %s [%s] | executable_paths=%d | %s",
+                i, card.name, role, len(rps), paths_str,
             )
         logger.info("[RoutePlan] ==========================================")
         return capable_agents
