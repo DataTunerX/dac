@@ -43,6 +43,8 @@ sys.modules["agent.broadcast_capability_check"].ROUTING_AGENT_POOL_KEY = "routin
 from agent.skill_agent import (  # noqa: E402
     SkillAgentExecutor,
     SummaryEvaluationResult,
+    _build_agent_summarize_prompt,
+    _build_summarize_eval_prompt,
 )
 from agent.skill_agent_turn import (  # noqa: E402
     DEFAULT_MAX_LOOPS,
@@ -311,7 +313,7 @@ class TestTurnLoopWithLLMEval:
             missing_info="", rationale="sufficient",
             cot_analysis="步骤1：用户问题核心诉求是...步骤2：答案覆盖了...步骤3：是实质性结果。步骤4：satisfactory=true。",
         ))
-        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, []))
+        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, [], []))
         with patch.object(ex, "_summarize_with_evaluation", mock_eval):
             with patch.object(ex, "_execute_plan_and_mid_exec", mock_exec):
 
@@ -322,7 +324,7 @@ class TestTurnLoopWithLLMEval:
 
                 while total < ex.max_loops:
                     total += 1
-                    tr, dr, _hop, _meta = await ex._execute_plan_and_mid_exec()
+                    tr, dr, _hop, _meta, _ef = await ex._execute_plan_and_mid_exec()
                     accumulated_task.update(tr)
                     accumulated_delegate.update(dr)
                     er = await ex._summarize_with_evaluation(
@@ -358,7 +360,7 @@ class TestTurnLoopWithLLMEval:
                 cot_analysis="步骤1：问题诉求是...步骤2：答案覆盖了...步骤3：实质性结果。步骤4：satisfactory=true。",
             )
 
-        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, []))
+        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, [], []))
         with patch.object(ex, "_summarize_with_evaluation", mock_eval):
             with patch.object(ex, "_execute_plan_and_mid_exec", mock_exec):
 
@@ -370,7 +372,7 @@ class TestTurnLoopWithLLMEval:
 
                 while total < ex.max_loops:
                     total += 1
-                    tr, dr, _hop, _meta = await ex._execute_plan_and_mid_exec()
+                    tr, dr, _hop, _meta, _ef = await ex._execute_plan_and_mid_exec()
                     accumulated_task.update(tr)
                     accumulated_delegate.update(dr)
                     er = await ex._summarize_with_evaluation(
@@ -397,14 +399,14 @@ class TestTurnLoopWithLLMEval:
             missing_info="缺数据", rationale="insufficient",
             cot_analysis="步骤1：问题诉求是...步骤2：答案未覆盖...步骤3：解释说明。步骤4：satisfactory=false。",
         ))
-        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, []))
+        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, [], []))
         with patch.object(ex, "_summarize_with_evaluation", mock_eval):
             with patch.object(ex, "_execute_plan_and_mid_exec", mock_exec):
 
                 total = 0
                 while total < ex.max_loops:
                     total += 1
-                    tr, dr, _hop, _meta = await ex._execute_plan_and_mid_exec()
+                    tr, dr, _hop, _meta, _ef = await ex._execute_plan_and_mid_exec()
                     er = await ex._summarize_with_evaluation(
                         original_query="q",
                         task_results=tr,
@@ -425,14 +427,14 @@ class TestTurnLoopWithLLMEval:
             missing_info="缺", rationale="not enough",
             cot_analysis="步骤1：问题诉求是...步骤2：答案未覆盖...步骤3：解释说明。步骤4：satisfactory=false。",
         ))
-        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, []))
+        mock_exec = AsyncMock(return_value=({1: "ok"}, {}, 2, [], []))
         with patch.object(ex, "_summarize_with_evaluation", mock_eval):
             with patch.object(ex, "_execute_plan_and_mid_exec", mock_exec):
 
                 total = 0
                 while total < ex.max_loops:
                     total += 1
-                    tr, dr, _hop, _meta = await ex._execute_plan_and_mid_exec()
+                    tr, dr, _hop, _meta, _ef = await ex._execute_plan_and_mid_exec()
                     er = await ex._summarize_with_evaluation(
                         original_query="q",
                         task_results=tr,
@@ -461,3 +463,150 @@ class TestOldExecuteUnchanged:
         assert SummaryEvaluationResult is not None
         from pydantic import BaseModel
         assert issubclass(SummaryEvaluationResult, BaseModel)
+
+
+# =============================================================================
+# Summary prompt builders — Execution Flow, no JSON dump, no duplication
+# =============================================================================
+
+_ZHANGSAN_FAIL = (
+    '无法直接通过用户名"张三"查询订单，订单数据只有用户ID，不包含用户姓名。'
+)
+
+_ZHANGSAN_EF = [
+    {
+        "execution_id": "own-1-order-agent-t1",
+        "turn": 1,
+        "stage": "pre_exec",
+        "agent": "order-agent",
+        "role": "initiator",
+        "task": "查询用户张三购买的商品，按用户名'张三'进行过滤",
+        "result": _ZHANGSAN_FAIL,
+        "reason": "订单数据只有用户ID，无法按姓名查询",
+        "parent_execution_id": None,
+        "delegated_by": None,
+        "run_id": "ut-run",
+        "trace_id": "",
+        "user_id": "ut",
+    }
+]
+
+
+class TestSummaryPromptBuilders:
+    def test_eval_prompt_uses_execution_flow_not_json_dump(self):
+        system, human = _build_summarize_eval_prompt(
+            "张三买了哪些东西",
+            execution_flow_tasks=_ZHANGSAN_EF,
+            task_results={1: _ZHANGSAN_FAIL},
+            delegate_results={},
+            current_agent="order-agent",
+        )
+        assert "evaluate_summary" in system
+        assert "## 执行流水账" in human
+        assert "原始问题：张三买了哪些东西" in human
+        assert "请调用 evaluate_summary" in human
+        assert "上游传入上下文" not in human
+        assert "executed_tasks" not in human
+        assert "本层自身执行结果" not in human
+        assert "委托给下游 SG" not in human
+        # Same result must not be repeated as own_text on top of EF.
+        assert human.count(_ZHANGSAN_FAIL) == 1
+
+    def test_agent_summarize_prompt_uses_execution_flow(self):
+        system, human = _build_agent_summarize_prompt(
+            "张三买了哪些东西",
+            execution_flow_tasks=_ZHANGSAN_EF,
+            task_results={1: _ZHANGSAN_FAIL},
+            current_agent="order-agent",
+        )
+        assert "evaluate_summary" not in system
+        assert "## 执行流水账" in human
+        assert "请直接输出答案" in human
+        assert "上游传入上下文" not in human
+        assert "executed_tasks" not in human
+        assert human.count(_ZHANGSAN_FAIL) == 1
+
+    def test_fallback_without_execution_flow(self):
+        _, human = _build_summarize_eval_prompt(
+            "查询销售总额",
+            execution_flow_tasks=None,
+            task_results={1: "2024年1月销售总额为123456元。"},
+            delegate_results={},
+        )
+        assert "## 执行流水账" not in human
+        assert "## 本层执行结果" in human
+        assert "123456" in human
+        assert "上游传入上下文" not in human
+
+    def test_empty_results_placeholder(self):
+        _, human = _build_agent_summarize_prompt(
+            "任意问题",
+            execution_flow_tasks=[],
+            task_results={},
+            delegate_results={},
+        )
+        assert "暂无执行结果" in human
+        assert "上游传入上下文" not in human
+
+    def test_prompt_build_logs_single_line_box(self, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="agent.skill_agent"):
+            _build_summarize_eval_prompt(
+                "张三买了哪些东西",
+                execution_flow_tasks=_ZHANGSAN_EF,
+                current_agent="order-agent",
+                agent_role="initiator",
+                turn=1,
+            )
+        text = caplog.text
+        assert "[SummaryPrompt] skill-summarize-eval" in text
+        assert "第1轮" in text
+        assert "turn=1" in text
+        assert "┌─" in text
+        assert "├─ human prompt" in text
+        assert "└─" in text
+        assert "═" not in text
+        assert "agent=order-agent" in text
+        assert "role=initiator" in text
+        assert "## 执行流水账" in text
+
+
+class TestMidExecBoxedLogs:
+    def test_planner_context_logs_single_line_box(self, caplog):
+        import logging
+        from types import SimpleNamespace
+
+        card = SimpleNamespace(
+            name="user-agent",
+            description="查询用户信息",
+            skills=[SimpleNamespace(name="user_query")],
+        )
+        with caplog.at_level(logging.INFO, logger="agent.skill_agent"):
+            SkillAgentExecutor._build_mid_exec_planner_context(
+                synthesized_query='查询用户"张三"的用户ID',
+                target_cards=[card],
+                original_query="张三买了哪些东西",
+                detection_reason="本层订单数据只有用户ID",
+                executed_tasks=[{
+                    "task_id": 1,
+                    "agent": "order-agent",
+                    "description": "查询用户张三的购买记录",
+                    "status": "completed",
+                    "result": "订单数据中只有用户ID",
+                }],
+                turn=1,
+                mid_exec_round=1,
+            )
+        text = caplog.text
+        assert "[MidExec][Plan] planner context" in text
+        assert "第1轮" in text
+        assert "Round 1" in text
+        assert "turn=1" in text
+        assert "round=1" in text
+        assert "┌─" in text
+        assert "├─ group_memory" in text
+        assert "└─" in text
+        assert "═" not in text
+        assert "agents=user-agent" in text
+        assert "## 1. 本轮子任务" in text
+        assert "planner context (" not in text

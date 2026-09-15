@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
@@ -47,6 +49,9 @@ func (u *agentContainerUsecase) Create(ctx context.Context, req *domain.CreateAg
 	if req.OrchestratorAgentMaxLoops == "" {
 		req.OrchestratorAgentMaxLoops = "5" // Default value
 	}
+	if req.DACType == "skill" && req.CrossSGMaxHop == "" {
+		req.CrossSGMaxHop = "5"
+	}
 
 	// Build entity
 	container := &entity.AgentContainer{
@@ -61,6 +66,9 @@ func (u *agentContainerUsecase) Create(ctx context.Context, req *domain.CreateAg
 		ExpertAgentMaxSteps:       req.ExpertAgentMaxSteps,
 		OrchestratorAgentMaxLoops: req.OrchestratorAgentMaxLoops,
 		SkillAgentMaxLoops:        req.SkillAgentMaxLoops,
+		CrossSGMaxHop:             req.CrossSGMaxHop,
+		SummarizeEnabled:          req.SummarizeEnabled,
+		SummarizeCustomPrompt:     req.SummarizeCustomPrompt,
 	}
 
 	// Create in repository
@@ -127,6 +135,19 @@ func (u *agentContainerUsecase) Update(ctx context.Context, namespace, name stri
 	}
 	if req.SkillAgentMaxLoops != nil {
 		existing.SkillAgentMaxLoops = *req.SkillAgentMaxLoops
+	}
+	if req.CrossSGMaxHop != nil {
+		existing.CrossSGMaxHop = *req.CrossSGMaxHop
+	}
+	if req.SummarizeEnabled != nil {
+		existing.SummarizeEnabled = *req.SummarizeEnabled
+	}
+	if req.SummarizeCustomPrompt != nil {
+		existing.SummarizeCustomPrompt = *req.SummarizeCustomPrompt
+	}
+
+	if err := validateCrossSGMaxHop(existing.CrossSGMaxHop); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
 	// skillPolicy / agentCard constraints by dacType
@@ -212,6 +233,9 @@ func (u *agentContainerUsecase) validateCreateRequest(req *domain.CreateAgentCon
 			return err
 		}
 	}
+	if err := validateCrossSGMaxHop(req.CrossSGMaxHop); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -280,6 +304,26 @@ func validateSkillPolicyRefs(policy entity.SkillPolicy) error {
 			return domain.NewInvalidInputError(fmt.Sprintf("duplicate skillPolicy skill name %q (must be unique within a DAC)", s.Name))
 		}
 		seen[s.Name] = struct{}{}
+	}
+	return nil
+}
+
+// validateCrossSGMaxHop enforces CROSS_SG_MAX_HOP rules.
+// Empty is allowed (skill create defaults to 5; generator falls back).
+// Otherwise the value must be an integer >= 1:
+//   1  = single-agent (no cross-SG delegation)
+//   >=2 = multi-agent hop limit
+func validateCrossSGMaxHop(hop string) error {
+	hop = strings.TrimSpace(hop)
+	if hop == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(hop)
+	if err != nil {
+		return domain.NewInvalidInputError("crossSGMaxHop must be an integer >= 1")
+	}
+	if n < 1 {
+		return domain.NewInvalidInputError("crossSGMaxHop must be >= 1")
 	}
 	return nil
 }

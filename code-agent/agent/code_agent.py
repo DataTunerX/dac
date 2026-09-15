@@ -12,6 +12,7 @@ import re
 import asyncio
 import atexit
 import signal
+import time as _time
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 import uuid
@@ -1990,6 +1991,7 @@ class CodeAgent(BaseAgent):
             f"skill_runner: {skill_runner is not None}"
         )
         self.agent_id = agent_id or (metadata or {}).get("agent_id") or self.agent_name
+        self._progress_context: dict = {}
 
     @staticmethod
     def _skill_first_enabled(metadata: Optional[dict]) -> bool:
@@ -2040,30 +2042,65 @@ class CodeAgent(BaseAgent):
         if self.skill_runner is None:
             return None
         user_id, run_id, trace_id = self._skill_trace_ids()
+        query_preview = (query or "").replace("\n", " ").strip()[:420]
         logger.info(
             "[CodeAgent][Skill] plan_and_run query=%r user_id=%s run_id=%s",
             (query or "")[:180],
             user_id,
             run_id,
         )
+
+        await self.emit_progress(
+            "skill_started",
+            message=f"running local skill | query: {query_preview}",
+            status="running",
+            task_id=self.current_task_id,
+            extra={"skill_query": query_preview},
+        )
+
+        t0 = _time.perf_counter()
         try:
             async with use_code_repo_cwd(list(self.code_paths.values())):
-                return await self.skill_runner.plan_and_run(
+                result = await self.skill_runner.plan_and_run(
                     query=query,
                     user_id=user_id or "",
                     run_id=run_id or "",
                     trace_id=trace_id or "",
+                    progress_callback=self.emit_progress,
                 )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("[CodeAgent][Skill] plan_and_run raised: %s", exc)
-            return {
+            result = {
                 "status": "local_skill_error",
                 "skill": "",
                 "final_answer": f"Skill execution error: {exc}",
                 "attempts": [],
             }
+
+        elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+        status_code = str(result.get("status") or "").strip().lower()
+        skill_name = str(result.get("skill") or "")
+        is_success = status_code == "completed"
+
+        await self.emit_progress(
+            "skill_finished",
+            message=(
+                f"completed skill {skill_name or '(unknown)'} ({elapsed_ms}ms)"
+                if is_success
+                else f"skill failed ({status_code or 'error'}, {elapsed_ms}ms)"
+            ),
+            status="done" if is_success else "fail",
+            task_id=self.current_task_id,
+            extra={
+                "skill_name": skill_name,
+                "skill_status": status_code,
+                "elapsed_ms": elapsed_ms,
+            },
+        )
+
+        return result
 
     @staticmethod
     def _skill_result_is_success(result: dict) -> bool:
@@ -2158,6 +2195,23 @@ class CodeAgent(BaseAgent):
             extra=extra,
         ))
 
+    @staticmethod
+    def _is_progress_frame(text: str) -> bool:
+        """Check if a text line is a [[DAC_PROGRESS]] frame."""
+        return isinstance(text, str) and text.lstrip().startswith("[[DAC_PROGRESS]] ")
+
+    @classmethod
+    def _strip_progress_lines(cls, text: str) -> str:
+        """Strip [[DAC_PROGRESS]] lines from body text.
+
+        Progress frames leaking from delegated agents should not pollute
+        downstream LLM prompts or answer text.
+        """
+        if not text:
+            return ""
+        lines = [line for line in text.splitlines() if not cls._is_progress_frame(line)]
+        return "\n".join(lines).strip()
+
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
         """Context manager for safe agent state transitions.
@@ -2229,6 +2283,7 @@ class CodeAgent(BaseAgent):
             retry=2,
             validate=validate_pydantic(FileLocationResult),
             fallback_formatter=format_llm_output,
+            agent_name=self.agent_name,
         )
 
         if data_dict is None:
@@ -2300,6 +2355,7 @@ class CodeAgent(BaseAgent):
             retry=2,
             validate=validate_pydantic(FileAuditResponse),
             fallback_formatter=format_llm_output,
+            agent_name=self.agent_name,
         )
 
         if data_dict is None:
@@ -2393,6 +2449,7 @@ class CodeAgent(BaseAgent):
             retry=2,
             validate=validate_pydantic(RequeryResult),
             fallback_formatter=format_llm_output,
+            agent_name=self.agent_name,
         )
 
         if data_dict is None:
@@ -2473,6 +2530,7 @@ class CodeAgent(BaseAgent):
             retry=2,
             validate=validate_pydantic(ObserveResult),
             fallback_formatter=format_llm_output,
+            agent_name=self.agent_name,
         )
 
         if data_dict is None:
@@ -3249,6 +3307,7 @@ class CodeAgent(BaseAgent):
             retry=2,
             validate=validate_pydantic(CodeSearchResult),
             fallback_formatter=format_llm_output,
+            agent_name=self.agent_name,
         )
 
         if data_dict is None:
@@ -4051,6 +4110,7 @@ class CodeAgent(BaseAgent):
             retry=2,
             validate=validate_pydantic(KeywordExtractionResult),
             fallback_formatter=format_llm_output,
+            agent_name=self.agent_name,
         )
 
         if data_dict is None:
@@ -4123,6 +4183,7 @@ class CodeAgent(BaseAgent):
                 retry=2,
                 validate=validate_pydantic(RelevanceCheckResult),
                 fallback_formatter=format_llm_output,
+                agent_name=self.agent_name,
             )
 
             if data_dict and "relevant" in data_dict:
@@ -4853,7 +4914,7 @@ class CodeAgent(BaseAgent):
         chain = chat_prompt | self.llm
         
         with langfuse.start_as_current_span(
-            name="codeagent-answer-with-code",
+            name=f"codeagent-answer-with-code [{self.agent_name}]",
             trace_context={"trace_id": trace_id}
         ) as span:
             span.update_trace(
@@ -5392,6 +5453,7 @@ class CodeAgentExecutor(AgentExecutor):
             base_url=base_url,
             model=model,
             temperature=temperature,
+            agent_name=os.getenv("Agent_Name", "CodeAgent"),
         )
     
     def preload_skill_runner(self) -> Any:

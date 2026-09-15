@@ -55,6 +55,20 @@ class CapabilityCheckResponse(BaseModel):
     missing_requirements: list[str] = Field(default_factory=list)
     # Opaque SG-issued handoff; Routing/mid-delegate may transport it as-is.
     execution_hint: dict = Field(default_factory=dict)
+    # ---- Capability-chain scoring fields (shared protocol with routing-agent / skill-agent) ----
+    latency_ms: int = 0
+    score_version: str = ""
+    evidence_grade: str = ""
+    threshold: float = 0.0
+    handle_score: float = 0.0
+    steps: list[dict] = Field(default_factory=list)
+    contributing_steps: list[int] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+    @property
+    def is_chain_scored(self) -> bool:
+        """Whether this response used the capability-chain scoring protocol."""
+        return bool(self.score_version)
 
 
 def _is_non_actionable_contribution_text(text: str) -> bool:

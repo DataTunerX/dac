@@ -75,6 +75,12 @@ spec:
                 - description
                 - name
                 type: object
+              crossSGMaxHop:
+                description: |-
+                  CrossSGMaxHop is the maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP).
+                  Must be an integer >= 1 when set. "1" is single-agent mode; >= 2 is
+                  multi-agent. Empty falls back to dac-configuration then "5" at generate time.
+                type: string
               dacType:
                 type: string
               dataPolicy:
@@ -105,9 +111,12 @@ spec:
                 type: object
               orchestratorAgentMaxLoops:
                 type: string
+              skillAgentMaxLoops:
+                type: string
               skillPolicy:
-                description: SkillPolicy selects packages for a dedicated skill DAC or local orchestrator attachments
-                  (empty for ds/normal).
+                description: |-
+                  SkillPolicy is the raw skill-hub selection for dacType=skill (required) and
+                  optionally for dacType=normal LocalSkill packs (empty for ds).
                 properties:
                   skills:
                     description: |-
@@ -136,6 +145,20 @@ spec:
                       type: object
                     type: array
                 type: object
+              summarizeCustomPrompt:
+                description: |-
+                  SummarizeCustomPrompt is a user-defined system prompt for the summary LLM.
+                  When non-empty, replaces the built-in default SUMMARIZE_CORE_PRINCIPLES.
+                  Only effective when summarization is triggered (initiator with collaboration).
+                  env: SUMMARIZE_CUSTOM_PROMPT
+                type: string
+              summarizeEnabled:
+                description: |-
+                  SummarizeEnabled controls whether the skill-agent performs LLM summarization.
+                  "true" (default) = auto: summarization follows the 4-layer decision tree.
+                  "false" = force-off: passthrough raw skill results for all agents.
+                  env: SUMMARIZE_ENABLED
+                type: string
             required:
             - agentCard
             - dacType
@@ -143,6 +166,7 @@ spec:
             - expertAgentMaxSteps
             - model
             - orchestratorAgentMaxLoops
+            - skillAgentMaxLoops
             type: object
           status:
             description: DataAgentContainerStatus defines the observed state of DataAgentContainer

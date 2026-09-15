@@ -54,6 +54,9 @@ type CreateAgentContainerRequest struct {
 	ExpertAgentMaxSteps       string            `json:"expertAgentMaxSteps,omitempty"`
 	OrchestratorAgentMaxLoops string            `json:"orchestratorAgentMaxLoops,omitempty"`
 	SkillAgentMaxLoops        string            `json:"skillAgentMaxLoops,omitempty"`
+	CrossSGMaxHop             string            `json:"crossSGMaxHop,omitempty"`
+	SummarizeEnabled          string            `json:"summarizeEnabled,omitempty"`
+	SummarizeCustomPrompt     string            `json:"summarizeCustomPrompt,omitempty"`
 }
 
 // UpdateAgentContainerRequest represents the HTTP update request
@@ -67,6 +70,9 @@ type UpdateAgentContainerRequest struct {
 	ExpertAgentMaxSteps       *string            `json:"expertAgentMaxSteps,omitempty"`
 	OrchestratorAgentMaxLoops *string            `json:"orchestratorAgentMaxLoops,omitempty"`
 	SkillAgentMaxLoops        *string            `json:"skillAgentMaxLoops,omitempty"`
+	CrossSGMaxHop             *string            `json:"crossSGMaxHop,omitempty"`
+	SummarizeEnabled          *string            `json:"summarizeEnabled,omitempty"`
+	SummarizeCustomPrompt     *string            `json:"summarizeCustomPrompt,omitempty"`
 }
 
 // AgentContainerResponse represents the HTTP response for agent container
@@ -82,6 +88,9 @@ type AgentContainerResponse struct {
 	ExpertAgentMaxSteps       string                         `json:"expertAgentMaxSteps,omitempty"`
 	OrchestratorAgentMaxLoops string                         `json:"orchestratorAgentMaxLoops,omitempty"`
 	SkillAgentMaxLoops        string                         `json:"skillAgentMaxLoops,omitempty"`
+	CrossSGMaxHop             string                         `json:"crossSGMaxHop,omitempty"`
+	SummarizeEnabled          string                         `json:"summarizeEnabled,omitempty"`
+	SummarizeCustomPrompt     string                         `json:"summarizeCustomPrompt,omitempty"`
 	ActiveDataDescriptors     []ActiveDataDescriptorResponse `json:"activeDataDescriptors,omitempty"`
 	Endpoint                  *EndpointResponse              `json:"endpoint,omitempty"`
 	Conditions                []ConditionResponse            `json:"conditions,omitempty"`
@@ -155,6 +164,9 @@ func ToAgentContainerResponse(container *entity.AgentContainer) AgentContainerRe
 		ExpertAgentMaxSteps:       container.ExpertAgentMaxSteps,
 		OrchestratorAgentMaxLoops: container.OrchestratorAgentMaxLoops,
 		SkillAgentMaxLoops:        container.SkillAgentMaxLoops,
+		CrossSGMaxHop:             container.CrossSGMaxHop,
+		SummarizeEnabled:          container.SummarizeEnabled,
+		SummarizeCustomPrompt:     container.SummarizeCustomPrompt,
 		CreatedAt:                 container.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:           container.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}

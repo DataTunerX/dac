@@ -86,6 +86,22 @@ type DataAgentContainerSpec struct {
 	OrchestratorAgentMaxLoops string      `json:"orchestratorAgentMaxLoops"`
 	SkillAgentMaxLoops        string      `json:"skillAgentMaxLoops"`
 	ExpertAgentMaxSteps       string      `json:"expertAgentMaxSteps"`
+	// CrossSGMaxHop is the maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP).
+	// Must be an integer >= 1 when set. "1" is single-agent mode; >= 2 is
+	// multi-agent. Empty falls back to dac-configuration then "5" at generate time.
+	CrossSGMaxHop string `json:"crossSGMaxHop,omitempty"`
+
+	// SummarizeEnabled controls whether the skill-agent performs LLM summarization.
+	// "true" (default) = auto: summarization follows the 4-layer decision tree.
+	// "false" = force-off: passthrough raw skill results for all agents.
+	// env: SUMMARIZE_ENABLED
+	SummarizeEnabled string `json:"summarizeEnabled,omitempty"`
+
+	// SummarizeCustomPrompt is a user-defined system prompt for the summary LLM.
+	// When non-empty, replaces the built-in default SUMMARIZE_CORE_PRINCIPLES.
+	// Only effective when summarization is triggered (initiator with collaboration).
+	// env: SUMMARIZE_CUSTOM_PROMPT
+	SummarizeCustomPrompt string `json:"summarizeCustomPrompt,omitempty"`
 }
 
 // ActiveDataDescriptor tracks which data descriptors are being used

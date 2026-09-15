@@ -694,9 +694,12 @@ executionEngine:
     # -- Total timeout in seconds for all member capability probes (also used as SG Expert sidecar check timeout).
     memberCapabilityTotalTimeoutSec: 180
 
-  # -- Maximum cross-SG delegation hops for skill agents (env: CROSS_SG_MAX_HOP)
+  # -- Fallback CROSS_SG_MAX_HOP when a DAC does not set spec.crossSGMaxHop
+  #    (page-created skill agents set hop on the CR; this is also used by
+  #    orchestrator agents). Env: CROSS_SG_MAX_HOP
     crossSGMaxHop: "5"
-    # -- Maximum mid-execution rounds for skill agents (env: CROSS_SG_MID_EXEC_ROUNDS)
+    # -- Maximum mid-execution rounds (env: CROSS_SG_MID_EXEC_ROUNDS).
+    #    Not set from the create-skill UI; cluster-wide default only.
     crossSGMidExecRounds: "5"
 
   # -- dd-configuration ConfigMap values (read by DD controller)
@@ -930,11 +933,18 @@ bizSkillAgent:
     # -- Poll interval in seconds. Set to 0 to disable monitoring.
     skillSyncInterval: "30"
     # -- Pull newly published skills in addition to configured startup skills.
-    skillSyncWatchAll: "true"
-    # -- Maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP)
+    skillSyncWatchAll: "false"
+    # -- Builtin platform skill-agent only (not page-created DACs).
+    #    Maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP)
     crossSGMaxHop: "5"
-    # -- Maximum mid-execution rounds (env: CROSS_SG_MID_EXEC_ROUNDS)
+    # -- Builtin platform skill-agent only. Maximum mid-execution rounds
+    #    (env: CROSS_SG_MID_EXEC_ROUNDS)
     crossSGMidExecRounds: "5"
+    # -- Summarize configuration for the skill-agent.
+    #    summarizeEnabled: "true" = auto (4-layer decision tree), "false" = force-off passthrough.
+    #    summarizeCustomPrompt: user-defined system prompt, overrides the built-in default.
+    summarizeEnabled: "true"
+    summarizeCustomPrompt: ""
   service:
     type: ClusterIP
     # -- A2A protocol port

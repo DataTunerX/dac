@@ -9,6 +9,59 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
+func TestExtractDACFrame(t *testing.T) {
+	name, payload, ok := extractDACFrame("[[DAC_EXECUTION_FLOW]] {\"execution_id\":\"own-1\"}")
+	if !ok {
+		t.Fatal("expected EF frame to parse")
+	}
+	if name != "DAC_EXECUTION_FLOW" {
+		t.Errorf("name=%q, want DAC_EXECUTION_FLOW", name)
+	}
+	if payload != "{\"execution_id\":\"own-1\"}" {
+		t.Errorf("payload=%q", payload)
+	}
+}
+
+func TestHandleFramePayload_ExecutionFlowSetsEventType(t *testing.T) {
+	c := &client{logger: slog.Default()}
+	outputCh := make(chan entity.StreamChunk, 2)
+	state := &answerFrameState{}
+
+	c.handleFramePayload("DAC_EXECUTION_FLOW", `{"schema_version":"v1","execution_id":"own-1"}`, outputCh, state)
+	close(outputCh)
+
+	chunk := <-outputCh
+	if chunk.EventType != "execution-flow" {
+		t.Fatalf("expected EventType execution-flow, got %q", chunk.EventType)
+	}
+	if chunk.Progress != `{"schema_version":"v1","execution_id":"own-1"}` {
+		t.Fatalf("unexpected Progress=%q", chunk.Progress)
+	}
+}
+
+func TestHandleArtifactUpdate_EmitsExecutionFlowEventType(t *testing.T) {
+	c := &client{logger: slog.Default()}
+	outputCh := make(chan entity.StreamChunk, 4)
+	var lineBuf lineBuffer
+	var answerState answerFrameState
+
+	tp := protocol.NewTextPart("[[DAC_EXECUTION_FLOW]] {\"schema_version\":\"v1\",\"execution_id\":\"own-1-user-agent-t1\"}\n")
+	event := &protocol.TaskArtifactUpdateEvent{
+		Artifact: protocol.Artifact{
+			Parts: []protocol.Part{&tp},
+		},
+	}
+	c.handleArtifactUpdate(event, outputCh, &lineBuf, &answerState)
+
+	chunk := <-outputCh
+	if chunk.EventType != "execution-flow" {
+		t.Fatalf("expected EventType execution-flow, got %q", chunk.EventType)
+	}
+	if !strings.Contains(chunk.Progress, "own-1-user-agent-t1") {
+		t.Fatalf("expected execution_id in Progress, got %q", chunk.Progress)
+	}
+}
+
 func TestExtractDACFramePayload(t *testing.T) {
 	tests := []struct {
 		line   string
@@ -31,9 +84,9 @@ func TestExtractDACFramePayload(t *testing.T) {
 
 func TestLineBuffer_Feed_ProgressOnly(t *testing.T) {
 	var b lineBuffer
-	progress, content := b.feed("[[DAC_PROGRESS]] {\"event\":\"routing_plan_ready\"}\n")
-	if len(progress) != 1 || progress[0] != "{\"event\":\"routing_plan_ready\"}" {
-		t.Errorf("expected one progress payload, got progress=%v", progress)
+	frames, content := b.feed("[[DAC_PROGRESS]] {\"event\":\"routing_plan_ready\"}\n")
+	if len(frames) != 1 || frames[0].payload != "{\"event\":\"routing_plan_ready\"}" || frames[0].name != "DAC_PROGRESS" {
+		t.Errorf("expected one progress payload, got frames=%v", frames)
 	}
 	if len(content) != 0 {
 		t.Errorf("expected no content, got %v", content)
@@ -45,9 +98,9 @@ func TestLineBuffer_Feed_ProgressOnly(t *testing.T) {
 
 func TestLineBuffer_Feed_ContentOnly(t *testing.T) {
 	var b lineBuffer
-	progress, content := b.feed("hello\nworld\n")
-	if len(progress) != 0 {
-		t.Errorf("expected no progress, got %v", progress)
+	frames, content := b.feed("hello\nworld\n")
+	if len(frames) != 0 {
+		t.Errorf("expected no progress, got %v", frames)
 	}
 	if len(content) != 2 || content[0] != "hello" || content[1] != "world" {
 		t.Errorf("expected [hello world], got %v", content)
@@ -59,17 +112,17 @@ func TestLineBuffer_Feed_ContentOnly(t *testing.T) {
 
 func TestLineBuffer_Feed_Mixed(t *testing.T) {
 	var b lineBuffer
-	progress, content := b.feed("[[DAC_PROGRESS]] {\"layer\":\"routing\"}\nline1\n")
-	if len(progress) != 1 || !strings.Contains(progress[0], "routing") {
-		t.Errorf("expected one progress, got %v", progress)
+	frames, content := b.feed("[[DAC_PROGRESS]] {\"layer\":\"routing\"}\nline1\n")
+	if len(frames) != 1 || !strings.Contains(frames[0].payload, "routing") {
+		t.Errorf("expected one progress, got %v", frames)
 	}
 	if len(content) != 1 || content[0] != "line1" {
 		t.Errorf("expected [line1], got %v", content)
 	}
 
-	progress2, content2 := b.feed("line2\n")
-	if len(progress2) != 0 {
-		t.Errorf("expected no progress, got %v", progress2)
+	frames2, content2 := b.feed("line2\n")
+	if len(frames2) != 0 {
+		t.Errorf("expected no progress, got %v", frames2)
 	}
 	if len(content2) != 1 || content2[0] != "line2" {
 		t.Errorf("expected [line2], got %v", content2)
@@ -78,17 +131,17 @@ func TestLineBuffer_Feed_Mixed(t *testing.T) {
 
 func TestLineBuffer_Feed_IncompleteLine(t *testing.T) {
 	var b lineBuffer
-	progress, content := b.feed("[[DAC_PROG")
-	if len(progress) != 0 || len(content) != 0 {
-		t.Errorf("expected no complete lines, got progress=%v content=%v", progress, content)
+	frames, content := b.feed("[[DAC_PROG")
+	if len(frames) != 0 || len(content) != 0 {
+		t.Errorf("expected no complete lines, got frames=%v content=%v", frames, content)
 	}
 	if b.buf != "[[DAC_PROG" {
 		t.Errorf("expected buf [[DAC_PROG, got %q", b.buf)
 	}
 
-	progress2, content2 := b.feed("RESS]] {\"x\":1}\n")
-	if len(progress2) != 1 || progress2[0] != "{\"x\":1}" {
-		t.Errorf("expected one progress after completion, got %v", progress2)
+	frames2, content2 := b.feed("RESS]] {\"x\":1}\n")
+	if len(frames2) != 1 || frames2[0].payload != "{\"x\":1}" {
+		t.Errorf("expected one progress after completion, got %v", frames2)
 	}
 	if len(content2) != 0 {
 		t.Errorf("expected no content, got %v", content2)
@@ -122,9 +175,9 @@ func TestLineBuffer_ProgressNotInContent(t *testing.T) {
 
 func TestLineBuffer_Feed_AnswerFrame(t *testing.T) {
 	var b lineBuffer
-	progress, content := b.feed("[[DAC_ANSWER]] {\"event\":\"final_answer\",\"payload\":{\"text\":\"ok\"}}\n")
-	if len(progress) != 1 || !strings.Contains(progress[0], "final_answer") {
-		t.Errorf("expected one frame payload (DAC_ANSWER), got progress=%v", progress)
+	frames, content := b.feed("[[DAC_ANSWER]] {\"event\":\"final_answer\",\"payload\":{\"text\":\"ok\"}}\n")
+	if len(frames) != 1 || frames[0].name != "DAC_ANSWER" || !strings.Contains(frames[0].payload, "final_answer") {
+		t.Errorf("expected one frame payload (DAC_ANSWER), got frames=%v", frames)
 	}
 	if len(content) != 0 {
 		t.Errorf("expected no content, got %v", content)
@@ -133,9 +186,9 @@ func TestLineBuffer_Feed_AnswerFrame(t *testing.T) {
 
 func TestLineBuffer_Feed_ProgressAndAnswerNotInContent(t *testing.T) {
 	var b lineBuffer
-	progress, content := b.feed("[[DAC_PROGRESS]] {\"event\":\"e\"}\n[[DAC_ANSWER]] {\"event\":\"final_answer\"}\nreply\n")
-	if len(progress) != 2 {
-		t.Errorf("expected 2 frames, got %d", len(progress))
+	frames, content := b.feed("[[DAC_PROGRESS]] {\"event\":\"e\"}\n[[DAC_ANSWER]] {\"event\":\"final_answer\"}\nreply\n")
+	if len(frames) != 2 {
+		t.Errorf("expected 2 frames, got %d", len(frames))
 	}
 	if len(content) != 1 || content[0] != "reply" {
 		t.Errorf("expected [reply], got %v", content)
@@ -165,9 +218,9 @@ func TestHandleFramePayload_StreamsFinalAnswerChunksAndSkipsDuplicateFinal(t *te
 	outputCh := make(chan entity.StreamChunk, 4)
 	state := &answerFrameState{}
 
-	c.handleFramePayload(`{"event":"final_answer_chunk","payload":{"text":"hel"}}`, outputCh, state)
-	c.handleFramePayload(`{"event":"final_answer_chunk","payload":{"text":"lo"}}`, outputCh, state)
-	c.handleFramePayload(`{"event":"final_answer","payload":{"text":"hello"}}`, outputCh, state)
+	c.handleFramePayload("DAC_ANSWER", `{"event":"final_answer_chunk","payload":{"text":"hel"}}`, outputCh, state)
+	c.handleFramePayload("DAC_ANSWER", `{"event":"final_answer_chunk","payload":{"text":"lo"}}`, outputCh, state)
+	c.handleFramePayload("DAC_ANSWER", `{"event":"final_answer","payload":{"text":"hello"}}`, outputCh, state)
 
 	close(outputCh)
 
@@ -189,7 +242,7 @@ func TestHandleFramePayload_UsesFinalAnswerAsFallback(t *testing.T) {
 	outputCh := make(chan entity.StreamChunk, 2)
 	state := &answerFrameState{}
 
-	c.handleFramePayload(`{"event":"final_answer","payload":{"text":"final text"}}`, outputCh, state)
+	c.handleFramePayload("DAC_ANSWER", `{"event":"final_answer","payload":{"text":"final text"}}`, outputCh, state)
 
 	close(outputCh)
 

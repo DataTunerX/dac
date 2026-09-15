@@ -92,6 +92,9 @@ func (h *AgentContainerHandler) Create(ctx context.Context, c *app.RequestContex
 		ExpertAgentMaxSteps:       req.ExpertAgentMaxSteps,
 		OrchestratorAgentMaxLoops: req.OrchestratorAgentMaxLoops,
 		SkillAgentMaxLoops:        req.SkillAgentMaxLoops,
+		CrossSGMaxHop:             req.CrossSGMaxHop,
+		SummarizeEnabled:          req.SummarizeEnabled,
+		SummarizeCustomPrompt:     req.SummarizeCustomPrompt,
 	}
 
 	container, err := h.usecase.Create(ctx, domainReq)
@@ -345,6 +348,9 @@ func (h *AgentContainerHandler) Update(ctx context.Context, c *app.RequestContex
 		ExpertAgentMaxSteps:       req.ExpertAgentMaxSteps,
 		OrchestratorAgentMaxLoops: req.OrchestratorAgentMaxLoops,
 		SkillAgentMaxLoops:        req.SkillAgentMaxLoops,
+		CrossSGMaxHop:             req.CrossSGMaxHop,
+		SummarizeEnabled:          req.SummarizeEnabled,
+		SummarizeCustomPrompt:     req.SummarizeCustomPrompt,
 	}
 
 	container, err := h.usecase.Update(ctx, namespace, name, domainReq)

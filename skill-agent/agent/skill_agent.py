@@ -29,13 +29,13 @@ from typing import (
     Any,
     AsyncIterable,
     Callable,
-    ClassVar,
     Dict,
     List,
     Literal,
     Optional,
     Union,
 )
+from collections import OrderedDict
 from collections.abc import Awaitable
 from uuid import uuid4
 
@@ -68,23 +68,31 @@ from langchain_core.prompts.chat import (
     HumanMessagePromptTemplate,
     SystemMessagePromptTemplate,
 )
-from langchain_core.tools import StructuredTool, tool
+from langchain_core.tools import StructuredTool
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 from model_sdk import ModelManager
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from typing_extensions import override
 
 from . import broadcast_capability_check as sg_broadcast
+from . import capability_chain
+from .capability_chain import CapabilityChainResult
 from .agent_card_resolve import resolve_agent_card_by_planner_name
 from .agentregistry_client import AgentRegistryClient
+from .execution_flow import (
+    ExecutionTask,
+    is_execution_flow_frame,
+    render_execution_flow_md,
+    strip_execution_flow_lines,
+)
 from .dataservices_client import (
     CreateHistoryRequest,
     DataServicesClient,
     HistoryMessage,
     SearchHistoryRequest,
 )
-from .tool_call_utils import invoke_llm_with_tool
+from .tool_call_utils import invoke_llm_with_tool, safe_langfuse_flush
 
 try:
     from skill_sdk.skill.runner import SkillRunner
@@ -125,6 +133,8 @@ PRE_MAKE_PLAN_MESSAGE_TYPE = "pre_make_plan"
 PROPAGATED_HISTORY_KEY = "propagated_history"
 SG_EXECUTION_HINT_KEY = "sg_execution_hint"
 NONE_TASK_DESCRIPTION = "No available agent can do this task. "
+NONE_TASK_REASON_CODE = "no_capable_agent"
+NONE_TASK_UNASSIGNED_RESULT = "未派发：当前可用智能体中无人可执行此任务。"
 DEPENDENT_TASK_SKIP_MARKER = "__SG_SKIP_UPSTREAM_NO_DATA__"
 DEPENDENT_TASK_SKIP_DESCRIPTION = (
     DEPENDENT_TASK_SKIP_MARKER + "上游依赖任务未返回有效数据，当前子任务无输入来源，已自动跳过。"
@@ -331,22 +341,50 @@ def history_messages_from_payload(payload: Any) -> list[Union[HumanMessage, AIMe
     return messages
 
 
-def _log_history_turns(turns: list[dict], source: str, max_content_len: int = 600) -> None:
-    """Log formatted history turns at INFO level for debugging/tracing."""
+# One GetHistory dump per run_id. Planner + Executor both call get_history()
+# in the same request; repeating the banner looks like two fetches.
+_HISTORY_LOG_SEEN: OrderedDict[str, None] = OrderedDict()
+_HISTORY_LOG_SEEN_MAX = 256
+
+
+def _log_history_turns(
+    turns: list[dict],
+    source: str,
+    max_content_len: int = 600,
+    run_id: str = "",
+) -> bool:
+    """Log formatted history turns at INFO level for debugging/tracing.
+
+    Returns True if this call printed the dump. Same ``run_id`` is printed
+    at most once so later get_history() reads do not look like a second fetch.
+    """
     if not turns:
-        return
-    lines = ["", "=" * 60, f"  GetHistory 查询结果 (来源: {source})", "=" * 60]
+        return False
+    key = (run_id or "").strip()
+    if key:
+        if key in _HISTORY_LOG_SEEN:
+            return False
+        _HISTORY_LOG_SEEN[key] = None
+        _HISTORY_LOG_SEEN.move_to_end(key)
+        while len(_HISTORY_LOG_SEEN) > _HISTORY_LOG_SEEN_MAX:
+            _HISTORY_LOG_SEEN.popitem(last=False)
+    body_parts: list[str] = []
     for i, item in enumerate(turns, start=1):
         prefix = "用户" if item["role"] == "user" else "助手"
         content = item.get("content", "")
         content_display = content[:max_content_len]
         if len(content) > max_content_len:
             content_display += f"...（截断，共 {len(content)} 字符）"
-        lines.append(f"  ── 第 {i} 轮 ({prefix}) ──")
-        lines.append(f"  {content_display}")
-        lines.append("")
-    lines.append("=" * 60)
-    logger.info("\n".join(lines))
+        body_parts.append(f"── 第 {i} 轮 ({prefix}) ──")
+        body_parts.append(content_display)
+        body_parts.append("")
+    _log_boxed_document(
+        f"[GetHistory] {source}",
+        meta_lines=[f"turns={len(turns)}"],
+        body_label="history",
+        body="\n".join(body_parts).rstrip(),
+    )
+    return True
 
 
 def _log_add_history(
@@ -372,24 +410,20 @@ def _log_add_history(
     if len(answer) > max_content_len:
         answer_display += f"...（截断，共 {len(answer)} 字符）"
 
-    lines = [
-        "",
-        "=" * 60,
-        "  AddHistory 写入明细",
-        "=" * 60,
-        f"  agent_id          : {agent_id}",
-        f"  user_id           : {user_id}",
-        f"  run_id            : {run_id}",
-        f"  skip_history_write: {skip_history_write}",
-        f"  is_delegated      : {is_delegated}",
-        f"  delegator         : {delegator}",
-        "  ── 请求 (query) ──",
-        f"  {query_display}",
-        "  ── 回答 (answer) ──",
-        f"  {answer_display}",
-        "=" * 60,
-    ]
-    logger.info("\n".join(lines))
+    _log_boxed_document(
+        "[AddHistory] 写入明细",
+        meta_lines=[
+            f"agent_id={agent_id}    user_id={user_id}",
+            f"run_id={run_id}",
+            f"skip_history_write={skip_history_write}    "
+            f"is_delegated={is_delegated}    delegator={delegator}",
+        ],
+        body_label="payload",
+        body=(
+            f"── 请求 (query) ──\n{query_display}\n\n"
+            f"── 回答 (answer) ──\n{answer_display}"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +432,7 @@ def _log_add_history(
 
 _KNOWN_STRING_FIELDS_WITH_INNER_QUOTES = (
     "original_query", "description", "thought_process", "reason", "rationale", "final_answer",
+    "contribution",
 )
 
 
@@ -433,6 +468,79 @@ def _escape_known_string_field_inner_quotes(text: str) -> str:
     return pattern.sub(_repl, text)
 
 
+def _parse_json_output(answer) -> Optional[dict]:
+    """Parse LLM plain-text output into a dict.
+
+    Tries in order: direct JSON parse, strip markdown fences, escape inner
+    quotes, json_repair, ast.literal_eval, single-quote-to-double-quote.
+    Returns the parsed dict, or None if all attempts fail.
+    """
+    raw = "".join(
+        [
+            str(p.get("text", "")) if isinstance(p, dict) else (getattr(p, "text", None) or str(p))
+            for p in (getattr(answer, "content", None) or [])
+        ]
+    ) if isinstance(getattr(answer, "content", None), list) else ""
+    if not raw:
+        raw = getattr(answer, "content", None)
+    if not isinstance(raw, str):
+        raw = str(answer or "")
+    if not raw.strip():
+        return None
+    try:
+        parsed = json.loads(raw, strict=False)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    cleaned_content = raw.strip()
+    if cleaned_content.startswith("```json"):
+        cleaned_content = cleaned_content[7:]
+    elif cleaned_content.startswith("```"):
+        cleaned_content = cleaned_content[3:]
+    if cleaned_content.endswith("```"):
+        cleaned_content = cleaned_content[:-3]
+    cleaned_content = cleaned_content.strip()
+
+    try:
+        parsed = json.loads(cleaned_content, strict=False)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
+    if escaped_content != cleaned_content:
+        try:
+            parsed = json.loads(escaped_content, strict=False)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            pass
+
+    if _json_repair is not None:
+        try:
+            repaired = _json_repair(escaped_content, return_objects=True)
+            if isinstance(repaired, dict):
+                return repaired
+        except Exception:
+            pass
+
+    try:
+        import ast
+        parsed = ast.literal_eval(cleaned_content)
+        if isinstance(parsed, dict):
+            return parsed
+    except (ValueError, SyntaxError):
+        pass
+
+    try:
+        parsed = json.loads(cleaned_content.replace("'", '"'), strict=False)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -444,20 +552,92 @@ class BaseAgent(BaseModel, ABC):
     content_types: list[str] = Field(description="Supported content types.")
 
 
+def _non_empty_str(value: Any, fallback: str = "(未提供)") -> str:
+    """把任意值收敛为非空字符串。
+
+    ``TaskList.original_query`` / ``thought_process`` 已改为必填且 ``min_length=1``，
+    若调用方传入空串会让 pydantic 直接校验失败并触发无意义的重试。这里统一兜底。
+    """
+    text = str(value if value is not None else "").strip()
+    return text or fallback
+
+
+def _require_non_blank(value: Any, field_name: str) -> str:
+    """Strip and reject empty / whitespace-only strings. ``depends_on`` is exempt."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        raise ValueError(f"{field_name} must not be empty")
+    return text
+
+
 class PlannerTask(BaseModel):
-    id: int = Field(description="Sequential ID for the task.")
-    description: str = Field(description="description of subtask")
-    agent: str = Field(description="agent name of the task to be executed.")
-    depends_on: list[int] = Field(
-        default_factory=list,
-        description="List of task IDs that this task depends on.",
+    id: int = Field(description="Sequential ID for the task, starting from 1.")
+    description: str = Field(
+        description=(
+            "Description of the subtask handed to the agent. Must not be empty. "
+            "If this task consumes data produced by an upstream task, state here "
+            "which concrete fields/keys are needed from that upstream task."
+        ),
     )
+    agent: str = Field(
+        description=(
+            "Exact agent name of the task to be executed. Must match one of the "
+            'available agent names verbatim, or be "NONE".'
+        ),
+    )
+    depends_on: List[int] = Field(
+        description=(
+            "REQUIRED — always provide this field. List of task IDs that must complete "
+            "before this task can run. Write [] explicitly when, and only when, this "
+            "task has no upstream dependency (it is the first task, or runs "
+            "independently of the others). Never omit it."
+        ),
+    )
+
+    @field_validator("description", "agent", mode="before")
+    @classmethod
+    def _reject_blank_task_str(cls, value: Any, info) -> str:
+        return _require_non_blank(value, info.field_name)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _reject_missing_id(cls, value: Any) -> int:
+        if value is None or (isinstance(value, str) and not str(value).strip()):
+            raise ValueError("id must not be empty")
+        return value
 
 
 class TaskList(BaseModel):
-    thought_process: Optional[str] = Field(default=None, description="The internal reasoning steps of the planner.")
-    original_query: Optional[str] = Field(description="Verbatim original user query.")
-    tasks: List[PlannerTask] = Field(description="A list of tasks to be executed sequentially.")
+    # 除 tasks[].depends_on 允许 [] 外，其余字段均不允许空。
+    thought_process: str = Field(
+        description=(
+            "REQUIRED, must not be empty. The internal step-by-step reasoning of the "
+            "planner (Step1 data need -> Step2 ontology -> Step3 capability match -> "
+            "Step4 self-check -> Step5 context/history -> Step6 cross-domain split)."
+        ),
+    )
+    original_query: str = Field(
+        description="REQUIRED, must not be empty. Verbatim original user query.",
+    )
+    tasks: List[PlannerTask] = Field(
+        description=(
+            "REQUIRED, must contain at least one task and must never be an empty list. "
+            "Tasks to be executed sequentially. If no available agent can handle the "
+            'query, return exactly one task with agent="NONE".'
+        ),
+    )
+
+    @field_validator("thought_process", "original_query", mode="before")
+    @classmethod
+    def _reject_blank_plan_str(cls, value: Any, info) -> str:
+        return _require_non_blank(value, info.field_name)
+
+    @field_validator("tasks")
+    @classmethod
+    def _reject_empty_tasks(cls, value: List[PlannerTask]) -> List[PlannerTask]:
+        if not value:
+            raise ValueError("tasks must not be empty")
+        return value
 
 
 class TaskStatus(BaseModel):
@@ -474,18 +654,48 @@ class TaskStatus(BaseModel):
     status: str = Field(description="the status of the task.")
 
 
-class CapabilityCheckToolResult(BaseModel):
-    """Capability check result for handle_capability_check (aligned with SD orchestrator)."""
+# ── Chain-driven planning models ──────────────────────────────────────
+
+class CapabilityChainStep(BaseModel):
+    """Planner output: one step in the operation chain decomposition."""
     model_config = {"extra": "ignore"}
-    can_handle: bool = Field(description="Whether this SG can handle the query")
-    can_contribute: bool = Field(description="Whether this SG can contribute")
-    contribution: str = Field(description="What this SG can contribute")
-    confidence: float = Field(description="Confidence score from 0.0 to 1.0")
-    reason: str = Field(description="Detailed reasoning")
+    step_id: int = Field(description="步骤编号，从 1 开始")
+    description: str = Field(description="一步一句话：输入→操作→产出")
+    operation: str = Field(description="操作类别，建议从常用类别中选择，若无匹配可用自定义文本")
+    input_source: Literal["query", "upstream"] = Field(description="输入来源")
+    input_desc: str = Field(description="输入描述")
+    output_desc: str = Field(description="期望产出")
+    is_final: bool = Field(description="是否最终结果的步骤")
+    matched_agent: str = Field(description="匹配的 Agent 名称或 NONE")
+    match_reason: str = Field(description="为什么选这个 Agent（或为什么 NONE）")
+
+
+class ChainPlanResult(BaseModel):
+    """LLM output for chain-driven planning."""
+    model_config = {"extra": "ignore"}
+    thought_process: str = Field(description="完整推理过程")
+    original_query: str = Field(description="用户原始问题")
+    capability_chain: list[CapabilityChainStep] = Field(description="操作链分解")
+    tasks: list[PlannerTask] = Field(description="可执行任务列表")
+
+
+# ── Recommended operations for chain planning (soft hint, not hard enum) ──
+
+_RECOMMENDED_OPERATIONS: frozenset[str] = frozenset({
+    "lookup", "filter", "aggregate", "retrieve", "extract",
+    "summarize", "classify", "compare", "translate", "generate", "modify",
+})
+
+
+# Capability check LLM schema: the LLM outputs per-step, per-dimension
+# checklists and ratios (see agent/capability_chain.py and
+# CAPABILITY_EVALUATION_SCORING_DESIGN.md); can_handle / can_contribute /
+# confidence are derived arithmetically by ``capability_chain.aggregate``.
+CapabilityCheckToolResult = CapabilityChainResult
 
 
 def _normalize_capability_result(result_data: dict[str, Any]) -> tuple[bool, bool]:
-    """Normalize LLM capability result, aligned with SD orchestrator
+    """Normalize a (can_handle, can_contribute) pair, aligned with SD orchestrator
     _normalize_member_capability_judgment.
 
     When can_handle=True, can_contribute is also True.
@@ -497,10 +707,31 @@ def _normalize_capability_result(result_data: dict[str, Any]) -> tuple[bool, boo
     return can_handle, can_contribute
 
 
+def _format_skills_for_capability_check(skills: Optional[List[Any]]) -> str:
+    """Render loaded skills as ``### name`` blocks with the full SKILL.md body.
+
+    The capability judge scores against the skill body (field lists, command
+    examples, coverage statements, exclusions), so nothing is truncated.
+    """
+    if not skills:
+        return "（无）"
+    blocks: List[str] = []
+    for skill in skills:
+        name = str(getattr(skill, "name", "") or "").strip() or "unnamed"
+        body = str(getattr(skill, "description", "") or "").strip() or "（无正文）"
+        tags = getattr(skill, "tags", None) or []
+        header = f"### 技能：{name}"
+        if tags:
+            header += f"  (tags: {', '.join(str(t) for t in tags)})"
+        blocks.append(f"{header}\n{body}")
+    return "\n\n".join(blocks)
+
+
 class DelegationDetectionResult(BaseModel):
     model_config = {"extra": "ignore"}
+    task_type: Literal["structured", "unstructured"] = Field(description="Task type classification. structured=数据库查询、表字段检索、记录查找等有明确字段边界的数据操作；unstructured=文档总结、文本分析、代码审查、翻译、内容生成等无标准答案的分析性任务")
     needs_help: bool = Field(description="Whether another SG's help is needed")
-    synthesized_query: str = Field(description="Scoped sub-query for the downstream SG.")
+    synthesized_query: str = Field(description="Scoped sub-query for the downstream SG. Required for structured tasks. For unstructured tasks it is also a NECESSARY CONDITION of needs_help=true: if you cannot write an executable sub-query, there is no clear gap and needs_help must be false.")
     target_sgs: List[str] = Field(default_factory=list, description="SG names that should supplement the data gap. Fill when needs_help=true; final selection uses capability_check. Names must be selected from the provided SG list, do NOT invent non-existent SG names.")
     reason: str = Field(description="Why additional data is needed")
 
@@ -544,6 +775,20 @@ class SummaryEvaluationResult(BaseModel):
     )
     missing_info: str = Field(
         description="When satisfactory=false, describe what information is still missing and should be retrieved in the next turn. When satisfactory=true, set to empty string."
+    )
+    gap_obtainable: bool = Field(
+        default=True,
+        description=(
+            "Only meaningful when satisfactory=false. Whether the missing information could "
+            "plausibly be obtained by executing further steps. "
+            "true = the gap is retrievable by more work (another agent holds the data, a query can fetch it, "
+            "a missing join key can be resolved). "
+            "false = the gap lies outside the capability boundary and no amount of re-execution can produce it "
+            "(e.g. the result explicitly states it lacks that ability and no agent in the collaboration pool "
+            "declares it; or it requires real-time/external data that is unavailable). "
+            "Note: a bare mention in the result that it lacks an ability is NOT by itself reason to set false — "
+            "if another agent could supply it, set true. Set true when satisfactory=true."
+        ),
     )
     rationale: str = Field(
         description="One-sentence reason for the evaluation decision (e.g. why the answer is sufficient or insufficient)"
@@ -714,7 +959,7 @@ PLANNER_COT_INSTRUCTIONS_ZH = """
      - `id`：整数（从1开始）。
      - `description`：转述给智能体的子任务（忠实于用户原始表述）。
      - `agent`：确切的智能体名称或"NONE"。
-     - `depends_on`：整数列表，标明此任务依赖哪些 task id 必须先完成。
+     - `depends_on`：**必填**整数列表，标明此任务依赖哪些 task id 必须先完成；没有上游依赖时也必须显式写 `[]`，严禁省略该字段。
 
 ## `make_plan_cmd` 工具参数示例
 {instructions}
@@ -868,8 +1113,418 @@ PLANNER_COT_INSTRUCTIONS_ZH_HISTORY = """
 
 ---
 
+## 工具调用要求
+必须调用 `make_plan_cmd` 工具输出规划结果，直接填充工具参数字段。不要直接输出自然语言或 JSON 文本。
+
+## ⚠ 工具参数必填性（强制，缺字段即为无效输出）
+`make_plan_cmd` 的所有参数均为**必填**，且**没有任何默认值**。省略或留空都视为无效输出。
+
+- `thought_process`：必填、非空。写入 Step1–Step6 的完整推理过程。
+- `original_query`：必填、非空。逐字复制用户原始输入。
+- `tasks`：必填、非空数组，至少包含 1 个任务。
+- 每个 task 的字段：
+  - `id`：必填，整数，从 1 开始递增。
+  - `description`：必填、非空，转述给智能体的子任务。
+  - `agent`：必填、非空，必须与[可用智能体]中的名称完全一致，或为 `NONE`。
+  - `depends_on`：**必填**。即使该任务没有任何上游依赖，也**必须显式写 `depends_on: []`**；
+    若该任务需要上游任务的产出，则**必须**写入对应的上游 task id（如 `depends_on: [1]`）。
+    ⚠ 严禁省略 `depends_on` 字段本身——省略会导致跨域依赖丢失、下游误按并行执行。
+
+---
+
 问题：
 
+"""
+
+
+PLANNER_COT_INSTRUCTIONS_ZH_HISTORY_JSONSTRING = """
+# 角色：首席战略规划师（多智能体编排专家）
+
+## 核心使命
+按 **数据归属（Data Sovereignty）** 将用户查询分解为可执行任务。你必须通过 **[执行上下文]** 建立反馈闭环，并结合 **[对话历史]** 的语境，确保规划路径既能解决指代关系，又能避免重复失败。
+
+## 核心方法论：数据归属语义判断（不要靠关键词，要靠业务本质思考）
+
+⚠ **严禁名词驱动**：不要因为问题里出现 "X" 就路由到主管 "X" 的 Agent。
+⚠ **不要退化成关键词字面比对**：判断标准不是 "Agent 描述里有没有这个词"，而是"这份数据从**业务本质**上是不是该 Agent 能力的**自然产物**"。
+✅ **必须做业务语义归属**：先问"这份数据是什么**业务性质**的数据"，再问"哪个 Agent 的业务能力**天然覆盖 / 自然沉淀**这种性质的数据"。
+
+### 关键认知（数据本体二分法 — 整个推理的根基）
+
+任何业务数据，从本质上都属于以下两类之一：
+
+1. **静态本体数据（实体的内在属性 / 自身状态）**
+   - 含义：是某个业务实体"自带的"、"自身就有的"属性或状态。
+   - 归属：**持有该实体生命周期的 Agent**。
+   - 直觉判断："这个数据，就算从来没人买过、没人用过，它也客观存在。"
+   - 例：
+     - 商品的名称 / SKU / 类目 / 上下架状态 / 库存量 / 标价 → 商品 Agent
+     - 用户的昵称 / 等级 / 注册时间 / 收货地址 → 用户 Agent
+
+2. **动态行为数据（行为/事件/交互产生的流水或统计）**
+   - 含义：必须有"某种动作发生过"才会存在的数据，是行为本身的副产物或聚合统计。
+   - 归属：**记录该行为本身的 Agent**（**不是**被作用对象那一方的 Agent）。
+   - 直觉判断："如果没人触发过这个动作，这数据就不存在。"
+   - 例：
+     - 商品的销量 / 销售情况 / 成交额 / 售出记录 / 退款情况 → **由购买/退款行为产生** → 订单 / 交易 Agent
+     - 用户的登录次数 / 浏览路径 / 收藏行为 → **由用户操作产生** → 行为日志 / 用户行为 Agent
+
+### 关键洞察（消除"X 的 Y"歧义）
+- "X 的 Y"形式中，**Y 的业务性质决定归属，X 只是过滤维度**。
+- 当 Y 是 **动作/行为/统计/流水**（销售、购买、成交、登录、支付、退款……）时：
+  - 这份数据是**动态行为数据**，归属于**记录该行为的领域**，**不在** X 自身的领域。
+  - 哪怕 Y 听起来"是关于 X 的"，也不改变这一点。
+- 反例提醒：商品 Agent 管的是"商品本体"，**不**管"消费者购买商品产生的销售流水"——后者是交易行为的产物。
+
+## 战略思考过程（思维链 — 必须按顺序执行，不可跳过）
+
+### Step 1：数据需求识别
+对用户查询，思考并写出：
+- **核心数据需求**：要回答这个问题，必须获得**什么业务性质的数据**？用一句话描述。
+- **过滤维度**（可空）：这份数据要按什么条件过滤。
+
+### Step 2：数据本体性质判定（核心二分）
+对 Step 1 写出的"核心数据需求"，必须明确判定它是：
+- **(A) 静态本体数据** — "X 的内在属性 / 自身状态"，那么归属于持有 X 实体生命周期的 Agent；或
+- **(B) 动态行为数据** — "由某种动作/事件产生的流水或统计"，那么归属于记录该动作的 Agent。
+
+### Step 3：业务能力语义匹配
+逐个审视 [可用智能体]，对每个候选 Agent：
+- **读懂它的业务能力范围**，而不是死扣它的描述里出现了哪些字。
+- 自问：**Step 1 那份数据，是不是这个 Agent 业务能力的"自然产物 / 直接职责覆盖"？**
+
+### Step 4：路由前自检（强制）
+在最终落定 Agent 前，必须在 `thought_process` 中显式回答下面四问：
+1. **本体性质**：Step 1 这份数据，是 (A) 静态本体属性 还是 (B) 动态行为产物？
+2. **业务覆盖**：选定 Agent 的业务能力，是不是**天然产生 / 直接覆盖**这份数据？
+3. **名词陷阱**：我是否仅因为"用户问题里的名词" 与 "Agent 主体名词" 同名就做了路由？
+4. **更优候选**：是否存在另一个 Agent，其业务本质比当前选择**更直接地**对应这份数据的产出？
+
+### Step 5：[执行上下文] + [对话历史] 闭环分析
+- **结果复用**：若 **[执行上下文]** 中已有相关任务的成功结果，直接继承，严禁创建重复查询任务。
+- **路径纠偏（避坑）**：若上下文显示先前尝试已失败，本次规划必须改变策略。
+- **历史指代解析**：用 [对话历史] 仅解析"它 / 那个 / 继续 / 更详细一点"等指代，不要把历史中与当前追问无关的过滤条件机械搬运过来。
+
+### Step 6：跨域编排判定
+- 当 **数据归属方 ≠ 过滤维度持有方** 时：
+  - **首选方案**：让"数据归属方"独立完成查询。
+  - **仅当**过滤条件需要先由另一个 Agent 解析为 ID / 枚举 / 名单后才能传给主查询 Agent 时，才安排上游任务。
+- 编排顺序：**数据持有方**（产出关联键）→ **数据消费方**（消费关联键），消费方必须在 `depends_on` 中声明依赖。
+- 严禁循环依赖（A↔B）。
+
+### Step 7：依赖与描述注入（自洽校验规则）
+若当前任务需要先前任务的产出，必须在 `description` 中明确注入（说明需要哪些上游数据，如关键字段、标识符等）。
+
+**描述与依赖的自洽规则（强制）**：
+- 若某任务的 `description` 中明确或隐含地依赖了另一个任务的结果（例如描述中出现了"根据上一步"、"需要从上游获取"、"基于任务 X 的结果"、或引用了尚未产出的数据），则该任务的 `depends_on` 字段**必须**包含对应任务的 ID。**禁止出现**描述中声明依赖、但 `depends_on` 为空的自相矛盾情况。
+- 同时，若 `depends_on` 非空，则 `description` 中**必须**说明需要从上游获取哪些具体数据或字段，而不是仅笼统写一句"需要从上游获取"。
+
+## 智能体选择规则（必须严格遵守）
+1. **数据本体归属优先**：分配给"业务能力天然产出该数据"的 Agent。
+2. **领域内隐含能力**：领域专家拥有**该领域内**的全量知识。
+3. **⚠ 不可跨域扩张（重点）**：不要假设"X Agent 是 X 全能专家就能处理 X 的 Y"。
+4. **任务分解节制**：仅当查询确实涉及**多个不同领域**或存在**明确先后依赖**时才拆分。
+5. **"无对应"协议（NONE）**：
+   - **仅当**用户问题的**全部**可执行议题都超出当前可用 Agent 的领域范围时，才使用 `agent="NONE"`。
+6. **名称准确性**：`agent` 字段必须与智能体列表中的"名称"完全一致。
+
+## ⚠ 反模式（已知路由失败案例 — 必须避免）
+1. **名词陷阱（最高频错误）**：把"X 的 Y"中的动态行为数据 Y 当成 X 领域的事。
+2. **关键词字面匹配陷阱**：仅因为 Agent 描述里出现了某个相关词就路由。
+3. **跨域隐含能力误判**：以为"X 领域专家"能处理"X 的 Y"，而 Y 实际是另一领域的行为产物。
+4. **静态/动态判定错误**：把动态行为数据当成静态本体数据。
+
+## ⚠ 跨域串联规则（强制）
+当用户查询需要跨 SG 串联两个领域的数据时：
+1. 拥有关联键的 SG（**数据持有方**）的任务排在前面。
+2. 需要关联键的 SG（**数据消费方**）在其 `depends_on` 中声明对持有方任务的依赖。
+3. 消费方任务的 `description` 中需明确说明需要从上游获得的关键字段。
+
+## ⚠ 对话历史使用规则（指代与继承）
+1. **仅用于理解指代**：解析"它"、"那个"、"继续"等含义。
+2. **禁止无关条件搬运**：不要将历史对话中与当前追问无关的过滤条件搬运到当前任务中。
+3. **对比性追问须继承完整上下文**：用户进行对比追问（如"那2024年呢"），必须从历史中完整继承未变化的维度，确保 `description` 语义自包含。
+4. **指代追问必须自包含**：对于"更详细一点"这类指代，描述必须补充历史主题，使其对 Agent 而言是完整的。
+
+## ⚠ 任务描述 (Description) 关键规则（必须严格遵守）
+1. **忠实转述与结果注入**：忠实反映意图，并主动注入 **[执行上下文]** 中的关键结果。
+2. **严禁捏造条件（重点）**：绝对不允许在描述中添加用户未提及的任何限制。
+3. **宁简勿繁**：问题宽泛时，描述也保持宽泛，由领域专家自行解读。
+4. **保留过滤维度**：当 **谓词数据 ≠ 过滤维度** 时，description 必须保留过滤维度。
+
+---
+
+**[对话历史] (History):**
+{history}
+*注：包含用户与系统的自然语言对话，用于理解语境和指代。*
+
+**[可用智能体] (Agents):**
+{agents}
+
+**[执行上下文] (Information):**
+{information}
+*注：包含之前已执行的任务 ID、任务描述、执行 Agent 以及执行结果。*
+
+**[组级记忆] (Group Memory):**
+{group_memory}
+*注：包含长期策略沉淀及 Agent 间协作的特殊规则。*
+
+---
+
+## JSON 输出要求（强制，缺字段即为无效输出）
+
+你必须输出 **一个** JSON 对象，字段全部必填、没有任何默认值。省略或留空都视为无效输出。
+
+根对象必须恰好包含以下三个键（不要增删键名）：
+
+- `thought_process`：字符串，必填、非空。写入 Step1–Step6 的完整推理过程。
+- `original_query`：字符串，必填、非空。逐字复制用户原始输入。
+- `tasks`：数组，必填、非空，至少包含 1 个任务对象。
+
+`tasks` 中每个元素必须是对象，且必须包含：
+
+- `id`：整数，从 1 开始递增。
+- `description`：非空字符串，转述给智能体的子任务。
+- `agent`：非空字符串，必须与[可用智能体]中的名称完全一致，或为 `NONE`。
+- `depends_on`：**必填数组**。即使该任务没有任何上游依赖，也**必须显式写 `[]`**；若该任务需要上游任务的产出，则必须写入对应的上游 task id（如 `[1]`）。严禁省略 `depends_on`。
+
+合法 JSON 形状如下（这是格式模板，不是可执行答案；花括号必须成对出现）。
+
+**例 A — 执行上下文已有关联键（必须复用，禁止再查 user-agent）：**
+
+```json
+{{
+  "thought_process": "Step5 执行上下文已给出张三的用户ID=U003。禁止再创建 user-agent 解析任务。购买商品是订单流水，直接派 order-agent，description 写入 U003，depends_on=[]。",
+  "original_query": "查询用户张三购买的商品",
+  "tasks": [
+    {{
+      "id": 1,
+      "description": "按用户ID U003 查询该用户购买的商品",
+      "agent": "order-agent",
+      "depends_on": []
+    }}
+  ]
+}}
+```
+
+**例 B — 尚无关联键、需要跨域串联：**
+
+```json
+{{
+  "thought_process": "Step1 ... Step6 ...",
+  "original_query": "用户的原始问题原文",
+  "tasks": [
+    {{
+      "id": 1,
+      "description": "先查需要产出关联键的子任务",
+      "agent": "user-agent",
+      "depends_on": []
+    }},
+    {{
+      "id": 2,
+      "description": "再查需要消费上游关联键的子任务，并写明需要哪些上游字段",
+      "agent": "order-agent",
+      "depends_on": [1]
+    }}
+  ]
+}}
+```
+
+无可用智能体时的 JSON 形状：
+
+```json
+{{
+  "thought_process": "所有可用 Agent 均无法覆盖该问题。",
+  "original_query": "用户的原始问题原文",
+  "tasks": [
+    {{
+      "id": 1,
+      "description": "No available agent can do this task. ",
+      "agent": "NONE",
+      "depends_on": []
+    }}
+  ]
+}}
+```
+
+输出前自检：
+1. 文本可以被 `json.loads` 解析为对象。
+2. 根键只有 `thought_process`、`original_query`、`tasks`。
+3. 每个 task 都有 `id`、`description`、`agent`、`depends_on`，且 `depends_on` 是数组。
+4. 除 JSON 外没有其它字符（或仅有一对 json 代码围栏）。
+5. 若 [执行上下文] 或 [组级记忆] 已包含可用关联键（如用户ID），tasks 中不得再出现仅为解析该键的任务；下游 description 必须写明该键值，且 `depends_on` 为 `[]`。
+
+---
+
+问题：
+
+"""
+# 2026-09-11 更新：此模板已废弃，请使用链驱动的 PLANNER_CHAIN_INSTRUCTIONS_ZH 模板
+# 如需回退，将 USE_CHAIN_PLANNING 设置为 false
+
+
+# ── 链驱动规划提示词 ─────────────────────────────────────────────────
+PLANNER_CHAIN_INSTRUCTIONS_ZH = """
+# 角色：首席战略规划师（多智能体编排专家）
+
+## 核心使命
+先将用户查询分解为**操作步骤链**，再对链上每一步做数据归属路由，最终输出可执行任务列表。
+
+## 步骤方法论
+
+### Step 0：操作链分解（先拆链，再路由）
+
+把用户 query 分解为操作步骤链："已知输入 → 访问数据/资源 → 执行操作 → 产出结果"。
+
+**拆分规则：**
+1. 一步只做**一种操作**、访问**一类数据**。上一步的产出是下一步的输入时拆开，否则不拆。
+2. 单一简单问题就是一步。复杂问题是多段链串联。
+3. 拆分依据是**问题本身需要什么**，不考虑 Agent 能不能做。Agent 做不了的操作也必须出现在链上（最终会标记 agent=NONE）。
+4. 为每个步骤标注：
+   - `operation`：操作类别。优先从常用类别中选择，若无匹配可用简短自定义文本。
+     常用类别：lookup（按键/条件查询）│ filter（条件筛选）│ aggregate（统计/分组/排序）│
+     retrieve（文档/知识库检索）│ extract（从文本/图片/音频抽取）│ summarize（归纳/摘要）│
+     classify（分类/打标签/判定）│ compare（对比）│ translate（格式/语言转换）│
+     generate（创作新内容）│ modify（写入/更新/删除）
+   - `input_source`：`query`（问题文本/附件已给出）或 `upstream`（需由上一步产出）
+   - `input_desc`：输入是什么（简洁短语）
+   - `output_desc`：期望产出什么（简洁短语）
+   - `is_final`：该步骤的产出是否就是用户要的最终结果（之一）
+
+**示例 1**：「张三买了哪些东西」
+```
+链（2 步）：
+  步骤1：用户名(query) → 用户表 → lookup → user_id  [is_final=false]
+  步骤2：user_id(upstream) → 订单表 → lookup → 商品列表  [is_final=true]
+```
+
+**示例 2**：「北京明天天气怎么样，并且帮我把这句话翻译成英文」
+```
+链（2 步，独立）：
+  步骤1：地点+时间(query) → 天气数据 → lookup → 天气信息  [is_final=true]
+  步骤2：文本(query) → 无外部数据 → translate → 英文翻译  [is_final=true]
+```
+
+**示例 3**：「对数据库做一次全面体检并给出优化建议」
+```
+链（4 步）：
+  步骤1：时间范围(query) → 慢查询日志 → lookup → 慢查询列表  [is_final=false]
+  步骤2：时间范围(query) → 性能指标数据 → lookup → QPS/CPU/内存  [is_final=false]
+  步骤3：连接池名(query) → 连接池状态 → lookup → 连接池快照  [is_final=false]
+  步骤4：慢查询列表+性能时序+连接池快照(upstream) → 汇总分析 → summarize → 优化建议  [is_final=true]
+```
+
+**示例 4**：「帮我查一下」（意图模糊）
+```
+链（1 步）：
+  步骤1：意图(query) → 无外部数据 → classify → 确定查询意图  [is_final=true]
+  注：无法匹配到 Agent，最终 agent=NONE
+```
+
+
+### Step 1：对链上每一步做数据归属判定
+
+对 Step 0 产出的链上**每一个步骤**，独立判定该步骤所需数据的业务性质：
+
+1. **静态本体数据**（实体的内在属性/自身状态）：归属于该实体生命周期的 Agent。
+   例：商品名称/SKU/库存量 → 商品 Agent；用户昵称/注册时间 → 用户 Agent
+2. **动态行为数据**（行为/事件/交互产生的流水或统计）：归属于**记录该行为本身**的 Agent。
+   例：商品销量/成交额 → 订单/交易 Agent（不是商品 Agent）；用户登录记录 → 行为日志 Agent
+
+
+### Step 2：对链上每一步做 Agent 匹配
+
+逐个审视 [可用智能体]，对每一步：
+- **读懂它的业务能力范围**，不是死扣描述里的字
+- 自问：**该步骤需要的这份数据，是这个 Agent 业务能力的"自然产物/直接职责覆盖"吗？**
+- 如果没有任何 Agent 覆盖该步骤的数据需求，则该步骤标记为 agent="NONE"
+
+
+### Step 3：路由前自检（per-step）
+
+对链上每一步（除 NONE 外），在 thought_process 中回答：
+1. 该步骤产出数据的业务性质（静态/动态）
+2. 选的 Agent 的业务能力是否天然产出这份数据
+3. 是否仅因为"步骤描述里的名词"和"Agent 主体名词"同名就做了路由 → 如果是，必须纠正
+
+
+### Step 4：执行上下文 + 对话历史闭环
+
+- 若 [执行上下文] 中有已成功执行的步骤结果，复用其产出，从链上删除对应步骤
+- 若上下文显示某些步骤已失败，链上对应步骤标记原因
+- 对话历史仅用于解析指代
+
+
+### Step 5：从链推导任务编排
+
+将链上步骤转化为 task 列表：
+- 链上每个步骤 → 一个 task，task.id = step_id
+- `depends_on` 从链拓扑自然导出：当前步骤 input_source 为 `upstream` 时，depends_on 包含该上游步骤的 id
+- `description` 从链信息组装：`{{input_desc}}→{{operation}}→{{output_desc}}`，并注入已知键值
+- 链上标记为 NONE 的步骤 → task 的 agent="NONE"
+- 如所有步骤均为 NONE → tasks 只输出一个 id=1、agent="NONE" 的 task
+
+
+## ⚠ 反模式（必须避免）
+1. **名词陷阱**：把动态行为数据当成被作用对象领域的数据。商品 Agent 不管销售量——那是交易行为的产物。
+2. **关键词字面匹配**：不要因为 Agent 描述里有某个词就路由，要看业务本质。
+3. **跳过链分解**：必须先拆链再做路由，不能直接从 query 跳到 agent。
+4. **链步骤遗漏**：Agent 做不了的操作也必须出现在链上（agent=NONE）。
+
+
+## 可用输入：
+
+**[对话历史] (History):**
+{history}
+
+**[可用智能体] (Agents):**
+{agents}
+
+**[执行上下文] (Information):**
+{information}
+
+**[组级记忆] (Group Memory):**
+{group_memory}
+
+
+## 输出要求
+
+只输出一个纯 JSON 对象（不要 ```json 围栏），字段全必填：
+
+{{
+  "thought_process": "Step0 链分解 → Step1 数据归属 → Step2 Agent匹配 → Step3 自检 → Step4 上下文 → Step5 任务编排，完整写出每步推理",
+  "original_query": "用户问题原文",
+  "capability_chain": [
+    {{
+      "step_id": 1,
+      "description": "一步一句话：输入→操作→产出",
+      "operation": "lookup 或自定义文本",
+      "input_source": "query",
+      "input_desc": "输入描述",
+      "output_desc": "期望产出",
+      "is_final": true,
+      "matched_agent": "从可用智能体列表选择的 agent name 或 NONE",
+      "match_reason": "为什么选这个 Agent（或为什么 NONE）"
+    }}
+  ],
+  "tasks": [
+    {{
+      "id": 1,
+      "description": "从链信息组装的完整任务描述，含具体键值",
+      "agent": "与 capability_chain.matched_agent 一致",
+      "depends_on": []
+    }}
+  ]
+}}
+
+输出前自检：
+- capability_chain 中每个步骤的 matched_agent 必须映射到 tasks 中对应 id 的 agent 字段
+- tasks 中的 depends_on 必须与 capability_chain 中的 input_source=upstream 一致（例：若步骤3的 input_source=upstream，则 depends_on 应包含步骤2的 id）
+- 如所有步骤均为 NONE → tasks 只输出一个 agent="NONE" 的 task
+
+---
+
+问题：
 """
 
 
@@ -913,157 +1568,221 @@ Orchestrator_INSTRUCTIONS_ZH = """
    * 若用户未明确要求扩展分析，默认不要主动展开这些内容。
 """
 
-SKILL_CAPABILITY_CHECK_PROMPT = """# Role: capability judge for a skill agent
+SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 
-You are a capability judge for a skill agent. Your task is to determine whether
-this agent can handle or contribute to the user's query, based on domain
-alignment and skill inventory.
+你要评估"本 Agent"能否解决或贡献用户问题。评估对象是任务成功的必要条件，不是主题相似度。
+你负责：拆分步骤、逐维度列清单并给出比例、给出证据等级、书写贡献说明与缺失项。
+你不负责：判定 can_handle / can_contribute、计算 confidence。这些由程序按固定公式从你的比例中推导。
 
-Think step by step, then call evaluate_capability.
+评估依据只有下面四类文本，按可信度从高到低：
+1. 技能正文（skill inventory 中每个技能的完整说明：字段列表、数据格式、命令示例、处理流程、覆盖范围、排除项）
+2. 技能短描述
+3. Agent 描述
+4. 用户问题原文与历史
 
-## Core Principle: Domain-First Decision
+本标准同时适用于结构化数据技能（表、字段、键）和非结构化技能（文档库、知识库、图片、音频、纯生成 / 转换）。
+两类技能使用同一套维度，区别只在清单里的"项"是字段还是信息需求项（主题、知识点、文档集、模态）。
 
-The fundamental question is: **does this agent's primary domain match the
-primary domain of the user's query?**
+## 一、方法论：任务是一条步骤链
 
-### Decision Steps (follow in order):
+任何任务都是一条或多条这样的链：已知输入 → 访问数据/资源 → 执行操作 → 产出结果（在给定的限定条件下）。
+复杂问题是多段链串起来，上一步的产出是下一步的输入。
 
-D1) **Identify the query's primary domain(s).**
-    What is the main subject / topic the user is asking about? Look at the
-    central entity, the core question being asked, or the main problem area.
-    A query may touch multiple domains. If the query has a single clear
-    primary domain, identify it. If the query explicitly asks about two or
-    more domains as parallel, equally-weighted concerns (e.g., "同时排查 A 和 B",
-    "既需要 X 也需要 Y"), there may be MULTIPLE peer primary domains — each is
-    an equally valid primary domain from the perspective of its respective agent.
+- 能独立解决 = 本 Agent 能独立走完所有步骤。
+- 能贡献 = 本 Agent 能独立走完某一步，且这一步的产出是后续步骤的输入，或本身就是用户要的结果之一。
 
-    **Distinguishing peer vs. secondary**: A domain is a PEER primary domain
-    only when it is presented as a first-class problem/concern, not merely a
-    supporting check to help diagnose the main problem. Key signals:
-    - Peer: "同时排查 A 和 B", "分别检查 X 和 Y", "X 和 Y 都需要确认"
-    - Secondary: "排查 A 的同时看看 B", "A 出了问题，顺便确认下 B",
-      "主要排查 A，同时 B 也查一下", "排查 A（原因），同时确认 B（是否受牵连）"
-    When one domain is the CLEAR trigger/root problem and the other is just a
-    supporting check to help explain it, the trigger domain is the PRIMARY
-    domain and the supporting check is SECONDARY.
+示例（结构化）："张三买了哪些东西"
+  步骤 1：用户名(query) → 用户表[用户名, 用户ID] → lookup → user_id                 is_final=false
+  步骤 2：user_id(upstream) → 订单表[订单, 商品] → lookup → 商品列表                 is_final=true
+示例（非结构化）："总结这份合同的风险点，并对比去年版本的变化"
+  步骤 1：合同文件(query 附件) → 合同文本 → extract → 风险条款列表                    is_final=true
+  步骤 2：合同名称(query) → 合同归档库 → retrieve → 去年版本文本                       is_final=false
+  步骤 3：风险条款列表(upstream) + 去年版本文本(upstream) → 无外部数据 → compare → 变化说明   is_final=true
 
-D2) **Compare with the agent's domain.**
-    Determine whether this agent's domain (inferred from its name, description,
-    and skill inventory) matches the query's primary domain. This is a topical
-    / subject-matter judgment, not a completeness check.
+## 二、步骤拆分规则
 
-D3) **Determine can_handle and can_contribute.**
+- 一步只做一种操作、访问一类数据；上一步的输出必须是下一步的输入，否则不拆。单一简单问题就是一步。
+- 拆分依据是问题本身需要什么，不是本 Agent 会什么。本 Agent 做不了的步骤也必须列出并打分。
+- 每个输入项标注来源：query（问题文本或用户附带的文件、图片等附件已给出）/ upstream（需由上一步产出）/ missing（都没有）。
+- 操作类别只能取：lookup（按键或条件定位记录）、filter（按条件筛选）、aggregate（统计、分组、排序）、
+  retrieve（在文档库 / 知识库检索）、extract（从文本、图片、音频抽取信息）、summarize（归纳、摘要）、
+  classify（分类、打标签、判定）、compare（对比）、translate（语言或格式转换）、generate（基于输入创作新内容）、
+  modify（写入、删除、更新外部状态）。
+- is_final：该步骤的产出是否就是用户要的最终结果（之一）。多个并列子问题各自是一步且各自 is_final=true。
+- 问候、闲聊、无法识别意图的问题：拆成一步，操作类别按最接近的选，五个维度按实际情况打分（通常 D 与 R 为 0）。
 
-## Core Rules
+## 三、五个维度（每个步骤各评一次）
 
-### Rule 1: Primary Domain Match → can_handle = true
+四个比例维度必须先写清单（required / matched）再给 ratio；只给数字不给清单视为无效。
+操作维度为三档。
 
-If the agent's primary domain MATCHES the query's domain (or at least one of
-the query's peer primary domains from D1), set **can_handle = true**, regardless
-of how complex the query is.
+### I 输入匹配
+- 定义：该步骤所需输入，问题或上一步给了多少。
+- 打分：列出所需输入项；逐项判断是否已提供且类型 / 模态可用；I = 可用项 / 所需项。
+- 来源为 upstream 的输入按可用计，但必须写入 missing_requirements（若本 Agent 的上一步能产出则不必）。
+- 输入模态与技能不匹配（技能只处理文本，输入是图片）记为不可用。
+- 该步骤不需要输入时 required 为空、ratio = 1.0。
+- **时间表达式规则**："本月"、"今天"、"本周"、"最近"、"上月"等时间表达式是自包含输入，直接记为已匹配。系统知道当前日期，执行时自然会按时间筛选，不需要调用方补精确起止日期。
+- evidence_strength：
+  · solid：依据来自问题原文中的具体值（如"张三"）、用户附件中的具体文件、或技能正文中明确声明的输入条件与支持的输入格式
+  · speculative：仅能根据 Agent 描述或问题上下文推断输入是否可用
 
-**Key insight**: A complex query may require multiple agents to fully solve.
-That does NOT mean this agent cannot handle it. If the query's domain (or one
-of its peer domains) is this agent's domain, this agent is the right owner for
-that portion. Other agents can collaborate to fill in the gaps. Do NOT downgrade
-to can_handle=false just because the query is complex or spans multiple domains.
+### D 信息覆盖
+- 定义：该步骤要读写的信息需求项，技能的数据源 / 知识源里有多少。
+- 打分：列出所需信息项；逐项在技能正文声明的覆盖范围中核对；D = 命中项 / 所需项。
+- 结构化：信息项 = 实体与字段；核对对象 = 字段列表、数据格式说明。
+- 非结构化：信息项 = 主题、知识点、文档集、时间版本、模态；核对对象 = 正文的覆盖范围声明（主题清单、来源、版本、模态）。
+- 特例 1：正文明确写"不包含 X / 不支持 X / 不覆盖 X / 请使用其他技能查询 X"，X 对应项直接记未命中。
+- 特例 2：该步骤不需要访问任何外部数据 / 知识（纯生成、纯转换、对上游产物的加工），required 为空、ratio = 1.0。
+- 特例 3：信息项属于正文声明主题的子项（"年假"属于"请假制度"），可记命中，但整体证据等级不得高于 B。
+- D 判断的是"技能是否拥有这类信息源"，不判断"具体答案是否一定在里面"。记录可能不存在属于数据实例问题，写入 risks，不影响分值。
+- evidence_strength：
+  · solid：依据来自技能正文中的明确字段列表、数据格式说明、覆盖主题清单及明确的排除项声明；如果正文明确写"不包含 X"，X 记未命中的依据也是 solid
+  · speculative：正文仅有概括描述（如"可查询订单信息"、"公司内部文档问答"）而无具体字段/主题清单；或完全依赖 Agent 描述做推断
 
-**Peer domain rule**: When the query has multiple TRUE peer-level primary domains
-(see D1 definition — both are first-class problems, not one supporting the other),
-the agent whose domain matches ANY of those peer domains should get can_handle=true.
-Multiple agents can each be can_handle=true for the same query — each handles
-their own domain and collaborates on the rest.
+### O 操作能力
+- 定义：该步骤要做的变换，技能能不能做。
+- 打分只能取三档：
+  1.0 = 技能正文明确描述该操作或给出等价命令 / 流程；
+  0.7 = 正文未明确描述，但技能允许的工具或已声明的能力可以直接组合完成；
+  0   = 不能做、明确不支持、或需要技能没有的工具类别（如只读技能遇到 modify）。
+- 摘要、翻译、生成类操作的质量不确定性由 0.7 档承担，不进 R。
 
-**Important — when NOT to use peer domain rule**: If the query has ONE clear
-trigger/root problem (primary domain) and the other mentioned domains are just
-supporting checks to help diagnose it, those supporting checks are SECONDARY
-domains. The agent for the secondary domain should get can_handle=false,
-can_contribute=true. 
+### R 结果匹配
+- 定义：该步骤要产出的项 / 形态，技能的输出能满足多少。
+- 打分：列出期望产出项（含形态要求：列表、数量、图表、摘要、译文、标签）；逐项判断技能能否输出该项及该形态；R = 可产出项 / 期望项。
+- R 只判"能不能产出这个形态的结果"，不判质量。
+- **R 部分匹配规则**：当该步骤不是最终步骤（is_final=false）或 Agent 只在链中贡献部分步骤时，期望产出项只需匹配"步骤描述中的核心产出类型"，不要额外要求最终结果的完整语义。示例：query="Rust 电子产品周边"，step1 描述为"筛选电子类商品列表"，则 R 只需判"电子商品列表"，不要求产出项必须包含"Rust 相关"。
+- evidence_strength：
+  · solid：依据来自技能正文中明确的输出字段、返回格式、输出形态说明
+  · speculative：正文仅有概括描述（如"返回查询结果"）而无具体输出格式；或完全依赖 Agent 描述
 
-Examples of domain match (can_handle=true):
-- Query: "Analyze the deployment status of service X and check if there are
-  related alerts" → primary domain = deployment/operations. If this agent is a
-  deployment agent, can_handle=true, even though alerts may need another agent.
-- Query: "Monitor the database performance and suggest optimizations" →
-  primary domain = database. If this agent is a database monitoring agent,
-  can_handle=true, even though optimization suggestions may need another agent.
-- Query: "排查数据库连接数异常增长和部署配置变更" → peer primary domains =
-  database AND deployment. If this agent is a DB agent, can_handle=true.
-  If this agent is a deploy agent, ALSO can_handle=true. Both are valid.
+### C 约束满足
+- 定义：问题里显式或隐含的限定条件，技能能满足多少。
+- 打分：列出该步骤的约束项：时效（实时 / 快照）、权限与副作用（只读 / 可写）、数据范围（区域 / 租户 / 时间跨度）、规模、精度、合规、语言、文档版本；逐项对照技能正文；C = 满足项 / 约束项。
+- 没有约束时 required 为空、ratio = 1.0。
+- 正文没有声明能满足的约束（如未声明支持英文、未声明实时同步）记为不满足，不得推断。
+- **时间约束不拆分**：问题中有"本月/今天/最近/实时"等时间限定，且技能有时间字段+筛选工具（如 grep、awk sort）时，约束视为可满足（ratio=1.0），仅在 risks 里提示"非实时/快照数据可能不是最新状态"。只有当技能明确说"不包含时间字段"或"不支持按时间筛选"时才记未命中。
+- evidence_strength：
+  · solid：依据来自技能正文明确声明的数据同步周期、读写权限、数据范围、支持的语言/版本等
+  · speculative：未找到对应声明的约束判断（如正文未声明支持英文，仅因工具可处理文本就推测"英文可处理"）
+  · 正文没有声明能满足的约束记为不满足，evidence_strength 仍可标 solid（不满足的依据是"正文未声明"这一事实而非推测）
 
-### Rule 2: Not Primary Domain, But Concrete Overlap → can_contribute = true
+## 四、打分总则
 
-If the agent's domain is NOT the query's primary domain, but the agent's skill
-inventory can concretely supply a needed slice of the answer, set
-**can_handle = false, can_contribute = true**.
+- 技能正文没写的能力视为没有。禁止根据 Agent 名称、行业常识或"通常应该有"推断。
+  非结构化技能尤其如此：正文只写"公司内部文档问答"而没有主题清单时，任何具体主题都不能记命中，证据等级记 C。
+- 正文明确"不包含 / 不支持 / 不覆盖"的内容，对应项直接记未命中或 0。
+- 各维度独立核对各自的清单，不允许为了让总分好看而调整某个维度。
+- 每条 evidence 必须是原文引用并注明来源类别，如："技能正文：用户数据中不包含订单信息"、"问题原文：张三"。
+- **evidence_strength 强制要求**：每个 RatioCheck 必须标注 evidence_strength = solid 或 speculative。不能所有维度都标 solid 或都标 speculative，必须逐个维度独立判断。
+- **多维度/多子任务查询规则**：当 query 明确列出多个维度或子任务（"从 A、B、C 三个维度排查"），必须为每个维度各建至少一个步骤。本 Agent 不覆盖的维度同样建步骤，但对应的 D=0/1 或 O=0。不允许只建自己能做的维度然后判 h=true。
 
-"Concrete overlap" means the agent's skills can actually answer a specific
-sub-question or provide a specific data point the user is asking for. Vague
-"might be helpful" or "the agent knows about related things" is NOT enough.
+## 五、证据等级（整体一个，不进乘法）
 
-Examples of concrete contribution (can_contribute=true):
-- Query: "Analyze the deployment status of service X and check related alerts"
-  → primary domain = deployment. If this agent is an alert monitoring agent,
-  it can contribute the alert data (can_handle=false, can_contribute=true).
-- Query: "Investigate the root cause of a slow API response" → primary domain
-  = API/investigation. If this agent is a database agent that can provide
-  query latency data, can_handle=false, can_contribute=true.
+- A：各维度依据全部来自技能正文中的明确内容（字段列表、数据格式、命令示例；主题清单、来源、版本、处理流程、排除项）。
+- B：主要来自技能正文，个别维度只能依赖技能短描述，或使用了 D 特例 3 的子项推断。
+- C：主要依赖技能短描述或 Agent 描述，正文无对应内容。
+- D：缺乏文本依据，含推测成分。
 
-### Rule 3: No Domain Overlap → can_handle = false, can_contribute = false
+## 六、contribution、missing_requirements、risks、reason
 
-If the agent's domain has nothing to do with the query, set both to false.
-A neighboring domain that cannot answer any concrete asked question is
-insufficient.
+- contribution：本 Agent 至少能独立完成一个有用步骤时按三要素书写，否则留空。
+  三要素：输入（使用问题中的哪个已知值，或需补齐哪个缺失值）；输出（产出哪个具体项）；用途（对应哪个后续步骤的输入，或最终结果的哪一部分）。
+  合格："输入 username=张三，输出 user_id，供步骤 2 查询订单使用"。
+  不合格："可以提供相关用户信息"、"可以补充辅助数据"。
+  程序侧判断 can_contribute 的条件：有贡献步骤（步骤能力分≥阈值且产出被需要） 且 contribution 非空。
+- missing_requirements：本 Agent 无法自行提供、需由请求方或其他 Agent 补齐的输入或数据，注明所属步骤，如 "user_id（步骤 2）"。
+- risks：不影响分值的提示，如结果唯一性（"张三"可能对应多人）、记录可能不存在。
+- reason：固定结构，逐步骤一行："步骤 N（一句话）：I=a/b D=c/d O=x R=e/f C=g/h，依据要点"；最后一句给整体结论（能独立完成 / 只能贡献步骤 N / 都不能）。
 
-### Rule 4: Evidence from Skill Inventory
+## 七、程序侧公式（供你理解结果含义，不需要你计算）
 
-- **Skill inventory** (loaded skills listed below) is the primary evidence
-  for what this agent can actually do.
-- Agent name and description provide domain context but are NOT sufficient
-  alone to prove can_handle. The inventory must back it up.
-- If the agent's inventory clearly covers the query's primary domain but
-  lacks some related sub-topics, keep can_handle=true and note the gaps in
-  the reason field — do NOT downgrade.
+  步骤能力分 = weighted-arithmetic-mean(I,D,O,R,C)
+    solid 维度权重=1.0，speculative 维度权重=0.1
+    O 维度始终 solid（三档评分有明确的声明或无声明依据）
+  can_handle = 各步骤能力分的算术平均达到阈值，且没有本 Agent 无法自行产出的 upstream / missing 输入
+  can_contribute = can_handle，或存在某一步能力分达到阈值且其产出被需要
+  confidence = 能独立完成时取 step_score 均值；只能贡献时取贡献步骤能力分最大值；都不能时为 0
 
-### Rule 5: Complex / Multi-Domain Queries
+## 八、完整示例
 
-When a query is complex and spans multiple domains:
-- The agent whose domain matches the query's domain (or one of its peer domains
-  from D1) → can_handle=true.
-- Agents whose domains match SECONDARY aspects → can_contribute=true.
-- Multiple agents can simultaneously have can_handle=true for the same query
-  when the query has multiple peer-level primary domains.
-- Do not deny can_handle just because the query needs other agents too.
-- Do not confuse "can fully answer alone" with "can handle". An agent can
-  handle a query even if it needs collaboration.
-- When judging whether a domain is primary or secondary, look at the perspective
-  of THIS agent — if the query asks about this agent's domain as a first-class
-  topic (not just a supporting check), it is a primary domain for this agent.
+本 Agent 技能正文关键内容：字段 用户ID|用户名|电话|邮箱；"按用户名查询：grep 张三 data/users.txt"；"用户数据中不包含订单信息，如需获取用户的订单数据，请使用 order_query 技能"。
+用户问题："张三买了哪些东西"
 
-### Rule 6: Confidence
-
-- domain match + inventory covers the core → confidence >= 0.8
-- domain match but inventory has gaps → confidence 0.5–0.8
-- no domain match but concrete contribution → confidence 0.3–0.5
-- no domain overlap → confidence 0.0–0.2
+步骤 1（用户名 → user_id，lookup，is_final=false）
+  I: required=[用户名] matched=[用户名] ratio=1.0 evidence_strength=solid  依据：问题原文"张三"
+  D: required=[用户名, 用户ID] matched=[用户名, 用户ID] ratio=1.0 evidence_strength=solid  依据：技能正文字段列表
+  O: 1.0                                                                    依据：技能正文 grep 示例
+  R: required=[user_id] matched=[user_id] ratio=1.0 evidence_strength=solid
+  C: required=[] matched=[] ratio=1.0 evidence_strength=solid
+步骤 2（user_id → 商品列表，lookup，is_final=true；inputs: user_id source=upstream）
+  I: required=[user_id] matched=[user_id] ratio=1.0 evidence_strength=solid  上游产出，由本 Agent 步骤 1 提供
+  D: required=[订单, 商品] matched=[] ratio=0.0 evidence_strength=solid      依据：技能正文"用户数据中不包含订单信息"
+  O: 1.0
+  R: required=[商品列表] matched=[] ratio=0.0 evidence_strength=solid
+  C: required=[] matched=[] ratio=1.0 evidence_strength=solid
+evidence_grade: A
+contribution: "输入 username=张三，输出 user_id，供步骤 2 查询订单使用"
+missing_requirements: ["订单 / 购买记录数据（步骤 2）"]
+risks: ["用户名 张三 可能对应多个用户"]
+reason: "步骤 1（用户名→user_id）：I=1/1 D=2/2 O=1.0 R=1/1 C=1.0，字段列表与 grep 示例明确。步骤 2（user_id→商品列表）：I=1/1 D=0/2 O=1.0 R=0/1 C=1.0，正文明确不包含订单信息。不能独立完成；可贡献步骤 1。"
 
 ---
-Agent info:
+本 Agent 信息：
 - name: {agent_name}
 - description: {agent_description}
-- skill inventory (loaded skills; evidence for judgment):
+- skill inventory（技能名 + 完整正文；打分的主要依据）:
 {agent_skills}
 
-History:
+历史：
 {history}
 
-User query:
+用户问题：
 {query}
 
 ---
-Output guidance:
-- Put your D1–D3 step-by-step reasoning into the reason field.
-- Call evaluate_capability to output the verdict.
+输出要求：
+- 只输出一个纯 JSON 对象，**不要使用 ```json 代码块包裹**，直接输出 JSON 文本。
+- 每个 RatioCheck（input_match / data_coverage / result_match / constraint_satisfaction）必须同时给出 required（字符串数组）、matched（字符串数组）、ratio（数字，0~1）、evidence_strength（字符串，solid 或 speculative）。
+- operation_capability 只能是 1.0、0.7 或 0。
+- 不要输出 can_handle、can_contribute、confidence。
+
+严格按照以下 JSON schema 输出（示例，实际内容按评估结果填写）：
+
+{{
+  "steps": [
+    {{
+      "step_id": 1,
+      "description": "从慢查询日志中检索并排序慢查询记录",
+      "operation": "lookup",
+      "is_final": true,
+      "inputs": [
+        {{"name": "时间范围", "source": "query"}}
+      ],
+      "outputs": ["慢查询TOP列表"],
+      "constraints": ["只读"],
+      "input_match": {{"required": ["时间范围"], "matched": ["时间范围"], "ratio": 1.0}},
+      "data_coverage": {{"required": ["慢查询日志数据"], "matched": ["慢查询日志数据"], "ratio": 1.0}},
+      "operation_capability": 1.0,
+      "result_match": {{"required": ["慢查询列表"], "matched": ["慢查询列表"], "ratio": 1.0}},
+      "constraint_satisfaction": {{"required": ["只读"], "matched": ["只读"], "ratio": 1.0}},
+      "evidence": ["技能正文：grep 'slow_query' data/mysql-slow.log"]
+    }}
+  ],
+  "evidence_grade": "A",
+  "contribution": "输入时间范围，输出慢查询TOP列表",
+  "missing_requirements": [],
+  "risks": [],
+  "reason": "步骤1（慢查询日志→慢查询列表）：I=1/1 D=1/1 O=1.0 R=1/1 C=1/1，依据技能正文grep示例。可独立完成。"
+}}
+
+注意要点：
+- steps 是数组，每项中的 inputs 是对象数组（每个对象含 name 和 source），outputs 和 constraints 是字符串数组。
+- input_match、data_coverage、result_match、constraint_satisfaction 是对象（含 required/matched/ratio），不是数组。
+- operation_capability 是数字（1.0 / 0.7 / 0），必须是数字类型不是字符串。
+- evidence 是字符串数组。
+- 每个步骤的 step_id 从 1 开始连续递增。
 """
 
 
@@ -1133,18 +1852,9 @@ class PlannerAgent(BaseAgent):
             stream=stream,
             extra_body=_extra_body,
         )
-        try:
-            self.llm = self.llm.bind_tools(
-                [self.make_plan_tool],
-                tool_choice="make_plan_cmd",
-            )
-        except TypeError:
-            logger.warning(
-                "[PlannerAgent] tool_choice='make_plan_cmd' not supported by provider=%s model=%s, "
-                "falling back to bind_tools without tool_choice — LLM may produce text instead of tool calls",
-                provider, model,
-            )
-            self.llm = self.llm.bind_tools([self.make_plan_tool])
+        # make_plan 与 capability_check 已改用纯文本 JSON 字符串输出
+        # （self.llm.ainvoke，不经 bind_tools），此 LLM 实例仅用于
+        # _ainvoke_plain_plan 路径，不再参与 invoke_llm_with_tool。
         self.make_plan_max_attempts = int(os.getenv("MAKE_PLAN_MAX_ATTEMPTS", "3"))
         self.data_services_client = DataServicesClient(
             base_url=data_services_url,
@@ -1153,23 +1863,6 @@ class PlannerAgent(BaseAgent):
         )
         self.metadata = metadata if isinstance(metadata, dict) else {}
         self.agent_id = agent_id
-
-    make_plan_tool: ClassVar[Any]
-
-    @tool("make_plan_cmd", args_schema=TaskList, description="Create a structured plan with tasks to be executed sequentially.")
-    def make_plan_tool(
-        thought_process: Optional[str] = None,
-        original_query: Optional[str] = None,
-        tasks: List[PlannerTask] = None,
-    ) -> str:
-        plan_data = {
-            "thought_process": thought_process,
-            "original_query": original_query,
-            "tasks": [
-                task.dict() if isinstance(task, PlannerTask) else task for task in (tasks or [])
-            ],
-        }
-        return json.dumps(plan_data, ensure_ascii=False)
 
     def format_agent_skills(self, skills_list):
         result_lines = []
@@ -1206,16 +1899,17 @@ class PlannerAgent(BaseAgent):
         return "\n\n".join(lines)
 
     async def get_history(self) -> list:
+        run_id = str(self.metadata.get("run_id", "") or "")
         propagated = parse_propagated_history(self.metadata.get(PROPAGATED_HISTORY_KEY))
         turns = _normalize_history_turns(propagated.get("turns"))
         if turns:
-            _log_history_turns(turns, source="propagated")
+            _log_history_turns(turns, source="propagated", run_id=run_id)
             return history_text_from_payload(propagated)
 
         search_items = []
         search_request = SearchHistoryRequest(
             user_id=self.metadata.get("user_id", ""),
-            run_id=self.metadata.get("run_id", ""),
+            run_id=run_id,
             limit=get_conversation_history_limit(),
         )
         async with self.data_services_client.session_context() as client:
@@ -1224,59 +1918,399 @@ class PlannerAgent(BaseAgent):
         if history_search_response.status == "success":
             search_items = history_search_response.data
         payload = history_payload_from_search_items(search_items, source="skill_agent_planner_fallback")
-        _log_history_turns(payload.get("turns", []), source="data-services API")
+        _log_history_turns(payload.get("turns", []), source="data-services API", run_id=run_id)
         return history_text_from_payload(payload)
 
-    def format_llm_output(self, answer) -> dict:
-        raw = getattr(answer, "content", "") or ""
+    @staticmethod
+    def _llm_answer_text(answer) -> str:
+        """Normalize LangChain AIMessage content (str or multimodal list) to text."""
+        raw = getattr(answer, "content", None)
+        if raw is None:
+            return str(answer or "")
+        if isinstance(raw, str):
+            return raw
+        if isinstance(raw, list):
+            parts: List[str] = []
+            for item in raw:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if text:
+                        parts.append(str(text))
+                else:
+                    text = getattr(item, "text", None)
+                    if text:
+                        parts.append(str(text))
+            return "".join(parts)
+        return str(raw)
+
+    def format_llm_output(self, answer) -> Optional[dict]:
+        """Parse LLM plain-text output into a dict (delegates to module-level helper)."""
+        return _parse_json_output(answer)
+
+    @staticmethod
+    def _plan_information(
+        replan_context: Optional[Dict[str, Any]] = None,
+        replan_guidance: str = "",
+    ) -> str:
+        if not (replan_context or replan_guidance):
+            return ""
+        info_parts: List[str] = []
+        if replan_context:
+            info_parts.append(
+                "REPLAN_CONTEXT(JSON):\n" + json.dumps(replan_context, ensure_ascii=False)
+            )
+        if replan_guidance:
+            info_parts.append(f"REPLAN_GUIDANCE:\n{replan_guidance}")
+        return "\n\n".join(info_parts)
+
+    @staticmethod
+    def _valid_plan_agent_names(agent_cards) -> set[str]:
+        names = {
+            str(getattr(c, "name", "") or "").strip()
+            for c in (agent_cards or [])
+        }
+        names.discard("")
+        names.add("NONE")
+        return names
+
+    @staticmethod
+    def _none_task_list(query: Any, reason: str) -> TaskList:
+        return TaskList(
+            thought_process=reason,
+            original_query=str(query),
+            tasks=[
+                PlannerTask(
+                    id=1,
+                    description=NONE_TASK_DESCRIPTION,
+                    agent="NONE",
+                    depends_on=[],
+                )
+            ],
+        )
+
+    @staticmethod
+    def _validate_chain_task_consistency(
+        args: dict[str, Any],
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Validate that capability_chain ↔ tasks are consistent.
+
+        Returns (error_msg, thought_process_validated).
+        """
+        chain_steps: list[dict] = args.get("capability_chain") or []
+        tasks: list[dict] = args.get("tasks") or []
+
+        if not chain_steps:
+            return None, None  # No chain present — skip validation (legacy mode)
+
+        # --- Validate chain steps themselves ---
+        for i, s in enumerate(chain_steps):
+            sid = s.get("step_id")
+            if sid is None:
+                return f"capability_chain[{i}].step_id 缺失", None
+            if not isinstance(sid, int) or sid < 1:
+                return f"capability_chain[{i}].step_id 必须是正整数，实际: {sid}", None
+            if not str(s.get("description") or "").strip():
+                return f"capability_chain[{i}].description 为空", None
+            if not str(s.get("matched_agent") or "").strip():
+                return f"capability_chain[{i}].matched_agent 为空（链步骤不允许没有 agent 标记）", None
+
+        # --- Build lookup maps ---
+        chain_by_id: dict[int, dict] = {}
+        task_by_id: dict[int, dict] = {}
+        for s in chain_steps:
+            chain_by_id[s["step_id"]] = s
+        for t in tasks:
+            tid = t.get("id")
+            if tid is not None:
+                task_by_id[tid] = t
+
+        # --- Cross-check: chain ↔ tasks ---
+        # Every chain step must have a corresponding task
+        for sid, s in chain_by_id.items():
+            if sid not in task_by_id:
+                return (
+                    f"capability_chain 中步骤 {sid} ({s.get('description','')[:60]}) "
+                    f"在 tasks 中没有对应的 task（期望 task.id={sid}）",
+                    None,
+                )
+            chain_agent = str(s.get("matched_agent", "")).strip()
+            task_agent = str(task_by_id[sid].get("agent", "")).strip()
+            if chain_agent.upper() != task_agent.upper():
+                return (
+                    f"capability_chain 步骤 {sid} 的 matched_agent='{chain_agent}' "
+                    f"与 task[{sid}] 的 agent='{task_agent}' 不一致",
+                    None,
+                )
+
+        # Check if extra tasks not in chain
+        for tid in task_by_id:
+            if tid not in chain_by_id:
+                return (
+                    f"task[{tid}] ('{task_by_id[tid].get('description','')[:60]}') "
+                    f"在 capability_chain 中没有对应步骤",
+                    None,
+                )
+
+        # --- Cross-check depends_on ---
+        for _, s in chain_by_id.items():
+            if str(s.get("input_source", "")).lower() == "upstream":
+                sid = s["step_id"]
+                task_deps = task_by_id.get(sid, {}).get("depends_on") or []
+                if not task_deps:
+                    return (
+                        f"capability_chain 步骤 {sid} input_source=upstream，"
+                        f"但 task[{sid}].depends_on 为空（必须包含上游步骤 id）",
+                        None,
+                    )
+
+        # All good — return the valid thought_process
+        tp = str(args.get("thought_process") or "").strip()
+        return None, tp
+
+    def _hydrate_chain_plan(
+        self,
+        args: dict[str, Any],
+        query: Any,
+        valid_agent_names: set[str],
+    ) -> tuple[Optional[TaskList], Optional[str]]:
+        """Parse chain-driven planner output into TaskList.
+
+        Steps:
+        1. Validate capability_chain ↔ tasks consistency
+        2. Run standard field completeness checks
+        3. Build TaskList
+        """
+        # --- Step 1: chain-task consistency ---
+        err, thought_process = self._validate_chain_task_consistency(args)
+        if err:
+            return None, err
+
+        # --- Step 2: standard field checks ---
+        omitted: list[str] = []
+        if not (thought_process or "").strip():
+            omitted.append("thought_process")
+        if not str(args.get("original_query") or query or "").strip():
+            omitted.append("original_query")
+
+        raw_tasks: list[dict] = args.get("tasks") or []
+        if not raw_tasks:
+            omitted.append("tasks(必须是非空数组)")
+        else:
+            for idx, rt in enumerate(raw_tasks):
+                if not isinstance(rt, dict):
+                    omitted.append(f"tasks[{idx}](必须是对象)")
+                    continue
+                if rt.get("id") is None:
+                    omitted.append(f"tasks[{idx}].id")
+                if not str(rt.get("description") or "").strip():
+                    omitted.append(f"tasks[{idx}].description")
+                if not str(rt.get("agent") or "").strip():
+                    omitted.append(f"tasks[{idx}].agent")
+                if "depends_on" not in rt or rt.get("depends_on") is None:
+                    omitted.append(f"tasks[{idx}].depends_on")
+
+        if omitted:
+            return None, (
+                f"缺少必填字段: {omitted}。"
+                f"`thought_process`、`original_query`、`capability_chain`、`tasks` 以及每个 task 的 "
+                f"`id`、`description`、`agent`、`depends_on` 全部为必填，不允许省略或留空。"
+                f"特别注意 `depends_on`：即使该任务没有上游依赖，也必须显式写成 `depends_on: []`；"
+                f"若该任务需要上游任务的产出，则必须写入对应的上游 task id。"
+            )
+
+        # --- Step 3: build TaskList ---
         try:
-            return json.loads(raw, strict=False)
-        except json.JSONDecodeError:
-            pass
+            tasks = TaskList(
+                thought_process=thought_process or str(args.get("thought_process")),
+                original_query=_non_empty_str(query),
+                tasks=raw_tasks,
+            )
+        except Exception as exc:
+            return None, f"规划结果解析失败: {exc}."
 
-        cleaned_content = raw.strip()
-        if cleaned_content.startswith("```json"):
-            cleaned_content = cleaned_content[7:]
-        elif cleaned_content.startswith("```"):
-            cleaned_content = cleaned_content[3:]
-        if cleaned_content.endswith("```"):
-            cleaned_content = cleaned_content[:-3]
-        cleaned_content = cleaned_content.strip()
+        if not tasks.tasks:
+            return None, (
+                f"`tasks` 列表为空。如果确实没有合适的智能体，请使用 agent='NONE' "
+                f"和 description='{NONE_TASK_DESCRIPTION}'。"
+            )
+
+        unknown = [
+            (t.id, (t.agent or "").strip())
+            for t in tasks.tasks
+            if (t.agent or "").strip() not in valid_agent_names
+            and (t.agent or "").strip().upper() != "NONE"
+        ]
+        if unknown:
+            return None, (
+                f"agent 名称不存在于可用智能体列表中: "
+                f"{[a for _, a in unknown]}。"
+                f"`agent` 字段必须与可用智能体的名称完全一致，可选值为: "
+                f"{sorted(n for n in valid_agent_names if n != 'NONE')}。"
+                f"如果确实没有合适的智能体，请使用 agent='NONE' 和 "
+                f"description='{NONE_TASK_DESCRIPTION}'。"
+            )
+
+        return tasks, None
+
+    def _hydrate_task_list(
+        self,
+        args: Any,
+        query: Any,
+        valid_agent_names: set[str],
+    ) -> tuple[Optional[TaskList], Optional[str]]:
+        """Parse planner dict into TaskList. Returns (plan, error_nudge)."""
+        if not isinstance(args, dict):
+            return None, "输出无法解析为包含规划结果的 JSON 对象。"
+
+        omitted: List[str] = []
+        if not str(args.get("thought_process") or "").strip():
+            omitted.append("thought_process")
+        if not str(args.get("original_query") or query or "").strip():
+            omitted.append("original_query")
+        raw_tasks = args.get("tasks")
+        if not isinstance(raw_tasks, list):
+            omitted.append("tasks(必须是数组)")
+            raw_tasks = []
+        else:
+            for idx, rt in enumerate(raw_tasks):
+                if not isinstance(rt, dict):
+                    omitted.append(f"tasks[{idx}](必须是对象)")
+                    continue
+                if rt.get("id") is None or (
+                    isinstance(rt.get("id"), str) and not str(rt.get("id")).strip()
+                ):
+                    omitted.append(f"tasks[{idx}].id")
+                if not str(rt.get("description") or "").strip():
+                    omitted.append(f"tasks[{idx}].description")
+                if not str(rt.get("agent") or "").strip():
+                    omitted.append(f"tasks[{idx}].agent")
+                # depends_on 允许 []，只禁止缺省 / null
+                if "depends_on" not in rt or rt.get("depends_on") is None:
+                    omitted.append(f"tasks[{idx}].depends_on")
+        if omitted:
+            return None, (
+                f"缺少必填字段: {omitted}。"
+                f"`thought_process`、`original_query`、`tasks` 以及每个 task 的 "
+                f"`id`、`description`、`agent`、`depends_on` 全部为必填，不允许省略或留空。"
+                f"特别注意 `depends_on`：即使该任务没有上游依赖，也必须显式写成 `depends_on: []`；"
+                f"若该任务需要上游任务的产出，则必须写入对应的上游 task id。"
+            )
 
         try:
-            return json.loads(cleaned_content, strict=False)
-        except json.JSONDecodeError:
-            pass
+            tasks = TaskList(
+                thought_process=str(args.get("thought_process")),
+                original_query=_non_empty_str(query),
+                tasks=raw_tasks,
+            )
+        except Exception as exc:
+            return None, f"规划结果解析失败: {exc}。"
 
-        escaped_content = _escape_known_string_field_inner_quotes(cleaned_content)
-        if escaped_content != cleaned_content:
-            try:
-                return json.loads(escaped_content, strict=False)
-            except json.JSONDecodeError:
-                pass
+        if not tasks.tasks:
+            return None, (
+                f"`tasks` 列表为空。如果确实没有合适的智能体，请使用 agent='NONE' "
+                f"和 description='{NONE_TASK_DESCRIPTION}'。"
+            )
 
-        if _json_repair is not None:
-            try:
-                repaired = _json_repair(escaped_content, return_objects=True)
-                if isinstance(repaired, dict):
-                    return repaired
-            except Exception:
-                pass
+        unknown = [
+            (t.id, (t.agent or "").strip())
+            for t in tasks.tasks
+            if (t.agent or "").strip() not in valid_agent_names
+            and (t.agent or "").strip().upper() != "NONE"
+        ]
+        if unknown:
+            return None, (
+                f"agent 名称不存在于可用智能体列表中: "
+                f"{[a for _, a in unknown]}。"
+                f"`agent` 字段必须与可用智能体的名称完全一致，可选值为: "
+                f"{sorted(n for n in valid_agent_names if n != 'NONE')}。"
+                f"如果确实没有合适的智能体，请使用 agent='NONE' 和 "
+                f"description='{NONE_TASK_DESCRIPTION}'。"
+            )
+        return tasks, None
 
+    def _format_plan_messages(
+        self,
+        *,
+        system_template: str,
+        query: Any,
+        agent_cards,
+        group_memory: str,
+        information: str,
+        history: Any,
+    ) -> list:
+        system_prompt = SystemMessagePromptTemplate.from_template(
+            template=system_template,
+            input_variables=["history", "agents", "information", "group_memory"],
+        )
+        human_prompt = HumanMessagePromptTemplate.from_template("{query}")
+        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
+        return chat_prompt.format_messages(
+            query=query,
+            agents=self.generate_system_prompt_agents(agent_cards),
+            information=information,
+            group_memory=group_memory,
+            history=history,
+        )
+
+    async def _ainvoke_plain_plan(
+        self,
+        messages: list,
+        *,
+        span_name: str,
+        query: Any,
+        agent_name: str,
+    ):
+        """Plain-text LLM invoke (no bind_tools) for make_plan_jsonstring."""
+        _t0 = _time.monotonic()
+        answer = None
+        preview = ""
         try:
-            import ast
-            parsed = ast.literal_eval(cleaned_content)
-            if isinstance(parsed, dict):
-                return parsed
-        except (ValueError, SyntaxError):
-            pass
+            from langfuse.langchain import CallbackHandler as _LangfuseCb
+            from langfuse import get_client as _get_langfuse_client
 
-        try:
-            return json.loads(cleaned_content.replace("'", '"'), strict=False)
-        except json.JSONDecodeError:
-            pass
-
-        return None
+            _handler = _LangfuseCb()
+            _langfuse_client = _get_langfuse_client()
+            user_id = self.metadata.get("user_id", "")
+            run_id = self.metadata.get("run_id", "")
+            trace_id = self.metadata.get("trace_id", "")
+            _span_name = f"{span_name} [{agent_name}]" if agent_name else span_name
+            with _langfuse_client.start_as_current_span(
+                name=_span_name,
+                trace_context={"trace_id": trace_id} if trace_id else {},
+                input={"query": str(query)[:500]},
+            ) as span:
+                if user_id or run_id:
+                    span.update_trace(
+                        user_id=user_id or None,
+                        session_id=run_id or None,
+                    )
+                answer = await self.llm.ainvoke(
+                    messages,
+                    config={"callbacks": [_handler]},
+                )
+                preview = self._llm_answer_text(answer)[:2000]
+                span.update(output={"answer": preview})
+            await safe_langfuse_flush(_langfuse_client)
+        except Exception as exc:
+            if answer is None:
+                logger.warning(
+                    "make_plan_jsonstring tracing/invoke wrapper failed (%s: %s); "
+                    "retrying plain ainvoke",
+                    type(exc).__name__,
+                    exc,
+                )
+                answer = await self.llm.ainvoke(messages)
+            preview = self._llm_answer_text(answer)[:2000]
+        elapsed_ms = round((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            " === PlannerAgent._ainvoke_plain_plan (%s) elapsed_ms=%s preview=%s",
+            span_name,
+            elapsed_ms,
+            preview[:300],
+        )
+        return answer
 
     async def make_plan(
         self,
@@ -1285,138 +2319,112 @@ class PlannerAgent(BaseAgent):
         group_memory: str = "",
         replan_context: Optional[Dict[str, Any]] = None,
         replan_guidance: str = "",
+        plan_stage: str = "pre_exec",
     ) -> TaskList:
-        information = ""
-        if replan_context or replan_guidance:
-            info_parts: List[str] = []
-            if replan_context:
-                info_parts.append(
-                    "REPLAN_CONTEXT(JSON):\n" + json.dumps(replan_context, ensure_ascii=False)
-                )
-            if replan_guidance:
-                info_parts.append(f"REPLAN_GUIDANCE:\n{replan_guidance}")
-            information = "\n\n".join(info_parts)
+        """planner: LLM emits a JSON object as text (no nested tool schema).
 
-        system_template = PLANNER_COT_INSTRUCTIONS_ZH_HISTORY
+        Feature flag: set USE_CHAIN_PLANNING=true to enable chain-driven planning
+        (operation chain decomposition → agent matching → task generation).
+        """
+        use_chain = os.getenv("USE_CHAIN_PLANNING", "true").strip().lower() in ("true", "1", "yes")
+        plan_mode = "chain" if use_chain else "legacy"
 
-        human_template = "{query}"
-
-        json_prompt_instructions_en: dict = {
-            "thought_process": "[Step1 Data Need] Subq1: core-need=current real-time meteorological observation for Beijing, filter=city(Beijing)+now; Subq2: core-need=outfit/styling advice matching the given weather, filter=that weather condition. [Step2 Ontology] Subq1=(A) Static-State (weather observations exist objectively regardless of any query); Subq2=(B) Dynamic-Output (advice produced by a styling inference action). [Step3 Capability Semantics] Weather-Checker's business is to fetch and serve meteorological state → Subq1 is its direct duty → owns Subq1; Fashion-Consultant's business is to produce outfit advice from a context → Subq2 is its natural output → owns Subq2. [Step4 Self-Check] (1) Ontology vs chosen agent's capability are aligned: yes; (2) Routed solely by noun/keyword coincidence: no, based on business essence; (3) Any agent more essentially aligned: none. [Step5 Context] No reusable prior result, no correction needed. [Step6 Cross-Domain] Two distinct domains (meteorology vs lifestyle) with sequential dependency, so split into two tasks with dependency. Note: description faithfully relays user's words without adding extra conditions.",
-            "original_query": "Help me check the weather in Beijing and recommend suitable clothing advice",
-            "tasks": [
-                {"id": 1, "description": "Check the weather in Beijing", "agent": "Weather-Checker", "depends_on": []},
-                {"id": 2, "description": "Recommend suitable clothing advice", "agent": "Fashion-Consultant", "depends_on": [1]},
-            ],
-        }
-
-        json_prompt_no_agent_en: dict = {
-            "thought_process": "[Step1 Data Need] core-need=knowledge/explanation about the Starlink project (aerospace + satellite-communication domain), filter=Starlink. [Step2 Ontology] (B) Dynamic-Output (an explanation produced by a knowledge-bearing agent). [Step3 Capability Semantics] Reviewed every available agent's business essence — none of them naturally produces aerospace/satellite knowledge as a core duty. [Step4 Self-Check] (1) No agent's business naturally covers this need: confirmed; (2) Not routed by noun coincidence: yes; (3) Any agent more essentially aligned: none. [Step5 Context] N/A. [Step6 Cross-Domain] N/A. Conclusion: subject lies outside every available agent's business sovereignty, fall back to NONE.",
-            "original_query": "What is the Starlink project?",
-            "tasks": [
-                {"id": 1, "description": NONE_TASK_DESCRIPTION, "agent": "NONE"},
-            ],
-        }
-
-        system_prompt = SystemMessagePromptTemplate.from_template(
-            template=system_template,
-            input_variables=["history", "agents", "information", "group_memory"],
-            # partial_variables={"instructions": json_prompt_instructions_en, "none_instructions": json_prompt_no_agent_en},
+        system_template = (
+            PLANNER_CHAIN_INSTRUCTIONS_ZH
+            if use_chain
+            else PLANNER_COT_INSTRUCTIONS_ZH_HISTORY_JSONSTRING
         )
-        human_prompt = HumanMessagePromptTemplate.from_template(human_template)
-        chat_prompt = ChatPromptTemplate.from_messages([system_prompt, human_prompt])
-        system_prompt_agents = self.generate_system_prompt_agents(agent_cards)
-
-        user_id = self.metadata.get("user_id", "")
-        run_id = self.metadata.get("run_id", "")
-        trace_id = self.metadata.get("trace_id", "")
-
+        information = self._plan_information(replan_context, replan_guidance)
         history = await self.get_history()
+        messages = self._format_plan_messages(
+            system_template=system_template,
+            query=query,
+            agent_cards=agent_cards,
+            group_memory=group_memory,
+            information=information,
+            history=history,
+        )
+        valid_agent_names = self._valid_plan_agent_names(agent_cards)
+        agent_name = self.agent_id or self.agent_name or "PlannerAgent"
+        span_prefix = (
+            "skill-agent-make_plan_jsonstring-mid-exec"
+            if plan_stage == "mid_exec"
+            else "skill-agent-make_plan_jsonstring"
+        )
+        span_prefix = f"{span_prefix}-{plan_mode}"
+        max_attempts = self.make_plan_max_attempts
+        nudge: Optional[HumanMessage] = None
+        tasks: Optional[TaskList] = None
 
-        format_kwargs = {
-            "query": query,
-            "agents": system_prompt_agents,
-            "information": information,
-            "group_memory": group_memory,
-            "history": history,
-        }
-        messages = chat_prompt.format_messages(**format_kwargs)
-
-        tasks = None
-
-        with langfuse.start_as_current_span(
-            name="skill-agent-make_plan",
-            trace_context={"trace_id": trace_id}
-        ) as span:
-            span.update_trace(
-                user_id=user_id,
-                session_id=run_id,
-                input={"query": query}
+        for attempt in range(1, max_attempts + 1):
+            logger.info(
+                "make_plan_jsonstring llm_invoke stage=%s mode=%s attempt=%d/%d",
+                plan_stage, plan_mode, attempt, max_attempts,
             )
-
-            for attempt in range(1, self.make_plan_max_attempts + 1):
-                logger.info("make_plan llm_invoke attempt=%d/%d", attempt, self.make_plan_max_attempts)
-                answer = await self.llm.ainvoke(messages, config={"callbacks": [langfuse_handler]})
-                messages.append(answer)
-                tool_calls = getattr(answer, "tool_calls", None) or []
-
-                if not tool_calls:
-                    logger.warning("make_plan attempt %s: no tool call, nudging.", attempt)
-                    messages.append(HumanMessage(content="你上一次没有调用工具。请**必须**调用 `make_plan_cmd` 工具来输出规划结果。"))
-                    continue
-
-                call = next((c for c in tool_calls if c.get("name") == "make_plan_cmd"), None)
-                if call is None:
-                    logger.warning("make_plan attempt %s: unknown tool, nudging.", attempt)
-                    for c in tool_calls:
-                        messages.append(ToolMessage(content="unknown tool", tool_call_id=c.get("id", "")))
-                    messages.append(HumanMessage(content="你调用了未知工具。请只使用 `make_plan_cmd` 工具。"))
-                    continue
-
-                args = call.get("args", {}) or {}
-                try:
-                    tasks = TaskList(
-                        thought_process=args.get("thought_process"),
-                        original_query=str(query),
-                        tasks=args.get("tasks") or [],
+            attempt_messages = (
+                messages + [AIMessage(content=""), nudge] if nudge is not None else messages
+            )
+            try:
+                answer = await self._ainvoke_plain_plan(
+                    attempt_messages,
+                    span_name=f"{span_prefix}-attempt-{attempt}",
+                    query=query,
+                    agent_name=agent_name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "make_plan_jsonstring attempt %s: LLM invoke failed: %s: %s",
+                    attempt, type(exc).__name__, exc,
+                )
+                nudge = HumanMessage(
+                    content=(
+                        "上一次调用失败。请重新输出一个完整的 JSON 对象，"
+                        "包含 thought_process、original_query、tasks；"
+                        "每个 task 必须有 id、description、agent、depends_on。"
                     )
-                except Exception as e:
-                    logger.warning("make_plan attempt %s: failed to parse TaskList: %s, nudging.", attempt, e)
-                    for c in tool_calls:
-                        messages.append(ToolMessage(content=f"parse error: {e}", tool_call_id=c.get("id", "")))
-                    messages.append(HumanMessage(content=f"工具调用参数解析失败: {e}。请检查然后重新调用 `make_plan_cmd`。"))
-                    continue
+                )
+                continue
 
-                if not tasks.tasks:
-                    logger.warning("make_plan attempt %s: empty tasks list, nudging.", attempt)
-                    for c in tool_calls:
-                        messages.append(ToolMessage(content="empty tasks list", tool_call_id=c.get("id", "")))
-                    messages.append(HumanMessage(content=f"你返回的 `tasks` 列表为空。如果确实没有合适的智能体，请使用 agent='NONE' 和 description='{NONE_TASK_DESCRIPTION}'。"))
-                    continue
+            args = self.format_llm_output(answer)
 
-                logger.info("make_plan SELECTED attempt=%d tasks_count=%d", attempt, len(tasks.tasks))
+            if use_chain:
+                tasks, err = self._hydrate_chain_plan(args, query, valid_agent_names)
+            else:
+                tasks, err = self._hydrate_task_list(args, query, valid_agent_names)
+
+            if tasks is not None:
+                logger.info(
+                    "make_plan_jsonstring SELECTED mode=%s attempt=%d tasks_count=%d",
+                    plan_mode, attempt, len(tasks.tasks),
+                )
                 break
-
-            span.update_trace(
-                output={
-                    "tasks": tasks.model_dump() if tasks else None,
-                }
+            preview = self._llm_answer_text(answer)[:400]
+            logger.warning(
+                "make_plan_jsonstring attempt %s: invalid JSON plan, nudging: %s preview=%s",
+                attempt, err, preview,
             )
-
-        langfuse.flush()
+            nudge = HumanMessage(
+                content=(
+                    (err or "输出无法解析为合法规划 JSON。")
+                    + " 请只输出一个 JSON 对象，字段为 thought_process、original_query、tasks；"
+                    "每个 task 必须包含 id、description、agent、depends_on；"
+                    "无依赖时 depends_on 必须写成 []。"
+                )
+            )
+            tasks = None
 
         if tasks is None:
             logger.warning(
-                "make_plan EXIT no_valid_selection after %s attempts.",
-                self.make_plan_max_attempts,
+                "make_plan_jsonstring EXIT no_valid_selection mode=%s after %s attempts.",
+                plan_mode, max_attempts,
             )
-            tasks = TaskList(
-                thought_process=f"Planner failed to produce a valid plan after {self.make_plan_max_attempts} attempts.",
-                original_query=str(query),
-                tasks=[PlannerTask(id=1, description=NONE_TASK_DESCRIPTION, agent="NONE")],
+            tasks = self._none_task_list(
+                query,
+                f"Planner failed to produce a valid plan after "
+                f"{self.make_plan_max_attempts} tool-call attempts and "
+                f"{max_attempts} jsonstring attempts.",
             )
 
-        logger.info(" === PlannerAgent.make_plan , tasks = %s", tasks)
         return tasks
 
 
@@ -1456,17 +2464,21 @@ class SkillAgent(BaseAgent):
         turns = _normalize_history_turns(payload.get("turns"))
         if not turns:
             return
-        lines = ["", "=" * 60, "  SkillAgent 接收到的历史对话数据", "=" * 60]
+        body_parts: list[str] = []
         for i, item in enumerate(turns, start=1):
             prefix = "用户" if item["role"] == "user" else "助手"
             content_display = item["content"][:600]
             if len(item["content"]) > 600:
                 content_display += "...（截断）"
-            lines.append(f"  ── 第 {i} 轮 ({prefix}) ──")
-            lines.append(f"  {content_display}")
-            lines.append("")
-        lines.append("=" * 60)
-        logger.info("\n".join(lines))
+            body_parts.append(f"── 第 {i} 轮 ({prefix}) ──")
+            body_parts.append(content_display)
+            body_parts.append("")
+        _log_boxed_document(
+            "[GetHistory] propagated",
+            meta_lines=[f"turns={len(turns)}"],
+            body_label="history",
+            body="\n".join(body_parts).rstrip(),
+        )
 
     def _build_query_with_history(self, query: str) -> str:
         history_text = _history_text_from_metadata(self.metadata)
@@ -1708,6 +2720,300 @@ class SkillAgent(BaseAgent):
 
 
 # ---------------------------------------------------------------------------
+# Summary prompt builders
+# Analogous to ``_build_turn_context_md``: one document, Execution Flow as
+# the single source of truth.  Do not dump ``upstream_context`` as JSON and
+# do not repeat own/delegate results when EF is present.
+# ---------------------------------------------------------------------------
+
+SUMMARIZE_CORE_PRINCIPLES = (
+    "你是一位知识分析与总结专家。你的任务是基于提供的执行结果和对话上下文，"
+    "通过逻辑严密的分析，回答用户的原始问题。\n\n"
+    "**核心原则**\n"
+    "1. 直接输出答案正文，从实质内容开始。\n"
+    "2. 不要自我介绍，不要说明你是汇总器或 agent，不要描述协作/整合过程。\n"
+    "3. 不要使用「好的，作为…」「我已收到/整合了…」「以下是针对…的完整/综合回答」等开场白。\n"
+    "4. 下游结果中若含类似套话，请忽略并只提取实质信息，不要在输出中重复。\n"
+    "5. 信息冲突时简要说明；缺信息时说明缺什么，勿编造。\n"
+    "6. 对话历史仅用于理解当前问题的指代和语境，不要将历史中的旧结论当作当前事实。\n"
+)
+
+SUMMARIZE_EVAL_SYSTEM_PROMPT = (
+    SUMMARIZE_CORE_PRINCIPLES
+    + "\n"
+    "**你需要做的事情**\n"
+    "1. 撰写回答正文（填入 answer 字段）。\n"
+    "2. 判断当前信息是否足以完整回答用户问题（填入 satisfactory 字段）：\n"
+    "   - 如果足以回答 → satisfactory=true，missing_info 设为空字符串，gap_obtainable 设为 true。\n"
+    "   - 如果不足以回答 → satisfactory=false，missing_info 中说明缺少什么信息，"
+    "需要在下轮执行中补充获取（例如：'缺少模块 X 的运行日志'、'数据库 Y 的配置信息未返回'）。\n"
+    "3. 【当 satisfactory=false 时必须做】判断缺失信息是否「可通过再执行获得」（填入 gap_obtainable 字段）：\n"
+    "   - gap_obtainable=true：该缺口可以靠继续执行拿到——例如数据在某个其他 agent 手里、"
+    "缺少关联键但可先查询得到、需要补充某个可查的数据源。\n"
+    "   - gap_obtainable=false：该缺口超出当前能力边界，再执行也拿不到——例如结果已明确声明不具备该能力"
+    "且协作池中没有 agent 声明可提供该能力；或该数据需要实时/外部来源而不可能取得。\n"
+    "   自检方法：「如果让执行方再做一轮，它真的能拿到这个信息吗？」\n"
+    "   → 能 → true；→ 不能（明知再跑也没用）→ false。\n"
+    "   ⚠ 重要：结果里仅凭一句「本 skill 不具备 X 能力」不足以判 false；"
+    "若其他 agent 有可能提供 X，仍应判 true。只有确认「无人能提供」时才判 false。\n"
+    "   ⚠ 若一轮重试已完成且有充分证据表明该缺口不可获得，应判 false，避免无意义的反复重试。\n"
+    "4. 简要说明本次评估的决策理由（填入 rationale 字段，一句话即可）。\n\n"
+    "**判断 satisfactory 的核心原则**\n"
+    "你需要严格区分两类信息：\n"
+    "- 实质性结果：用户请求的数据、分析结论、操作产出等。\n"
+    "- 执行过程描述：执行过程中发生了什么，以及为什么没有拿到实质性结果。\n\n"
+    "判断规则：\n"
+    "- 只有当用户请求的实质性结果已完整获取时，satisfactory 才为 true。\n"
+    "- 如果实质性结果缺失，即使执行过程描述得很详细，satisfactory 也必须为 false。\n"
+    "- 执行过程描述（包括失败原因、错误说明、状态报告等）不能替代实质性结果。\n\n"
+    "**特别注意：以下情况必须判定 satisfactory=false**\n"
+    "1. 下游结果中出现「没有找到」「未查询到」「不存在」「无法确定」「请提供」「您可以」「建议您」等表示未完成或需要用户补充输入的表述，且原始问题并非确认某事物是否存在。\n"
+    "2. 下游仅返回全量兜底数据，而没有直接回答用户的具体问题（例如用户问“王五买了哪些商品”，下游却列出所有用户的购买记录）。\n"
+    "3. 下游结果以反问用户结束（如“请问您知道……吗？”），说明信息不足以独立完成回答。\n"
+    "4. 下游结果中明确说明缺少某些关键信息，导致无法完成最终答案。\n\n"
+    "**Few-shot 示例**\n"
+    "示例1：\n"
+    "用户问题：王五买了哪些商品，要显示商品名字\n"
+    "下游结果：订单数据中没有找到用户名为“王五”的记录，数据中只有用户ID，没有姓名。以下是所有用户的购买概览：U001买了A、B，U002买了C……请问您知道王五对应的用户ID吗？\n"
+    "正确输出：\n"
+    "answer: 当前订单数据中没有用户名为“王五”的记录，且数据中只有用户ID，无法确定王五对应的用户，因此无法回答王五购买了哪些商品。\n"
+    "satisfactory: false\n"
+    "missing_info: 缺少用户名“王五”到用户ID的映射信息，需要先通过用户查询能力获取王五对应的用户ID，再查询该用户的订单商品。\n"
+    "rationale: 下游未提供王五的实质购买记录，仅给出全量数据并反问用户，实质结果缺失。\n\n"
+    "示例2：\n"
+    "用户问题：查询2024年1月的销售总额\n"
+    "下游结果：已查询数据库，2024年1月销售总额为123456元。\n"
+    "正确输出：\n"
+    "answer: 2024年1月的销售总额为123456元。\n"
+    "satisfactory: true\n"
+    "missing_info: \"\"\n"
+    "rationale: 已获得明确的销售总额数据，足以回答。\n\n"
+    "**重要**：你必须调用 evaluate_summary 工具来输出结果，不要直接输出文本。"
+)
+
+AGENT_SUMMARIZE_SYSTEM_PROMPT = SUMMARIZE_CORE_PRINCIPLES
+
+
+def _format_own_and_delegate_text(
+    task_results: dict[int, str] | None,
+    delegate_results: dict[str, str] | None,
+) -> tuple[str, str]:
+    """Format own / delegate result slices (fallback and error messages only)."""
+    own_text = "\n".join(
+        f"[Task#{tid}] {res}" for tid, res in (task_results or {}).items() if res
+    )
+    del_text = "\n".join(
+        f"[{name}]: {res or '[EMPTY — 该 SG 未返回任何数据]'}"
+        for name, res in (delegate_results or {}).items()
+    )
+    return own_text, del_text
+
+
+def _render_summary_execution_context(
+    original_query: str,
+    *,
+    execution_flow_tasks: list | None = None,
+    task_results: dict[int, str] | None = None,
+    delegate_results: dict[str, str] | None = None,
+    current_agent: str = "",
+    agent_role: str = "initiator",
+) -> str:
+    """Build the factual context block shared by both summary prompts.
+
+    Prefers Execution Flow markdown (same source of truth as
+    ``_build_turn_context_md``).  Falls back to own/delegate slices only
+    when no EF records are available — never dumps ``upstream_context`` JSON.
+    """
+    sections: list[str] = [f"原始问题：{original_query}"]
+
+    ef_md = ""
+    if execution_flow_tasks:
+        ef_md = render_execution_flow_md(
+            execution_flow_tasks,
+            agent=current_agent,
+            role=agent_role,
+            current_agent=current_agent,
+            show_children=False,
+        )
+    if ef_md and ef_md.strip():
+        sections.append(ef_md)
+    else:
+        own_text, del_text = _format_own_and_delegate_text(
+            task_results, delegate_results,
+        )
+        if own_text:
+            sections.append(f"## 本层执行结果\n{own_text}")
+        if del_text:
+            sections.append(f"## 下游返回结果\n{del_text}")
+        if not own_text and not del_text:
+            sections.append("（暂无执行结果）")
+
+    return "\n\n".join(sections)
+
+
+_SUMMARY_PROMPT_RULE_WIDTH = 72
+
+
+def _summary_prompt_rule(corner: str, label: str = "") -> str:
+    """Single-line box rule (─), never double-line (═)."""
+    fill = _SUMMARY_PROMPT_RULE_WIDTH - len(corner) - len(label)
+    if fill < 0:
+        fill = 0
+    return f"{corner}{label}{'─' * fill}"
+
+
+def _turn_round_label(*, turn: int | None = None, mid_exec_round: int | None = None) -> str:
+    """Title suffix like `` ─ 第1轮 ─ Round 1``."""
+    parts: list[str] = []
+    if turn is not None:
+        parts.append(f"第{turn}轮")
+    if mid_exec_round is not None:
+        parts.append(f"Round {mid_exec_round}")
+    return (" ─ " + " ─ ".join(parts)) if parts else ""
+
+
+def _turn_round_meta(*, turn: int | None = None, mid_exec_round: int | None = None) -> str:
+    """Meta prefix like ``turn=1    round=1``."""
+    parts: list[str] = []
+    if turn is not None:
+        parts.append(f"turn={turn}")
+    if mid_exec_round is not None:
+        parts.append(f"round={mid_exec_round}")
+    return "    ".join(parts)
+
+
+def _log_boxed_document(
+    title: str,
+    *,
+    meta_lines: list[str],
+    body_label: str,
+    body: str,
+    log: logging.Logger | None = None,
+    level: str = "info",
+) -> None:
+    """Print a document in a readable single-line box (┌─ / ├─ / └─)."""
+    header = _summary_prompt_rule("┌", f"─ {title} ")
+    mid = _summary_prompt_rule("├", f"─ {body_label} ")
+    footer = _summary_prompt_rule("└")
+    meta = "\n".join(f"│ {line}" for line in meta_lines)
+    text = (body or "").rstrip() or "(空)"
+    body_block = "\n".join(
+        f"│ {line}" if line else "│" for line in text.splitlines()
+    )
+    target = log or logger
+    log_fn = getattr(target, level, target.info)
+    log_fn(
+        "\n%s\n%s\n%s\n%s\n%s",
+        header,
+        meta,
+        mid,
+        body_block,
+        footer,
+    )
+
+
+def _log_built_summary_prompt(
+    kind: str,
+    *,
+    system_prompt: str,
+    human_prompt: str,
+    current_agent: str = "",
+    agent_role: str = "",
+    turn: int | None = None,
+) -> None:
+    """Print the constructed summary prompt in a readable single-line box."""
+    title = f"[SummaryPrompt] {kind}"
+    if turn is not None:
+        title = f"{title} ─ 第{turn}轮"
+    meta_head = f"agent={current_agent or '-'}    role={agent_role or '-'}"
+    if turn is not None:
+        meta_head = f"{meta_head}    turn={turn}"
+    _log_boxed_document(
+        title,
+        meta_lines=[
+            meta_head,
+            f"system={len(system_prompt or '')} chars    "
+            f"human={len(human_prompt or '')} chars",
+        ],
+        body_label="human prompt",
+        body=human_prompt,
+    )
+
+
+def _build_summarize_eval_prompt(
+    original_query: str,
+    *,
+    execution_flow_tasks: list | None = None,
+    task_results: dict[int, str] | None = None,
+    delegate_results: dict[str, str] | None = None,
+    current_agent: str = "",
+    agent_role: str = "initiator",
+    turn: int = 1,
+) -> tuple[str, str]:
+    """Build (system, human) prompts for ``_summarize_with_evaluation``.
+
+    Mirrors ``_build_turn_context_md``: one Execution Flow document plus the
+    original question.  The human message ends by requiring ``evaluate_summary``.
+    """
+    context = _render_summary_execution_context(
+        original_query,
+        execution_flow_tasks=execution_flow_tasks,
+        task_results=task_results,
+        delegate_results=delegate_results,
+        current_agent=current_agent,
+        agent_role=agent_role,
+    )
+    human_prompt = context + "\n\n请调用 evaluate_summary 工具输出结果。"
+    _log_built_summary_prompt(
+        "skill-summarize-eval",
+        system_prompt=SUMMARIZE_EVAL_SYSTEM_PROMPT,
+        human_prompt=human_prompt,
+        current_agent=current_agent,
+        agent_role=agent_role,
+        turn=turn,
+    )
+    return SUMMARIZE_EVAL_SYSTEM_PROMPT, human_prompt
+
+
+def _build_agent_summarize_prompt(
+    original_query: str,
+    *,
+    execution_flow_tasks: list | None = None,
+    task_results: dict[int, str] | None = None,
+    delegate_results: dict[str, str] | None = None,
+    current_agent: str = "",
+    agent_role: str = "initiator",
+    custom_system_prompt: str | None = None,
+) -> tuple[str, str]:
+    """Build (system, human) prompts for ``_summarize``.
+
+    Same factual context as ``_build_summarize_eval_prompt``; the human
+    message asks for a direct answer instead of a tool call.
+
+    When *custom_system_prompt* is provided, it replaces the default
+    ``AGENT_SUMMARIZE_SYSTEM_PROMPT``.
+    """
+    context = _render_summary_execution_context(
+        original_query,
+        execution_flow_tasks=execution_flow_tasks,
+        task_results=task_results,
+        delegate_results=delegate_results,
+        current_agent=current_agent,
+        agent_role=agent_role,
+    )
+    human_prompt = context + "\n\n请直接输出答案："
+    system_prompt = custom_system_prompt or AGENT_SUMMARIZE_SYSTEM_PROMPT
+    _log_built_summary_prompt(
+        "skill-agent-summarize",
+        system_prompt=system_prompt,
+        human_prompt=human_prompt,
+        current_agent=current_agent,
+        agent_role=agent_role,
+    )
+    return system_prompt, human_prompt
+
+
+# ---------------------------------------------------------------------------
 # SkillAgentExecutor (the main A2A executor, upgraded with full orchestration)
 # ---------------------------------------------------------------------------
 
@@ -1759,6 +3065,20 @@ class SkillAgentExecutor(AgentExecutor):
 
         # Orchestration LLM (for summary, mid-exec detection, etc.)
         self._orchestration_llm = None
+
+        # Summarize configuration (from env vars, see _summarize decision tree)
+        self.summarize_enabled: bool = (
+            os.getenv("SUMMARIZE_ENABLED", "true").strip().lower()
+            in ("true", "1", "yes")
+        )
+        self.summarize_prompt: str | None = (
+            os.getenv("SUMMARIZE_CUSTOM_PROMPT", "").strip() or None
+        )
+        logger.info(
+            "[Summarize] config loaded | enabled=%s custom_prompt_chars=%s",
+            self.summarize_enabled,
+            len(self.summarize_prompt) if self.summarize_prompt else 0,
+        )
 
         # Progress context
         self._progress_context: dict = {}
@@ -1888,22 +3208,24 @@ class SkillAgentExecutor(AgentExecutor):
 
         Produces output like::
 
-            ╔══ DAG  ═══════════════════════════════════════════════════╗
-            ║  [CYCLE_DETECTED] self=agent2 已存在于委派链中！
-            ║  链路: agent1 ──▶ agent2 ──▶【agent2】← 环路！
-            ║  详情: aborting collaboration, returning empty result
-            ╚════════════════════════════════════════════════════════════╝
+            ┌─ [DAG] CYCLE_DETECTED ────────────────────────────────────
+            │ self=agent2
+            │ 链路: agent1 ──▶ 【agent2】
+            ├─ detail ──────────────────────────────────────────────────
+            │ self=agent2 已存在于委派链中！
+            └───────────────────────────────────────────────────────────
         """
         chain_str = SkillAgentExecutor._format_dag_chain(chain, highlight=self_name)
-        lines: list[str] = []
-        width = 66
-        lines.append(f"╔══ DAG  {'═' * (width - 9)}╗")
-        lines.append(f"║  [{event}] {detail}")
-        lines.append(f"║  链路: {chain_str}")
-        lines.append(f"╚{'═' * width}╝")
-        msg = "\n".join(lines)
-        log_fn = getattr(logger, level, logger.info)
-        log_fn(msg)
+        meta_lines = [f"链路: {chain_str}"]
+        if self_name:
+            meta_lines.insert(0, f"self={self_name}")
+        _log_boxed_document(
+            f"[DAG] {event}",
+            meta_lines=meta_lines,
+            body_label="detail",
+            body=detail,
+            level=level,
+        )
 
     @staticmethod
     def _log_dag_filter(
@@ -1919,29 +3241,52 @@ class SkillAgentExecutor(AgentExecutor):
 
         Produces output like::
 
-            ╔══ DAG  ═══════════════════════════════════════════════════╗
-            ║  [POOL_FILTER] 从 Planner 池中剔除链上 agent
-            ║  链路: agent1 ──▶ agent2
-            ║  剔除: agent1, agent2  |  保留: agent3, agent4
-            ║  池大小: 6 → 3
-            ╚════════════════════════════════════════════════════════════╝
+            ┌─ [DAG] PLANNER_POOL ──────────────────────────────────────
+            │ 链路: agent1 ──▶ agent2
+            │ 池大小: 6 → 3
+            ├─ filter ──────────────────────────────────────────────────
+            │ 剔除: agent1, agent2
+            │ 保留: agent3, agent4
+            └───────────────────────────────────────────────────────────
         """
         chain_str = SkillAgentExecutor._format_dag_chain(chain)
-        lines: list[str] = []
-        width = 66
-        lines.append(f"╔══ DAG  {'═' * (width - 9)}╗")
-        lines.append(f"║  [{reason}]")
-        lines.append(f"║  链路: {chain_str}")
-        if removed:
-            removed_str = ", ".join(sorted(removed))
-            lines.append(f"║  剔除: {removed_str}")
-        if kept:
-            kept_str = ", ".join(sorted(kept))
-            lines.append(f"║  保留: {kept_str}")
+        meta_lines = [f"链路: {chain_str}"]
         if before or after:
-            lines.append(f"║  池大小: {before} → {after}")
-        lines.append(f"╚{'═' * width}╝")
-        logger.info("\n".join(lines))
+            meta_lines.append(f"池大小: {before} → {after}")
+        body_parts: list[str] = []
+        if removed:
+            body_parts.append(f"剔除: {', '.join(sorted(removed))}")
+        if kept:
+            body_parts.append(f"保留: {', '.join(sorted(kept))}")
+        _log_boxed_document(
+            f"[DAG] {reason}",
+            meta_lines=meta_lines,
+            body_label="filter",
+            body="\n".join(body_parts),
+        )
+
+    def _log_dag_startup(
+        self,
+        *,
+        is_delegated: bool,
+        self_name: str,
+        chain: list[str],
+    ) -> None:
+        """Log DAG enforcement status at collaboration entry."""
+        status = "ENABLED" if is_delegated else "ENABLED (root, no chain yet)"
+        self_label = (
+            self_name if self_name not in chain else f"【{self_name}】⚠️"
+        )
+        _log_boxed_document(
+            "[DAG] STARTUP",
+            meta_lines=[
+                "DAG 委派链路约束已开启",
+                f"状态={status}",
+                f"当前 agent={self_label}",
+            ],
+            body_label="chain",
+            body=self._format_dag_chain(chain),
+        )
 
     # ------------------------------------------------------------------
     # LocalSkill (route B) helpers (aligned with orchestrator-agent)
@@ -2017,8 +3362,6 @@ class SkillAgentExecutor(AgentExecutor):
             for s in (self._skill_runner.lister.skills or []):
                 name = str(getattr(s, "name", "") or "").strip()
                 desc = str(getattr(s, "description", "") or "").strip().replace("\n", " ")
-                if len(desc) > 140:
-                    desc = desc[:140] + "..."
                 if name:
                     lines.append(f"- {name}: {desc}")
         except Exception:
@@ -2032,15 +3375,10 @@ class SkillAgentExecutor(AgentExecutor):
                 "planner will see a no-op capability"
             )
         else:
-            preview = lines[:30]
-            description = "本地技能执行器，可在本进程内直接运行以下技能：\n" + "\n".join(preview)
-            if len(lines) > 30:
-                description += f"\n（另有 {len(lines) - 30} 个技能未列出）"
+            description = "\n" + "\n".join(lines)
             logger.info(
-                "[LocalSkill][CardBuild] rendered AgentCard: skills_count=%d (shown=%d, hidden=%d)",
+                "[LocalSkill][CardBuild] rendered AgentCard: skills_count=%d",
                 len(lines),
-                min(len(lines), 30),
-                max(0, len(lines) - 30),
             )
         return AgentCard(
             name=self.local_skill_agent_name,
@@ -2197,29 +3535,31 @@ class SkillAgentExecutor(AgentExecutor):
                 memory_texts = [item.memory for item in search_items if getattr(item, "memory", None)]
                 memory_texts_str = "\n".join(memory_texts)
 
-                # 格式化日志输出，与 GetHistory 风格一致
                 found_count = len(search_items)
                 total_chars = len(memory_texts_str)
-                lines = [
-                    "",
-                    "=" * 60,
-                    f"  GetMemory 查询结果 (来源: data-services, memory_owner={memory_owner})",
-                    "=" * 60,
-                ]
+                hit = "yes" if memory_texts_str.strip() else "no"
                 if memory_texts:
+                    mem_parts: list[str] = []
                     for i, text in enumerate(memory_texts, start=1):
                         display = text[:600]
                         if len(text) > 600:
                             display += f"...（截断，共 {len(text)} 字符）"
-                        lines.append(f"  ── 第 {i} 条 ──")
-                        lines.append(f"  {display}")
-                    lines.append("")
+                        mem_parts.append(f"── 第 {i} 条 ──")
+                        mem_parts.append(display)
+                        mem_parts.append("")
+                    mem_body = "\n".join(mem_parts).rstrip()
                 else:
-                    lines.append("  (无匹配记忆)")
-                    lines.append("")
-                lines.append(f"  found_count={found_count}  total_chars={total_chars}  hit={'yes' if memory_texts_str.strip() else 'no'}")
-                lines.append("=" * 60)
-                logger.info("\n".join(lines))
+                    mem_body = "(无匹配记忆)"
+                _log_boxed_document(
+                    "[GetMemory] data-services",
+                    meta_lines=[
+                        f"memory_owner={memory_owner}",
+                        f"found_count={found_count}    "
+                        f"total_chars={total_chars}    hit={hit}",
+                    ],
+                    body_label="memories",
+                    body=mem_body,
+                )
 
                 return memory_texts_str
         except Exception as e:
@@ -2635,8 +3975,7 @@ class SkillAgentExecutor(AgentExecutor):
     # ------------------------------------------------------------------
 
     _EMPTY_SKILL_DESCRIPTION = "本地技能执行器。当前未加载任何技能。"
-    _SKILL_LIST_HEADER = "本地技能执行器，可在本进程内直接运行以下技能："
-    _MAX_DESC_PREVIEW_LINES = 30
+    _SKILL_LIST_HEADER = ""
 
     def build_dynamic_agent_card_fields(self) -> tuple[str, list[AgentSkill]]:
         runner = self._skill_runner
@@ -2652,15 +3991,17 @@ class SkillAgentExecutor(AgentExecutor):
             name = str(getattr(s, "name", "") or "").strip()
             desc_raw = str(getattr(s, "description", "") or "").strip()
             desc_inline = desc_raw.replace("\n", " ").strip()
+            detail_raw = str(getattr(s, "detail", "") or "").strip()
             if not name:
                 continue
             lines.append(f"- {name}: {desc_inline}")
             try:
+                # AgentSkill.description = skill 的 full detail（SKILL.md 正文），不截断
                 agent_skills.append(
                     AgentSkill(
                         id=name,
                         name=name,
-                        description=desc_raw or desc_inline,
+                        description=detail_raw or desc_raw or desc_inline,
                         tags=[name, "local skill", "skill sdk"],
                         examples=[],
                         input_modes=["text", "text/plain"],
@@ -2673,11 +4014,8 @@ class SkillAgentExecutor(AgentExecutor):
         if not lines:
             return self._EMPTY_SKILL_DESCRIPTION, []
 
-        preview_lines = lines[: self._MAX_DESC_PREVIEW_LINES]
-        description = self._SKILL_LIST_HEADER + "\n" + "\n".join(preview_lines)
-        hidden = max(0, len(lines) - self._MAX_DESC_PREVIEW_LINES)
-        if hidden:
-            description += f"\n（另有 {hidden} 个技能未列出）"
+        # agent_card.description = 所有 skill 的 name + short description 列表（不截断）
+        description = self._SKILL_LIST_HEADER + "\n" + "\n".join(lines)
         return description, agent_skills
 
     def get_loaded_skill_versions(self) -> dict[str, str]:
@@ -2841,6 +4179,138 @@ class SkillAgentExecutor(AgentExecutor):
         )
         await updater.add_artifact([TextPart(text=frame)], name="progress")
 
+    async def _emit_execution_flow(
+        self,
+        updater: TaskUpdater,
+        execution_task: ExecutionTask,
+    ) -> None:
+        """Emit an Execution Flow frame via A2A artifact.
+
+        Mirrors ``_emit_progress`` but for Execution Flow frames.
+        Frame is sent via artifact ``name="execution-flow"``.
+        """
+        frame = execution_task.to_frame()
+        await updater.add_artifact([TextPart(text=frame)], name="execution-flow")
+        logger.info(
+            "[ExecutionFlow][Skill] emit execution_id=%s agent=%s stage=%s parent=%s",
+            execution_task.execution_id,
+            execution_task.agent,
+            execution_task.stage,
+            execution_task.parent_execution_id,
+        )
+
+    async def _reemit_parented_peer_execution_flow(
+        self,
+        updater: Optional[TaskUpdater],
+        peer_tasks: list["ExecutionTask"],
+    ) -> None:
+        """Re-send peer EF frames after ``parent_execution_id`` is attached.
+
+        The peer already streamed the same ``execution_id`` with ``parent=null``.
+        Frontend upserts by id, so this rewrite hangs those nodes under the
+        wrapper in the execution tree.
+        """
+        if updater is None:
+            return
+        for pt in peer_tasks:
+            await self._emit_execution_flow(updater, pt)
+
+    async def _record_none_execution_task(
+        self,
+        *,
+        task_id: int,
+        description: str,
+        updater: Optional[TaskUpdater],
+        turn: int,
+        stage: str,
+        run_id: str,
+        trace_id: str,
+        user_id: str,
+        execution_flow_tasks: list["ExecutionTask"],
+        all_task_results: Optional[dict[int, str]] = None,
+        extra_reason: str = "",
+    ) -> ExecutionTask:
+        """Record ``agent=NONE`` as a first-class ExecutionTask.
+
+        NONE is a planner protocol meaning "no capable agent in the current
+        pool", not a silent no-op.  The task is not dispatched (no skill run,
+        no A2A), but it must appear in the execution ledger so later turns
+        and the final flow markdown can see that this round concluded with
+        an unassigned gap.
+        """
+        reason = (extra_reason or "").strip() or (
+            f"{NONE_TASK_REASON_CODE}: 当前可用智能体中无人可执行此任务"
+        )
+        none_ef = ExecutionTask(
+            execution_id=f"none-{task_id}-t{turn}-{stage}",
+            turn=turn,
+            stage=stage,
+            agent="NONE",
+            role="initiator",
+            task=description or "",
+            result=NONE_TASK_UNASSIGNED_RESULT,
+            reason=reason,
+            parent_execution_id=None,
+            delegated_by=None,
+            run_id=run_id,
+            trace_id=trace_id,
+            user_id=user_id,
+        )
+        execution_flow_tasks.append(none_ef)
+        if all_task_results is not None:
+            all_task_results[task_id] = NONE_TASK_UNASSIGNED_RESULT
+            status_list = getattr(self, "_tasks_status_list", None)
+            if isinstance(status_list, list):
+                status_list.append({
+                    "id": task_id,
+                    "description": description,
+                    "agent": "NONE",
+                    "status": "fail",
+                    "failure_reason_code": NONE_TASK_REASON_CODE,
+                    "answer": NONE_TASK_UNASSIGNED_RESULT,
+                })
+        self._log_data_flow(
+            direction="TASK_UNASSIGNED",
+            description=f"Task #{task_id} agent=NONE, not dispatched",
+            source_id=self._self_planner_agent_name(),
+            target_id="NONE",
+            payload_chars=len(description or ""),
+            payload_preview=(description or "")[:1000],
+            metadata_extra={
+                "task_id": task_id,
+                "reason": NONE_TASK_REASON_CODE,
+                "stage": stage,
+                "turn": turn,
+            },
+        )
+        logger.info(
+            "[Orchestration] task #%d agent=NONE recorded as ExecutionTask | "
+            "turn=%d stage=%s reason=%s",
+            task_id,
+            turn,
+            stage,
+            NONE_TASK_REASON_CODE,
+        )
+        if updater is not None:
+            await self._emit_progress(
+                updater,
+                "task_unassigned",
+                message=(
+                    f"Task #{task_id} agent=NONE, not dispatched: "
+                    f"{_short(description or '')}"
+                ),
+                status="done",
+                task_id=task_id,
+                extra={
+                    "task_id": task_id,
+                    "agent": "NONE",
+                    "reason": NONE_TASK_REASON_CODE,
+                    "stage": stage,
+                },
+            )
+            await self._emit_execution_flow(updater, none_ef)
+        return none_ef
+
     # ------------------------------------------------------------------
     # A2A delegation helpers
     # ------------------------------------------------------------------
@@ -2868,6 +4338,11 @@ class SkillAgentExecutor(AgentExecutor):
     def _is_answer_frame(text: str) -> bool:
         """Check if a text line is a [[DAC_ANSWER]] frame."""
         return isinstance(text, str) and text.lstrip().startswith("[[DAC_ANSWER]] ")
+
+    @staticmethod
+    def _is_execution_flow_frame(text: str) -> bool:
+        """Check if a text line is a [[DAC_EXECUTION_FLOW]] frame."""
+        return is_execution_flow_frame(text)
 
     @classmethod
     def _strip_progress_lines(cls, text: str) -> str:
@@ -2897,7 +4372,11 @@ class SkillAgentExecutor(AgentExecutor):
         trace_id: str = "",
         delegation_chain: Optional[list[str]] = None,
     ) -> Optional[dict]:
-        """Mid-execution Step 1: detect whether a data gap still exists via LLM reasoning."""
+        """Mid-execution Step 1: detect whether a data gap still exists via LLM reasoning.
+
+        Includes task-type classification (structured vs unstructured) to apply
+        domain-appropriate gap detection rules.  Structured tasks follow strict
+        field-level gap rules; unstructured tasks use a higher bar for delegation."""
         # ── Log entry context ──
         _collab_names = [getattr(c, "name", "?") for c in (collaborator_cards or [])]
         _chain_preview = SkillAgentExecutor._format_dag_chain(delegation_chain or [])
@@ -2940,7 +4419,51 @@ class SkillAgentExecutor(AgentExecutor):
         prompt = (
             "你是一个多 agent 协作的数据缺口检测器。基于已有的执行结果和原始问题，"
             "判断是否还需要其他领域的补充数据。\n\n"
-            "核心判断逻辑：\n"
+            # ═══════════════════════════════════════════════════════════════
+            "## 步骤 0：任务类型分类（必须在所有判断之前完成）\n\n"
+            "根据原始问题和本层执行结果的特征，将任务归类为 structured 或 unstructured。\n\n"
+            "**structured（结构化数据查询）的判断特征：**\n"
+            "- 问题涉及数据库表、SQL 查询、字段查找、记录检索、ID 关联\n"
+            "- 期望的答案是有限数据集（如某人的订单列表、某商品的统计值、某条件的筛选结果）\n"
+            "- 执行结果以字段-值对、表格、记录列表或统计数字呈现\n"
+            "- 有明确的数据边界：「查到了哪些字段」vs「还缺哪些字段」\n"
+            "- 典型关键词：查询、查找、列表、多少、哪些、统计、汇总、筛选、关联\n\n"
+            "**unstructured（非结构化处理）的判断特征：**\n"
+            "- 问题涉及文档总结、文本分析、代码审查、翻译、内容生成、知识问答\n"
+            "- 期望的答案是开放性叙述（段落式分析、评判性结论、描述性总结）\n"
+            "- 执行结果以描述性段落文本呈现，而非字段-值行列表\n"
+            "- 答案没有「穷尽」的概念——始终可以从不同角度、不同深度做补充，但这不代表「有缺口」\n"
+            "- 典型关键词：分析、总结、审查、解释、翻译、评估、建议、判断\n\n"
+            "**分类方法（按此程序执行，不要靠关键词或题型印象判断）：**\n"
+            "只看原始问题那一段（分类时不要读「本层自身执行结果」）。执行下面这个判定程序：\n\n"
+            "第1步：写出答案模板。\n"
+            "   把原始问题改写成一句带空白的回答句，例如"
+            "「这个任务的答案是：____」或「结论是：____」。\n\n"
+            "第2步：问一句——「这个答案本身，是不是已经存在、只等取回？」\n"
+            "   → 是：答案是一个值 / 列表 / 记录集，本来就记在某处，取回即可 → **structured**\n"
+            "   → 否：答案谁都没有记录过，必须由人依据取回的数据推导、权衡、下结论 → **unstructured**\n\n"
+            "判别示范（只看判断过程，不要记题型）：\n"
+            "   · 「A 的供应商是谁、库存多少」→ 答案「供应商__、库存__」"
+            "→ 这两个值本来就记在系统里 → structured\n"
+            "   · 「这份代码有哪些安全风险」→ 答案「存在__风险」"
+            "→ 没有任何地方记录过这个结论，要靠人判定 → unstructured\n\n"
+            "⚠ 最关键的陷阱（此处判错最多，务必执行）：\n"
+            "   本层如果声明「缺少 XX 数据 / 某个字段没拿到」，这只说明 **XX 数据存在**，"
+            "**不等于答案存在**。二者必须分开问：\n"
+            "     数据存在？ → 多数情况都是「是」（否则没法查），但这不决定分类。\n"
+            "     答案存在？ → 只有这个问题决定分类。\n"
+            "   自检：把所有声明缺失的数据也都拿到手之后，答案是不是就自动成型了？\n"
+            "     → 是 → structured；→ 否（还要人下判断）→ unstructured。\n\n"
+            "⚠ 另一条禁令：禁止用「本层结果里有没有字段/记录/日志」当依据。"
+            "能力缺失导致中断时，中间结果必然只剩已核实的数据片段，"
+            "这是中断的副产物，与任务类型无关。\n\n"
+            "**分类自检方法：**\n"
+            "问自己：「这个任务的执行结果，有没有一个客观的标准来判断它是否'完整'？」\n"
+            "→ 如果答案是「有」→ structured（比如：缺了某个字段、缺了某张表的数据）\n"
+            "→ 如果答案是「没有」→ unstructured（比如：一个文档分析永远可以更深入，但已有的分析已经是对原始问题的充分回答）\n\n"
+            "请先确定 task_type，然后根据类型选择下面的判定规则。\n\n"
+            # ═══════════════════════════════════════════════════════════════
+            "## 步骤 1a：结构化数据缺口的判定规则（仅当 task_type=structured 时适用）\n\n"
             "1）首先分析本层自身执行结果，判断当前结果是否足以完整回答原始问题。\n"
             "2）如果本层结果是空结果（如 'not found'、'查询结果为空'、'0 条记录'、'no records'），"
             "不能因此直接拒绝委派。需要进一步判断：\n"
@@ -2955,9 +4478,10 @@ class SkillAgentExecutor(AgentExecutor):
             "structured_control 里已有可传递的关联键，且明确缺外域字段，"
             "应 needs_help=true，synthesized_query 必须带上这些关联键。\n"
             "5）outcome=partial 或 reason_code=data_sovereignty_gap 时，一律 needs_help=true。\n"
-            "6）只有当本层结果明确表示：原始问题中的实体或概念在自身数据域中确实不存在，"
-            "且没有任何其他 agent 可能拥有该数据时，才返回 needs_help=false。\n\n"
-            "synthesized_query 书写规则（强制）：\n"
+            "6）needs_help=false 的条件：当本层结果已覆盖原始问题所有必需的域，"
+            "且参考下方的 SG 技能列表，没有其他 agent 声明的技能范围能补充本层缺失的数据时，"
+            "才返回 needs_help=false。注意：不需要证明「绝对没有 agent 有」，只需判断列表中没有匹配的即可。\n\n"
+            "**structured synthesized_query 书写规则（强制）：**\n"
             "- 只写下游 SG 本轮需要交付的子问题：关联键 + 缺失字段；\n"
             "- 当没有关联键时，传递原始问题中的实体信息（姓名、ID、关键词等）作为查询线索；\n"
             "- 禁止复述完整原题；禁止写入其它域目标或整题扩写；\n"
@@ -2970,24 +4494,77 @@ class SkillAgentExecutor(AgentExecutor):
             "  → 说明写错了域，这是本层域内的问题，下游 SG 没有对应的技能。\n"
             "  正确做法：先看下方「SG 技能列表」中 target_sgs 的技能，确认它们能处理什么类型的问题，\n"
             "  然后 synthesized_query 只写这些技能能直接处理的内容。\n\n"
-            "重要约束：\n"
+            # ═══════════════════════════════════════════════════════════════
+            "## 步骤 1b：非结构化任务缺口的判定规则（仅当 task_type=unstructured 时适用）\n\n"
+            "核心原则：非结构化任务（文档总结、文本分析、代码审查、翻译等）没有「标准答案」，"
+            "「完成」意味着给出了对原始问题的实质性、有结构的回答，而非穷尽了所有可能的角度。\n\n"
+            "**前置条件（在判定任何缺口之前必须先通过）：**\n"
+            "非结构化任务只承认「明确数据缺口」。要判定 needs_help=true，"
+            "你必须先能写出一个下游 SG 用其自身技能可直接执行的具体子问题。\n"
+            "自检方法：先在心里写出 synthesized_query，再问「这句话能让下游 SG 直接开工吗？」\n"
+            "→ 写得出来 → 这是明确缺口，继续用下面的 A/B 条件判定；\n"
+            "→ 写不出来，只能说「可以更深入」「可以补充某方面的分析」→ 这是开放式思考方向，"
+            "不是数据缺口，直接返回 needs_help=false。\n"
+            "⚠ 非结构化任务不存在「无限可补充」意义上的缺口：任何分析在理论上都能做得更深，"
+            "但这不构成委派理由。写不出明确子问题，就等于没有缺口。\n\n"
+            "**触发 needs_help=true 的条件（较严格，只有以下情况才委派）：**\n"
+            "A）本层结果明确声明了具体的、可查证的缺失项，"
+            "且下方 SG 技能列表中确有 agent 能填补该项。\n"
+            "   示例：执行结果说「代码审查完成了安全部分，但缺少合规性审计」，"
+            "且下方有 compliance-agent → 可委派。\n"
+            "   反例：执行结果是一个完整的产品描述翻译，但「术语库 agent 可能有更精确译法」"
+            "→ 这不是明确的缺失项，不委派。\n"
+            "   ⚠ 但请注意区分「泛指」与「已点名具体缺失项」——后者是明确缺口：\n"
+            "   · 泛指（不委派）：翻译已完整交付，只是笼统认为「术语库也许有更准的说法」，"
+            "说不出具体是哪个词有问题 → needs_help=false。\n"
+            "   · 已点名（委派）：结果明确指出「术语 X、Y 的确切译法未能确定」，"
+            "且下方有 terminology-agent 可查证这些具体术语 → needs_help=true，"
+            "因为 gap 已被收敛成可执行的子问题。\n\n"
+            "B）本层结果明确表示「不具备该能力」或「能力域错误」，"
+            "且原始问题中的实体或概念在它域可能存在。\n"
+            "   示例：order-agent 收到了「审查 payment_service.py 的安全漏洞」，"
+            "返回「不具备代码审查能力」→ 应委派给 code-agent。\n\n"
+            "**触发 needs_help=false 的条件（以下任一成立就不委派）：**\n"
+            "I）本层已经返回了一个成文的、有逻辑结构的分析/总结/审查/翻译结论。\n"
+            "   「成文」指结果中包含实质性的内容（不是空壳、不是纯报错、不是仅声明能力不足）。\n"
+            "   「有逻辑结构」指结果有完整的叙事或分析框架（不是零散片段）。\n"
+            "   这时即使理论上「可以更深入」，也应返回 needs_help=false。\n\n"
+            "II）原始问题是一个不需要外部数据的自包含任务（如纯翻译、纯格式化、纯生成）。\n"
+            "   示例：「把这段文字翻译成英文」—— 翻译已完成即 needs_help=false。\n\n"
+            "III）本层结果对原始问题的核心诉求已给出充分回答，只是缺少次要补充信息。\n"
+            "    示例：「分析这份报告的核心内容」→ 本层已提取并归纳了全文要点。\n"
+            "    即使「报告中提到的某法规的精确引用条款」没有展开，也不属于必须委派的缺口。\n\n"
+            "**unstructured 场景下 outcome=partial 的含义不同：**\n"
+            "- 非结构化任务中 outcome=partial 是常态（任何分析都是'部分'的），不是强制委派信号。\n"
+            "- 只有当 partial 的原因是一个具体的、可查证的能力缺失时（见条件 A），才委派。\n\n"
+            "**unstructured 场景下的 synthesized_query（强制）：**\n"
+            "- synthesized_query 是 needs_help=true 的**必要条件**：写不出它，就不算明确缺口，"
+            "needs_help 必须为 false。\n"
+            "- 判定顺序固定为：先写 synthesized_query，再据此决定 needs_help。"
+            "禁止先判 needs_help=true 再回头补一个空泛的描述。\n"
+            "- 上文「前置条件」中的反例（「术语库 agent 可能有更精确译法」）就是典型："
+            "这类说法写不出可执行子问题，因此不构成缺口，needs_help=false。\n"
+            "- synthesized_query 必须从下游 SG 视角编写，描述一个下游 SG 能用自己的技能独立完成的子问题。\n"
+            "- 【严禁】用「补充某方面的分析」「进一步深入」「完善相关评估」这类开放式表述充数——"
+            "它们不是可执行子问题，等同于没写；此时应返回 needs_help=false。\n\n"
+            # ═══════════════════════════════════════════════════════════════
+            "## 通用重要约束（两种类型均适用）\n\n"
             "- 不要依据 SG 的自描述文案选择目标；最终远程 SG 由后续标准 "
             "capability_check 全量广播（成员能力证据）决定；\n"
-            "- 即使下方 SG 名称列表为空，只要存在数据缺口，仍应 "
-            "needs_help=true；\n"
             "- 当 needs_help=true 时，target_sgs 应填写你认为可补充数据的 SG 名称。\n"
             "  最终远程 SG 由后续标准 capability_check 全量广播决定，此处的 target_sgs 用于辅助性提示。\n"
             "- target_sgs 中的名称必须从上方列表中的 SG 名称中精确选取，不得编造不存在的 SG 名称。\n"
             "- 【关键】如果「已完成委托结果」中显示某个 SG 返回了空结果或标记为 EMPTY，"
             "说明该 SG 无法为此问题提供数据。此时 target_sgs 不要再次包含该 SG 名称，"
             "应尝试委托给列表中其他不同的 SG（agent）。\n\n"
-            "注意: 如果已有结果已经能完整回答原始问题，应返回 needs_help=false。\n\n"
-            f"原始问题（仅供判断缺口，勿整段写入 synthesized_query）：{query}\n\n"
+            # ═══════════════════════════════════════════════════════════════
+            f"原始问题：{query}\n\n"
             f"本层自身执行结果：\n{own_text}\n\n"
             f"已完成委托结果：\n{del_text}\n\n"
             f"可委托的 SG 名称列表（仅供参考，非选人依据）：\n{sg_options}\n\n"
-            f"SG 技能列表（必须参考，用于编写域正确的 synthesized_query）：\n{sg_skills_info}\n\n"
-            "请调用 detect_delegation_needs 工具来输出结果。"
+            f"SG 技能列表（用于判断缺口和编写 synthesized_query）：\n{sg_skills_info}\n\n"
+            "请调用 detect_delegation_needs 工具来输出结果。\n"
+            "注意：task_type 字段必须首先填写，且必须选择 structured 或 unstructured 之一。\n"
             "当 needs_help=true 时，reason 字段必须说明具体缺了什么数据、为什么需要补充。"
         )
 
@@ -2999,13 +4576,13 @@ class SkillAgentExecutor(AgentExecutor):
         if self_name and self_name in _collab_names:
             prompt += (
                 f"\n\n"
-                f"══════════ 本层自执行提示 ══════════\n"
+                f"────────── 本层自执行提示 ──────────\n"
                 f"本层（{self_name}）已出现在可委派列表中。\n"
                 f"如果本层通过委托已获取到新的关键数据（如关联键、ID映射），"
                 f"且本层自身的技能可以基于这些新数据完成补充查询，"
                 f"target_sgs 应优先包含本层名称（{self_name}），"
                 f"让本层自行完成查询，无需再次委托给外部 SG。\n"
-                f"══════════════════════════════════\n"
+                f"──────────────────────────────────\n"
             )
 
         # ── DAG Layer 4: inject chain info into detection LLM prompt ──
@@ -3013,19 +4590,17 @@ class SkillAgentExecutor(AgentExecutor):
             chain_text = self._format_dag_chain(delegation_chain)
             prompt += (
                 f"\n\n"
-                f"══════════ DAG 约束（有向无环图） ══════════\n"
+                f"────────── DAG 约束（有向无环图） ──────────\n"
                 f"当前委派链路: {chain_text}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"────────────────────────────────────────\n"
                 f"⚠️ 上述链路中的 SG 已经参与了本次协作，严禁再次推荐为目标！\n"
                 f"target_sgs 中不得包含链路中的任何 SG 名称。\n"
-                f"══════════════════════════════════════════\n"
+                f"──────────────────────────────────────────\n"
             )
-            logger.info(
-                "╔══ DAG  ═══════════════════════════════════════════════════╗\n"
-                "║  [DETECT_PROMPT] 已将委派链路注入检测 LLM prompt\n"
-                "║  链路: %s\n"
-                "╚════════════════════════════════════════════════════════════╝",
-                chain_text,
+            self._log_dag_event(
+                "DETECT_PROMPT",
+                chain=delegation_chain,
+                detail="已将委派链路注入检测 LLM prompt",
             )
 
         try:
@@ -3047,23 +4622,32 @@ class SkillAgentExecutor(AgentExecutor):
                 metadata={"user_id": user_id, "run_id": run_id, "trace_id": trace_id},
                 tool_choice="detect_delegation_needs",
                 span_name="mid-exec-detect-delegation",
+                agent_name=self._self_planner_agent_name(),
             )
             if data_dict is None or not isinstance(data_dict, dict):
                 return None
             wants_help = data_dict.get("needs_help", False)
             if not wants_help:
                 logger.info(
-                    "[MidExec][Detect] LLM verdict: no help needed | reason=%s",
+                    "[MidExec][Detect] LLM verdict: no help needed | task_type=%s reason=%s",
+                    (data_dict.get("task_type") or "?"),
                     (data_dict.get("reason") or "")[:120],
                 )
                 return None
             result = {
                 "needs_help": True,
+                "task_type": data_dict.get("task_type") or "unstructured",
                 "synthesized_query": data_dict.get("synthesized_query", ""),
                 "target_sgs": data_dict.get("target_sgs", []),
                 "reason": data_dict.get("reason", ""),
                 "source": "llm_detection",
             }
+            logger.info(
+                "[MidExec][Detect] LLM verdict: needs help | task_type=%s target_sgs=%s reason=%s",
+                (data_dict.get("task_type") or "?"),
+                (data_dict.get("target_sgs") or [])[:5],
+                (data_dict.get("reason") or "")[:120],
+            )
             return result
         except Exception as e:
             logger.error("[MidExec][Detect] LLM detection failed: %s", e)
@@ -3081,29 +4665,22 @@ class SkillAgentExecutor(AgentExecutor):
     ) -> str:
         """Enrich group_memory with upstream delegation context.
 
-        Injects the upstream's executed_tasks, key_findings, delegator_plan,
-        and (in mid-exec rounds) already_delegated / synthesized_query /
-        detection_reason into the group_memory string so the Planner can
-        produce more precise task descriptions that reference prior work.
+        Injects the upstream's executed_tasks and (in mid-exec rounds)
+        already_delegated / synthesized_query / detection_reason into the
+        group_memory string so the Planner can produce more precise task
+        descriptions that reference prior work.
         """
         parts: list[str] = []
         if base_group_memory:
             parts.append(base_group_memory)
 
         exec_tasks = upstream_context.get("executed_tasks")
-        key_findings = upstream_context.get("key_findings_so_far")
-        delegator_plan = upstream_context.get("delegator_plan")
         upstream_inner = upstream_context.get("upstream_context")
 
         upstream_info_parts: list[str] = []
-        if delegator_plan:
-            plan_text = json.dumps(delegator_plan, ensure_ascii=False)
-            upstream_info_parts.append(f"上游原始计划: {plan_text}")
         if exec_tasks:
             tasks_text = json.dumps(exec_tasks, ensure_ascii=False)
             upstream_info_parts.append(f"上游已执行任务及结果: {tasks_text}")
-        if key_findings:
-            upstream_info_parts.append(f"上游关键发现: {key_findings}")
         if upstream_inner:
             inner_text = json.dumps(upstream_inner, ensure_ascii=False)
             upstream_info_parts.append(f"更上层上下文: {inner_text}")
@@ -3136,20 +4713,12 @@ class SkillAgentExecutor(AgentExecutor):
         result = "\n\n".join(parts)
         # Build a compact preview of upstream content for INFO-level visibility
         _preview_parts: list[str] = []
-        if delegator_plan:
-            _task_descs = ", ".join(
-                f"#{t.get('id', '?')}:{str(t.get('description', ''))}"
-                for t in (delegator_plan if isinstance(delegator_plan, list) else [])
-            )
-            _preview_parts.append(f"plan=[{_task_descs}]")
         if exec_tasks:
             _exec_descs = ", ".join(
                 f"#{t.get('task_id', '?')}:{str(t.get('result', ''))}"
                 for t in (exec_tasks if isinstance(exec_tasks, list) else [])
             )
             _preview_parts.append(f"executed=[{_exec_descs}]")
-        if key_findings:
-            _preview_parts.append(f"findings='{_short(str(key_findings), 200)}'")
         if upstream_inner:
             _preview_parts.append("hasUpstreamChain")
         _preview = " | ".join(_preview_parts) if _preview_parts else "(none)"
@@ -3159,7 +4728,7 @@ class SkillAgentExecutor(AgentExecutor):
             len(result),
             [
                 k
-                for k in ("delegator_plan", "executed_tasks", "key_findings_so_far", "upstream_context")
+                for k in ("executed_tasks", "upstream_context")
                 if upstream_context.get(k)
             ],
             _preview,
@@ -3170,22 +4739,16 @@ class SkillAgentExecutor(AgentExecutor):
     def _format_upstream_context_summary(upstream_context: dict | None) -> str:
         """Produce a compact, human-readable summary of upstream_context for logging.
 
-        Example output: ``plan=3tasks executed=2tasks findings=450chars chain=1``
+        Example output: ``executed=2tasks chain=1``
         If upstream_context is empty or None, returns ``(none)``.
         """
         if not upstream_context:
             return "(none)"
         parts: list[str] = []
-        _plan = upstream_context.get("delegator_plan")
         _exec = upstream_context.get("executed_tasks")
-        _findings = upstream_context.get("key_findings_so_far")
         _inner = upstream_context.get("upstream_context")
-        if _plan:
-            parts.append(f"plan={len(_plan)}tasks")
         if _exec:
             parts.append(f"executed={len(_exec)}tasks")
-        if _findings:
-            parts.append(f"findings={len(_findings)}chars")
         if _inner:
             parts.append(f"upstreamChain=depth+1")
         return " ".join(parts) if parts else "(empty)"
@@ -3226,49 +4789,50 @@ class SkillAgentExecutor(AgentExecutor):
         synthesized_query: str,
         *,
         original_query: str = "",
-        own_results: dict[int, str] | None = None,
-        delegated_results: dict[str, str] | None = None,
+        executed_tasks: list[dict] | None = None,
         detection_reason: str = "",
     ) -> str:
+        """Build a probe query for remote SG capability check.
+
+        Uses the same structured ``executed_tasks`` format as
+        :meth:`_build_mid_exec_planner_context` so the remote SG sees
+        a clean, consistent view of what has already been done.
+        """
         scoped = (synthesized_query or "").strip()
         if not scoped:
             return scoped
 
-        # Build context block so the capability-check LLM receives the same
-        # information as the detection LLM, preventing mis-selection caused
-        # by an isolated (context-free) sub-query.
-        context_parts: list[str] = []
-        if original_query:
-            context_parts.append(f"原始问题：{original_query}")
-        if own_results:
-            own_text = "\n".join(
-                f"[Task#{tid}]: {res}" for tid, res in own_results.items() if res
-            )
-            if own_text:
-                context_parts.append(f"本层已执行结果：\n{own_text}")
-        if delegated_results:
-            del_text = "\n".join(
-                f"[{name}]: {res or '[EMPTY]'}"
-                for name, res in delegated_results.items()
-            )
-            if del_text:
-                context_parts.append(f"已完成委托结果：\n{del_text}")
-        if detection_reason:
-            context_parts.append(f"检测理由：{detection_reason}")
+        lines: list[str] = []
+        lines.append("请根据下面提供的信息和自身的skill的能力，分析是否可以解答或处理信息中提到的问题。")
+        lines.append("")
 
-        if context_parts:
-            context_block = "\n\n".join(context_parts)
-            return (
-                "请根据下面提供的信息和自身的skill的能力，分析是否可以解答或处理信息中提到的问题。\n\n"
-                "══════════ 上下文（供准确判断） ══════════\n"
-                f"{context_block}\n"
-                "══════════════════════════════════════\n\n"
-                f"子任务：{scoped}"
-            )
-        return (
-            "请根据下面提供的信息和自身的skill的能力，分析是否可以解答或处理信息中提到的问题。\n\n"
-            f"{scoped}"
-        )
+        # ── Section 1: Core Task ──
+        if original_query:
+            lines.append(f"**原始问题**：{original_query}")
+        if detection_reason:
+            lines.append(f"**委派原因**：{detection_reason}")
+        lines.append("")
+
+        # ── Section 2: Executed Tasks ──
+        if executed_tasks:
+            lines.append("## 已执行任务")
+            lines.append("")
+            lines.append("| Task ID | Agent | 描述 | 状态 | 结果 |")
+            lines.append("|---------|-------|------|------|------|")
+            for t in executed_tasks:
+                tid = str(t.get("task_id", t.get("id", "?")))
+                agent = str(t.get("agent", "") or "")
+                desc = (str(t.get("description", "") or ""))[:200]
+                status = str(t.get("status", "?"))
+                result = (str(t.get("result", "") or ""))[:500]
+                status_icon = "✅" if status == "completed" else "❌"
+                lines.append(f"| {tid} | {agent} | {desc} | {status_icon} | {result} |")
+            lines.append("")
+
+        # ── Section 3: Sub-Task ──
+        lines.append(f"**子任务**：{scoped}")
+
+        return "\n".join(lines)
 
     async def _load_mid_exec_broadcast_candidates(
         self,
@@ -3351,16 +4915,14 @@ class SkillAgentExecutor(AgentExecutor):
         run_id: str = "",
         trace_id: str = "",
         original_query: str = "",
-        own_results: dict[int, str] | None = None,
-        delegated_results: dict[str, str] | None = None,
+        executed_tasks: list[dict] | None = None,
         detection_reason: str = "",
     ) -> dict[str, Any]:
         """Select mid-delegate peer SGs via concurrent standard capability_check.
 
-        When *original_query*, *own_results*, *delegated_results*, or
-        *detection_reason* are provided they are injected into the probe
-        query so the capability-check LLM receives the same context as the
-        detection LLM.
+        When *original_query*, *executed_tasks*, or *detection_reason* are
+        provided they are injected into the probe query so the
+        capability-check LLM receives the same context as the detection LLM.
         """
         empty: dict[str, Any] = {
             "target_cards": [], "target_sg_names": [], "capable_pairs": [],
@@ -3388,8 +4950,7 @@ class SkillAgentExecutor(AgentExecutor):
         probe_query = self._mid_exec_capability_probe_query(
             synthesized_query,
             original_query=original_query,
-            own_results=own_results,
-            delegated_results=delegated_results,
+            executed_tasks=executed_tasks,
             detection_reason=detection_reason,
         )
 
@@ -3510,11 +5071,10 @@ class SkillAgentExecutor(AgentExecutor):
         target_cards: list,
         original_query: str = "",
         detection_reason: str = "",
-        own_results: dict[int, str] | None = None,
-        delegated_results: dict[str, str] | None = None,
-        capability_evidence: str = "",
-        upstream_context: dict | None = None,
+        executed_tasks: list[dict] | None = None,
         delegation_chain: list[str] | None = None,
+        turn: int = 1,
+        mid_exec_round: int = 1,
     ) -> str:
         """Build a clean, markdown-formatted context for the mid-exec Planner.
 
@@ -3550,88 +5110,55 @@ class SkillAgentExecutor(AgentExecutor):
                     lines.append(f"- **技能**：{', '.join(skill_names)}")
                 lines.append("")
 
-        # ── Section 3: Already Executed ──
-        has_own = bool(own_results) and any(v for v in (own_results or {}).values() if v)
-        has_del = bool(delegated_results) and any(v for v in (delegated_results or {}).values() if v)
-        if has_own or has_del:
-            lines.append("## 3. 已执行结果")
+        # ── Section 3: Executed Tasks (unified table) ──
+        if executed_tasks:
+            lines.append("## 3. 已执行任务")
             lines.append("")
-            if has_own:
-                for tid, res in (own_results or {}).items():
-                    if res:
-                        lines.append(f"### 本层 Task #{tid}")
-                        lines.append("```")
-                        lines.append(res)
-                        lines.append("```")
-                        lines.append("")
-            if has_del:
-                for name, res in (delegated_results or {}).items():
-                    if res:
-                        lines.append(f"### 委托 [{name}]")
-                        lines.append("```")
-                        lines.append(res)
-                        lines.append("```")
-                        lines.append("")
-
-        # ── Section 4: Capability Evidence ──
-        if capability_evidence:
-            lines.append("## 4. 能力检测证据")
-            lines.append("")
-            lines.append(capability_evidence)
+            lines.append("| Task ID | Agent | 描述 | 状态 | 结果 |")
+            lines.append("|---------|-------|------|------|------|")
+            for t in executed_tasks:
+                tid = str(t.get("task_id", t.get("id", "?")))
+                agent = str(t.get("agent", "") or "")
+                desc = (str(t.get("description", "") or ""))[:200]
+                status = str(t.get("status", "?"))
+                result = (str(t.get("result", "") or ""))[:500]
+                status_icon = "✅" if status == "completed" else "❌"
+                lines.append(f"| {tid} | {agent} | {desc} | {status_icon} | {result} |")
             lines.append("")
 
-        # ── Section 5: Upstream Context ──
-        if upstream_context:
-            lines.append("## 5. 上游上下文")
-            lines.append("")
-            delegator_plan = upstream_context.get("delegator_plan")
-            exec_tasks = upstream_context.get("executed_tasks")
-            key_findings = upstream_context.get("key_findings_so_far")
-            if delegator_plan:
-                plan_items = delegator_plan if isinstance(delegator_plan, list) else []
-                lines.append("### 上游原始计划")
-                for t in plan_items:
-                    tid = t.get("id", "?")
-                    tdesc = str(t.get("description", ""))
-                    tagent = str(t.get("agent", ""))
-                    lines.append(f"- **Task #{tid}** → `{tagent}`：{tdesc}")
-                lines.append("")
-            if exec_tasks:
-                exec_items = exec_tasks if isinstance(exec_tasks, list) else []
-                lines.append("### 上游已执行任务")
-                for t in exec_items:
-                    tid = t.get("task_id", t.get("id", "?"))
-                    tdesc = str(t.get("description", ""))
-                    tstatus = str(t.get("status", "?"))
-                    tresult = (str(t.get("result", "")) or "")[:500]
-                    lines.append(f"- **Task #{tid}** [{tstatus}]：{tdesc}")
-                    if tresult:
-                        lines.append(f"  ```\n  {tresult}\n  ```")
-                lines.append("")
-            if key_findings:
-                lines.append("### 上游关键发现")
-                lines.append("```")
-                lines.append(str(key_findings))
-                lines.append("```")
-                lines.append("")
-
-        # ── Section 6: DAG Chain ──
+        # ── Section 4: DAG Chain ──
         if delegation_chain:
             chain_str = " → ".join(delegation_chain)
-            lines.append("## 6. DAG 委派链路")
+            lines.append("## 4. DAG 委派链路")
             lines.append(f"当前链路：{chain_str}")
             lines.append("⚠️ 上述链路中的 Agent 已参与本轮协作，不可再次分配任务。")
             lines.append("")
 
-        # ── Section 7: Planning Rules ──
-        lines.append("## 7. 规划规则")
+        # ── Section 5: Planning Rules ──
+        lines.append("## 5. 规划规则")
         lines.append("1. `description` 必须忠实于**本轮子任务**，禁止扩写为完整原题")
         lines.append("2. 每个 task 的 `agent` 必须从「可用智能体」中选取")
         lines.append("3. 如果所有可用智能体都无法处理该子任务，`agent` 填 `NONE`")
-        lines.append("4. 上游上下文只用于理解关联键，不得写入 `description`")
+        lines.append("4. 已执行任务的结果只用于理解上下文，不得重复执行")
         lines.append("5. **必须调用 `make_plan_cmd` 工具输出规划结果**")
 
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        agent_names = [
+            str(getattr(c, "name", "") or "").strip() or "?"
+            for c in (target_cards or [])
+        ]
+        tr_meta = _turn_round_meta(turn=turn, mid_exec_round=mid_exec_round)
+        _log_boxed_document(
+            f"[MidExec][Plan] planner context{_turn_round_label(turn=turn, mid_exec_round=mid_exec_round)}",
+            meta_lines=[
+                f"{tr_meta}    chars={len(result)}    "
+                f"agents={', '.join(agent_names) or '-'}",
+                f"subtask={_short(synthesized_query, 160)}",
+            ],
+            body_label="group_memory",
+            body=result,
+        )
+        return result
 
     async def _plan_mid_exec_delegation(
         self,
@@ -3639,12 +5166,11 @@ class SkillAgentExecutor(AgentExecutor):
         target_cards: list[AgentCard],
         *,
         original_query: str = "",
-        own_results: dict[int, str] | None = None,
-        delegated_results: dict[str, str] | None = None,
+        executed_tasks: list[dict] | None = None,
         detection_reason: str = "",
-        capability_evidence: str = "",
-        upstream_context: dict | None = None,
         delegation_chain: list[str] | None = None,
+        turn: int = 1,
+        mid_exec_round: int = 1,
     ) -> Optional[TaskList]:
         """Mid-execution Step 2: plan tasks against capability-selected peers.
 
@@ -3657,38 +5183,17 @@ class SkillAgentExecutor(AgentExecutor):
             planner_ctx = self._build_mid_exec_planner_context(
                 original_query=original_query,
                 synthesized_query=synthesized_query,
-                own_results=own_results or {},
-                delegated_results=delegated_results or {},
                 target_cards=target_cards,
                 detection_reason=detection_reason,
-                capability_evidence=capability_evidence,
-                upstream_context=upstream_context,
+                executed_tasks=executed_tasks,
                 delegation_chain=delegation_chain,
+                turn=turn,
+                mid_exec_round=mid_exec_round,
             )
-            logger.info(
-                "[MidExec][Plan] planner context built | "
-                "chars=%d targets=%d",
-                len(planner_ctx),
-                len(target_cards),
+            planner = self._get_planner()
+            plan = await planner.make_plan(
+                synthesized_query, target_cards, group_memory=planner_ctx, plan_stage="mid_exec",
             )
-
-            scoped_plan_query = (
-                "【Mid-exec 子任务】下列内容即远程 SG 的全部工作范围。"
-                "规划时 description 必须忠实于该子任务，"
-                "禁止追加原题中其它域目标或整题扩写。\n\n"
-                f"{synthesized_query}"
-            )
-            planner = PlannerAgent(
-                provider=self.provider,
-                api_key=self.api_key,
-                base_url=self.base_url,
-                model=self.model,
-                temperature=self.temperature,
-                data_services_url=self.data_services_url,
-                metadata=self.metadata,
-                agent_id=self.agent_id,
-            )
-            plan = await planner.make_plan(scoped_plan_query, target_cards, group_memory=planner_ctx)
             return self._apply_scoped_mid_exec_task_descriptions(plan, synthesized_query)
         except Exception as e:
             logger.warning("[MidExec][Plan] mid-exec plan failed: %s", e)
@@ -3700,20 +5205,19 @@ class SkillAgentExecutor(AgentExecutor):
         target_cards: list[AgentCard],
         *,
         original_query: str,
-        own_results: dict[int, str],
-        delegated_results: dict[str, str],
+        executed_tasks: list[dict],
         detection_reason: str = "",
-        capability_evidence: str = "",
-        upstream_context: dict | None = None,
         delegation_chain: list[str] | None = None,
+        turn: int = 1,
+        mid_exec_round: int = 1,
     ) -> Optional[TaskList]:
         """Mid-execution Step 2 (detect-direct path): plan tasks with full detection context.
 
         Builds a clean, markdown-formatted planner context via
         :meth:`_build_mid_exec_planner_context` that includes the original
-        query, local execution results, delegated results, target agent
-        skills, detection reason, capability evidence, DAG chain, and
-        upstream context — the same information the detection LLM had.
+        query, executed tasks, target agent skills, detection reason,
+        DAG chain, and upstream context — the same information the
+        detection LLM had.
         """
         if not target_cards or not synthesized_query:
             return None
@@ -3721,43 +5225,66 @@ class SkillAgentExecutor(AgentExecutor):
             planner_ctx = self._build_mid_exec_planner_context(
                 original_query=original_query,
                 synthesized_query=synthesized_query,
-                own_results=own_results,
-                delegated_results=delegated_results,
                 target_cards=target_cards,
                 detection_reason=detection_reason,
-                capability_evidence=capability_evidence,
-                upstream_context=upstream_context,
+                executed_tasks=executed_tasks,
                 delegation_chain=delegation_chain,
+                turn=turn,
+                mid_exec_round=mid_exec_round,
             )
-            logger.info(
-                "[MidExec][Plan][DetectDirect] planner context built | "
-                "chars=%d targets=%d",
-                len(planner_ctx),
-                len(target_cards),
+            planner = self._get_planner()
+            plan = await planner.make_plan(
+                synthesized_query, target_cards, group_memory=planner_ctx, plan_stage="mid_exec",
             )
-
-            scoped_plan_query = (
-                "【Mid-exec 子任务】下列内容即远程 SG 的全部工作范围。"
-                "规划时 description 必须忠实于该子任务，"
-                "禁止追加原题中其它域目标或整题扩写。\n\n"
-                f"{synthesized_query}"
-            )
-
-            planner = PlannerAgent(
-                provider=self.provider,
-                api_key=self.api_key,
-                base_url=self.base_url,
-                model=self.model,
-                temperature=self.temperature,
-                data_services_url=self.data_services_url,
-                metadata=self.metadata,
-                agent_id=self.agent_id,
-            )
-            plan = await planner.make_plan(scoped_plan_query, target_cards, group_memory=planner_ctx)
             return self._apply_scoped_mid_exec_task_descriptions(plan, synthesized_query)
         except Exception as e:
             logger.warning("[MidExec][Plan][DetectDirect] mid-exec plan failed: %s", e)
             return None
+
+    @staticmethod
+    def compose_mid_exec_self_query(
+        task_description: str,
+        execution_flow: list | None = None,
+        *,
+        current_agent: str = "",
+    ) -> str:
+        """Build the SkillAgent query for a mid-exec local (self) task.
+
+        The current-round ``synthesized_query`` stays in front so skill
+        selection still keys off the actual ask. Prior-round Execution Flow
+        is appended as a factual ledger (same snapshot dispatched to remote
+        delegatees). Empty EF → return the task description unchanged.
+        """
+        task = (task_description or "").strip()
+        ef_md = ""
+        if execution_flow:
+            try:
+                ef_md = (
+                    render_execution_flow_md(
+                        execution_flow,
+                        agent=current_agent,
+                        current_agent=current_agent,
+                        show_children=False,
+                    )
+                    or ""
+                ).strip()
+            except Exception:
+                logger.warning(
+                    "[MidExec][SelfExec] failed to render execution_flow for local query",
+                    exc_info=True,
+                )
+                ef_md = ""
+        if not ef_md:
+            return task
+        if not task:
+            return ef_md
+        return (
+            f"当前任务: {task}\n\n"
+            "【执行流水账】\n"
+            "以下为截至本轮之前已发生的执行事实，仅用于理解关联键和已查到的值；"
+            "不是本轮要回答的问题。\n\n"
+            f"{ef_md}"
+        )
 
     async def _execute_mid_exec_self_task(
         self,
@@ -3766,13 +5293,24 @@ class SkillAgentExecutor(AgentExecutor):
         skill_runner: "SkillRunner | None",
         metadata: dict,
         updater: Optional[Any] = None,
+        execution_flow: list | None = None,
     ) -> str:
         """Execute a task locally as self during mid-exec delegation.
 
         Reuses the same :class:`SkillAgent` local execution path as the main
         task loop, but does not consume a hop or build a delegation chain.
+
+        ``execution_flow`` is the dispatch-time snapshot (prior rounds only).
+        It is rendered into the SkillAgent query so local skills can read
+        join keys from earlier mid-exec rounds — the same facts a remote
+        delegatee sees via ``upstream_context["execution_flow"]``.
         """
         self_name = self._self_planner_agent_name()
+        query = self.compose_mid_exec_self_query(
+            task_description,
+            execution_flow,
+            current_agent=self_name,
+        )
 
         # --- Data Flow: self-exec task start ---
         self._log_data_flow(
@@ -3780,17 +5318,19 @@ class SkillAgentExecutor(AgentExecutor):
             description=f"Mid-exec self-execution Task #{task_id} → 本地 {self_name} 执行",
             source_id=self.agent_id,
             target_id=f"{self_name} (in-process)",
-            payload_chars=len(task_description or ""),
-            payload_preview=(task_description or "")[:1000],
+            payload_chars=len(query or ""),
+            payload_preview=(query or "")[:1000],
             metadata_extra={
                 "task_id": task_id,
                 "task_desc_chars": len(task_description or ""),
+                "query_chars": len(query or ""),
+                "ef_injected": bool(execution_flow) and query != (task_description or "").strip(),
             },
         )
 
         local_agent = SkillAgent(
             skill_runner=skill_runner,
-            query=task_description,
+            query=query,
             metadata=metadata,
             current_task_id=task_id,
             agent_id=self.agent_id,
@@ -3839,7 +5379,9 @@ class SkillAgentExecutor(AgentExecutor):
         updater: Optional[Any] = None,
         skill_runner: "SkillRunner | None" = None,
         metadata: dict | None = None,
-    ) -> tuple[dict[str, str], dict[str, str], int]:
+        turn: int = 1,
+        detection_reason: str = "",
+    ) -> tuple[dict[str, str], dict[str, str], int, list["ExecutionTask"]]:
         """Mid-execution Step 3: dispatch plan tasks to target SGs.
 
         Forward progress frames from delegated agents via ``updater`` so the
@@ -3849,20 +5391,39 @@ class SkillAgentExecutor(AgentExecutor):
         task is executed locally (in-process) instead of delegated via A2A.
 
         Returns:
-            Tuple of (delegate_results, self_results, remaining_hop).
-            delegate_results  — remote delegation results (key: SG name)
-            self_results      — in-process self-execution results (key: self agent name)
-            remaining_hop     — reflects the hop count after all dispatches in this
-                                call, accounting for each delegation edge consumed.
+            Tuple of ``(delegate_results, self_results, remaining_hop, execution_flow_tasks)``.
+            delegate_results       — remote delegation results (key: SG name)
+            self_results           — in-process self-execution results (key: self agent name)
+            remaining_hop          — reflects the hop count after all dispatches in this
+                                     call, accounting for each delegation edge consumed.
+            execution_flow_tasks   — list of ExecutionTask for this dispatch call.
         """
         delegate_results: dict[str, str] = {}
         self_results: dict[str, str] = {}
+        execution_flow_tasks: list[ExecutionTask] = []
         name_to_card = {c.name: c for c in target_cards}
         hints = dict(hints_by_sg or {})
         mid_exec_round = int((upstream_context or {}).get("mid_exec_round") or 0)
 
         for task in plan.tasks:
             agent_name = (task.agent or "").strip()
+            if agent_name.upper() == "NONE":
+                await self._record_none_execution_task(
+                    task_id=task.id,
+                    description=task.description or "",
+                    updater=updater,
+                    turn=turn,
+                    stage=f"mid_exec_round_{mid_exec_round}",
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                    execution_flow_tasks=execution_flow_tasks,
+                    extra_reason=(
+                        detection_reason
+                        or f"{NONE_TASK_REASON_CODE}: mid-exec 无可用智能体"
+                    ),
+                )
+                continue
             target_card = name_to_card.get(agent_name)
             if target_card is None:
                 logger.warning("[MidExec][Dispatch] no card for agent=%s", agent_name)
@@ -3898,8 +5459,26 @@ class SkillAgentExecutor(AgentExecutor):
                     skill_runner=skill_runner,
                     metadata=metadata,
                     updater=updater,
+                    execution_flow=(upstream_context or {}).get("execution_flow"),
                 )
                 self_results[agent_name] = result
+                # Point F: mid-exec self task Execution Flow emit
+                mid_self_ef = ExecutionTask(
+                    execution_id=f"mid-self-{task.id}-{agent_name}-t{turn}-r{mid_exec_round}",
+                    turn=turn,
+                    stage=f"mid_exec_round_{mid_exec_round}",
+                    agent=agent_name,
+                    role="initiator",
+                    task=task.description or "",
+                    result=result,
+                    reason=detection_reason,
+                    parent_execution_id=None,
+                    delegated_by=None,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                )
+                execution_flow_tasks.append(mid_self_ef)
                 if updater is not None:
                     await self._emit_progress(
                         updater,
@@ -3917,6 +5496,7 @@ class SkillAgentExecutor(AgentExecutor):
                             "result_chars": len(result or ""),
                         },
                     )
+                    await self._emit_execution_flow(updater, mid_self_ef)
                 continue
             if current_hop <= 1:
                 delegate_results[agent_name] = NONE_TASK_DESCRIPTION
@@ -3949,7 +5529,7 @@ class SkillAgentExecutor(AgentExecutor):
                     },
                 )
 
-            result = await self._delegate_to_peer(
+            result, peer_ef_tasks = await self._delegate_to_peer(
                 task.description or "",
                 target_card,
                 user_id, run_id, trace_id,
@@ -3960,6 +5540,35 @@ class SkillAgentExecutor(AgentExecutor):
                 updater=updater,
             )
             delegate_results[agent_name] = result
+
+            # Point G: mid-exec delegate task Execution Flow emit
+            mg_ef_id = f"mid-del-{task.id}-{agent_name}-t{turn}-r{mid_exec_round}"
+            parented_peer: list[ExecutionTask] = []
+            for pt in peer_ef_tasks:
+                if pt.parent_execution_id is None:
+                    pt.parent_execution_id = mg_ef_id
+                    pt.delegated_by = self._self_planner_agent_name()
+                    parented_peer.append(pt)
+            mg_ef_task = ExecutionTask(
+                execution_id=mg_ef_id,
+                turn=turn,
+                stage=f"mid_exec_round_{mid_exec_round}",
+                agent=agent_name,
+                role="delegatee",
+                task=task.description or "",
+                result=result,
+                reason=detection_reason,
+                parent_execution_id=None,
+                delegated_by=self._self_planner_agent_name(),
+                run_id=run_id,
+                trace_id=trace_id,
+                user_id=user_id,
+            )
+            execution_flow_tasks.append(mg_ef_task)
+            execution_flow_tasks.extend(peer_ef_tasks)
+            if updater is not None:
+                await self._emit_execution_flow(updater, mg_ef_task)
+                await self._reemit_parented_peer_execution_flow(updater, parented_peer)
 
             if updater is not None:
                 await self._emit_progress(
@@ -3979,7 +5588,7 @@ class SkillAgentExecutor(AgentExecutor):
                         "result_chars": len(result or ""),
                     },
                 )
-        return delegate_results, self_results, current_hop
+        return delegate_results, self_results, current_hop, execution_flow_tasks
 
     # ------------------------------------------------------------------
     # Updated _delegate_to_peer with delegation_chain and execution_hint
@@ -3999,13 +5608,19 @@ class SkillAgentExecutor(AgentExecutor):
         delegation_chain: list[str] = None,
         execution_hint: dict | None = None,
         updater: Optional[Any] = None,
-    ) -> str:
+    ) -> tuple[str, list["ExecutionTask"]]:
         """Delegate a task to a peer agent via A2A streaming.
 
         Consume A2A streaming chunks with line-buffering (frames may be split
         across chunk boundaries), relay ``[[DAC_PROGRESS]]`` / ``[[DAC_ANSWER]]``
         frames to ``updater``, and return body text with progress lines stripped.
-        Mirrors the orchestrator's ``stream_a2a_collect_forward_progress_frames``.
+        Also collects ``[[DAC_EXECUTION_FLOW]]`` frames from the peer and returns
+        them as a list of ``ExecutionTask`` objects.
+
+        Returns
+        -------
+        tuple[str, list[ExecutionTask]]
+            ``(response_text, peer_execution_flow_tasks)``.
         """
         logger.info(
             "[Cross-SG][Delegate] delegating to %s | hop=%d | query_preview=%s",
@@ -4055,6 +5670,7 @@ class SkillAgentExecutor(AgentExecutor):
                 # complete lines only.
                 line_buf = ""
                 result_segments: list[str] = []
+                peer_execution_flow_tasks: list[ExecutionTask] = []
 
                 async def _handle_line(raw_line: str) -> None:
                     s = raw_line.strip()
@@ -4074,6 +5690,46 @@ class SkillAgentExecutor(AgentExecutor):
                                 name="progress",
                             )
                         return
+                    # Collect peer's Execution Flow frames. Never keep them in body text
+                    # that later goes to the LLM or the user-facing answer.
+                    if self._is_execution_flow_frame(s):
+                        ef_task = ExecutionTask.from_frame(s)
+                        if ef_task is not None:
+                            peer_execution_flow_tasks.append(ef_task)
+                        # Also forward to updater under "execution-flow" artifact
+                        if updater is not None:
+                            await updater.add_artifact(
+                                [TextPart(text=s + "\n")],
+                                name="execution-flow",
+                            )
+                            logger.info(
+                                "[ExecutionFlow][Skill] forward peer frame execution_id=%s agent=%s stage=%s",
+                                getattr(ef_task, "execution_id", None),
+                                getattr(ef_task, "agent", None),
+                                getattr(ef_task, "stage", None),
+                            )
+                        return
+                    ef_idx = s.find("[[DAC_EXECUTION_FLOW]] ")
+                    if ef_idx >= 0:
+                        ef_line = s[ef_idx:]
+                        ef_task = ExecutionTask.from_frame(ef_line)
+                        if ef_task is not None:
+                            peer_execution_flow_tasks.append(ef_task)
+                        if updater is not None:
+                            await updater.add_artifact(
+                                [TextPart(text=ef_line if ef_line.endswith("\n") else ef_line + "\n")],
+                                name="execution-flow",
+                            )
+                            logger.info(
+                                "[ExecutionFlow][Skill] forward inline peer frame execution_id=%s agent=%s stage=%s",
+                                getattr(ef_task, "execution_id", None),
+                                getattr(ef_task, "agent", None),
+                                getattr(ef_task, "stage", None),
+                            )
+                        clean_text = s[:ef_idx].strip()
+                        if clean_text:
+                            result_segments.append(clean_text)
+                        return
                     result_segments.append(s)
 
                 async for chunk in stream_response:
@@ -4088,17 +5744,17 @@ class SkillAgentExecutor(AgentExecutor):
                     await _handle_line(line_buf)
 
                 full_response = "\n".join(result_segments).strip()
-                # Strip any remaining progress lines from the body (belt-and-suspenders)
-                full_response = self._strip_progress_lines(full_response)
+                # Strip any remaining progress / EF lines from the body (belt-and-suspenders)
+                full_response = strip_execution_flow_lines(self._strip_progress_lines(full_response))
                 logger.info(
                     "[Cross-SG][Delegate] result from %s | chars=%d",
                     target_card.name,
                     len(full_response),
                 )
-                return full_response
+                return full_response, peer_execution_flow_tasks
         except Exception as e:
             logger.error("[Cross-SG][Delegate] failed to delegate to %s: %s", target_card.name, e)
-            return f"Delegation failed: {e}"
+            return f"Delegation failed: {e}", []
 
     # ------------------------------------------------------------------
     # Dependency guard (aligned with orchestrator-agent)
@@ -4192,6 +5848,7 @@ class SkillAgentExecutor(AgentExecutor):
                 metadata=self.metadata,
                 tool_choice="judge_dependency",
                 span_name="dependency-judge",
+                agent_name=self._self_planner_agent_name(),
             )
             if not isinstance(parsed, dict):
                 return {**default_fail_close, "error": "malformed_output"}
@@ -4367,6 +6024,7 @@ class SkillAgentExecutor(AgentExecutor):
                 metadata={"user_id": user_id, "run_id": run_id, "trace_id": trace_id},
                 tool_choice="refine_query",
                 span_name=f"dep-query-refine-{_span_tag}",
+                agent_name=self._self_planner_agent_name(),
             )
             if result_data is None:
                 logger.warning(
@@ -4484,20 +6142,20 @@ class SkillAgentExecutor(AgentExecutor):
         Checks propagated_history first, then falls back to data-services API.
         """
         md = self.metadata if isinstance(self.metadata, dict) else {}
+        run_id = str(md.get("run_id", "") or "")
         propagated = parse_propagated_history(md.get(PROPAGATED_HISTORY_KEY))
         if _normalize_history_turns(propagated.get("turns")):
-            logger.info(
-                "[HistoryFlow] skill-agent get_history from propagated | turns=%d",
-                len(propagated.get("turns", [])),
-            )
-            messages = history_messages_from_payload(propagated)
-            _log_history_turns(propagated.get("turns", []), source="propagated")
-            return messages
+            if _log_history_turns(propagated.get("turns", []), source="propagated", run_id=run_id):
+                logger.info(
+                    "[HistoryFlow] skill-agent get_history from propagated | turns=%d",
+                    len(propagated.get("turns", [])),
+                )
+            return history_messages_from_payload(propagated)
 
         search_items = []
         search_request = SearchHistoryRequest(
             user_id=md.get("user_id", ""),
-            run_id=md.get("run_id", ""),
+            run_id=run_id,
             limit=get_conversation_history_limit(),
         )
         try:
@@ -4513,11 +6171,11 @@ class SkillAgentExecutor(AgentExecutor):
             logger.error("[HistoryFlow] skill-agent get_history API call failed: %s", exc)
 
         payload = history_payload_from_search_items(search_items, source="skill_agent_executor_fallback")
-        logger.info(
-            "[HistoryFlow] skill-agent get_history from API | turns=%d",
-            payload.get("turn_count", 0),
-        )
-        _log_history_turns(payload.get("turns", []), source="data-services API")
+        if _log_history_turns(payload.get("turns", []), source="data-services API", run_id=run_id):
+            logger.info(
+                "[HistoryFlow] skill-agent get_history from API | turns=%d",
+                payload.get("turn_count", 0),
+            )
         return history_messages_from_payload(payload)
 
     # ------------------------------------------------------------------
@@ -4528,6 +6186,28 @@ class SkillAgentExecutor(AgentExecutor):
     # Pydantic model (defined near the other tool-call schemas above) as
     # the args_schema for the evaluate_summary StructuredTool.
 
+    def _summary_prompt_agent_meta(self) -> tuple[str, str]:
+        """Return (current_agent, agent_role) for summary prompt builders."""
+        try:
+            current_agent = self._self_planner_agent_name()
+        except Exception:
+            current_agent = str(getattr(self, "agent_id", "") or "")
+        return current_agent, "initiator"
+
+    def _resolve_execution_flow_for_summary(
+        self,
+        execution_flow_tasks: list | None,
+        upstream_context: dict | None,
+    ) -> list | None:
+        """Prefer explicit EF; fall back to ``upstream_context['execution_flow']``."""
+        if execution_flow_tasks:
+            return execution_flow_tasks
+        if isinstance(upstream_context, dict):
+            upstream_ef = upstream_context.get("execution_flow")
+            if upstream_ef:
+                return upstream_ef
+        return None
+
     async def _summarize_with_evaluation(
         self,
         original_query: str,
@@ -4537,6 +6217,9 @@ class SkillAgentExecutor(AgentExecutor):
         user_id: str = "",
         run_id: str = "",
         trace_id: str = "",
+        execution_flow_tasks: list | None = None,
+        agent_role: str = "",
+        turn: int = 1,
     ) -> SummaryEvaluationResult:
         """Summarize task results AND evaluate whether the answer is sufficient.
 
@@ -4547,90 +6230,32 @@ class SkillAgentExecutor(AgentExecutor):
         always valid structured data — no regex parsing of free-text
         markers.
 
+        Prompt context is built by :func:`_build_summarize_eval_prompt`
+        (Execution Flow markdown, not a JSON dump of ``upstream_context``).
+
         Returns a :class:`SummaryEvaluationResult` with the answer text
         and the evaluation outcome.
         """
-        from langchain_core.messages import SystemMessage, HumanMessage
-
-        # 构建各部分文本（直接拼接，不截断）
-        own_text = "\n".join(
-            f"[Task#{tid}] {res}" for tid, res in task_results.items() if res
+        own_text, del_text = _format_own_and_delegate_text(
+            task_results, delegate_results,
         )
-        del_text = "\n".join(
-            f"[{name}]: {res or '[EMPTY — 该 SG 未返回任何数据]'}"
-            for name, res in delegate_results.items()
-        )
-        upstream_text = (
-            json.dumps(upstream_context, ensure_ascii=False)
-            if upstream_context
-            else "无"
-        )
-
-        # 系统提示词（强化评估标准，由 LLM 独立判断）
-        system_prompt = (
-            "你是一位知识分析与总结专家。你的任务是基于提供的执行结果和对话上下文，"
-            "通过逻辑严密的分析，回答用户的原始问题。\n\n"
-            "**核心原则**\n"
-            "1. 直接输出答案正文，从实质内容开始。\n"
-            "2. 不要自我介绍，不要说明你是汇总器或 agent，不要描述协作/整合过程。\n"
-            "3. 不要使用「好的，作为…」「我已收到/整合了…」「以下是针对…的完整/综合回答」等开场白。\n"
-            "4. 下游结果中若含类似套话，请忽略并只提取实质信息，不要在输出中重复。\n"
-            "5. 信息冲突时简要说明；缺信息时说明缺什么，勿编造。\n"
-            "6. 对话历史仅用于理解当前问题的指代和语境，不要将历史中的旧结论当作当前事实。\n\n"
-            "**你需要做的事情**\n"
-            "1. 撰写回答正文（填入 answer 字段）。\n"
-            "2. 判断当前信息是否足以完整回答用户问题（填入 satisfactory 字段）：\n"
-            "   - 如果足以回答 → satisfactory=true，missing_info 设为空字符串。\n"
-            "   - 如果不足以回答 → satisfactory=false，missing_info 中说明缺少什么信息，"
-            "需要在下轮执行中补充获取（例如：'缺少模块 X 的运行日志'、'数据库 Y 的配置信息未返回'）。\n"
-            "3. 简要说明本次评估的决策理由（填入 rationale 字段，一句话即可）。\n\n"
-            "**判断 satisfactory 的核心原则**\n"
-            "你需要严格区分两类信息：\n"
-            "- 实质性结果：用户请求的数据、分析结论、操作产出等。\n"
-            "- 执行过程描述：执行过程中发生了什么，以及为什么没有拿到实质性结果。\n\n"
-            "判断规则：\n"
-            "- 只有当用户请求的实质性结果已完整获取时，satisfactory 才为 true。\n"
-            "- 如果实质性结果缺失，即使执行过程描述得很详细，satisfactory 也必须为 false。\n"
-            "- 执行过程描述（包括失败原因、错误说明、状态报告等）不能替代实质性结果。\n\n"
-            "**特别注意：以下情况必须判定 satisfactory=false**\n"
-            "1. 下游结果中出现「没有找到」「未查询到」「不存在」「无法确定」「请提供」「您可以」「建议您」等表示未完成或需要用户补充输入的表述，且原始问题并非确认某事物是否存在。\n"
-            "2. 下游仅返回全量兜底数据，而没有直接回答用户的具体问题（例如用户问“王五买了哪些商品”，下游却列出所有用户的购买记录）。\n"
-            "3. 下游结果以反问用户结束（如“请问您知道……吗？”），说明信息不足以独立完成回答。\n"
-            "4. 下游结果中明确说明缺少某些关键信息，导致无法完成最终答案。\n\n"
-            "**Few-shot 示例**\n"
-            "示例1：\n"
-            "用户问题：王五买了哪些商品，要显示商品名字\n"
-            "下游结果：订单数据中没有找到用户名为“王五”的记录，数据中只有用户ID，没有姓名。以下是所有用户的购买概览：U001买了A、B，U002买了C……请问您知道王五对应的用户ID吗？\n"
-            "正确输出：\n"
-            "answer: 当前订单数据中没有用户名为“王五”的记录，且数据中只有用户ID，无法确定王五对应的用户，因此无法回答王五购买了哪些商品。\n"
-            "satisfactory: false\n"
-            "missing_info: 缺少用户名“王五”到用户ID的映射信息，需要先通过用户查询能力获取王五对应的用户ID，再查询该用户的订单商品。\n"
-            "rationale: 下游未提供王五的实质购买记录，仅给出全量数据并反问用户，实质结果缺失。\n\n"
-            "示例2：\n"
-            "用户问题：查询2024年1月的销售总额\n"
-            "下游结果：已查询数据库，2024年1月销售总额为123456元。\n"
-            "正确输出：\n"
-            "answer: 2024年1月的销售总额为123456元。\n"
-            "satisfactory: true\n"
-            "missing_info: \"\"\n"
-            "rationale: 已获得明确的销售总额数据，足以回答。\n\n"
-            "**重要**：你必须调用 evaluate_summary 工具来输出结果，不要直接输出文本。"
-        )
-
-        # 人类消息（直接拼接，避免花括号问题）
-        human_prompt = (
-            f"原始问题：{original_query}\n\n"
-            f"上游传入上下文：{upstream_text}\n\n"
-            f"本层自身执行结果：\n{own_text}\n\n"
-            f"委托给下游 SG 的返回结果（可能已包含多级汇总）：\n{del_text}\n\n"
-            "请调用 evaluate_summary 工具输出结果。"
+        current_agent, default_role = self._summary_prompt_agent_meta()
+        system_prompt, human_prompt = _build_summarize_eval_prompt(
+            original_query,
+            execution_flow_tasks=self._resolve_execution_flow_for_summary(
+                execution_flow_tasks, upstream_context,
+            ),
+            task_results=task_results,
+            delegate_results=delegate_results,
+            current_agent=current_agent,
+            agent_role=agent_role or default_role,
+            turn=turn,
         )
 
         try:
             llm = self._get_orchestration_llm()
             history_messages = await self.get_history()
 
-            # 直接构建消息列表，避免使用 ChatPromptTemplate
             messages = [SystemMessage(content=system_prompt)]
             if history_messages:
                 messages.extend(history_messages)
@@ -4646,6 +6271,7 @@ class SkillAgentExecutor(AgentExecutor):
                     "rationale: 评估决策的一句话理由。"
                     "cot_analysis: 思维链分析过程，包含对问题诉求的拆解、答案覆盖度的逐条核验、"
                     "实质性结果 vs 解释说明的区分、以及最终的客观判断结论。"
+                    "gap_obtainable: satisfactory=false 时，缺失信息是否可通过再执行获得。"
                 ),
                 args_schema=SummaryEvaluationResult,
                 func=None,
@@ -4663,6 +6289,14 @@ class SkillAgentExecutor(AgentExecutor):
                 },
                 tool_choice="evaluate_summary",
                 span_name="skill-summarize-eval",
+                agent_name=current_agent,
+                query=original_query,
+                span_input={
+                    "query": original_query,
+                    "turn": turn,
+                    "system_chars": len(system_prompt or ""),
+                    "human_chars": len(human_prompt or ""),
+                },
             )
 
             # 处理 LLM 未调用工具的情况（结构性兜底，不基于内容判断）
@@ -4673,17 +6307,26 @@ class SkillAgentExecutor(AgentExecutor):
                 )
                 return SummaryEvaluationResult(
                     answer="汇总阶段：LLM 未调用评估工具，无法生成有效回答，请重试。",
-satisfactory=False,
-                missing_info="LLM 未调用 evaluate_summary 工具，需要重新执行汇总。",
-                rationale="LLM did not call evaluate_summary tool",
-                cot_analysis="LLM 未调用 evaluate_summary 工具，无法进行思维链分析。",
-            )
+                    satisfactory=False,
+                    missing_info="LLM 未调用 evaluate_summary 工具，需要重新执行汇总。",
+                    rationale="LLM did not call evaluate_summary tool",
+                    cot_analysis="LLM 未调用 evaluate_summary 工具，无法进行思维链分析。",
+                )
 
             # 提取字段，仅做空值处理，不做任何基于内容的规则判断
             answer = result_data.get("answer", "").strip()
             satisfactory = bool(result_data.get("satisfactory", False))
             missing_info = result_data.get("missing_info", "").strip()
             rationale = result_data.get("rationale", "").strip()
+            # gap_obtainable: only meaningful when satisfactory=False.
+            # Default True (assume retryable) so a missing/failed field never
+            # silently suppresses a legitimate retry.
+            try:
+                gap_obtainable = bool(result_data.get("gap_obtainable", True))
+            except (TypeError, ValueError):
+                gap_obtainable = True
+            if satisfactory:
+                gap_obtainable = True
 
             # 结构兜底：若 answer 为空，即使 LLM 判为 true 也无法使用，强制改为不充分
             if not answer:
@@ -4701,12 +6344,12 @@ satisfactory=False,
                 satisfactory=satisfactory,
                 missing_info=missing_info,
                 rationale=rationale,
+                gap_obtainable=gap_obtainable,
                 cot_analysis=result_data.get("cot_analysis", ""),
             )
 
         except Exception as e:
             logger.error("[SummaryEval] LLM summarization failed: %s", e)
-            # 异常时也返回 satisfactory=False，避免流程误终止
             return SummaryEvaluationResult(
                 answer=(
                     "由于汇总阶段出错，未能生成综合答案。以下为各协作 SG 返回的原始结果：\n\n"
@@ -4728,70 +6371,182 @@ satisfactory=False,
         user_id: str = "",
         run_id: str = "",
         trace_id: str = "",
+        execution_flow_tasks: list | None = None,
+        agent_role: str = "",
     ) -> str:
         """Use LLM to summarize all task results into a final answer.
 
-        Injects upstream_context, conversation history, and annotates task statuses.
+        Behaviour is governed by a 3-layer decision tree (highest priority first):
+
+        1. ``SUMMARIZE_ENABLED=false`` → **passthrough** (force-off for all agents)
+        2. ``agent_role == "delegatee"`` → **passthrough** (delegated never summarizes)
+        3. initiator (summarization enabled) → **LLM summarization**
+           - ``SUMMARIZE_CUSTOM_PROMPT`` non-empty → custom system prompt
+           - ``SUMMARIZE_CUSTOM_PROMPT`` empty → default ``SUMMARIZE_CORE_PRINCIPLES``
+
+        Prompt context is built by :func:`_build_agent_summarize_prompt`
+        (Execution Flow markdown, not a JSON dump of ``upstream_context``).
         """
-        own_text = "\n".join(
-            f"[Task#{tid}] {res}" for tid, res in task_results.items() if res
+        own_text, del_text = _format_own_and_delegate_text(
+            task_results, delegate_results,
         )
-        del_text = "\n".join(
-            f"[{name}]: {res or '[EMPTY — 该 SG 未返回任何数据]'}"
-            for name, res in delegate_results.items()
+        # Passthrough uses raw results *without* [Task#N] prefix (which is
+        # only intended as LLM-context scaffolding, never user-facing output).
+        # Also filter out system placeholder values (NONE tasks, skipped
+        # dependent tasks) so they don't leak to users.
+        _SYS_PLACEHOLDERS = {NONE_TASK_UNASSIGNED_RESULT, DEPENDENT_TASK_SKIP_DESCRIPTION}
+        passthrough = "\n\n".join(
+            r for r in (task_results or {}).values()
+            if r and r not in _SYS_PLACEHOLDERS
         )
-        upstream_text = (json.dumps(upstream_context, ensure_ascii=False)
-                         if upstream_context else "无")
+        if delegate_results:
+            del_passthrough = "\n\n".join(
+                r for r in delegate_results.values()
+                if r and r not in _SYS_PLACEHOLDERS
+            )
+            if del_passthrough:
+                passthrough += "\n\n" + del_passthrough
 
-        system_prompt_text = (
-            "你是一位知识分析与总结专家。你的任务是基于提供的执行结果和对话上下文，"
-            "通过逻辑严密的分析，回答用户的原始问题。\n\n"
-            "**核心原则**\n"
-            "1. 直接输出答案正文，从实质内容开始。\n"
-            "2. 不要自我介绍，不要说明你是汇总器或 agent，不要描述协作/整合过程。\n"
-            "3. 不要使用「好的，作为…」「我已收到/整合了…」「以下是针对…的完整/综合回答」等开场白。\n"
-            "4. 下游结果中若含类似套话，请忽略并只提取实质信息，不要在输出中重复。\n"
-            "5. 信息冲突时简要说明；缺信息时说明缺什么，勿编造。\n"
-            "6. 对话历史仅用于理解当前问题的指代和语境，不要将历史中的旧结论当作当前事实。\n"
+        # ── Debug: log every result value being joined into passthrough ──
+        _tr_values = [v for v in (task_results or {}).values() if v]
+        _tr_keys = list((task_results or {}).keys())
+        _dr_values = [v for v in (delegate_results or {}).values() if v]
+        _dr_keys = list((delegate_results or {}).keys())
+        logger.info(
+            "[Summary] PASSTHROUGH-DEBUG | "
+            "enabled=%s role=%s tr_count=%d tr_keys=%s "
+            "dr_count=%d dr_keys=%s passthrough_len=%d",
+            self.summarize_enabled,
+            agent_role,
+            len(_tr_values),
+            _tr_keys,
+            len(_dr_values),
+            _dr_keys,
+            len(passthrough),
+        )
+        for i, v in enumerate(_tr_values):
+            _dup = ""
+            if _tr_values.count(v) > 1:
+                _dup = " (DUPLICATE — same value appears %d times total)" % _tr_values.count(v)
+            logger.info(
+                "[Summary] PASSTHROUGH-DEBUG tr[%d/%d] len=%d hash=%s%s preview=%s",
+                i + 1,
+                len(_tr_values),
+                len(v),
+                hash(v),
+                _dup,
+                v[:300],
+            )
+        if _tr_values and len(set(_tr_values)) < len(_tr_values):
+            logger.warning(
+                "[Summary] PASSTHROUGH-DEBUG DUPLICATE DETECTED | "
+                "unique=%d total=%d — passthrough will contain repeated content",
+                len(set(_tr_values)),
+                len(_tr_values),
+            )
+
+        # ── Rule 1: SUMMARIZE_ENABLED force-off → passthrough ──
+        if not self.summarize_enabled:
+            logger.info(
+                "[Summary] passthrough (SUMMARIZE_ENABLED=false) | "
+                "own_chars=%d del_chars=%d agent_role=%s",
+                len(own_text), len(del_text), agent_role,
+            )
+            return passthrough
+
+        # ── Rule 2: delegatee never summarizes ──
+        if agent_role == "delegatee":
+            logger.info(
+                "[Summary] passthrough (delegatee) | "
+                "own_chars=%d del_chars=%d",
+                len(own_text), len(del_text),
+            )
+            return passthrough
+
+        # ── Rule 3: initiator (summarization enabled) → LLM summarization ──
+        # Summarize regardless of whether delegation actually occurred.
+        logger.info(
+            "[Summary] LLM summarize (initiator) | "
+            "own_chars=%d del_chars=%d custom_prompt=%s",
+            len(own_text), len(del_text),
+            bool(self.summarize_prompt),
         )
 
-        human_prompt_text = (
-            "原始问题：" + original_query + "\n\n"
-            "上游传入上下文：" + upstream_text.replace("{", "{{").replace("}", "}}") + "\n\n"
-            "本层自身执行结果：\n" + own_text.replace("{", "{{").replace("}", "}}") + "\n\n"
-            "委托给下游 SG 的返回结果（可能已包含多级汇总）：\n" + del_text.replace("{", "{{").replace("}", "}}") + "\n\n"
-            "请直接输出答案："
+        current_agent, default_role = self._summary_prompt_agent_meta()
+        system_prompt, human_prompt = _build_agent_summarize_prompt(
+            original_query,
+            execution_flow_tasks=self._resolve_execution_flow_for_summary(
+                execution_flow_tasks, upstream_context,
+            ),
+            task_results=task_results,
+            delegate_results=delegate_results,
+            current_agent=current_agent,
+            agent_role=agent_role or default_role,
+            custom_system_prompt=self.summarize_prompt,
         )
 
         try:
             llm = self._get_orchestration_llm()
             history_messages = await self.get_history()
-            chat_prompt = ChatPromptTemplate.from_messages([
-                SystemMessagePromptTemplate.from_template(system_prompt_text),
-                *history_messages,
-                HumanMessagePromptTemplate.from_template(human_prompt_text),
-            ])
-            messages = chat_prompt.format_messages()
 
-            with langfuse.start_as_current_span(
-                name="skill-agent-summarize",
-                trace_context={"trace_id": trace_id}
-            ) as span:
-                span.update_trace(
-                    user_id=user_id,
-                    session_id=run_id,
-                    input={"query": original_query}
+            messages = [SystemMessage(content=system_prompt)]
+            if history_messages:
+                messages.extend(history_messages)
+            messages.append(HumanMessage(content=human_prompt))
+
+            # Same Langfuse path as invoke_llm_with_tool / _ainvoke_plain_plan:
+            # get_client() + a fresh CallbackHandler at call time. The module-level
+            # ``langfuse`` / ``langfuse_handler`` are created at import and do not
+            # attach LangChain generations to the current span.
+            from langfuse.langchain import CallbackHandler as _LangfuseCb
+            from langfuse import get_client as _get_langfuse_client
+
+            _handler = _LangfuseCb()
+            _langfuse_client = _get_langfuse_client()
+            _span_name = (
+                f"skill-agent-summarize [{current_agent}]"
+                if current_agent else "skill-agent-summarize"
+            )
+            _t0 = _time.monotonic()
+            answer = None
+            final_text = ""
+            try:
+                with _langfuse_client.start_as_current_span(
+                    name=_span_name,
+                    trace_context={"trace_id": trace_id} if trace_id else {},
+                    input={
+                        "query": original_query,
+                        "system_chars": len(system_prompt or ""),
+                        "human_chars": len(human_prompt or ""),
+                    },
+                ) as span:
+                    if user_id or run_id:
+                        span.update_trace(
+                            user_id=user_id or None,
+                            session_id=run_id or None,
+                        )
+                    answer = await llm.ainvoke(
+                        messages,
+                        config={"callbacks": [_handler]},
+                    )
+                    final_text = str(getattr(answer, "content", "") or "").strip()
+                    span.update(output={"answer": final_text[:2000]})
+                await safe_langfuse_flush(_langfuse_client)
+            except Exception as exc:
+                logger.warning(
+                    "[Summary] Langfuse tracing/invoke failed (%s: %s); "
+                    "retrying plain ainvoke",
+                    type(exc).__name__,
+                    exc,
                 )
-
-                answer = await llm.ainvoke(
-                    messages,
-                    config={"callbacks": [langfuse_handler]},
-                )
-                final_text = str(getattr(answer, "content", "") or "").strip()
-
-                span.update_trace(output={"answer": final_text})
-
-            langfuse.flush()
+                if answer is None:
+                    answer = await llm.ainvoke(messages)
+                    final_text = str(getattr(answer, "content", "") or "").strip()
+            logger.info(
+                " === skill-agent-summarize elapsed_ms=%s answer_chars=%s",
+                round((_time.monotonic() - _t0) * 1000),
+                len(final_text),
+            )
             return final_text
         except Exception as e:
             logger.error("[Summary] LLM summarization failed: %s", e)
@@ -4811,95 +6566,46 @@ satisfactory=False,
         event_queue: EventQueue,
         query: str,
     ) -> None:
+        _md = context.metadata if isinstance(context.metadata, dict) else {}
+        logger.info(
+            "[Capability] request received | agent=%s run_id=%s query=%s",
+            self.agent_id,
+            _md.get("run_id") or "",
+            (query or "")[:150],
+        )
         task = context.current_task
         if not task:
             task = new_task(context.message)
             await event_queue.enqueue_event(task)
 
         updater = TaskUpdater(event_queue, task.id, task.context_id)
-        request_metadata = context.metadata if isinstance(context.metadata, dict) else {}
-        md = request_metadata
+        md = _md
 
         card = self.agent_card
         agent_name = card.name if card else "SkillAgent"
         agent_description = (card.description if card else "") or ""
         agent_url = (card.url if card else "") or ""
 
-        agent_skills_text = "（无）"
-        if card and card.skills:
-            skills_lines = []
-            for skill in card.skills:
-                skill_desc = f"- {skill.name}: {skill.description}"
-                if hasattr(skill, "tags") and skill.tags:
-                    skill_desc += f" (tags: {', '.join(skill.tags)})"
-                skills_lines.append(skill_desc)
-            agent_skills_text = "\n".join(skills_lines)
+        agent_skills_text = _format_skills_for_capability_check(card.skills if card else None)
 
         history_text = _history_text_from_metadata(md)
         _cc_start = _time.monotonic()
+        leaf_path = [agent_name]
+        threshold = capability_chain.get_threshold()
 
-        try:
-            mgr = ModelManager()
-            _extra_body = (
-                {"enable_thinking": False}
-                if os.getenv("ENABLE_THINKING_PARAM", "true").strip().lower() not in ("false", "0", "no")
-                else {}
-            )
-            llm = mgr.get_llm(
-                provider=self.provider,
-                api_key=self.api_key,
-                base_url=self.base_url,
-                model=self.model,
-                temperature=0.01,
-                stream=False,
-                extra_body=_extra_body,
-            )
-            prompt = SKILL_CAPABILITY_CHECK_PROMPT.format(
-                agent_name=agent_name,
-                agent_description=agent_description,
-                agent_skills=agent_skills_text,
-                history=history_text,
-                query=query,
-            )
-            cap_tool = StructuredTool(
-                name="evaluate_capability",
-                description="评估本智能体能否处理用户问题",
-                args_schema=CapabilityCheckToolResult,
-                func=None,
-                coroutine=None,
-            )
-            result_data = await invoke_llm_with_tool(
-                llm=llm,
-                tool=cap_tool,
-                messages=[HumanMessage(content=prompt)],
-                metadata=md,
-                tool_choice="evaluate_capability",
-                span_name="skill-capability-check-llm",
-                query=query,
-            )
-            if result_data is None:
-                raise ValueError("LLM did not call evaluate_capability tool")
-
-            # Normalize (aligned with SD orchestrator _normalize_member_capability_judgment)
-            can_handle, can_contribute = _normalize_capability_result(result_data)
-            try:
-                conf = float(result_data.get("confidence", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                conf = 0.0
-            conf = max(0.0, min(1.0, conf))
-            reason = str(result_data.get("reason") or "").strip()[:500]
-
-            leaf_path = [agent_name]
+        if not (card and card.skills):
+            # Runtime fact, not a capability judgement: nothing is loaded, so
+            # there is nothing to evaluate. Skip the LLM entirely.
             check_response = sg_broadcast.CapabilityCheckResponse(
-                can_handle=can_handle,
-                confidence=round(conf, 2),
-                reason=reason,
+                can_handle=False,
+                confidence=0.0,
+                reason="No skills loaded; nothing to evaluate.",
                 agent_name=agent_name,
                 agent_url=agent_url,
                 route_path=leaf_path,
-                route_paths=[{"path": leaf_path, "confidence": round(conf, 2), "alias": _path_to_alias(leaf_path)}],
-                can_contribute=can_contribute,
-                contribution=str(result_data.get("contribution", "")),
+                route_paths=[{"path": leaf_path, "confidence": 0.0, "alias": _path_to_alias(leaf_path)}],
+                can_contribute=False,
+                contribution="",
                 execution_strategy="single",
                 collaboration_agents=[],
                 collaboration_roles={},
@@ -4910,10 +6616,170 @@ satisfactory=False,
                 missing_requirements=[],
                 execution_hint={},
                 latency_ms=int((_time.monotonic() - _cc_start) * 1000),
+                score_version=capability_chain.SCORE_VERSION,
+                evidence_grade="D",
+                threshold=threshold,
+                handle_score=0.0,
+                steps=[],
+                contributing_steps=[],
+            )
+            await self._emit_capability_check_response(updater, task, md, query, check_response)
+            return
+
+        try:
+            max_attempts = int(os.getenv("CAPABILITY_CHECK_MAX_ATTEMPTS", "3"))
+            prompt = SKILL_CAPABILITY_CHECK_PROMPT.format(
+                agent_name=agent_name,
+                agent_description=agent_description,
+                agent_skills=agent_skills_text,
+                history=history_text,
+                query=query,
+            )
+            nudge: Optional[HumanMessage] = None
+            chain_result: Optional[CapabilityChainResult] = None
+            llm = self._get_orchestration_llm()
+
+            for attempt in range(1, max_attempts + 1):
+                logger.info(
+                    "[Capability][JSON] llm_invoke attempt=%d/%d agent=%s",
+                    attempt, max_attempts, agent_name,
+                )
+                attempt_messages = (
+                    [HumanMessage(content=prompt)]
+                    if nudge is None
+                    else [HumanMessage(content=prompt), AIMessage(content=""), nudge]
+                )
+                try:
+                    answer = await llm.ainvoke(attempt_messages)
+                except Exception as exc:
+                    logger.warning(
+                        "[Capability][JSON] attempt %d: LLM invoke failed: %s: %s",
+                        attempt, type(exc).__name__, exc,
+                    )
+                    nudge = HumanMessage(
+                        content=(
+                            "上一次调用失败。请重新输出一个完整的 JSON 对象，"
+                            "字段必须包含 steps、evidence_grade、contribution、"
+                            "missing_requirements、risks、reason。"
+                        )
+                    )
+                    continue
+
+                result_data = _parse_json_output(answer)
+                if result_data is None:
+                    raw_text = (
+                        "".join(
+                            [
+                                str(p.get("text", "")) if isinstance(p, dict) else str(p)
+                                for p in (getattr(answer, "content", None) or [])
+                            ]
+                        ) if isinstance(getattr(answer, "content", None), list) else getattr(answer, "content", "") or ""
+                    )
+                    preview = (raw_text or str(answer))[:400]
+                    logger.warning(
+                        "[Capability][JSON] attempt %d: invalid JSON, nudging | preview=%s",
+                        attempt, preview,
+                    )
+                    nudge = HumanMessage(
+                        content=(
+                            "输出无法解析为合法 JSON。请只输出一个 JSON 对象，"
+                            "字段包含 steps（步骤数组）、evidence_grade（A/B/C/D）、"
+                            "contribution（贡献说明，不能贡献时为空字符串）、"
+                            "missing_requirements（缺失项列表，无缺失时为 []）、"
+                            "risks（风险列表，无风险时为 []）、"
+                            "reason（结构化理由）。"
+                            "每个步骤的 RatioCheck 必须同时给出 required、matched、ratio、evidence_strength。"
+                        )
+                    )
+                    continue
+
+                try:
+                    chain_result = capability_chain.parse_chain_result(result_data)
+                except Exception as exc:
+                    preview = json.dumps(result_data, ensure_ascii=False, default=str)[:400]
+                    logger.warning(
+                        "[Capability][JSON] attempt %d: parse_chain_result failed: %s | data=%s",
+                        attempt, exc, preview,
+                    )
+                    nudge = HumanMessage(
+                        content=(
+                            f"JSON 解析成功，但字段类型不符合 schema：{exc}。\n"
+                            "请严格按照以下 schema 修正后重新输出：\n"
+                            '- steps 是数组，每项的 inputs 是对象数组 [{"name":"...","source":"..."}]，不能是单个对象\n'
+                            '- outputs 是字符串数组 ["..."]，不能是对象\n'
+                            '- constraints 是字符串数组 ["..."]，不能是对象\n'
+                            "- input_match/data_coverage/result_match/constraint_satisfaction 是对象 "
+                            '{"required":["..."],"matched":["..."],"ratio":0.0}，不是数组\n'
+                            "- operation_capability 必须是数字 1.0、0.7 或 0\n"
+                        )
+                    )
+                    continue
+
+                # Valid chain_result obtained
+                logger.info(
+                    "[Capability][JSON] SELECTED attempt=%d steps=%d",
+                    attempt, len(chain_result.steps),
+                )
+                break
+
+            if chain_result is None:
+                raise ValueError(
+                    f"Capability check failed to produce valid JSON after {max_attempts} attempts."
+                )
+
+            agg = capability_chain.aggregate(chain_result, threshold=threshold)
+            # Aligned with SD orchestrator _normalize_member_capability_judgment
+            can_handle, can_contribute = _normalize_capability_result(
+                {"can_handle": agg.can_handle, "can_contribute": agg.can_contribute}
+            )
+            conf = agg.confidence
+            reason = str(chain_result.reason or "").strip()[:2000]
+
+            logger.info(
+                "[Capability][Chain] agent=%s handle_score=%.3f threshold=%.2f steps=%s "
+                "contributing=%s external_dep=%s evidence=%s -> handle=%s contribute=%s conf=%.2f",
+                agent_name,
+                agg.handle_score,
+                agg.threshold,
+                {k: round(v, 3) for k, v in agg.step_scores.items()},
+                agg.contributing_steps,
+                agg.has_external_dependency,
+                chain_result.evidence_grade,
+                can_handle,
+                can_contribute,
+                conf,
+            )
+
+            check_response = sg_broadcast.CapabilityCheckResponse(
+                can_handle=can_handle,
+                confidence=conf,
+                reason=reason,
+                agent_name=agent_name,
+                agent_url=agent_url,
+                route_path=leaf_path,
+                route_paths=[{"path": leaf_path, "confidence": conf, "alias": _path_to_alias(leaf_path)}],
+                can_contribute=can_contribute,
+                contribution=agg.contribution,
+                execution_strategy="single",
+                collaboration_agents=[],
+                collaboration_roles={},
+                collaboration_paths=[],
+                member_results=[],
+                degraded=False,
+                unavailable_count=0,
+                missing_requirements=agg.missing_requirements,
+                execution_hint={},
+                latency_ms=int((_time.monotonic() - _cc_start) * 1000),
+                score_version=capability_chain.SCORE_VERSION,
+                evidence_grade=chain_result.evidence_grade,
+                threshold=agg.threshold,
+                handle_score=agg.handle_score,
+                steps=agg.steps_payload(chain_result),
+                contributing_steps=agg.contributing_steps,
+                risks=list(chain_result.risks or []),
             )
         except Exception as e:
             logger.error("Capability check failed: %s", e, exc_info=True)
-            leaf_path = [agent_name]
             check_response = sg_broadcast.CapabilityCheckResponse(
                 can_handle=False,
                 confidence=0.0,
@@ -4932,8 +6798,20 @@ satisfactory=False,
                 missing_requirements=[],
                 execution_hint={},
                 latency_ms=int((_time.monotonic() - _cc_start) * 1000),
+                score_version=capability_chain.SCORE_VERSION,
+                threshold=threshold,
             )
 
+        await self._emit_capability_check_response(updater, task, md, query, check_response)
+
+    async def _emit_capability_check_response(
+        self,
+        updater: TaskUpdater,
+        task: Any,
+        md: dict,
+        query: str,
+        check_response: "sg_broadcast.CapabilityCheckResponse",
+    ) -> None:
         check_response.execution_hint = self._build_execution_hint(
             run_id=str(md.get("run_id") or ""),
             query=query,
@@ -4963,8 +6841,10 @@ satisfactory=False,
 
         Called when the routing agent sends ``message_type="pre_make_plan"``
         to evaluate this agent's task-planning capability before making a
-        final routing decision.  The agent runs :meth:`make_plan` with the
-        query and returns the resulting ``TaskList`` as JSON.
+        final routing decision.  The agent runs :meth:`make_plan` against
+        **this agent only** (own AgentCard + optional LocalSkill).  Peer
+        SGs are not loaded: routing already filtered candidates, and
+        PreMakePlan is a self-capability probe, not a collaboration plan.
         """
         task = context.current_task
         if not task:
@@ -4991,7 +6871,15 @@ satisfactory=False,
             )
 
         try:
-            all_cards, own_names, collab_names = await self._resolve_planner_agent_pool(query)
+            await self._ensure_skill_runner()
+            local_card = self.agent_card
+            all_cards = [local_card] if local_card else []
+            all_cards = self._maybe_append_local_skill_card(all_cards)
+            logger.info(
+                "[PreMakePlan] local-only planner pool | agent=%s cards=%s",
+                self.agent_id,
+                [getattr(c, "name", "") for c in all_cards],
+            )
 
             base_group_memory = await self._get_memory(query)
             group_memory = self._enrich_group_memory_with_upstream(
@@ -5098,19 +6986,10 @@ satisfactory=False,
         _dag_enabled = self._dag_enforcement_enabled()
         self_name = self._self_planner_agent_name()
         if _dag_enabled:
-            _dag_status = "ENABLED" if is_delegated else "ENABLED (root, no chain yet)"
-            _dag_chain_preview = self._format_dag_chain(delegation_chain)
-            _dag_self_label = self_name if self_name not in delegation_chain else f"【{self_name}】⚠️"
-            logger.info(
-                "╔══ DAG  ═══════════════════════════════════════════════════╗\n"
-                "║  [STARTUP] DAG 委派链路约束已开启\n"
-                "║  状态: %s\n"
-                "║  当前 agent: %s\n"
-                "║  当前链路: %s\n"
-                "╚════════════════════════════════════════════════════════════╝",
-                _dag_status,
-                _dag_self_label,
-                _dag_chain_preview,
+            self._log_dag_startup(
+                is_delegated=is_delegated,
+                self_name=self_name,
+                chain=delegation_chain,
             )
         else:
             logger.info(
@@ -5223,7 +7102,7 @@ satisfactory=False,
         # ------------------------------------------------------------------
         # Step 3-5: Execute plan and mid-exec loop (extracted method)
         # ------------------------------------------------------------------
-        all_task_results, delegate_results, _remaining_hop, _plan_meta = await self._execute_plan_and_mid_exec(
+        all_task_results, delegate_results, _remaining_hop, _plan_meta, execution_flow_tasks = await self._execute_plan_and_mid_exec(
             query=query,
             all_cards=all_cards,
             own_names=own_names,
@@ -5264,6 +7143,8 @@ satisfactory=False,
             user_id=user_id,
             run_id=run_id,
             trace_id=trace_id,
+            execution_flow_tasks=execution_flow_tasks,
+            agent_role="delegatee" if is_delegated else "initiator",
         )
 
         # --- Data Flow: summary output ---
@@ -5312,6 +7193,42 @@ satisfactory=False,
             message=new_agent_text_message("", context_id=task.context_id)
         )
 
+        # ── Log Execution Flow ──
+        # 将上游 EF 和本层 EF 分开渲染，避免混合导致层级混淆。
+        if execution_flow_tasks:
+            role = "delegatee" if is_delegated else "initiator"
+            local_ef = list(execution_flow_tasks[upstream_ef_count:])
+            upstream_ef_for_log = list(execution_flow_tasks[:upstream_ef_count])
+
+            if upstream_ef_for_log:
+                _upstream_agent = upstream_ef_for_log[0].agent if isinstance(upstream_ef_for_log[0], ExecutionTask) else ""
+                upstream_md = render_execution_flow_md(
+                    upstream_ef_for_log,
+                    agent=_upstream_agent,
+                    role="initiator",
+                )
+                logger.info(
+                    "[ExecutionFlow] run_id=%s trace_id=%s user_id=%s\n"
+                    "─── 上游执行流水账 ───\n%s",
+                    run_id, trace_id, user_id, upstream_md,
+                )
+
+            if local_ef:
+                local_md = render_execution_flow_md(
+                    local_ef,
+                    agent=self._self_planner_agent_name(),
+                    role=role,
+                    current_agent=self._self_planner_agent_name(),
+                )
+                logger.info(
+                    "[ExecutionFlow] run_id=%s trace_id=%s user_id=%s\n"
+                    "─── 本层执行流水账 ───\n%s",
+                    run_id, trace_id, user_id, local_md,
+                )
+
+            if not upstream_ef_for_log and not local_ef:
+                logger.info("[ExecutionFlow] no execution flow tasks recorded (run_id=%s)", run_id)
+
     # ------------------------------------------------------------------
     # Turn support: execute plan → execute → mid-exec as a reusable unit
     # ------------------------------------------------------------------
@@ -5334,7 +7251,9 @@ satisfactory=False,
         delegation_chain: list[str],
         failure_context: str = "",
         prior_delegate_results: dict[str, str] | None = None,
-    ) -> tuple[dict[int, str], dict[str, str], int, list[dict]]:
+        group_memory: str | None = None,
+        turn: int = 1,
+    ) -> tuple[dict[int, str], dict[str, str], int, list[dict], list["ExecutionTask"]]:
         """Execute Steps 3-5 (plan → execute tasks → mid-exec loop).
 
         Extracted from :meth:`execute` so that subclasses can wrap this in a
@@ -5346,9 +7265,36 @@ satisfactory=False,
 
         Returns
         -------
-        tuple[dict[int, str], dict[str, str], int, list[dict]]
-            ``(all_task_results, delegate_results, remaining_hop, plan_task_meta)``.
+        tuple[dict[int, str], dict[str, str], int, list[dict], list[ExecutionTask]]
+            ``(all_task_results, delegate_results, remaining_hop, plan_task_meta, execution_flow_tasks)``.
         """
+        # ------------------------------------------------------------------
+        # 0.  Execution Flow tracking
+        # ------------------------------------------------------------------
+        execution_flow_tasks: list[ExecutionTask] = []
+
+        # ── 接收上游 Execution Flow ──
+        # 被委派 Agent 需要看到上游的完整执行流水账，以便理解上下文
+        # 和关联键来源。上游的 Execution Flow 以 dict 列表形式通过
+        # upstream_context["execution_flow"] 传入。
+        upstream_ef_count = 0  # 记录上游 EF 数量，用于最终日志分离渲染
+        upstream_ef = upstream_context.get("execution_flow")
+        if upstream_ef and isinstance(upstream_ef, list):
+            for ef_dict in upstream_ef:
+                if isinstance(ef_dict, dict):
+                    try:
+                        execution_flow_tasks.append(ExecutionTask.from_dict(ef_dict))
+                    except Exception:
+                        logger.warning(
+                            "[ExecutionFlow] failed to parse upstream EF task: %s",
+                            ef_dict.get("execution_id", "?"),
+                        )
+            if execution_flow_tasks:
+                upstream_ef_count = len(execution_flow_tasks)
+                logger.info(
+                    "[ExecutionFlow] received upstream EF | agent=%s turn=%d count=%d",
+                    self._self_planner_agent_name(), turn, upstream_ef_count,
+                )
         # ------------------------------------------------------------------
         # Step 3: Plan tasks (with group_memory injection + upstream context)
         # ------------------------------------------------------------------
@@ -5360,33 +7306,31 @@ satisfactory=False,
             extra={"query_preview": _short(query)},
         )
 
-        base_group_memory = await self._get_memory(query)
-        group_memory = self._enrich_group_memory_with_upstream(
-            upstream_context=upstream_context,
-            base_group_memory=base_group_memory,
-        )
         execution_hint = self._validated_execution_hint(metadata, query)
-        if execution_hint:
-            note = self._execution_hint_memory_note(execution_hint)
-            group_memory = f"{group_memory}\n\n{note}".strip() if group_memory else note
-            logger.info(
-                "[Capability][ExecutionHint] injected into planning context | run_id=%s "
-                "selected=%s",
-                run_id,
-                (execution_hint.get("selected_members") or [])[:10],
-            )
 
-        # Inject failure context from previous turn (if any)
-        if failure_context:
-            group_memory = f"{group_memory}\n\n{failure_context}" if group_memory else failure_context
-            logger.info(
-                "[TurnLoop] failure_context injected | chars=%d",
-                len(failure_context),
+        if group_memory is None:
+            # Legacy path (single-shot executor): build group_memory from
+            # upstream_context via _enrich_group_memory_with_upstream.
+            base_group_memory = await self._get_memory(query)
+            group_memory = self._enrich_group_memory_with_upstream(
+                upstream_context=upstream_context,
+                base_group_memory=base_group_memory,
             )
+            if execution_hint:
+                note = self._execution_hint_memory_note(execution_hint)
+                group_memory = f"{group_memory}\n\n{note}".strip() if group_memory else note
+            if failure_context:
+                group_memory = f"{group_memory}\n\n{failure_context}" if group_memory else failure_context
+        else:
+            # Turn loop path: caller already assembled group_memory
+            # (including base_group_memory, turn context, failure_context).
+            # Append execution_hint if available.
+            if execution_hint:
+                note = self._execution_hint_memory_note(execution_hint)
+                group_memory = f"{group_memory}\n\n{note}".strip()
 
         logger.info(
-            "[Orchestration] group_memory prepared | base_chars=%d enriched_chars=%d",
-            len(base_group_memory or ""),
+            "[Orchestration] group_memory prepared | total_chars=%d",
             len(group_memory or ""),
         )
 
@@ -5476,8 +7420,20 @@ satisfactory=False,
         for task_item in plan.tasks:
             agent_name = (task_item.agent or "").strip()
 
-            # NONE tasks — skip
+            # NONE is a planner protocol ("no capable agent"), not a silent skip.
             if agent_name.upper() == "NONE":
+                await self._record_none_execution_task(
+                    task_id=task_item.id,
+                    description=task_item.description or "",
+                    updater=updater,
+                    turn=turn,
+                    stage="pre_exec",
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                    execution_flow_tasks=execution_flow_tasks,
+                    all_task_results=all_task_results,
+                )
                 continue
 
             # ---- Dependency guard: preflight check ----
@@ -5613,6 +7569,25 @@ satisfactory=False,
                     extra={"task_id": task_item.id, "agent": agent_name, "result_chars": len(result)},
                 )
 
+                # Point A: own task Execution Flow emit
+                own_ef_task = ExecutionTask(
+                    execution_id=f"own-{task_item.id}-{agent_name}-t{turn}",
+                    turn=turn,
+                    stage="pre_exec",
+                    agent=agent_name,
+                    role="initiator",
+                    task=task_query,
+                    result=result,
+                    reason="" if not is_fail else f"Local execution failed",
+                    parent_execution_id=None,
+                    delegated_by=None,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                )
+                execution_flow_tasks.append(own_ef_task)
+                await self._emit_execution_flow(updater, own_ef_task)
+
             # --- Peer delegation (use collab_names for SG delegation) ---
             # NOTE: every delegation edge consumes 1 hop.  The receiver will
             # further decrement when it delegates onward.
@@ -5655,14 +7630,14 @@ satisfactory=False,
                     }
                     for tid, res in all_task_results.items() if res
                 ]
+                # ── 传递 Execution Flow 到下游 Agent ──
+                # 将被委派方需要看到上游的完整执行流水账，以便理解上下文。
+                _ef_for_ctx = [t.to_dict() if isinstance(t, ExecutionTask) else t
+                               for t in execution_flow_tasks]
                 _ctx: dict[str, Any] = {
-                    "delegator_plan": [t.dict() for t in plan.tasks],
                     "executed_tasks": _completed_tasks_context,
-                    "key_findings_so_far": "\n".join(
-                        f"[Task#{tid}] {res[:300]}"
-                        for tid, res in all_task_results.items() if res
-                    ),
                     "upstream_context": upstream_context,
+                    "execution_flow": _ef_for_ctx,
                 }
 
                 await self._emit_progress(
@@ -5683,12 +7658,13 @@ satisfactory=False,
                 )
 
                 logger.info(
-                    "[Cross-SG][PreExecDelegation] delegating | task_id=%d target_sg=%s hop=%d chain=%s desc_preview=%s",
+                    "[Cross-SG][PreExecDelegation] delegating | task_id=%d target_sg=%s hop=%d chain=%s desc_preview=%s ef_tasks=%d",
                     task_item.id,
                     agent_name,
                     _next_hop,
                     _new_chain,
                     (task_query or "")[:100],
+                    len(_ef_for_ctx),
                 )
 
                 # --- Data Flow: upstream context being packed for delegation ---
@@ -5700,9 +7676,7 @@ satisfactory=False,
                     target_id=agent_name,
                     payload_chars=_ctx_chars,
                     payload_preview=(
-                        f"delegator_plan (tasks={len(plan.tasks)}), "
-                        f"executed_tasks (count={len(_completed_tasks_context)}), "
-                        f"key_findings_so_far ({len(_ctx.get('key_findings_so_far','') or '')} chars)"
+                        f"executed_tasks (count={len(_completed_tasks_context)})"
                     ),
                     metadata_extra={
                         "delegation_chain": _new_chain,
@@ -5711,7 +7685,7 @@ satisfactory=False,
                     },
                 )
 
-                result = await self._delegate_to_peer(
+                result, peer_ef_tasks = await self._delegate_to_peer(
                     task_query,
                     target_card,
                     user_id,
@@ -5724,6 +7698,36 @@ satisfactory=False,
                 )
                 delegate_results[agent_name] = result
                 all_task_results[task_item.id] = result
+                # Merge peer's Execution Flow — only set parent_execution_id
+                # on the peer's root tasks (those without a parent already).
+                pre_ef_id = f"pre-{task_item.id}-{agent_name}-t{turn}"
+                parented_peer: list[ExecutionTask] = []
+                for pt in peer_ef_tasks:
+                    if pt.parent_execution_id is None:
+                        pt.parent_execution_id = pre_ef_id
+                        pt.delegated_by = self._self_planner_agent_name()
+                        parented_peer.append(pt)
+                pre_ef_task = ExecutionTask(
+                    execution_id=pre_ef_id,
+                    turn=turn,
+                    stage="pre_exec",
+                    agent=agent_name,
+                    role="delegatee",
+                    task=task_query,
+                    result=result,
+                    reason="Pre-exec delegation",
+                    parent_execution_id=None,
+                    delegated_by=self._self_planner_agent_name(),
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    user_id=user_id,
+                )
+                execution_flow_tasks.append(pre_ef_task)
+                execution_flow_tasks.extend(peer_ef_tasks)
+                # Emit wrapper first, then rewrite parented peer roots so the UI
+                # tree is wrapper → nested internal execution (not two flat roots).
+                await self._emit_execution_flow(updater, pre_ef_task)
+                await self._reemit_parented_peer_execution_flow(updater, parented_peer)
                 is_fail = result.startswith("Delegation failed:") or result.startswith("Execution error:") or not result.strip()
                 self._tasks_status_list.append({
                     "id": task_item.id,
@@ -5759,7 +7763,7 @@ satisfactory=False,
         # Guard: if hop is already exhausted, skip mid-exec entirely.
         if current_hop <= 1:
             logger.info("[MidExec] hop exhausted (current_hop=%d), skipping mid-exec loop", current_hop)
-            return all_task_results, delegate_results, current_hop, plan_task_meta
+            return all_task_results, delegate_results, current_hop, plan_task_meta, execution_flow_tasks
 
         await self._emit_progress(
             updater,
@@ -5795,21 +7799,6 @@ satisfactory=False,
                     removed=_dag_removed,
                     kept=sorted(getattr(c, "name", "") for c in collaborator_cards_list),
                 )
-
-        # Build upstream context with executed tasks and delegator plan for the mid-exec loop
-        # (delegator_plan is static — it captures the original pre-mid-exec plan)
-        own_task_context = [
-            {
-                "id": tid,
-                "description": (task_item.description or ""),
-                "agent": (task_item.agent or ""),
-                "status": "completed",
-                "result": res,
-            }
-            for task_item in plan.tasks
-            for tid, res in own_results.items()
-            if tid == task_item.id and res
-        ]
 
         # Track SGs that returned empty/bad results — exclude them from
         # re-delegation in subsequent rounds to avoid infinite ping-pong
@@ -5939,6 +7928,7 @@ satisfactory=False,
                 break
 
             reason_text = (detection.get("reason") or "")[:400]
+            detected_task_type = detection.get("task_type") or "unknown"
             target_sgs = list(detection.get("target_sgs") or [])
             # Filter out LLM-hallucinated agent names that don't exist in collaborator pool
             if target_sgs and collaborator_cards_list:
@@ -5957,6 +7947,7 @@ satisfactory=False,
                 status="running",
                 extra={
                     "needs_help": True,
+                    "task_type": detected_task_type,
                     "reason": reason_text,
                     "target_sgs": target_sgs,
                     "round": mid_exec_round + 1,
@@ -5967,6 +7958,32 @@ satisfactory=False,
             synthesized_query = detection.get("synthesized_query", "")
             soft_target_hints = list(detection.get("target_sgs") or [])
             if not synthesized_query:
+                if detected_task_type == "unstructured":
+                    # 非结构化任务：写不出可执行子问题 ⇒ 不构成明确缺口。
+                    # 提示词已把「能写出 synthesized_query」设为 needs_help=true 的
+                    # 必要条件；此处做防御性收敛：按「无明确缺口」正常结束，
+                    # 不再进入下游选人/规划（它们均以非空 query 为前提）。
+                    # 非结构化任务在理论上永远可以「更深入」，因此不允许以
+                    # 开放式理由继续委派，否则会无限追数据。
+                    logger.info(
+                        "[MidExec] unstructured task with empty synthesized_query "
+                        "→ treated as no clear gap, exiting mid-exec loop"
+                    )
+                    await self._emit_progress(
+                        updater,
+                        "mid_exec_no_clear_gap",
+                        message=(
+                            "Mid-exec: 非结构化任务未发现明确数据缺口，"
+                            "无需补充数据"
+                        ),
+                        status="done",
+                        extra={
+                            "round": mid_exec_round + 1,
+                            "reason": "no_clear_gap_unstructured",
+                            "task_type": detected_task_type,
+                        },
+                    )
+                    break
                 await self._emit_progress(
                     updater,
                     "mid_exec_empty_query",
@@ -5979,11 +7996,29 @@ satisfactory=False,
                 )
                 break
 
-            # Step 1.5: Select targets via concurrent capability_check
+            # Step 1.5: Build executed tasks context for capability check and planner.
+            # Must be built BEFORE target selection so the capability check
+            # LLM sees the same context as the planner.
+            _round_executed_tasks: list[dict] = [
+                {
+                    "task_id": tid,
+                    "description": (task_item.description or ""),
+                    "agent": (task_item.agent or ""),
+                    "status": "completed",
+                    "result": res,
+                }
+                for task_item in plan.tasks
+                for tid, res in all_task_results.items()
+                if tid == task_item.id and res
+            ]
+            _upstream_executed = (upstream_context or {}).get("executed_tasks")
+            if _upstream_executed:
+                _round_executed_tasks = list(_upstream_executed) + _round_executed_tasks
+
+            # Step 1.6: Select targets via concurrent capability_check
             target_sg_names: list[str] = []
             target_cards_list: list[AgentCard] = []
             hints_by_sg: dict[str, dict] = {}
-            capability_evidence = ""
             if self._mid_delegate_detect_direct_enabled():
                 # ── Detect-Direct path: use detection LLM results directly ──
                 # The detection LLM already has full context (original query,
@@ -6070,14 +8105,12 @@ satisfactory=False,
                     run_id=run_id,
                     trace_id=trace_id,
                     original_query=query,
-                    own_results=own_results,
-                    delegated_results=_detect_delegate_results,
+                    executed_tasks=_round_executed_tasks,
                     detection_reason=reason_text,
                 )
                 target_cards_list = list(selection.get("target_cards") or [])
                 target_sg_names = list(selection.get("target_sg_names") or [])
                 hints_by_sg = dict(selection.get("hints_by_sg") or {})
-                capability_evidence = str(selection.get("evidence_text") or "")
 
                 # ── Re-delegation guard: filter exhausted SGs ──
                 if _exhausted_sgs and target_cards_list:
@@ -6221,53 +8254,27 @@ satisfactory=False,
                     break
 
             # Step 2: Plan
-            # Rebuild mid_upstream each round so the planner and dispatch
-            # context see the latest own_results + delegate_results from
-            # previous rounds, not just the pre-mid-exec snapshot.
-            _round_own_task_context = [
-                {
-                    "id": tid,
-                    "description": (task_item.description or ""),
-                    "agent": (task_item.agent or ""),
-                    "status": "completed",
-                    "result": res,
-                }
-                for task_item in plan.tasks
-                for tid, res in all_task_results.items()
-                if tid == task_item.id and res
-            ]
-            _round_key_findings = "\n".join(
-                f"[Task#{tid}] {res[:300]}"
-                for tid, res in all_task_results.items() if res
-            )
-            mid_upstream: dict[str, Any] = dict(upstream_context)
-            mid_upstream["delegator_plan"] = [t.dict() for t in plan.tasks]
-            mid_upstream["executed_tasks"] = _round_own_task_context
-            mid_upstream["key_findings_so_far"] = _round_key_findings
-
             if self._mid_delegate_detect_direct_enabled():
                 mid_plan = await self._plan_mid_exec_delegation_with_full_context(
                     synthesized_query=synthesized_query,
                     target_cards=target_cards_list,
                     original_query=query,
-                    own_results=own_results,
-                    delegated_results=delegate_results,
+                    executed_tasks=_round_executed_tasks,
                     detection_reason=detection.get("reason", ""),
-                    capability_evidence=capability_evidence,
-                    upstream_context=mid_upstream,
                     delegation_chain=delegation_chain,
+                    turn=turn,
+                    mid_exec_round=mid_exec_round + 1,
                 )
             else:
                 mid_plan = await self._plan_mid_exec_delegation(
                     synthesized_query=synthesized_query,
                     target_cards=target_cards_list,
                     original_query=query,
-                    own_results=own_results,
-                    delegated_results=delegate_results,
+                    executed_tasks=_round_executed_tasks,
                     detection_reason=detection.get("reason", ""),
-                    capability_evidence=capability_evidence,
-                    upstream_context=mid_upstream,
                     delegation_chain=delegation_chain,
+                    turn=turn,
+                    mid_exec_round=mid_exec_round + 1,
                 )
             if mid_plan is None:
                 logger.warning("[MidExec] plan returned None, exiting loop")
@@ -6291,6 +8298,22 @@ satisfactory=False,
                     "[MidExec][Plan] planner returned all-NONE, "
                     "no capable agent available — exiting mid-exec loop"
                 )
+                for none_task in mid_plan.tasks:
+                    await self._record_none_execution_task(
+                        task_id=none_task.id,
+                        description=none_task.description or "",
+                        updater=updater,
+                        turn=turn,
+                        stage=f"mid_exec_round_{mid_exec_round + 1}",
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        user_id=user_id,
+                        execution_flow_tasks=execution_flow_tasks,
+                        extra_reason=(
+                            detection.get("reason", "")
+                            or f"{NONE_TASK_REASON_CODE}: mid-exec 无可用智能体"
+                        ),
+                    )
                 await self._emit_progress(
                     updater,
                     "mid_exec_all_none",
@@ -6306,8 +8329,13 @@ satisfactory=False,
 
             # Step 3: Dispatch
             # Build enriched upstream context for dispatch
-            dispatch_ctx: dict[str, Any] = dict(mid_upstream)
+            dispatch_ctx: dict[str, Any] = dict(upstream_context)
+            # ── 传递 Execution Flow 到下游 Agent ──
+            # 下游 Agent 需要看到上游完整的执行流水账，以便理解上下文。
+            _ef_for_ctx = [t.to_dict() if isinstance(t, ExecutionTask) else t
+                           for t in execution_flow_tasks]
             dispatch_ctx.update({
+                "executed_tasks": _round_executed_tasks,
                 "already_delegated": [
                     {
                         "target_sg": name,
@@ -6319,6 +8347,7 @@ satisfactory=False,
                 "mid_exec_round": mid_exec_round + 1,
                 "synthesized_query": synthesized_query,
                 "detection_reason": detection.get("reason", ""),
+                "execution_flow": _ef_for_ctx,
             })
             # --- Data Flow: mid-exec round dispatch ---
             _mid_ctx_chars = len(json.dumps(dispatch_ctx, ensure_ascii=False))
@@ -6338,14 +8367,16 @@ satisfactory=False,
                 payload_chars=_mid_ctx_chars,
                 payload_preview=(
                     f"已委托: {len(delegate_results)} 条, "
-                    f"synthesized_query: {(synthesized_query or '')[:200]}"
+                    f"synthesized_query: {(synthesized_query or '')[:200]}, "
+                    f"ef_tasks: {len(_ef_for_ctx)}"
                 ),
                 metadata_extra={
                     "mid_exec_round": mid_exec_round + 1,
                     "delegation_chain": delegation_chain,
+                    "ef_tasks": len(_ef_for_ctx),
                 },
             )
-            mid_delegate, mid_self, current_hop = await self._dispatch_mid_exec_delegation(
+            mid_delegate, mid_self, current_hop, mid_ef_tasks = await self._dispatch_mid_exec_delegation(
                 plan=mid_plan,
                 target_cards=target_cards_list,
                 user_id=user_id,
@@ -6358,8 +8389,12 @@ satisfactory=False,
                 updater=updater,
                 skill_runner=skill_runner,
                 metadata=metadata,
+                turn=turn,
+                detection_reason=detection.get("reason", ""),
             )
             delegate_results.update(mid_delegate)
+            # Merge mid-exec execution flow tasks
+            execution_flow_tasks.extend(mid_ef_tasks)
 
             # Hop is consumed inside _dispatch_mid_exec_delegation;
             # current_hop has already been updated by the returned value.
@@ -6393,6 +8428,7 @@ satisfactory=False,
                 )
                 fake_task_id = 10000 + mid_exec_round * 100 + len(delegate_results)
                 own_results[fake_task_id] = f"[Self-exec {self_name}]: {mid_self[self_name]}"
+                all_task_results[fake_task_id] = f"[Self-exec {self_name}]: {mid_self[self_name]}"
 
             mid_exec_round += 1
 
@@ -6404,7 +8440,7 @@ satisfactory=False,
             extra={"mid_delegate_count": len(delegate_results), "rounds": mid_exec_round},
         )
 
-        return all_task_results, delegate_results, current_hop, plan_task_meta
+        return all_task_results, delegate_results, current_hop, plan_task_meta, execution_flow_tasks
 
     async def cancel(
         self, context: RequestContext, event_queue: EventQueue

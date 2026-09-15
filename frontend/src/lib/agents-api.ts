@@ -5,6 +5,7 @@ import { api } from "@/lib/api"
 import type {
   AgentContainerResponse,
   AgentContainerListResponse,
+  UpdateAgentContainerRequest,
 } from "@/lib/api-types"
 
 export async function listAgentsAll(params?: {
@@ -51,6 +52,18 @@ export async function getAgent(
 ): Promise<AgentContainerResponse> {
   const res = await api.get<AgentContainerResponse>(
     `/namespaces/${encodeURIComponent(namespace)}/agents/${encodeURIComponent(name)}`
+  )
+  return res.data
+}
+
+export async function updateAgent(
+  namespace: string,
+  name: string,
+  payload: UpdateAgentContainerRequest
+): Promise<AgentContainerResponse> {
+  const res = await api.put<AgentContainerResponse>(
+    `/namespaces/${encodeURIComponent(namespace)}/agents/${encodeURIComponent(name)}`,
+    payload
   )
   return res.data
 }

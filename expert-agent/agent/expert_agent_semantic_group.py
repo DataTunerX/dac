@@ -559,6 +559,11 @@ class ExpertAgent(BaseAgent):
         return isinstance(text, str) and text.lstrip().startswith("[[DAC_PROGRESS]] ")
 
     @staticmethod
+    def is_execution_flow_frame(text: str) -> bool:
+        """EF must not be treated as member answer text for LLM aggregation."""
+        return isinstance(text, str) and text.lstrip().startswith("[[DAC_EXECUTION_FLOW]] ")
+
+    @staticmethod
     def is_summary_artifact(text: str) -> bool:
         """检测 text 是否是 DAC_SUMMARY 协议帧（SD Orchestrator → SG Expert）。"""
         return isinstance(text, str) and text.lstrip().startswith("[[DAC_SUMMARY]] ")
@@ -1267,7 +1272,7 @@ class ExpertAgent(BaseAgent):
         parts: List[str] = []
         async for chunk in client.send_message_streaming(request):
             text = self._get_response_text_from_chunk(chunk)
-            if text and not self.is_progress_frame(text):
+            if text and not self.is_progress_frame(text) and not self.is_execution_flow_frame(text):
                 parts.append(text)
         parsed = self._parse_member_capability_json("".join(parts))
         if parsed is None:
@@ -1702,6 +1707,26 @@ class ExpertAgent(BaseAgent):
                         if callback is not None:
                             await callback(result)
                         continue
+                    if self.is_execution_flow_frame(result):
+                        logger.info(
+                            "[ExecutionFlow][SG-Expert] skip EF from LLM body agent=%s chars=%d",
+                            getattr(agent_card, "name", "") or "(unknown)",
+                            len(result),
+                        )
+                        callback = getattr(self, "progress_callback", None)
+                        if callback is not None:
+                            await callback(result)
+                        continue
+                    if isinstance(result, str):
+                        ef_idx = result.find("[[DAC_EXECUTION_FLOW]] ")
+                        if ef_idx >= 0:
+                            ef_line = result[ef_idx:]
+                            callback = getattr(self, "progress_callback", None)
+                            if callback is not None:
+                                await callback(ef_line if ef_line.endswith("\n") else ef_line + "\n")
+                            result = result[:ef_idx].strip()
+                            if not result:
+                                continue
                     if self.is_summary_artifact(result):
                         summary_text = self.parse_summary_artifact(result)
                         logger.info(
@@ -1723,6 +1748,11 @@ class ExpertAgent(BaseAgent):
                 )
             else:
                 text = " ".join(agent_texts) if agent_texts else ""
+                if text:
+                    text = "\n".join(
+                        line for line in text.splitlines()
+                        if not self.is_execution_flow_frame(line)
+                    ).strip()
             return (sd, text)
         except Exception as e:
             logger.warning("A2A call failed for agent %s: %s", getattr(agent_card, 'url', ''), e)

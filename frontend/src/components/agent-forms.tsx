@@ -29,6 +29,7 @@ import type {
   SkillPolicy,
   SkillInfoResponse,
   SkillNamespaceResponse,
+  AgentContainerResponse,
 } from "@/lib/api-types"
 import {
   Dialog,
@@ -72,6 +73,11 @@ const formSchema = z
     expertAgentMaxSteps: z.string().optional(),
     orchestratorAgentMaxLoops: z.string().optional(),
     skillAgentMaxLoops: z.string().optional(),
+    agentMode: z.enum(["single", "multi"]).optional(),
+    crossSGMaxHop: z.string().optional(),
+    // 总结配置（仅 skill 类型）
+    summarizeEnabled: z.enum(["true", "false"]).optional(),
+    summarizeCustomPrompt: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     // skill 类型不绑定 DD/SG，无需 dataSourceId
@@ -89,6 +95,22 @@ const formSchema = z
           message: "请选择模型",
           path: ["expertModel"],
         })
+      }
+      if (data.agentMode !== "single") {
+        const hopRaw = (data.crossSGMaxHop || "5").trim()
+        if (!/^[1-9]\d*$/.test(hopRaw)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "跨智能体最大跳数必须为大于等于 1 的整数",
+            path: ["crossSGMaxHop"],
+          })
+        } else if (Number(hopRaw) < 2) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "多智能体模式下跨智能体最大跳数必须大于等于 2",
+            path: ["crossSGMaxHop"],
+          })
+        }
       }
     } else {
       if (!(data.plannerModel || "").trim()) {
@@ -115,8 +137,12 @@ export type CreateAgentPayload = FormValues & {
   expertAgentMaxSteps?: string
   orchestratorAgentMaxLoops?: string
   skillAgentMaxLoops?: string
+  crossSGMaxHop?: string
   /** skill DAC 必填；Semantic Group 可选（驱动 LocalSkill 下载） */
   skillPolicy?: SkillPolicy
+  /** 总结配置 */
+  summarizeEnabled?: string
+  summarizeCustomPrompt?: string
 }
 
 type Skill = {
@@ -177,11 +203,15 @@ export function CreateAgentDialog({
   open,
   onOpenChange,
   onSubmit,
+  initialValues,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (data: CreateAgentPayload) => Promise<void>
+  /** When provided the dialog operates in edit mode — title, button text, and form defaults adapt. */
+  initialValues?: AgentContainerResponse
 }) {
+  const isEdit = !!initialValues
   const [dataDescriptors, setDataDescriptors] = useState<DataDescriptor[]>([])
   const [semanticGroups, setSemanticGroups] = useState<SemanticGroup[]>([])
   const [isLoadingDD, setIsLoadingDD] = useState(false)
@@ -249,8 +279,47 @@ export function CreateAgentDialog({
       expertAgentMaxSteps: "2",
       orchestratorAgentMaxLoops: "0",
       skillAgentMaxLoops: "2",
+      agentMode: "multi",
+      crossSGMaxHop: "5",
+      summarizeEnabled: "true",
+      summarizeCustomPrompt: "",
     },
   })
+
+  // ── Edit mode: pre-fill form when dialog opens with initialValues ──
+  useEffect(() => {
+    if (!open || !initialValues) return
+    const agent = initialValues
+    const model = agent.model ?? {}
+    const llm = model.expertLLM || model.plannerLLM || ""
+    const crossHop = (agent.crossSGMaxHop || "5").trim()
+    const agentMode = crossHop === "1" ? "single" as const : "multi" as const
+
+    form.reset({
+      name: (agent.agentCard?.name || agent.name || "").trim(),
+      plannerModel: llm,
+      expertModel: llm,
+      namespace: agent.namespace || "default",
+      dataSourceType: "skill",
+      dataSourceId: "",
+      description: (agent.agentCard?.description || "").trim(),
+      expertAgentMaxSteps: (agent.expertAgentMaxSteps || "2").trim(),
+      orchestratorAgentMaxLoops: (agent.orchestratorAgentMaxLoops || "0").trim(),
+      skillAgentMaxLoops: (agent.skillAgentMaxLoops || "2").trim(),
+      agentMode,
+      crossSGMaxHop: crossHop,
+      summarizeEnabled: (agent.summarizeEnabled || "true").trim() as "true" | "false",
+      summarizeCustomPrompt: (agent.summarizeCustomPrompt || "").trim(),
+    })
+
+    // Pre-fill skill bindings
+    setSkillPolicySkills(agent.skillPolicy?.skills ?? [])
+    setSkillDetailFailed(false)
+    setSkillDetailErrorMsg(null)
+    setSkills([])
+    setNameTouched(false)
+    setDescTouched(false)
+  }, [open, initialValues]) // eslint-disable-line react-hooks/exhaustive-deps
   const resetAll = () => {
     setSourceOpen(false)
     lastAutoName.current = ""
@@ -285,6 +354,10 @@ export function CreateAgentDialog({
       expertAgentMaxSteps: "2",
       orchestratorAgentMaxLoops: "0",
       skillAgentMaxLoops: "2",
+      agentMode: "multi",
+      crossSGMaxHop: "5",
+      summarizeEnabled: "true",
+      summarizeCustomPrompt: "",
     })
   }
 
@@ -300,6 +373,8 @@ export function CreateAgentDialog({
   const name = useWatch({ control: form.control, name: "name" })
   const description = useWatch({ control: form.control, name: "description" })
   const dataSourceId = useWatch({ control: form.control, name: "dataSourceId" })
+  const agentMode = useWatch({ control: form.control, name: "agentMode" })
+  const summarizeEnabled = useWatch({ control: form.control, name: "summarizeEnabled" })
 
   // State for user interaction tracking (to avoid overwriting user input)
   const [nameTouched, setNameTouched] = useState(false)
@@ -319,9 +394,15 @@ export function CreateAgentDialog({
   /** availableVersions keyed by `${namespace}/${name}` for version picker */
   const [skillVersionsByKey, setSkillVersionsByKey] = useState<Record<string, string[]>>({})
 
+  const lastSkillInit = useRef(false)
+
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      lastSkillInit.current = false
+      return
+    }
     if (dataSourceType === "descriptor") {
+      lastSkillInit.current = false
       form.setValue("orchestratorAgentMaxLoops", "0", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "2", { shouldDirty: false, shouldTouch: false })
     } else if (dataSourceType === "skill") {
@@ -329,7 +410,14 @@ export function CreateAgentDialog({
       form.setValue("orchestratorAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "10", { shouldDirty: false, shouldTouch: false })
       form.setValue("skillAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
+      // Only seed hop/mode when entering skill, otherwise a re-run would wipe user input (e.g. 3 → 5).
+      if (!lastSkillInit.current) {
+        form.setValue("agentMode", "multi", { shouldDirty: false, shouldTouch: false })
+        form.setValue("crossSGMaxHop", "5", { shouldDirty: false, shouldTouch: false })
+        lastSkillInit.current = true
+      }
     } else {
+      lastSkillInit.current = false
       form.setValue("orchestratorAgentMaxLoops", "1", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
     }
@@ -867,6 +955,9 @@ export function CreateAgentDialog({
           expertAgentMaxSteps: values.expertAgentMaxSteps || "10",
           orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "2",
           skillAgentMaxLoops: values.skillAgentMaxLoops || "2",
+          crossSGMaxHop: values.agentMode === "single" ? "1" : values.crossSGMaxHop || "5",
+          summarizeEnabled: values.summarizeEnabled || "true",
+          summarizeCustomPrompt: values.summarizeCustomPrompt || "",
         })
         handleOpenChange(false)
         return
@@ -925,9 +1016,9 @@ export function CreateAgentDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[720px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
-          <DialogTitle>新建智能体</DialogTitle>
+          <DialogTitle>{isEdit ? "编辑智能体" : "新建智能体"}</DialogTitle>
           <DialogDescription>
-            创建一个新的智能体，绑定数据源并指定使用的大模型。
+            {isEdit ? "修改智能体配置。当前仅 skill 类型智能体支持编辑。" : "创建一个新的智能体，绑定数据源并指定使用的大模型。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -952,7 +1043,7 @@ export function CreateAgentDialog({
                             setSkillVersionsByKey({})
                           }
                         }}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isEdit}
                       >
                         <FormControl>
                           <SelectTrigger className="w-full">
@@ -1070,7 +1161,7 @@ export function CreateAgentDialog({
                         <Input
                           placeholder="例如：agent-datadescriptor-00001"
                           {...field}
-                          disabled={isSubmitting}
+                          disabled={isSubmitting || isEdit}
                           onChange={(e) => {
                             setNameTouched(true)
                             field.onChange(e)
@@ -1131,7 +1222,7 @@ export function CreateAgentDialog({
                             field.onChange(val)
                           }}
                           onOpenChange={() => {}}
-                          disabled={isSubmitting || isLoadingNs}
+                          disabled={isSubmitting || isEdit || isLoadingNs}
                         >
                           <FormControl>
                             <SelectTrigger>
@@ -1231,6 +1322,65 @@ export function CreateAgentDialog({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <FormField
                         control={form.control}
+                        name="agentMode"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>智能体模式</FormLabel>
+                            <Select
+                              onValueChange={(val) => {
+                                field.onChange(val)
+                                if (val === "single") {
+                                  form.setValue("crossSGMaxHop", "1", { shouldValidate: true })
+                                } else {
+                                  const current = Number((form.getValues("crossSGMaxHop") || "").trim())
+                                  if (!Number.isInteger(current) || current < 2) {
+                                    form.setValue("crossSGMaxHop", "5", { shouldValidate: true })
+                                  }
+                                }
+                              }}
+                              value={field.value || "multi"}
+                            >
+                              <FormControl>
+                                <SelectTrigger className="w-full" disabled={isSubmitting}>
+                                  <SelectValue placeholder="选择模式" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent position="popper" side="bottom" align="start" sideOffset={6}>
+                                <SelectItem value="single">单智能体</SelectItem>
+                                <SelectItem value="multi">多智能体</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormDescription>
+                              单智能体不跨语义组委托（跳数为 1）；多智能体须设置大于等于 2 的跳数。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      {agentMode !== "single" ? (
+                        <FormField
+                          control={form.control}
+                          name="crossSGMaxHop"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>跨智能体最大跳数</FormLabel>
+                              <FormControl>
+                                <Input
+                                  placeholder="须 ≥ 2，默认 5"
+                                  {...field}
+                                  disabled={isSubmitting}
+                                />
+                              </FormControl>
+                              <FormDescription>须大于等于 2，默认 5。</FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      ) : null}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <FormField
+                        control={form.control}
                         name="skillAgentMaxLoops"
                         render={({ field }) => (
                           <FormItem>
@@ -1264,6 +1414,64 @@ export function CreateAgentDialog({
                         )}
                       />
                     </div>
+
+                  {/* ── 总结配置（仅 skill 类型） ── */}
+                  <div className="space-y-3 rounded-lg border border-line bg-surface p-4">
+                    <div className="text-xs font-semibold text-content-muted">总结配置</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <FormField
+                        control={form.control}
+                        name="summarizeEnabled"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>开启总结</FormLabel>
+                            <Select
+                              value={field.value || "true"}
+                              onValueChange={field.onChange}
+                              disabled={isSubmitting}
+                            >
+                              <FormControl>
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="是否启用 LLM 总结" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="true">开启（默认）</SelectItem>
+                                <SelectItem value="false">关闭（直接透传 skill 结果）</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormDescription>
+                              关闭后所有智能体直接输出 skill 原始结果，不进行 LLM 总结
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    {summarizeEnabled !== "false" && (
+                      <FormField
+                        control={form.control}
+                        name="summarizeCustomPrompt"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>自定义总结提示词</FormLabel>
+                            <FormControl>
+                              <Textarea
+                                placeholder="可选。不填则使用默认提示词"
+                                className="min-h-[200px]"
+                                {...field}
+                                disabled={isSubmitting}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              仅在多智能体模式下发生实际协作时生效。为空时使用系统默认总结策略
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
+                  </div>
                   </div>
                 ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1748,7 +1956,7 @@ export function CreateAgentDialog({
                 }
               >
                 {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                创建智能体
+                {isEdit ? "保存修改" : "创建智能体"}
           </Button>
         </DialogFooter>
           </form>

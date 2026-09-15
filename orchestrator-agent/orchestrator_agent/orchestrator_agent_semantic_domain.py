@@ -56,7 +56,7 @@ from langfuse.langchain import CallbackHandler
 from .agentregistry_client import AgentRegistryClient
 from .agent_card_resolve import resolve_agent_card_by_planner_name
 from langchain_core.tools import tool, StructuredTool
-from .tool_call_utils import invoke_llm_with_tool
+from .tool_call_utils import invoke_llm_with_tool, safe_langfuse_flush
 
 try:
     from skill_sdk.skill.runner import SkillRunner  # noqa: F401  (used when local skills enabled)
@@ -77,6 +77,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 PROGRESS_FRAME_PREFIX = "[[DAC_PROGRESS]] "
+EXECUTION_FLOW_FRAME_PREFIX = "[[DAC_EXECUTION_FLOW]] "
 SUMMARY_FRAME_PREFIX = "[[DAC_SUMMARY]] "
 
 # Planner: upstream orchestration outcomes (metadata.extra_context), not RAG knowledge.
@@ -1469,7 +1470,7 @@ class PlannerAgent(BaseAgent):
                 }
             )
 
-        langfuse.flush()
+        await safe_langfuse_flush(langfuse)
 
         if tasks is None:
             logger.warning(
@@ -1666,8 +1667,6 @@ class OrchestratorAgent(BaseAgent):
             for s in (self.skill_runner.lister.skills or []):
                 name = str(getattr(s, "name", "") or "").strip()
                 desc = str(getattr(s, "description", "") or "").strip().replace("\n", " ")
-                if len(desc) > 140:
-                    desc = desc[:140] + "..."
                 if name:
                     lines.append(f"- {name}: {desc}")
         except Exception:  # noqa: BLE001
@@ -1681,15 +1680,10 @@ class OrchestratorAgent(BaseAgent):
                 "planner will see a no-op capability"
             )
         else:
-            preview = lines[:30]
-            description = "本地技能执行器，可在本进程内直接运行以下技能：\n" + "\n".join(preview)
-            if len(lines) > 30:
-                description += f"\n（另有 {len(lines) - 30} 个技能未列出）"
+            description = "\n" + "\n".join(lines)
             logger.info(
-                "[LocalSkill][CardBuild] rendered AgentCard: skills_count=%d (shown=%d, hidden=%d)",
+                "[LocalSkill][CardBuild] rendered AgentCard: skills_count=%d",
                 len(lines),
-                min(len(lines), 30),
-                max(0, len(lines) - 30),
             )
         return AgentCard(
             name=self.local_skill_agent_name,
@@ -2464,6 +2458,35 @@ class OrchestratorAgent(BaseAgent):
         return isinstance(text, str) and text.lstrip().startswith(PROGRESS_FRAME_PREFIX)
 
     @staticmethod
+    def is_execution_flow_frame(text: str) -> bool:
+        """EF frames must not mix into LLM body; prefix is distinct from DAC Progress."""
+        return isinstance(text, str) and text.lstrip().startswith(EXECUTION_FLOW_FRAME_PREFIX)
+
+    @classmethod
+    def strip_execution_flow_lines(cls, text: str) -> str:
+        """Remove EF frame lines so they cannot pollute LLM prompts or user answers."""
+        if not text:
+            return ""
+        lines = [line for line in text.splitlines() if not cls.is_execution_flow_frame(line)]
+        return "\n".join(lines).strip()
+
+    @classmethod
+    def peel_execution_flow_text(cls, text: str) -> tuple[str, Optional[str]]:
+        """Split mixed text into (clean_body, ef_frame_or_none)."""
+        if not isinstance(text, str) or not text:
+            return text or "", None
+        if cls.is_execution_flow_frame(text):
+            return "", text if text.endswith("\n") else text + "\n"
+        idx = text.find(EXECUTION_FLOW_FRAME_PREFIX)
+        if idx < 0:
+            return text, None
+        clean = text[:idx].strip()
+        ef = text[idx:]
+        if not ef.endswith("\n"):
+            ef += "\n"
+        return clean, ef
+
+    @staticmethod
     def _truncate_progress_message(text: str, limit: int = 320) -> str:
         raw = (text or "").replace("\n", " ").strip()
         if len(raw) <= limit:
@@ -2771,8 +2794,19 @@ class OrchestratorAgent(BaseAgent):
                                 agent_name,
                             )
                             continue
+                        clean_text, ef_frame = self.peel_execution_flow_text(result)
+                        if ef_frame is not None:
+                            # Non-stream path has no updater; drop EF so it does not leak into LLM text.
+                            logger.info(
+                                "[ExecutionFlow][SD-Orchestrator][a2a_non_stream] drop EF from LLM body target=%s chars=%d",
+                                agent_name,
+                                len(ef_frame),
+                            )
+                            if not clean_text:
+                                continue
+                            result = clean_text
                         agent_knowledge.append(result)
-                return " ".join(agent_knowledge)
+                return self.strip_execution_flow_lines(" ".join(agent_knowledge))
 
             except Exception as e:
                 logger.error(f"An error occurred: {e}")
@@ -3382,6 +3416,21 @@ class OrchestratorAgent(BaseAgent):
                                 if self.debug == 1:
                                     think.append(agent_step_knowledge)
                                 continue
+                            clean_text, ef_frame = self.peel_execution_flow_text(agent_step_knowledge)
+                            if ef_frame is not None:
+                                logger.info(
+                                    "[ExecutionFlow][SD-Orchestrator][a2a_tasks] forward EF task_id=%s agent=%s chars=%d",
+                                    task.id,
+                                    task.agent,
+                                    len(ef_frame),
+                                )
+                                await updater.add_artifact(
+                                    [TextPart(text=ef_frame)],
+                                    name="execution-flow",
+                                )
+                                if not clean_text:
+                                    continue
+                                agent_step_knowledge = clean_text
                             if self.debug == 1:
                                 agent_knowledge_step = f"{agent_step_knowledge} \n"
                                 await updater.add_artifact(
@@ -3391,7 +3440,9 @@ class OrchestratorAgent(BaseAgent):
                                 think.append(agent_knowledge_step)
                             agent_steps_knowledge.append(agent_step_knowledge)
 
-                        agent_steps_knowledge_str = "\n".join(agent_steps_knowledge)
+                        agent_steps_knowledge_str = self.strip_execution_flow_lines(
+                            "\n".join(agent_steps_knowledge)
+                        )
                         log_size_trace(
                             "task-result-stream",
                             retry_count=retry_count,
@@ -3462,6 +3513,7 @@ class OrchestratorAgent(BaseAgent):
                 else:
                     try:
                         agent_result = await self.a2a_non_stream(task.description, task.agent)
+                        agent_result = self.strip_execution_flow_lines(agent_result or "")
                         agent_knowledge_step = f"Task [{task.id}]: {task.description}; \nResult:\n {agent_result} \n"
                         log_size_trace(
                             "task-result-non-stream",
@@ -3995,7 +4047,7 @@ class OrchestratorAgent(BaseAgent):
 
             span.update_trace(output={"answer": "".join(final_answer)})
 
-        langfuse.flush()
+        await safe_langfuse_flush(langfuse)
 
         log_size_trace(
             "summary-output",
@@ -4765,7 +4817,7 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
                 "``code_exec`` will be missing; model may fall back to plan_cmd/python."
             )
             return None
-        inst = CodeExecution(llm=llm, max_retries=CODE_EXEC_MAX_RETRIES)
+        inst = CodeExecution(llm=llm, max_retries=CODE_EXEC_MAX_RETRIES, agent_name=self.agent_id or "LocalSkill")
         logger.info(
             "[LocalSkill][Init] CodeExecution enabled (max_retries=%s) — ReAct exposes code_exec",
             CODE_EXEC_MAX_RETRIES,
@@ -4813,6 +4865,7 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
                     cmd_timeout_sec=LOCAL_SKILL_CMD_TIMEOUT_SEC,
                     max_concurrency=LOCAL_SKILL_MAX_CONCURRENCY,
                     code_execution=code_execution,
+                    agent_name=self.agent_id or "LocalSkill",
                 )
             except TypeError:
                 logger.warning(
@@ -4825,6 +4878,7 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
                     max_steps=LOCAL_SKILL_MAX_STEPS,
                     cmd_timeout_sec=LOCAL_SKILL_CMD_TIMEOUT_SEC,
                     code_execution=code_execution,
+                    agent_name=self.agent_id or "LocalSkill",
                 )
             if LOCAL_SKILLS_DIR:
                 load_t0 = _time.perf_counter()

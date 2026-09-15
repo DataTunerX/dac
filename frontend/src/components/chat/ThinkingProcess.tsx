@@ -10,6 +10,7 @@ import {
   Loader2,
   RefreshCw,
   BrainCircuit,
+  GitBranch,
   XCircle,
   AlertTriangle,
 } from "lucide-react"
@@ -23,6 +24,8 @@ import { cn } from "@/lib/utils"
 import { getProgressDetails, getProgressRowDisplay, shouldShowProgressItem } from "@/lib/chat-progress"
 import type { ChatProgressPayload } from "@/lib/api-types"
 import { EMPTY_PROGRESS } from "@/components/chat/chat-message-types"
+import { EMPTY_EXECUTION_FLOW, type ExecutionFlowTask } from "@/lib/execution-flow"
+import { ExecutionMapPanel } from "@/components/chat/ExecutionMapPanel"
 
 // 抽到模块级，避免在 ThinkingProcess 内定义导致每次父组件重渲染（如滚动）时被当作新组件 remount、state 丢失
 function chevronIcon(open: boolean, className = "w-4 h-4 text-content-muted shrink-0") {
@@ -194,6 +197,7 @@ export const ThinkingProcess = ({
   isThinking,
   isLive,
   progressList = EMPTY_PROGRESS,
+  executionFlowList = EMPTY_EXECUTION_FLOW,
   startedAt,
   elapsedSec,
 }: {
@@ -202,15 +206,15 @@ export const ThinkingProcess = ({
   isLive?: boolean
   /** Progress events shown under "思考中" (cards with event · agent · message). */
   progressList?: readonly ChatProgressPayload[]
+  /** Execution Flow tasks for the execution map panel. */
+  executionFlowList?: readonly ExecutionFlowTask[]
   /** Session-level stream start (ms); survives conversation switches. */
   startedAt?: number | null
   /** Frozen duration (seconds) after stream ends. */
   elapsedSec?: number | null
 }) => {
-  // Open by default: the log is the point of the panel, and keeping it behind a
-  // click meant the planning and reasoning the agents produce were never seen.
-  // Collapsing is still one click away and the choice sticks for this message.
-  const [userExpanded, setUserExpanded] = useState(true)
+  const [userExpanded, setUserExpanded] = useState(false)
+  const [mapOpen, setMapOpen] = useState(false)
   const wasThinkingOrLiveRef = useRef(false)
   useEffect(() => {
     const now = Boolean(isLive || isThinking)
@@ -694,11 +698,13 @@ export const ThinkingProcess = ({
   const reasoningActive = Boolean(isLive && isThinking)
 
   const hasProgress = progressList.length > 0
+  const hasExecutionFlow = executionFlowList.length > 0
   const hasReasoning = content.trim().length > 0
+  const showExecutionMap = hasExecutionFlow || Boolean(isLive || isThinking)
 
   // Keep the panel visible after streaming if we have frozen progress cards,
   // even when the backend didn't emit textual reasoning_content.
-  if (!isThinking && !hasReasoning && !hasProgress) return null
+  if (!isThinking && !hasReasoning && !hasProgress && !hasExecutionFlow) return null
 
   const isExpanded = userExpanded
 
@@ -711,13 +717,14 @@ export const ThinkingProcess = ({
           100% { transform: translateX(100%); }
         }
       `}</style>
-      <button
-        type="button"
-        className="w-full flex items-center py-2 text-left transition-colors select-none cursor-pointer"
-        onClick={() => setUserExpanded((v) => !v)}
-        aria-expanded={isExpanded}
-        aria-label={isExpanded ? "收起思考过程" : "展开思考过程"}
-      >
+      <div className="w-full flex items-center gap-2 py-2">
+        <button
+          type="button"
+          className="flex-1 min-w-0 flex items-center text-left transition-colors select-none cursor-pointer"
+          onClick={() => setUserExpanded((v) => !v)}
+          aria-expanded={isExpanded}
+          aria-label={isExpanded ? "收起思考过程" : "展开思考过程"}
+        >
         <div className="flex items-center gap-2 text-base text-content">
           {isThinking ? (
             <Loader2 className="w-4 h-4 animate-spin text-cta" />
@@ -734,7 +741,28 @@ export const ThinkingProcess = ({
             </span>
           </span>
         </div>
-      </button>
+        </button>
+        {showExecutionMap ? (
+          // Sibling of the thinking toggle (Q2): same row, not nested inside the <button>.
+          <button
+            type="button"
+            className="shrink-0 inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md text-[12px] font-medium text-content border border-line bg-surface hover:bg-surface-muted"
+            onClick={() => setMapOpen(true)}
+            aria-label="打开执行地图"
+          >
+            <GitBranch className="w-3.5 h-3.5 text-cta" />
+            执行地图
+            <span className="text-content-muted">({executionFlowList.length})</span>
+          </button>
+        ) : null}
+      </div>
+
+      <ExecutionMapPanel
+        open={mapOpen}
+        onOpenChange={setMapOpen}
+        tasks={executionFlowList}
+        isLive={Boolean(isLive)}
+      />
 
       {isExpanded ? (
         <div ref={scrollRef} className="mt-2 max-h-[60vh] overflow-y-auto rounded-lg border border-line/60 bg-surface-muted/20 p-3">

@@ -4,8 +4,9 @@ import dynamic from "next/dynamic"
 import { memo, useMemo } from "react"
 import type { ChatProgressPayload } from "@/lib/api-types"
 import { ChatMarkdown } from "@/components/markdown-chat"
-import { stripModelLeakTags, stripModelLeakLines } from "@/lib/strip-model-leak-tags"
+import { stripModelLeakTags, stripModelLeakLines, stripDacProtocolLines } from "@/lib/strip-model-leak-tags"
 import { ChatMessage, EMPTY_PROGRESS } from "@/components/chat/chat-message-types"
+import { EMPTY_EXECUTION_FLOW, type ExecutionFlowTask } from "@/lib/execution-flow"
 
 const ThinkingProcess = dynamic(
   () =>
@@ -21,6 +22,7 @@ export interface AssistantMessageBodyProps {
   readonly messagesLength: number
   readonly isStreaming: boolean
   readonly streamProgressList: readonly ChatProgressPayload[]
+  readonly streamExecutionFlowList?: readonly ExecutionFlowTask[]
   readonly streamStartedAt?: number | null
   readonly thinkingElapsedSec?: number | null
 }
@@ -32,11 +34,12 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
   messagesLength,
   isStreaming,
   streamProgressList,
+  streamExecutionFlowList = EMPTY_EXECUTION_FLOW,
   streamStartedAt,
   thinkingElapsedSec,
 }: AssistantMessageBodyProps) {
-  const thinking = stripModelLeakTags((msg.reasoning_content ?? "").trim())
-  const answer = stripModelLeakLines(stripModelLeakTags(msg.content ?? ""))
+  const thinking = stripDacProtocolLines(stripModelLeakTags((msg.reasoning_content ?? "").trim()))
+  const answer = stripDacProtocolLines(stripModelLeakLines(stripModelLeakTags(msg.content ?? "")))
   const isLastMessage = index === messagesLength - 1
   const hasVisibleAnswer = answer.trim().length > 0
   const isThinkingNow = isLastMessage && isStreaming && !hasVisibleAnswer
@@ -48,8 +51,18 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
     return EMPTY_PROGRESS
   }, [isLastMessage, msg.progressList, streamProgressList])
 
+  const executionFlowList = useMemo<readonly ExecutionFlowTask[]>(() => {
+    // Historical messages use frozen executionFlowList; the live last message
+    // prefers frozen data if present, otherwise the in-flight stream list.
+    if (!isLastMessage) return msg.executionFlowList ?? EMPTY_EXECUTION_FLOW
+    if (msg.executionFlowList && msg.executionFlowList.length > 0) return msg.executionFlowList
+    if (streamExecutionFlowList.length > 0) return streamExecutionFlowList
+    return EMPTY_EXECUTION_FLOW
+  }, [isLastMessage, msg.executionFlowList, streamExecutionFlowList])
+
   const hasProgress = progressList.length > 0
-  const showThinking = thinking.length > 0 || hasProgress || (isThinkingNow && isLastMessage)
+  const hasExecutionFlow = executionFlowList.length > 0
+  const showThinking = thinking.length > 0 || hasProgress || hasExecutionFlow || (isThinkingNow && isLastMessage)
 
   return (
     <>
@@ -59,6 +72,7 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
           isThinking={isThinkingNow}
           isLive={isLastMessage && isStreaming}
           progressList={progressList}
+          executionFlowList={executionFlowList}
           startedAt={isLastMessage ? streamStartedAt : undefined}
           elapsedSec={isLastMessage ? thinkingElapsedSec : undefined}
         />

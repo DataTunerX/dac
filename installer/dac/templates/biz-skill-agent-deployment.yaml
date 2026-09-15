@@ -78,6 +78,10 @@ spec:
             - name: CROSS_SG_MID_EXEC_ROUNDS
               value: {{ .Values.bizSkillAgent.config.crossSGMidExecRounds | default "5" | quote }}
             {{- include "dac.enableThinkingEnv" . | nindent 12 }}
+            - name: SUMMARIZE_ENABLED
+              value: {{ .Values.bizSkillAgent.config.summarizeEnabled | default "true" | quote }}
+            - name: SUMMARIZE_CUSTOM_PROMPT
+              value: {{ .Values.bizSkillAgent.config.summarizeCustomPrompt | default "" | quote }}
           args:
             {{- include "dac.redisArgs" (dict "context" . "redisDB" .Values.bizSkillAgent.config.redisDb) | nindent 12 }}
             {{- include "dac.llmArgs" . | nindent 12 }}

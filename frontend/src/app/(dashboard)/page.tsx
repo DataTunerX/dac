@@ -16,7 +16,8 @@ import { cn } from "@/lib/utils"
 import { ChatInput } from "@/components/chat/ChatInput"
 import { AssistantMessageBody } from "@/components/chat/AssistantMessageBody"
 import { EMPTY_PROGRESS } from "@/components/chat/chat-message-types"
-import { stripModelLeakTags } from "@/lib/strip-model-leak-tags"
+import { EMPTY_EXECUTION_FLOW } from "@/lib/execution-flow"
+import { stripDacProtocolLines, stripModelLeakTags } from "@/lib/strip-model-leak-tags"
 import {
   EMPTY_SESSION_STATE,
   markOptimisticRunId,
@@ -68,7 +69,7 @@ function ChatContent() {
   const regenerate = useChatStore((s) => s.regenerate)
   const startNew = useChatStore((s) => s.startNew)
 
-  const { messages, storeInput, isLoading, isStreaming, streamProgressList, streamStartedAt, thinkingElapsedSec } = useChatStore(
+  const { messages, storeInput, isLoading, isStreaming, streamProgressList, streamExecutionFlowList, streamStartedAt, thinkingElapsedSec } = useChatStore(
     useShallow((state) => {
       const session = runId ? state.sessions[runId] : undefined
       return {
@@ -78,6 +79,7 @@ function ChatContent() {
         isLoading: session?.isLoading ?? false,
         isStreaming: session?.isStreaming ?? false,
         streamProgressList: session?.streamProgressList ?? EMPTY_SESSION_STATE.streamProgressList,
+        streamExecutionFlowList: session?.streamExecutionFlowList ?? EMPTY_SESSION_STATE.streamExecutionFlowList,
         streamStartedAt: session?.streamStartedAt ?? EMPTY_SESSION_STATE.streamStartedAt,
         thinkingElapsedSec: session?.thinkingElapsedSec ?? EMPTY_SESSION_STATE.thinkingElapsedSec,
       }
@@ -216,7 +218,8 @@ function ChatContent() {
   const scrollContentKey =
     (lastMessage?.content?.length ?? 0) +
     (lastMessage?.reasoning_content?.length ?? 0) +
-    streamProgressList.length
+    streamProgressList.length +
+    streamExecutionFlowList.length
 
   useEffect(() => {
     if (!autoScrollRef.current) return
@@ -362,6 +365,9 @@ function ChatContent() {
                           streamProgressList={
                             index === messages.length - 1 ? streamProgressList : EMPTY_PROGRESS
                           }
+                          streamExecutionFlowList={
+                            index === messages.length - 1 ? streamExecutionFlowList : EMPTY_EXECUTION_FLOW
+                          }
                           streamStartedAt={index === messages.length - 1 ? streamStartedAt : undefined}
                           thinkingElapsedSec={index === messages.length - 1 ? thinkingElapsedSec : undefined}
                         />
@@ -373,7 +379,7 @@ function ChatContent() {
                             className="h-6 w-6 text-content-muted hover:text-content hover:bg-surface-muted rounded-md"
                             onClick={async () => {
                               try {
-                                await copyToClipboard(stripModelLeakTags(msg.content || ""))
+                                await copyToClipboard(stripDacProtocolLines(stripModelLeakTags(msg.content || "")))
                                 toast.success("已复制到剪贴板")
                               } catch (e) {
                                 console.error("Copy failed", e)
