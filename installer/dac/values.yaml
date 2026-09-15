@@ -932,7 +932,15 @@ bizSkillAgent:
     skillSyncEnabled: "true"
     # -- Poll interval in seconds. Set to 0 to disable monitoring.
     skillSyncInterval: "30"
-    # -- Pull newly published skills in addition to configured startup skills.
+    # -- Controls the scope of continuous SkillSync discovery
+    #    (env: SKILL_SYNC_WATCH_ALL). "false" does not disable SkillSync: the
+    #    agent still polls skill-hub and hot-loads new versions of the skills
+    #    configured for that agent at startup. Set to "true" only when this
+    #    shared agent should discover and import every skill visible in
+    #    skill-hub, including skills that were not assigned to it. Dedicated
+    #    skill agents should normally keep this "false"; this also matches the
+    #    current fw-worker configuration for biz-skill-agent and all DAC skill
+    #    agent workloads.
     skillSyncWatchAll: "false"
     # -- Builtin platform skill-agent only (not page-created DACs).
     #    Maximum cross-SG delegation hops (env: CROSS_SG_MAX_HOP)
