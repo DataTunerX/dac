@@ -6559,7 +6559,7 @@ class SkillAgentExecutor(AgentExecutor):
 
         try:
             max_attempts = int(os.getenv("CAPABILITY_CHECK_MAX_ATTEMPTS", "3"))
-            llm = self._get_orchestration_llm()
+            planner = self._get_planner()
 
             # ═══ Phase 1: Domain overlap check ═══
             domain_prompt = DOMAIN_CHECK_PROMPT.format(
@@ -6583,7 +6583,12 @@ class SkillAgentExecutor(AgentExecutor):
                     else [HumanMessage(content=domain_prompt), AIMessage(content=""), nudge]
                 )
                 try:
-                    answer = await llm.ainvoke(attempt_messages)
+                    answer = await planner._ainvoke_plain_plan(
+                        attempt_messages,
+                        span_name=f"skill-agent-capability-domain-attempt-{attempt}",
+                        query=query,
+                        agent_name=agent_name,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "[Capability][Domain] attempt %d: LLM invoke failed: %s: %s",
@@ -6718,7 +6723,12 @@ class SkillAgentExecutor(AgentExecutor):
                     else [HumanMessage(content=chain_prompt), AIMessage(content=""), nudge]
                 )
                 try:
-                    answer = await llm.ainvoke(attempt_messages)
+                    answer = await planner._ainvoke_plain_plan(
+                        attempt_messages,
+                        span_name=f"skill-agent-capability-chain-attempt-{attempt}",
+                        query=query,
+                        agent_name=agent_name,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "[Capability][JSON] attempt %d: LLM invoke failed: %s: %s",
