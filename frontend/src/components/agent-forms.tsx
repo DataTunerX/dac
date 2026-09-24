@@ -428,6 +428,8 @@ export function CreateAgentDialog({
       lastSkillInit.current = false
       return
     }
+    // 编辑时循环数和步数以 CR 为准。这段默认值只用于新建时切换数据源类型。
+    if (isEdit) return
     if (dataSourceType === "descriptor") {
       lastSkillInit.current = false
       form.setValue("orchestratorAgentMaxLoops", "0", { shouldDirty: false, shouldTouch: false })
@@ -448,7 +450,7 @@ export function CreateAgentDialog({
       form.setValue("orchestratorAgentMaxLoops", "1", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
     }
-  }, [open, dataSourceType, form])
+  }, [open, isEdit, dataSourceType, form])
 
   // Enter skill branch: clear DD/SG-derived skills; AgentCard skills filled from hub detail only
   useEffect(() => {

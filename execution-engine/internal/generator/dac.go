@@ -184,16 +184,9 @@ func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.D
 		if err != nil {
 			return err
 		}
-
-		deploymentName := h.GenerateDataAgentContainerDeploymentName(dac)
-		if _, err := h.K8sServices.GetDeployment(dac.Namespace, deploymentName); err != nil {
-			if !errors.IsNotFound(err) {
-				return err
-			}
-			err = h.K8sServices.CreateDeployment(dac.Namespace, deployment)
-			if err != nil {
-				return err
-			}
+		// Same as ds: update an existing Deployment so model, loop limits, overview, and skills roll Pods.
+		if err := h.K8sServices.CreateOrUpdateDeployment(dac.Namespace, deployment); err != nil {
+			return err
 		}
 	}
 
