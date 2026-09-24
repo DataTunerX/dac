@@ -1096,6 +1096,13 @@ class TestHopResetCrossTurn:
 class TestDAGCyclePrevention:
     """验证 CROSS_SG_ENFORCE_DAG=true 时 A→B→A 的回环被阻止。"""
 
+    def test_dag_enforcement_defaults_off(self, monkeypatch):
+        monkeypatch.delenv("CROSS_SG_ENFORCE_DAG", raising=False)
+        inst = object.__new__(SkillAgentExecutor)
+        assert inst._dag_enforcement_enabled() is False
+        monkeypatch.setenv("CROSS_SG_ENFORCE_DAG", "true")
+        assert inst._dag_enforcement_enabled() is True
+
     @pytest.mark.asyncio
     async def test_planner_pool_filters_out_chain_agents(self):
         """DAG Layer 2: planner 阶段的 agent 池过滤掉已在链中的 agent。"""

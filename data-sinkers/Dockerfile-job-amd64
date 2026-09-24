@@ -11,7 +11,8 @@ RUN apt install -y vim curl libglib2.0-0 libgl1-mesa-dev
 RUN python3 -m pip install -U 'mineru[core]' -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Download models and update the configuration file
-RUN /bin/bash -c "mineru-models-download -s modelscope -m pipeline"
+# MinerU 4.x: --tier basic (ONNX small models, ~0.8GB, CPU only, no VLM)
+RUN mineru-models-download --tier basic --source modelscope
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends tzdata && \

@@ -140,6 +140,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	descriptorRepo := k8s.NewDataDescriptorRepository(k8sClient)
 	descriptorUsecase := usecase.NewDataDescriptorUsecase(descriptorRepo, dsAdapter, appLogger)
 	descriptorHandler := handler.NewDataDescriptorHandler(descriptorUsecase, appLogger)
+	descriptorHandler.SetKubernetes(k8sClient.GetClientset())
 
 	// Semantic Domain module (data-services)
 	semanticDomainUsecase := usecase.NewSemanticDomainUsecase(dsAdapter, appLogger)
@@ -297,6 +298,9 @@ func runServer(cmd *cobra.Command, args []string) {
 		server.WithWriteTimeout(cfg.GetWriteTimeout()),
 		server.WithMaxRequestBodySize(cfg.Server.MaxRequestBodySize*1024*1024),
 		server.WithTransport(netpoll.NewTransporter),
+		// Cancels the handler context when the browser closes a stream,
+		// so a followed pod log stops instead of running until the job ends.
+		server.WithSenseClientDisconnection(true),
 	)
 
 	// Setup routes

@@ -335,6 +335,15 @@ func (a *DataServicesAdapter) ListSemanticGroupRoots(ctx context.Context) ([]dom
 	return out, total, nil
 }
 
+// CreateDDGroupRelation implements domain.DataServicesClient.
+func (a *DataServicesAdapter) CreateDDGroupRelation(ctx context.Context, req map[string]any) (*domain.DDGroupRelation, error) {
+	r, err := a.client.CreateDDGroupRelation(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return toDomainDDGroupRelation(r), nil
+}
+
 // ListDDGroupRelationsByGroup implements domain.DataServicesClient.
 func (a *DataServicesAdapter) ListDDGroupRelationsByGroup(ctx context.Context, groupID string) ([]domain.DDGroupRelation, int, error) {
 	list, total, err := a.client.ListDDGroupRelationsByGroup(ctx, groupID)

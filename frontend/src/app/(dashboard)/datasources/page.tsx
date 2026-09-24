@@ -41,7 +41,9 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { TableWrapper } from "@/components/ui/table-wrapper"
-import { Plus, Eye, Loader2, RefreshCw, Trash2, Box } from "lucide-react"
+import { Plus, Eye, Loader2, RefreshCw, Trash2, Box, ScrollText } from "lucide-react"
+import { DataSourceJobLogDialog } from "@/components/data-source-job-log-dialog"
+import { canViewSinkerJobLogs, SINKER_JOB_LOG_PERMISSION } from "@/lib/sinker-job-logs"
 import { CreateDataSourceDialog } from "@/components/data-source-forms"
 import { toast } from "sonner"
 import { BrandIcon } from "@/components/brand-icon"
@@ -169,6 +171,7 @@ export default function DataSourcesPage() {
   const [confirmDeleteAgent, setConfirmDeleteAgent] = useState<DataDescriptorDependency | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deletingKeys, setDeletingKeys] = useState<Set<string>>(new Set())
+  const [logTarget, setLogTarget] = useState<{ namespace: string; name: string } | null>(null)
 
   const [pageSize, setPageSize] = useState(20)
   const [page, setPage] = useState(1)
@@ -529,6 +532,19 @@ export default function DataSourcesPage() {
                     >
                         <Eye className="w-4 h-4 text-content-muted" />
                     </Button>
+                    {canViewSinkerJobLogs(ds.status) ? (
+                      <RbacWrapper requiredPermission={SINKER_JOB_LOG_PERMISSION}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setLogTarget({ namespace: ds.namespace, name: ds.name })}
+                          title="查看日志"
+                          aria-label="查看日志"
+                        >
+                          <ScrollText className="w-4 h-4 text-content-muted" />
+                        </Button>
+                      </RbacWrapper>
+                    ) : null}
                     <RbacWrapper requiredPermission="descriptor:delete">
                       <Button
                         variant="ghost"
@@ -568,6 +584,15 @@ export default function DataSourcesPage() {
         open={isCreateOpen} 
         onOpenChange={setIsCreateOpen} 
         onSubmit={handleCreate} 
+      />
+
+      <DataSourceJobLogDialog
+        open={logTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setLogTarget(null)
+        }}
+        namespace={logTarget?.namespace ?? ""}
+        name={logTarget?.name ?? ""}
       />
 
       {/* 依赖关系提示弹窗（抄配置管理的交互） */}

@@ -463,6 +463,13 @@ class AsyncSemanticGroupService:
                     getattr(semantic_group, 'parent_id', None),
                     group_id
                 ))
+                if result > 0:
+                    logger.info(
+                        "updated semantic_group id=%s group_name=%s version=%s",
+                        group_id,
+                        semantic_group.group_name,
+                        version,
+                    )
                 return result > 0
         except Error as e:
             logger.error(f"Update semantic group record error: {e}")
@@ -552,6 +559,12 @@ class AsyncSemanticGroupService:
         try:
             async with self._get_cursor() as cursor:
                 result = await cursor.execute(insert_query, values)
+                if result > 0:
+                    logger.info(
+                        "created dd_group_relation sd_id=%s group_id=%s",
+                        relation.sd_id,
+                        relation.group_id,
+                    )
                 return result > 0
         except Error as e:
             logger.error(f"Error creating DD group relation record: {e}")

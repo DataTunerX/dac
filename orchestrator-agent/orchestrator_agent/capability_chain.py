@@ -182,6 +182,19 @@ class CapabilityChainResult(BaseModel):
     )
 
 
+class DomainCheckResult(BaseModel):
+    """Phase 1 domain-overlap check — output by SG_DOMAIN_CHECK_PROMPT, consumed by code
+    to decide whether to enter Phase 2 capability decomposition."""
+
+    model_config = {"extra": "ignore"}
+    domain_verdict: Literal["has", "none", "uncertain"] = Field(
+        description="has=明确有交集，none=明确无交集，uncertain=不确定",
+    )
+    reason: str = Field(
+        description="领域比对结论",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Weighted arithmetic mean (evidence_strength)
 # ---------------------------------------------------------------------------
@@ -335,6 +348,29 @@ def aggregate(result: CapabilityChainResult, threshold: float | None = None) -> 
     """
     thr = get_threshold() if threshold is None else max(0.0, min(1.0, float(threshold)))
     steps = sorted(result.steps, key=lambda s: s.step_id)
+
+    # ── 领域不匹配硬门槛 ──
+    # 当所有步骤的 D 维度都是 ratio=0 且 evidence_strength=solid 时，
+    # 说明 Agent 的所有技能都明确不覆盖该问题领域（skill 正文没有相关字段
+    # /主题清单，或有明确的排除项声明）。
+    # 这是硬中断：加权平均不应补偿 D=0，直接判不可处理。
+    # 与 skill-agent ``agent/capability_chain.py`` 保持同一语义（4b06d240）。
+    if steps and all(
+        s.data_coverage.ratio == 0.0 and s.data_coverage.evidence_strength == "solid"
+        for s in steps
+    ):
+        logger.info(
+            "[CapabilityChain] Domain mismatch detected: all %d steps have "
+            "D=0(solid). Short-circuit to cannot_handle.",
+            len(steps),
+        )
+        return AggregatedCapability(
+            can_handle=False,
+            can_contribute=False,
+            confidence=0.0,
+            handle_score=0.0,
+            threshold=thr,
+        )
 
     scores: dict[int, float] = {s.step_id: step_score(s) for s in steps}
     handle_score = (

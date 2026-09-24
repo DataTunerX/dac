@@ -286,7 +286,7 @@ func (c *Client) GetSemanticGroupWithMembers(ctx context.Context, id string) (*S
 		return nil, err
 	}
 	var resp struct {
-		Status string                      `json:"status"`
+		Status string                       `json:"status"`
 		Data   SemanticGroupWithMembersData `json:"data"`
 	}
 	if err := c.doJSON(ctx, http.MethodGet, u, nil, &resp); err != nil {
@@ -313,6 +313,23 @@ func (c *Client) ListSemanticGroupRoots(ctx context.Context) ([]SemanticGroup, i
 }
 
 // --- DD Group Relations ---
+
+// CreateDDGroupRelation inserts a membership row via POST /dd_group_relations.
+func (c *Client) CreateDDGroupRelation(ctx context.Context, req map[string]any) (*DDGroupRelation, error) {
+	u, err := c.buildURL("/dd_group_relations")
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Status string          `json:"status"`
+		Data   DDGroupRelation `json:"data"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, u, req, &resp); err != nil {
+		return nil, err
+	}
+	c.logger.Info("created dd group relation", "sd_id", resp.Data.SemanticDomainID, "group_id", resp.Data.GroupID, "id", resp.Data.ID)
+	return &resp.Data, nil
+}
 
 func (c *Client) ListDDGroupRelationsByGroup(ctx context.Context, groupID string) ([]DDGroupRelation, int, error) {
 	u, err := c.buildURL("/dd_group_relations/group/" + url.PathEscape(groupID))
@@ -588,10 +605,10 @@ func (c *Client) GetAllKnowledge(ctx context.Context, collection string) ([]Know
 		return nil, err
 	}
 	var resp struct {
-		Status       string             `json:"status"`
-		Collection   string             `json:"collection"`
+		Status       string              `json:"status"`
+		Collection   string              `json:"collection"`
 		VectorResult []KnowledgeDocument `json:"vector_result"`
-		Message      string             `json:"message"`
+		Message      string              `json:"message"`
 	}
 	req := map[string]any{}
 	if err := c.doJSON(ctx, http.MethodPost, u, req, &resp); err != nil {

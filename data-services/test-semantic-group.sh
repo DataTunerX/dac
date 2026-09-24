@@ -150,6 +150,16 @@ curl -X PUT "http://192.168.3.238:22000/semantic_groups/4b979c3a-6e66-42f3-b762-
 #   "count": null
 # }
 
+# 7b. Update description + agent_card (including skills) — payload used by the management UI.
+# apiserver equivalent: PUT /api/v1/semantic-groups/{id}
+
+curl -X PUT "http://192.168.3.238:22000/semantic_groups/4b979c3a-6e66-42f3-b762-9a12c572ca5c" \
+-H "Content-Type: application/json" \
+-d '{
+    "description": "【语义域声明】银行金融数据服务。\n【子领域展开】存款与贷款业务数据查询与分析。\n【协作声明】相关问题应路由到本 Agent。",
+    "agent_card": "{\"name\":\"BankFinancialDataAgent\",\"description\":\"【语义域声明】银行金融数据服务。\\n【子领域展开】存款与贷款业务数据查询与分析。\\n【协作声明】相关问题应路由到本 Agent。\",\"url\":\"http://192.168.0.1:20002/\",\"version\":\"1.0.0\",\"skills\":[{\"id\":\"deposit-data-analysis\",\"name\":\"存款业务数据服务\",\"description\":\"覆盖存款明细与利率查询。\",\"tags\":[\"deposit\",\"存款\"],\"examples\":[\"各分行存款余额是多少？\"]}]}"
+}' | jq .
+
 # 8. Delete Semantic Group
 
 curl -X DELETE "http://192.168.3.238:22000/semantic_groups/4b979c3a-6e66-42f3-b762-9a12c572ca5c" | jq .
@@ -191,6 +201,8 @@ curl -X GET "http://192.168.3.238:22000/semantic_groups/status/count" | jq .
 # }
 
 # 11. Create DD Group Relation
+# apiserver equivalent: POST /api/v1/dd-group-relations
+# { "sd_id": "...", "group_id": "...", "association_reason": "手动添加" }
 
 curl -X POST "http://192.168.3.238:22000/dd_group_relations" \
 -H "Content-Type: application/json" \

@@ -1,4 +1,4 @@
-"""Unit tests for soft capability preference + coverage duty in SG ReAct."""
+"""Unit tests for informational capability hints (no hard filtering, no coverage duty)."""
 
 from __future__ import annotations
 
@@ -52,7 +52,8 @@ def _runner() -> ReActRunner:
     )
 
 
-def test_preference_section_and_tool_annotation_are_soft():
+def test_preference_section_and_hints_are_informational_only():
+    """Capability hints are informational; full pool is retained."""
     runner = _runner()
     agents = [
         (SimpleNamespace(descriptor_type="structured"), _card("OrdersAgent")),
@@ -70,7 +71,7 @@ def test_preference_section_and_tool_annotation_are_soft():
                 "agent_name": "StoreAgent",
                 "role": "handle",
                 "confidence": 0.93,
-                "matched_evidence": ["门店"],
+                "matched_evidence": ["\u95e8\u5e97"],
                 "reason": "store domain",
             }
         ],
@@ -78,7 +79,9 @@ def test_preference_section_and_tool_annotation_are_soft():
 
     section = runner._format_capability_preference_section(pref)
     assert "preferred_handlers: ['StoreAgent']" in section
-    assert "soft guidance, not an exclusive allowlist" in section
+    # Hint is informational, not exclusive.
+    assert "informational hints" in section
+    assert "NOT a hard filter" in section
 
     tools, tool_to_agent = runner._build_agent_tools(
         agents,
@@ -86,14 +89,15 @@ def test_preference_section_and_tool_annotation_are_soft():
         capability_preference=pref,
     )
     agent_tools = [t for t in tools if t.name != "finish"]
+    # Full pool retained (both agents present).
     assert len(agent_tools) == 2
-    assert "StoreAgent" in agent_tools[0].description or "store" in agent_tools[0].name
+    # Preferred handler gets a hint annotation.
     assert any(
-        t.description.startswith("[PREFERRED_HANDLER_BY_CAPABILITY_CHECK]")
+        "[CAPABILITY_HINT:" in t.description and "handler" in t.description
         for t in agent_tools
     )
     assert runner._preferred_handler_tool_names(tool_to_agent, pref)
-    # Full pool retained.
+    # Full pool retained — non-preferred agent is still available.
     assert {getattr(card, "name") for _m, card in tool_to_agent.values()} == {
         "OrdersAgent",
         "StoreAgent",
@@ -101,7 +105,8 @@ def test_preference_section_and_tool_annotation_are_soft():
 
 
 @pytest.mark.asyncio
-async def test_coverage_duty_blocks_finish_until_preferred_tried(monkeypatch):
+async def test_finish_accepted_directly_no_coverage_duty(monkeypatch):
+    """With informational hints only: finish is always accepted, no coverage duty."""
     runner = _runner()
     agents = [
         (SimpleNamespace(descriptor_type="structured"), _card("WrongAgent")),
@@ -122,34 +127,14 @@ async def test_coverage_duty_blocks_finish_until_preferred_tried(monkeypatch):
             self.tool_calls = tool_calls
             self.content = content
 
-    # Step1: call wrong agent. Step2: try finish. Step3: call preferred. Step4: finish.
+    # Step1: call preferred agent. Step2: finish.
     script = [
-        FakeAI(
-            [
-                {
-                    "name": "structured_WrongAgent",
-                    "args": {"query": "q"},
-                    "id": "c1",
-                }
-            ],
-            content="try wrong",
-        ),
-        FakeAI(
-            [
-                {
-                    "name": "finish",
-                    "args": {"final_answer": "cannot answer"},
-                    "id": "c2",
-                }
-            ],
-            content="finish early",
-        ),
         FakeAI(
             [
                 {
                     "name": "structured_RightAgent",
                     "args": {"query": "q"},
-                    "id": "c3",
+                    "id": "c1",
                 }
             ],
             content="try preferred",
@@ -159,7 +144,7 @@ async def test_coverage_duty_blocks_finish_until_preferred_tried(monkeypatch):
                 {
                     "name": "finish",
                     "args": {"final_answer": "answered by preferred"},
-                    "id": "c4",
+                    "id": "c2",
                 }
             ],
             content="done",
@@ -171,12 +156,7 @@ async def test_coverage_duty_blocks_finish_until_preferred_tried(monkeypatch):
         if not script:
             raise AssertionError("unexpected extra LLM call")
         msg = script.pop(0)
-        # Capture whether coverage nudge was injected before this decision.
-        contents = [str(getattr(m, "content", "")) for m in _messages]
-        if any("Coverage duty from prior capability preference" in c for c in contents):
-            calls.append("after_coverage_nudge")
-        else:
-            calls.append(msg.content or msg.tool_calls[0]["name"])
+        calls.append(msg.content or msg.tool_calls[0]["name"])
         return msg
 
     invoked: List[str] = []
@@ -211,11 +191,12 @@ async def test_coverage_duty_blocks_finish_until_preferred_tried(monkeypatch):
     )
 
     assert "answered by preferred" in result
-    assert "WrongAgent" in invoked
     assert "RightAgent" in invoked
-    assert "after_coverage_nudge" in calls
-    # Preferred was not skipped entirely.
-    assert invoked.index("RightAgent") > invoked.index("WrongAgent")
+    # No coverage duty nudge anywhere.
+    assert "after_coverage_nudge" not in calls
+    assert "Coverage duty" not in result
+    # Finish was accepted immediately after preferred agent tried.
+    assert calls == ["try preferred", "done"]
 
 
 class AsyncNoop:

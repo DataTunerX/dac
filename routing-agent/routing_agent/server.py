@@ -93,7 +93,20 @@ PROGRESS_EXTRA_ALLOWLIST: Dict[str, set[str]] = {
         "tasks",
     },
     "root_selected": {"mode", "route_paths"},
-    "pre_make_plan": {"candidate_count", "candidates", "selected", "plan_count", "message"},
+    "pre_make_plan": {
+        "candidate_count",
+        "candidates",
+        "selected",
+        "plan_count",
+        "message",
+        "reason",
+    },
+    "capability_check": {
+        "candidate_count",
+        "candidates",
+        "handler_count",
+        "contributor_count",
+    },
     "route_plan_with_capability_check": {
         "mode",
         "strategy",
@@ -348,6 +361,10 @@ class PlannerStep(BaseModel):
 # Message type flag used in A2A metadata to indicate a capability check request
 CAPABILITY_CHECK_MESSAGE_TYPE = "capability_check"
 PRE_MAKE_PLAN_MESSAGE_TYPE = "pre_make_plan"
+# Per-attempt timeout / retry for routing-side select_best_plan LLM call.
+# PRE_MAKE_PLAN_TIMEOUT only covers the A2A fan-out to candidate agents.
+PRE_MAKE_PLAN_SELECT_TIMEOUT_DEFAULT = 60.0
+PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS_DEFAULT = 3
 ROUTING_AGENT_POOL_KEY = "routing_agent_pool"
 ROUTING_SKIP_BROADCAST_ELIGIBLE_KEY = "routing_skip_broadcast_eligible"
 ROUTING_SELECTED_ROOT_KEY = "routing_selected_root"
@@ -431,6 +448,14 @@ class CapabilityCheckResponse(BaseModel):
     steps: list[dict] = Field(default_factory=list, description="Per-step I/D/O/R/C detail.")
     contributing_steps: list[int] = Field(default_factory=list, description="Step ids the agent can complete.")
     risks: list[str] = Field(default_factory=list, description="Non-scoring risk notes.")
+    domain_verdict: str = Field(
+        default="",
+        description="Phase-1 domain overlap: has / none / uncertain.",
+    )
+    has_external_dependency: bool = Field(
+        default=False,
+        description="Whether any step depends on input this agent cannot produce.",
+    )
 
     @property
     def is_chain_scored(self) -> bool:
@@ -739,6 +764,463 @@ def _render_capability_report(agent_name: str, resp: "CapabilityCheckResponse") 
     return report
 
 
+_INPUT_SOURCE_LABEL = {
+    "query": "来自问题/附件",
+    "upstream": "来自上一步",
+    "missing": "缺失",
+}
+
+
+def _join_md_items(items: Any, empty: str) -> str:
+    if not isinstance(items, list) or not items:
+        return empty
+    cleaned = [str(x).strip() for x in items if str(x).strip()]
+    return ", ".join(cleaned) if cleaned else empty
+
+
+def _infer_domain_verdict(resp: "CapabilityCheckResponse") -> str:
+    explicit = str(getattr(resp, "domain_verdict", "") or "").strip().lower()
+    if explicit in {"has", "none", "uncertain"}:
+        return explicit
+    reason = str(getattr(resp, "reason", "") or "")
+    if re.search(r"领域交集[：:]\s*明确有", reason):
+        return "has"
+    if re.search(r"领域交集[：:]\s*明确无", reason):
+        return "none"
+    if re.search(r"领域交集[：:]\s*不确定", reason):
+        return "uncertain"
+    return ""
+
+
+def _infer_has_external_dependency(resp: "CapabilityCheckResponse") -> bool:
+    if bool(getattr(resp, "has_external_dependency", False)):
+        return True
+    steps = [s for s in (getattr(resp, "steps", None) or []) if isinstance(s, dict)]
+    for s in steps:
+        try:
+            sid = int(s.get("step_id", 0) or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        for inp in s.get("inputs") or []:
+            if not isinstance(inp, dict):
+                continue
+            src = str(inp.get("source") or "").strip().lower()
+            if src == "missing":
+                return True
+            if src == "upstream":
+                has_earlier = any(
+                    isinstance(prev, dict) and int(prev.get("step_id", 0) or 0) < sid
+                    for prev in steps
+                )
+                if not has_earlier:
+                    return True
+    return False
+
+
+def _render_capability_progress_md(
+    agent_name: str,
+    resp: "CapabilityCheckResponse",
+    query: str = "",
+    max_evidence_len: int = 200,
+) -> str:
+    """Human-readable capability-check markdown for DAC Progress (matches skill-agent log format)."""
+    lines: list[str] = []
+    can_handle = bool(getattr(resp, "can_handle", False))
+    can_contribute = bool(getattr(resp, "can_contribute", False))
+    handle_label = "✓ 能" if can_handle else "✗ 不能"
+    contribute_label = "✓ 能" if can_contribute else "✗ 不能"
+    domain_verdict = _infer_domain_verdict(resp)
+    has_ext = _infer_has_external_dependency(resp)
+    contributing_steps = list(getattr(resp, "contributing_steps", None) or [])
+    threshold = float(getattr(resp, "threshold", 0.0) or 0.0)
+    handle_score = float(getattr(resp, "handle_score", 0.0) or 0.0)
+    confidence = float(getattr(resp, "confidence", 0.0) or 0.0)
+    evidence_grade = str(getattr(resp, "evidence_grade", "") or "") or "?"
+    latency_ms = int(getattr(resp, "latency_ms", 0) or 0)
+
+    lines.append(f"## Capability Check — agent=`{agent_name}`")
+    if query:
+        q = str(query)[:200].replace("\n", " ")
+        lines.append(f"> query: _{q}_")
+    lines.append("")
+
+    lines.append("### 结论摘要")
+    lines.append(f"- **独立处理**: {handle_label} (`can_handle={can_handle}`)")
+    lines.append(f"- **贡献步骤**: {contribute_label} (`can_contribute={can_contribute}`)")
+    lines.append(f"- **handle_score**: `{handle_score:.3f}`  (threshold={threshold:.2f})")
+    lines.append(f"- **confidence**: `{confidence:.2f}`")
+    lines.append(f"- **evidence_grade**: `{evidence_grade}`")
+    if domain_verdict:
+        lines.append(f"- **domain_verdict**: `{domain_verdict}`")
+    lines.append(f"- **has_external_dependency**: `{has_ext}`")
+    if contributing_steps:
+        lines.append(f"- **contributing_steps**: `{contributing_steps}`")
+    else:
+        lines.append("- **contributing_steps**: （无）")
+    lines.append(f"- **latency_ms**: `{latency_ms}`")
+    lines.append("")
+
+    lines.append("### §〇 前置检查：领域交集判定")
+    if domain_verdict:
+        lines.append(f"**结论**: `{domain_verdict}`")
+    else:
+        lines.append("**结论**: （未提供）")
+    missing = [str(m) for m in (getattr(resp, "missing_requirements", None) or []) if str(m).strip()]
+    if missing:
+        lines.append("**缺失项**:")
+        for m in missing:
+            lines.append(f"- {m}")
+    contribution = str(getattr(resp, "contribution", "") or "").strip()
+    if contribution:
+        lines.append(f"**贡献声明**: {contribution}")
+    risks = [str(r) for r in (getattr(resp, "risks", None) or []) if str(r).strip()]
+    if risks:
+        lines.append("**风险提示**:")
+        for r in risks:
+            lines.append(f"- {r}")
+    lines.append("")
+
+    steps = [s for s in (getattr(resp, "steps", None) or []) if isinstance(s, dict)]
+    if not steps:
+        lines.append("### 步骤拆解与逐维度打分")
+        if not getattr(resp, "is_chain_scored", False):
+            lines.append("> （非链式评分，无步骤明细）")
+        else:
+            lines.append("> （无步骤 — 领域无交集或空结果）")
+        lines.append("")
+    else:
+        lines.append(f"### 步骤拆解与逐维度打分（共 {len(steps)} 步）")
+        lines.append("")
+        for s in steps:
+            sid = s.get("step_id", "?")
+            desc = str(s.get("description") or s.get("operation") or "").strip()
+            op = str(s.get("operation") or "?")
+            final_label = "✓ 最终产出" if s.get("is_final") else "→ 中间步骤"
+            try:
+                step_s = float(s.get("step_score", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                step_s = 0.0
+            lines.append(f"#### 步骤 {sid}: {desc or '(无描述)'}")
+            lines.append(
+                f"- **step_score**: `{step_s:.3f}`  |  **操作**: `{op}`  |  类型: {final_label}"
+            )
+            lines.append("")
+
+            inputs = s.get("inputs") or []
+            if inputs:
+                lines.append("**输入**:")
+                for inp in inputs:
+                    if isinstance(inp, dict):
+                        name = str(inp.get("name") or "").strip() or "?"
+                        src_raw = str(inp.get("source") or "").strip()
+                        src = _INPUT_SOURCE_LABEL.get(src_raw, src_raw or "?")
+                        lines.append(f"  - `{name}` ({src})")
+                    else:
+                        lines.append(f"  - `{inp}`")
+                lines.append("")
+
+            outputs = [str(o) for o in (s.get("outputs") or []) if str(o).strip()]
+            if outputs:
+                lines.append("**预期产出**:")
+                for o in outputs:
+                    lines.append(f"  - `{o}`")
+                lines.append("")
+
+            constraints = [str(c) for c in (s.get("constraints") or []) if str(c).strip()]
+            if constraints:
+                lines.append("**约束条件**:")
+                for c in constraints:
+                    lines.append(f"  - `{c}`")
+                lines.append("")
+
+            checklists: dict = s.get("checklists", {}) or {}
+            scores: dict = s.get("scores", {}) or {}
+            lines.append("**维度打分**:")
+            lines.append("")
+            lines.append(
+                "| 维度 | 说明 | 所需项 | 命中项 | 得分 | 证据 |\n"
+                "|------|------|--------|--------|------|------|"
+            )
+            dim_meta = (
+                ("I", "输入匹配", "I"),
+                ("D", "信息覆盖", "D"),
+                ("O", "操作能力", None),
+                ("R", "结果匹配", "R"),
+                ("C", "约束满足", "C"),
+            )
+            for dim_name, dim_label, ck_key in dim_meta:
+                if ck_key is None:
+                    try:
+                        o_val = float(scores.get("O", 0) or 0)
+                    except (TypeError, ValueError):
+                        o_val = 0.0
+                    lines.append(
+                        f"| **{dim_name}** | {dim_label} | — | — "
+                        f"| `{o_val:.1f}` | solid ✓ |"
+                    )
+                    continue
+                ck = checklists.get(ck_key, {}) or {}
+                try:
+                    score = float(scores.get(ck_key, 0) or 0)
+                except (TypeError, ValueError):
+                    score = 0.0
+                req = _join_md_items(ck.get("required", []) or [], "（无需）")
+                mat = _join_md_items(ck.get("matched", []) or [], "（无命中）")
+                es = str(ck.get("evidence_strength") or "?")
+                lines.append(
+                    f"| **{dim_name}** | {dim_label} | {req} | {mat} "
+                    f"| `{score:.1f}` | {es} |"
+                )
+            lines.append("")
+
+            evidence_texts = s.get("evidence") or []
+            if evidence_texts:
+                lines.append("**打分依据**:")
+                for ev in evidence_texts[:4]:
+                    ev_text = str(ev).strip()
+                    if len(ev_text) > max_evidence_len:
+                        ev_text = ev_text[:max_evidence_len] + "..."
+                    lines.append(f"  - {ev_text}")
+                lines.append("")
+
+            lines.append("---")
+            lines.append("")
+
+    reason = str(getattr(resp, "reason", "") or "").strip()
+    if reason:
+        lines.append("### LLM 结构化理由（reason）")
+        lines.append("```")
+        lines.append(reason[:3000])
+        lines.append("```")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_broadcast_capability_progress_md(
+    query: str,
+    capable_agents: list[tuple[AgentCard, "CapabilityCheckResponse"]],
+) -> str:
+    """Concatenate per-agent capability-check markdown for one DAC Progress frame."""
+    if not capable_agents:
+        return "广播能力检查完成：未检测到可独立处理或可贡献的 Agent。"
+    labels = [_format_candidate_with_role(c, r) for c, r in capable_agents]
+    handler_count = sum(1 for _, r in capable_agents if getattr(r, "can_handle", False))
+    contrib_count = len(capable_agents) - handler_count
+    parts: list[str] = [
+        "# 广播能力检查结果",
+        "",
+        (
+            f"检测到 **{len(capable_agents)}** 个候选 Agent"
+            f"（handle={handler_count}, contribute={contrib_count}）："
+            f"{', '.join(labels)}"
+        ),
+        "",
+    ]
+    for card, resp in capable_agents:
+        name = getattr(card, "name", "") or getattr(resp, "agent_name", "") or "?"
+        parts.append(_render_capability_progress_md(name, resp, query=query))
+        parts.append("")
+    return "\n".join(parts).strip() + "\n"
+
+
+async def _emit_capability_check_progress(
+    on_progress: Optional[Callable[[str, str, str, Optional[Dict[str, Any]]], Awaitable[None]]],
+    query: str,
+    capable_agents: list[tuple[AgentCard, "CapabilityCheckResponse"]],
+) -> None:
+    if not on_progress:
+        return
+    labels = [_format_candidate_with_role(c, r) for c, r in capable_agents]
+    handler_count = sum(1 for _, r in capable_agents if getattr(r, "can_handle", False))
+    await on_progress(
+        "capability_check",
+        _render_broadcast_capability_progress_md(query, capable_agents),
+        "done",
+        {
+            "candidate_count": len(capable_agents),
+            "candidates": labels,
+            "handler_count": handler_count,
+            "contributor_count": len(capable_agents) - handler_count,
+        },
+    )
+
+
+def _task_field(task: dict, *keys: str, default: str = "") -> str:
+    for key in keys:
+        value = task.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return default
+
+
+def _render_pre_make_plan_md(
+    agent_name: str,
+    plan: Optional[dict],
+    *,
+    query: str = "",
+    resp: Optional["CapabilityCheckResponse"] = None,
+) -> str:
+    """Human-readable pre-make-plan markdown for one agent (DAC Progress)."""
+    lines: list[str] = [f"## Pre-Make-Plan — agent=`{agent_name}`"]
+    if query:
+        q = str(query)[:200].replace("\n", " ")
+        lines.append(f"> query: _{q}_")
+    lines.append("")
+
+    if not isinstance(plan, dict):
+        lines.append("> 未返回有效规划")
+        lines.append("")
+        return "\n".join(lines)
+
+    if plan.get("error"):
+        lines.append(f"> 规划失败: {str(plan.get('error'))[:300]}")
+        lines.append("")
+        return "\n".join(lines)
+
+    tasks = [t for t in (plan.get("tasks") or []) if isinstance(t, dict)]
+    original_query = str(plan.get("original_query") or "").strip()
+    thought = str(plan.get("thought_process") or plan.get("thought") or "").strip()
+
+    lines.append("### 规划摘要")
+    lines.append(f"- **任务数**: `{len(tasks)}`")
+    if resp is not None:
+        role = _capability_role(resp)
+        lines.append(
+            f"- **角色**: `{role}` (`can_handle={bool(resp.can_handle)}`, "
+            f"`can_contribute={bool(resp.can_contribute)}`)"
+        )
+    if original_query:
+        lines.append(f"- **original_query**: {original_query}")
+    lines.append("")
+
+    if not tasks:
+        lines.append("### 任务列表")
+        lines.append("> （空任务列表）")
+        lines.append("")
+    else:
+        lines.append(f"### 任务列表（共 {len(tasks)} 项）")
+        lines.append("")
+        for t in tasks:
+            tid = t.get("id", "?")
+            title = _task_field(t, "task_name", "name", "title")
+            heading = f"#### Task #{tid}"
+            if title:
+                heading = f"{heading}: {title}"
+            lines.append(heading)
+            agent = _task_field(t, "agent", "agent_name", "assigned_agent", default="?")
+            deps = t.get("depends_on")
+            if deps is None:
+                deps_s = "（未提供）"
+            else:
+                deps_s = f"`{deps}`"
+            desc = str(t.get("description") or "").strip() or "（无描述）"
+            lines.append(f"- **agent**: `{agent}`")
+            lines.append(f"- **depends_on**: {deps_s}")
+            lines.append(f"- **description**: {desc}")
+            lines.append("")
+
+    if thought:
+        lines.append("### 思考过程（thought_process）")
+        lines.append("```")
+        lines.append(thought[:3000])
+        lines.append("```")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_broadcast_pre_make_plan_progress_md(
+    query: str,
+    collected: list[tuple[AgentCard, "CapabilityCheckResponse", Optional[dict]]],
+) -> str:
+    """Concatenate per-agent pre-make-plan markdown for one DAC Progress frame."""
+    if not collected:
+        return "Pre-Make-Plan 完成：没有候选 Agent 返回规划。"
+    labels = [_format_candidate_with_role(c, r) for c, r, _ in collected]
+    ok_count = sum(1 for _, _, plan in collected if isinstance(plan, dict) and not plan.get("error"))
+    parts: list[str] = [
+        "# Pre-Make-Plan 结果",
+        "",
+        (
+            f"收到 **{ok_count}/{len(collected)}** 个 Agent 的规划："
+            f"{', '.join(labels)}"
+        ),
+        "",
+    ]
+    for card, resp, plan in collected:
+        name = getattr(card, "name", "") or getattr(resp, "agent_name", "") or "?"
+        parts.append(_render_pre_make_plan_md(name, plan, query=query, resp=resp))
+        parts.append("")
+    return "\n".join(parts).strip() + "\n"
+
+
+def _render_pre_make_plan_selection_md(
+    selected_name: str,
+    *,
+    candidate_count: int,
+    reason: str = "",
+    thought: str = "",
+    source: str = "",
+) -> str:
+    """DAC Progress text: conclusion on the first line, reason on the next."""
+    del candidate_count, source
+    lines = [f"选定 {selected_name} 作为最佳路由目标"]
+    reason_text = str(reason or "").strip()
+    if reason_text:
+        lines.append(reason_text)
+    thought_text = str(thought or "").strip()
+    if thought_text:
+        lines.append(thought_text[:3000])
+    return "\n".join(lines)
+
+
+def _pre_make_plan_select_timeout() -> float:
+    raw = os.getenv(
+        "PRE_MAKE_PLAN_SELECT_TIMEOUT",
+        str(PRE_MAKE_PLAN_SELECT_TIMEOUT_DEFAULT),
+    )
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return PRE_MAKE_PLAN_SELECT_TIMEOUT_DEFAULT
+    return value if value > 0 else PRE_MAKE_PLAN_SELECT_TIMEOUT_DEFAULT
+
+
+def _pre_make_plan_select_max_attempts() -> int:
+    raw = os.getenv(
+        "PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS",
+        str(PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS_DEFAULT),
+    )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS_DEFAULT
+    return value if value > 0 else PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS_DEFAULT
+
+
+async def _emit_pre_make_plan_progress(
+    on_progress: Optional[Callable[[str, str, str, Optional[Dict[str, Any]]], Awaitable[None]]],
+    query: str,
+    collected: list[tuple[AgentCard, "CapabilityCheckResponse", Optional[dict]]],
+) -> None:
+    if not on_progress:
+        return
+    labels = [_format_candidate_with_role(c, r) for c, r, _ in collected]
+    await on_progress(
+        "pre_make_plan",
+        _render_broadcast_pre_make_plan_progress_md(query, collected),
+        "running",
+        {
+            "candidate_count": len(collected),
+            "candidates": labels,
+            "plan_count": sum(
+                1 for _, _, plan in collected if isinstance(plan, dict) and not plan.get("error")
+            ),
+        },
+    )
+
+
 def _log_capability_respond(resp: "CapabilityCheckResponse") -> None:
     """One line per agent: wait/latency + verdict + scores + reason."""
     if resp.can_handle:
@@ -817,6 +1299,8 @@ def _capability_response_from_payload(
         steps=[s for s in steps_raw if isinstance(s, dict)] if isinstance(steps_raw, list) else [],
         contributing_steps=contributing,
         risks=[str(r) for r in (response_data.get("risks") or [])],
+        domain_verdict=str(response_data.get("domain_verdict") or "").strip(),
+        has_external_dependency=bool(response_data.get("has_external_dependency", False)),
         collaboration_agents=[str(a) for a in collab_raw] if isinstance(collab_raw, list) else [],
         collaboration_roles=response_data.get("collaboration_roles") if isinstance(response_data.get("collaboration_roles"), dict) else {},
         collaboration_paths=[p for p in (response_data.get("collaboration_paths") or []) if isinstance(p, dict)],
@@ -873,6 +1357,14 @@ def _agent_card_to_pool_dict(card: AgentCard) -> dict:
     return {"name": getattr(card, "name", ""), "url": getattr(card, "url", "")}
 
 
+def _capability_role(resp: "CapabilityCheckResponse") -> str:
+    return "handle" if getattr(resp, "can_handle", False) else "contribute"
+
+
+def _format_candidate_with_role(card: AgentCard, resp: "CapabilityCheckResponse") -> str:
+    return f"{card.name} [{_capability_role(resp)}]"
+
+
 def _build_routing_agent_pool_from_capable(
     capable_agents: list[tuple[AgentCard, "CapabilityCheckResponse"]],
 ) -> list[dict]:
@@ -881,7 +1373,7 @@ def _build_routing_agent_pool_from_capable(
         name = getattr(card, "name", "") or getattr(resp, "agent_name", "")
         if not name:
             continue
-        role = "handle" if getattr(resp, "can_handle", False) else "contribute"
+        role = _capability_role(resp)
         contribution = str(getattr(resp, "contribution", "") or "")
         reason = str(getattr(resp, "reason", "") or "")
         if len(contribution) > 300:
@@ -2567,6 +3059,7 @@ class RoutingAgent(BaseAgent):
         run_id: str,
         trace_id: str,
         propagated_history: Optional[dict] = None,
+        on_progress: Optional[Callable[[str, str, str, Optional[Dict[str, Any]]], Awaitable[None]]] = None,
     ) -> list[tuple[AgentCard, CapabilityCheckResponse]]:
         """Broadcast a capability check to ALL registered orchestrator agents concurrently.
         
@@ -2649,6 +3142,7 @@ class RoutingAgent(BaseAgent):
                 i, card.name, role, len(rps), paths_str,
             )
         logger.info("[RoutePlan] ==========================================")
+        await _emit_capability_check_progress(on_progress, query, capable_agents)
         return capable_agents
 
     def _validate_multi_root_plan(
@@ -2863,6 +3357,7 @@ class RoutingAgent(BaseAgent):
         trace_id: str,
         propagated_history: Optional[dict] = None,
         on_multi_root_plan_validated: Optional[Callable[[MultiRootTaskPlan], Awaitable[None]]] = None,
+        on_progress: Optional[Callable[[str, str, str, Optional[Dict[str, Any]]], Awaitable[None]]] = None,
     ) -> tuple[Optional[PlannerStep], Optional[MultiRootTaskPlan], list[AgentCard], Optional[list[dict]], dict]:
         """Broadcast-based routing with single-root fast path and multi-root task plan.
         
@@ -2888,6 +3383,7 @@ class RoutingAgent(BaseAgent):
             run_id,
             trace_id,
             propagated_history=history_payload,
+            on_progress=on_progress,
         )
 
         if not capable_agents:
@@ -3121,7 +3617,8 @@ class RoutingAgent(BaseAgent):
         user_id: str,
         run_id: str,
         trace_id: str,
-    ) -> Optional[tuple[AgentCard, CapabilityCheckResponse]]:
+        on_progress: Optional[Callable[[str, str, str, Optional[Dict[str, Any]]], Awaitable[None]]] = None,
+    ) -> Optional[tuple]:
         """Select the best agent from candidates by comparing their task plans.
 
         Sends concurrent ``pre_make_plan`` requests to the top-N candidates,
@@ -3129,11 +3626,13 @@ class RoutingAgent(BaseAgent):
         plans and pick the most suitable agent.
 
         Returns ``None`` when all candidates fail — the caller should fall
-        back to the simple first-pick logic.
+        back to the simple first-pick logic.  On success, the optional third
+        item is ``{source, reason, thought}`` describing why that agent won.
         """
         top_n = min(len(candidates), int(os.getenv("PRE_MAKE_PLAN_TOP_N", "3")))
+        asked = candidates[:top_n]
 
-        candidate_names = [c[0].name for c in candidates[:top_n]]
+        candidate_names = [c[0].name for c in asked]
         logger.info(
             "[PreMakePlan] ========== Pre-Make-Plan Start ==========\n"
             "  candidates=%d (top_n=%d) | agents=%s\n"
@@ -3143,30 +3642,33 @@ class RoutingAgent(BaseAgent):
             candidate_names,
         )
 
-        tasks = [
+        request_tasks = [
             self.send_pre_make_plan(query, card, user_id, run_id, trace_id)
-            for card, _ in candidates[:top_n]
+            for card, _ in asked
         ]
-        plan_results = await asyncio.gather(*tasks, return_exceptions=True)
+        plan_results = await asyncio.gather(*request_tasks, return_exceptions=True)
 
+        collected: list[tuple[AgentCard, CapabilityCheckResponse, Optional[dict]]] = []
         candidates_with_plans: list[tuple[AgentCard, CapabilityCheckResponse, dict]] = []
         for i, result in enumerate(plan_results):
-            if i >= len(candidates):
+            if i >= len(asked):
                 break
-            card, resp = candidates[i]
+            card, resp = asked[i]
             if isinstance(result, Exception):
                 logger.warning(
                     "[PreMakePlan] agent=%s exception: %s", card.name, result
                 )
+                collected.append((card, resp, {"error": str(result)}))
                 continue
             if result is None:
+                collected.append((card, resp, None))
                 continue
+            collected.append((card, resp, result))
             candidates_with_plans.append((card, resp, result))
-            tasks = result.get("tasks", [])
+            plan_tasks = result.get("tasks", [])
             thought = str(result.get("thought_process") or "")
-            # Build a per-task summary for the log
             task_summaries: list[str] = []
-            for t in tasks:
+            for t in plan_tasks:
                 if isinstance(t, dict):
                     t_name = t.get("task_name") or t.get("name") or t.get("title") or "?"
                     t_agent = t.get("agent") or t.get("agent_name") or t.get("assigned_agent") or "?"
@@ -3175,10 +3677,12 @@ class RoutingAgent(BaseAgent):
             logger.info(
                 "[PreMakePlan] agent=%s plan: tasks=%d | thought=%s\n%s",
                 card.name,
-                len(tasks),
+                len(plan_tasks),
                 thought,
                 "\n".join(task_summaries) if task_summaries else "  (no task details)",
             )
+
+        await _emit_pre_make_plan_progress(on_progress, query, collected)
 
         if not candidates_with_plans:
             logger.warning(
@@ -3193,7 +3697,15 @@ class RoutingAgent(BaseAgent):
                 "selecting agent=%s directly",
                 candidates_with_plans[0][0].name,
             )
-            return (candidates_with_plans[0][0], candidates_with_plans[0][1])
+            return (
+                candidates_with_plans[0][0],
+                candidates_with_plans[0][1],
+                {
+                    "source": "single_valid_plan",
+                    "reason": f"只有 {candidates_with_plans[0][0].name} 返回了有效规划，直接选定",
+                    "thought": "",
+                },
+            )
 
         logger.info(
             "[PreMakePlan] entering LLM comparison | candidates=%d",
@@ -3214,7 +3726,7 @@ class RoutingAgent(BaseAgent):
         user_id: str,
         run_id: str,
         trace_id: str,
-    ) -> tuple[AgentCard, CapabilityCheckResponse]:
+    ) -> tuple[AgentCard, CapabilityCheckResponse, dict]:
         """Use an LLM to compare task plans **and** capability check results.
 
         Each candidate has:
@@ -3333,39 +3845,108 @@ class RoutingAgent(BaseAgent):
             coroutine=None,
         )
 
-        try:
-            result = await invoke_llm_with_tool(
-                llm=self.planner_agent.llm,
-                tool=select_tool,
-                messages=[HumanMessage(content=prompt)],
-                metadata={"user_id": user_id, "run_id": run_id, "trace_id": trace_id},
-                tool_choice="select_best_plan",
-                span_name="routing-select-best-plan",
-                agent_name=self.agent_name,
-            )
-        except Exception as e:
-            logger.error(
-                "[PreMakePlan] LLM selection failed: %s — falling back to first",
-                e,
-            )
-            return (candidates_with_plans[0][0], candidates_with_plans[0][1])
+        timeout = _pre_make_plan_select_timeout()
+        max_attempts = _pre_make_plan_select_max_attempts()
+        result: Optional[dict] = None
+        last_error = ""
 
-        if result is None:
-            logger.warning(
-                "[PreMakePlan] LLM did not call select_best_plan — "
-                "falling back to first"
+        for attempt in range(1, max_attempts + 1):
+            logger.info(
+                "[PreMakePlan][LLM] invoke attempt=%d/%d timeout=%ss agents=%s",
+                attempt,
+                max_attempts,
+                timeout,
+                candidate_names,
             )
-            return (candidates_with_plans[0][0], candidates_with_plans[0][1])
+            try:
+                result = await asyncio.wait_for(
+                    invoke_llm_with_tool(
+                        llm=self.planner_agent.llm,
+                        tool=select_tool,
+                        messages=[HumanMessage(content=prompt)],
+                        metadata={
+                            "user_id": user_id,
+                            "run_id": run_id,
+                            "trace_id": trace_id,
+                        },
+                        tool_choice="select_best_plan",
+                        span_name="routing-select-best-plan",
+                        agent_name=self.agent_name,
+                    ),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                last_error = f"timeout after {timeout}s"
+                logger.warning(
+                    "[PreMakePlan][LLM] attempt %d/%d timed out after %ss",
+                    attempt,
+                    max_attempts,
+                    timeout,
+                )
+                result = None
+                continue
+            except Exception as e:
+                last_error = f"{type(e).__name__}: {e}"
+                logger.warning(
+                    "[PreMakePlan][LLM] attempt %d/%d failed: %s",
+                    attempt,
+                    max_attempts,
+                    last_error,
+                )
+                result = None
+                continue
+
+            if result is None:
+                last_error = "LLM did not call select_best_plan"
+                logger.warning(
+                    "[PreMakePlan][LLM] attempt %d/%d: %s",
+                    attempt,
+                    max_attempts,
+                    last_error,
+                )
+                continue
+            break
+        else:
+            first = candidates_with_plans[0]
+            logger.error(
+                "[PreMakePlan] LLM selection exhausted %d attempts (%s) — "
+                "falling back to first",
+                max_attempts,
+                last_error or "unknown",
+            )
+            return (
+                first[0],
+                first[1],
+                {
+                    "source": "fallback_first",
+                    "reason": (
+                        f"LLM 选择失败（{last_error or 'unknown'}，"
+                        f"{max_attempts} 次），回退到第一个有效规划的 Agent "
+                        f"{first[0].name}"
+                    ),
+                    "thought": "",
+                },
+            )
 
         idx = int(result.get("selected_agent_index", 1)) - 1
         idx = max(0, min(idx, len(candidates_with_plans) - 1))
+        thought = str(result.get("thought") or "").strip()
+        reason = str(result.get("reason") or "").strip()
         logger.info(
             "[PreMakePlan][LLM] selected agent=%s | thought=%s | reason=%s",
             candidates_with_plans[idx][0].name,
-            result.get("thought", ""),
-            result.get("reason", ""),
+            thought,
+            reason,
         )
-        return (candidates_with_plans[idx][0], candidates_with_plans[idx][1])
+        return (
+            candidates_with_plans[idx][0],
+            candidates_with_plans[idx][1],
+            {
+                "source": "llm",
+                "reason": reason or f"LLM 选定 {candidates_with_plans[idx][0].name}",
+                "thought": thought,
+            },
+        )
 
     async def get_best_agent_by_broadcast(
         self,
@@ -3408,6 +3989,7 @@ class RoutingAgent(BaseAgent):
                 run_id,
                 trace_id,
                 propagated_history=history_payload,
+                on_progress=on_pre_make_plan_progress,
             )
 
             if not capable_agents:
@@ -3432,32 +4014,49 @@ class RoutingAgent(BaseAgent):
                     )
                 else:
                     # ≥ 2 candidates — Pre-Make-Plan LLM selection.
-                    candidate_names = [c.name for c, _ in candidates]
+                    candidate_labels = [_format_candidate_with_role(c, r) for c, r in candidates]
                     if on_pre_make_plan_progress:
                         await on_pre_make_plan_progress(
                             "pre_make_plan",
-                            f"检测到 {len(candidates)} 个候选 Agent，启动 Pre-Make-Plan 评估：{', '.join(candidate_names)}",
+                            f"检测到 {len(candidates)} 个候选 Agent，启动 Pre-Make-Plan 评估：{', '.join(candidate_labels)}",
                             "running",
-                            {"candidate_count": len(candidates), "candidates": candidate_names},
+                            {"candidate_count": len(candidates), "candidates": candidate_labels},
                         )
                     pre_select_result = await self._select_by_pre_make_plan(
                         query, candidates, user_id, run_id, trace_id,
+                        on_progress=on_pre_make_plan_progress,
                     )
+                    selection_meta: dict = {}
                     if pre_select_result is not None:
-                        selected_card, selected_resp = pre_select_result
+                        selected_card, selected_resp = pre_select_result[0], pre_select_result[1]
+                        if len(pre_select_result) > 2 and isinstance(pre_select_result[2], dict):
+                            selection_meta = pre_select_result[2]
                     else:
                         selected_card, selected_resp = candidates[0]
+                        selection_meta = {
+                            "source": "fallback_first",
+                            "reason": "所有候选均未返回有效规划，回退到排序第一的候选",
+                            "thought": "",
+                        }
                     if on_pre_make_plan_progress:
+                        selection_md = _render_pre_make_plan_selection_md(
+                            selected_card.name,
+                            candidate_count=len(candidates),
+                            reason=str(selection_meta.get("reason") or ""),
+                            thought=str(selection_meta.get("thought") or ""),
+                            source=str(selection_meta.get("source") or ""),
+                        )
                         await on_pre_make_plan_progress(
                             "pre_make_plan",
-                            f"Pre-Make-Plan 完成：评估了 {len(candidates)} 个候选 Agent，选定 {selected_card.name}",
+                            selection_md,
                             "done",
                             {
                                 "candidate_count": len(candidates),
-                                "candidates": candidate_names,
+                                "candidates": candidate_labels,
                                 "selected": selected_card.name,
                                 "plan_count": len(candidates),
-                                "message": f"选定 {selected_card.name} 作为最佳路由目标",
+                                "message": selection_md,
+                                "reason": str(selection_meta.get("reason") or ""),
                             },
                         )
 
@@ -4524,6 +5123,9 @@ class RoutingAgentExecutor(AgentExecutor):
                     trace_id,
                     propagated_history=propagated_history,
                     on_multi_root_plan_validated=_on_multi_root_plan_validated,
+                    on_progress=lambda event, msg, status, extra: self._emit_progress(
+                        updater, event=event, message=msg, status=status, extra=extra,
+                    ),
                 )
                 rps_count = len(route_paths) if route_paths else 0
                 logger.info(

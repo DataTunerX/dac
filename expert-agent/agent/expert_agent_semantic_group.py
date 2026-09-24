@@ -37,15 +37,14 @@ from a2a.utils import new_agent_text_message, new_task, new_text_artifact
 from .redis_registry import RedisRegistry, HeartbeatService
 from model_sdk import ModelManager
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.tools import StructuredTool
 from .react import ReActRunner
+from .execution_flow import ExecutionTask, render_execution_flow_md
 from .dataservices_client import DataServicesClient, SemanticDomainInfo, SemanticGroupInfo
 from .agentregistry_client import AgentRegistryClient
 from .schema import ROLE_TYPE, AgentState, Memory, Message
 from .prompts import NEXT_STEP_PROMPT_ZH
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
-from .tool_call_utils import invoke_llm_with_tool
 
 try:
     # json_repair is a tolerant JSON parser designed specifically for LLM output.
@@ -330,30 +329,6 @@ class AgentState(str, Enum):
     ERROR = "ERROR"
 
 
-class ExecutionPlanPhase(BaseModel):
-    """Execution plan phase for LLM output."""
-    phase: int = Field(description="Phase number")
-    agents: List[str] = Field(default_factory=list, description="Agent names in this phase")
-    context_from: List[str] = Field(default_factory=list, description="Agent names whose context is used")
-
-
-class ExcludedAgent(BaseModel):
-    """Agent intentionally omitted from an execution plan."""
-    name: str = Field(description="Exact name of the excluded agent")
-    reason: str = Field(description="Brief reason why the agent is not needed")
-
-
-class ExecutionPlanResult(BaseModel):
-    """LLM output for execution plan."""
-    model_config = {"extra": "ignore"}
-    reasoning: str = Field(default="", description="Step-by-step reasoning")
-    execution_plan: List[ExecutionPlanPhase] = Field(default_factory=list, description="Ordered execution phases")
-    excluded_agents: List[ExcludedAgent] = Field(
-        default_factory=list,
-        description="Excluded agents with their exact names and reasons",
-    )
-
-
 class ExpertAgent(BaseAgent):
     """Expert Agent"""
 
@@ -374,6 +349,7 @@ class ExpertAgent(BaseAgent):
         current_task_id: int = None,
         resolve_intersection_mode: Optional[str] = None,
         agent_id: str = "",
+        execution_flow_md: str = "",
     ):
         logger.info('Initializing ExpertAgent')
         super().__init__(
@@ -455,6 +431,7 @@ class ExpertAgent(BaseAgent):
         self.agent_id = (agent_id or semantic_group_id or "").strip()
         # Soft preference from prior capability check (never hard-filters the pool).
         self.capability_preference: Dict[str, Any] = {}
+        self.execution_flow_md: str = (execution_flow_md or "").strip()
 
         self.react_runner = ReActRunner(
             llm=self.llm,
@@ -1129,6 +1106,79 @@ class ExpertAgent(BaseAgent):
         return result
 
     @staticmethod
+    def _copy_chain_protocol_fields(source: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep skill-agent / SD chain-scoring fields so routing can reuse them."""
+        if not isinstance(source, dict):
+            return {}
+        copied: Dict[str, Any] = {}
+        if "domain_verdict" in source:
+            copied["domain_verdict"] = str(source.get("domain_verdict") or "").strip()
+        if "score_version" in source:
+            copied["score_version"] = str(source.get("score_version") or "").strip()
+        if "evidence_grade" in source:
+            copied["evidence_grade"] = str(source.get("evidence_grade") or "").strip()
+        if "evidence_mode" in source:
+            copied["evidence_mode"] = str(source.get("evidence_mode") or "").strip()
+        if "threshold" in source:
+            try:
+                copied["threshold"] = float(source.get("threshold") or 0.0)
+            except (TypeError, ValueError):
+                copied["threshold"] = 0.0
+        if "handle_score" in source:
+            try:
+                copied["handle_score"] = float(source.get("handle_score") or 0.0)
+            except (TypeError, ValueError):
+                copied["handle_score"] = 0.0
+        if "has_external_dependency" in source:
+            copied["has_external_dependency"] = bool(source.get("has_external_dependency"))
+        if "contribution" in source:
+            copied["contribution"] = str(source.get("contribution") or "").strip()
+        steps = source.get("steps")
+        if isinstance(steps, list):
+            copied["steps"] = [step for step in steps if isinstance(step, dict)]
+        contributing = source.get("contributing_steps")
+        if isinstance(contributing, list):
+            step_ids: List[int] = []
+            for item in contributing:
+                try:
+                    step_ids.append(int(item))
+                except (TypeError, ValueError):
+                    continue
+            copied["contributing_steps"] = step_ids
+        risks = source.get("risks")
+        if isinstance(risks, list):
+            copied["risks"] = [str(item) for item in risks]
+        if "matched_evidence" in source:
+            copied["matched_evidence"] = ExpertAgent._compact_string_list(
+                source.get("matched_evidence")
+            )
+        return copied
+
+    @staticmethod
+    def _group_domain_verdict(
+        selected: List[Dict[str, Any]],
+        available: List[Dict[str, Any]],
+    ) -> str:
+        selected_verdicts = [
+            str(result.get("domain_verdict") or "").strip()
+            for result in selected
+            if str(result.get("domain_verdict") or "").strip()
+        ]
+        if "has" in selected_verdicts:
+            return "has"
+        if "uncertain" in selected_verdicts:
+            return "uncertain"
+        if selected_verdicts:
+            return selected_verdicts[0]
+        available_verdicts = [
+            str(result.get("domain_verdict") or "").strip()
+            for result in available
+        ]
+        if available and all(verdict == "none" for verdict in available_verdicts):
+            return "none"
+        return ""
+
+    @staticmethod
     def _parse_member_capability_json(text: str) -> Optional[Dict[str, Any]]:
         raw = str(text or "").strip()
         candidates = [raw]
@@ -1182,11 +1232,17 @@ class ExpertAgent(BaseAgent):
             status = "contributor"
         else:
             status = "unsupported"
-        return {
+        domain_verdict = str(payload.get("domain_verdict") or "").strip()
+        domain_match = bool(payload.get("domain_match", False))
+        if domain_verdict in ("has", "uncertain"):
+            domain_match = True
+        elif domain_verdict == "none":
+            domain_match = False
+        normalized = {
             "can_handle": can_handle,
             "can_contribute": can_contribute,
             "confidence": confidence,
-            "reason": str(payload.get("reason", "") or "").strip()[:500],
+            "reason": str(payload.get("reason", "") or "").strip()[:2000],
             "agent_name": str(
                 payload.get("agent_name") or getattr(agent_card, "name", "") or ""
             ).strip(),
@@ -1202,11 +1258,15 @@ class ExpertAgent(BaseAgent):
                 or getattr(member, "descriptor_type", "")
                 or ""
             ).strip(),
-            "domain_match": bool(payload.get("domain_match", False)),
+            "domain_match": domain_match,
             "available": True,
             "timed_out": False,
             "status": status,
         }
+        normalized.update(self._copy_chain_protocol_fields(payload))
+        if domain_verdict:
+            normalized["domain_verdict"] = domain_verdict
+        return normalized
 
     async def _request_member_capability(
         self,
@@ -1282,13 +1342,16 @@ class ExpertAgent(BaseAgent):
         logger.info(
             "[Capability][SGExpert] probe done | member=%s | status=%s | "
             "can_handle=%s | can_contribute=%s | confidence=%.2f | "
-            "domain_match=%s | tables=%s | metrics=%s | missing=%s | reason=%s",
+            "domain_match=%s | domain_verdict=%s | score_version=%s | "
+            "tables=%s | metrics=%s | missing=%s | reason=%s",
             normalized.get("agent_name") or member_name,
             normalized.get("status"),
             normalized.get("can_handle"),
             normalized.get("can_contribute"),
             float(normalized.get("confidence") or 0.0),
             normalized.get("domain_match"),
+            normalized.get("domain_verdict") or "",
+            normalized.get("score_version") or "",
             (normalized.get("matched_tables") or [])[:8],
             (normalized.get("matched_metrics") or [])[:8],
             (normalized.get("missing_requirements") or [])[:8],
@@ -1575,6 +1638,20 @@ class ExpertAgent(BaseAgent):
             for result in selected
             if result.get("agent_name")
         ]
+        chain_source: Dict[str, Any] = {}
+        for candidate in list(selected) + [
+            result for result in available if result not in selected
+        ]:
+            if str(candidate.get("score_version") or "").strip():
+                chain_source = candidate
+                break
+        if not chain_source and selected:
+            chain_source = selected[0]
+        chain_fields = self._copy_chain_protocol_fields(chain_source)
+        domain_verdict = self._group_domain_verdict(selected, available)
+        contribution = str(chain_fields.get("contribution") or "").strip()
+        if not contribution and can_contribute and not can_handle:
+            contribution = reason
         route_path = [group_name]
         result = {
             "can_handle": can_handle,
@@ -1585,7 +1662,7 @@ class ExpertAgent(BaseAgent):
             "route_path": route_path,
             "route_paths": [{"path": route_path, "confidence": confidence}],
             "can_contribute": can_contribute,
-            "contribution": reason if can_contribute and not can_handle else "",
+            "contribution": contribution,
             "execution_strategy": strategy,
             "collaboration_agents": collaboration_agents,
             "collaboration_roles": collaboration_roles,
@@ -1595,11 +1672,17 @@ class ExpertAgent(BaseAgent):
             "unavailable_count": unavailable_count,
             "missing_requirements": missing_requirements,
         }
+        result.update(chain_fields)
+        result["contribution"] = contribution
+        if domain_verdict:
+            result["domain_verdict"] = domain_verdict
+        elif "domain_verdict" not in result:
+            result["domain_verdict"] = ""
         logger.info(
             "[Capability][SGExpert] aggregate | group=%s | strategy=%s | "
             "can_handle=%s | can_contribute=%s | confidence=%.2f | "
             "selected=%s | roles=%s | degraded=%s | unavailable=%d | "
-            "missing=%s | reason=%s",
+            "domain_verdict=%s | score_version=%s | missing=%s | reason=%s",
             group_name,
             strategy,
             can_handle,
@@ -1609,6 +1692,8 @@ class ExpertAgent(BaseAgent):
             collaboration_roles,
             degraded,
             unavailable_count,
+            result.get("domain_verdict") or "",
+            result.get("score_version") or "",
             missing_requirements[:10],
             str(reason)[:240],
         )
@@ -1807,14 +1892,15 @@ class ExpertAgent(BaseAgent):
 
     @staticmethod
     def _answer_model_for_descriptor_type(descriptor_type: str) -> str:
-        """A2A metadata answer_model: structured and unstructured (doc SD) → summarized at SD execute();
-
-        Unstructured SD reads descriptorType from DescriptorTypes env; utility a2a uses original.
+        """A2A metadata answer_model:
+        - structured / structured-* → original (table data must not be truncated)
+        - code / unstructured → summarized (large text; ReAct only needs business context, not raw lines)
+        - group / other → original
         """
         dt = (descriptor_type or "").strip().lower()
-        if dt == "structured" or dt.startswith("structured-"):
+        if dt == "unstructured":
             return "summarized"
-        if dt == "unstructured" or "unstructured" in dt:
+        if dt == "code":
             return "summarized"
         return "original"
 
@@ -1934,227 +2020,6 @@ class ExpertAgent(BaseAgent):
         ns = (getattr(member, 'dd_namespace', '') or "").strip()
         dd = (getattr(member, 'dd_name', '') or "").strip()
         return f"{short}({ns}/{dd}:{dt})" if ns and dd else short
-
-    async def _plan_execution_order(self) -> List[Dict[str, Any]]:
-        """
-        使用 LLM 分析所有 agent 的能力描述，动态决定执行顺序和上下文传递关系。
-
-        返回执行计划列表，每个元素代表一个执行阶段：
-        [
-            {"phase": 1, "agents": ["CodeAgent", "DocAgent"], "context_from": []},
-            {"phase": 2, "agents": ["ChatBIAgent"], "context_from": ["CodeAgent", "DocAgent"]}
-        ]
-
-        如果 LLM 调用失败或返回无效 JSON，回退到默认策略：所有 agent 在 Phase 1 并行执行。
-        """
-        all_names = [getattr(ac, "name", "") or "(unknown)" for _, ac in self.group_agent_cards]
-        fallback_plan = [{"phase": 1, "agents": all_names, "context_from": []}]
-
-        # 只有 1 个 agent 时无需 LLM 规划
-        if len(self.group_agent_cards) <= 1:
-            logger.info("[ExecutionPlanner] Only %d agent(s), skip LLM planning", len(self.group_agent_cards))
-            return fallback_plan
-
-        # 收集每个 agent 的元数据。以 descriptor_type 为权威来源明确每个 agent 适合干什么，
-        # AgentCard.description 通常不会说明这些，故不依赖。
-        agent_info_lines: List[str] = []
-        for i, (member, ac) in enumerate(self.group_agent_cards, 1):
-            agent_name = getattr(ac, "name", "") or "(unknown)"
-            dt = (getattr(member, 'descriptor_type', '') or "").strip().lower() or "unknown"
-            role = self._get_role_by_descriptor_type(member)
-            agent_info_lines.append(
-                f"{i}. Name: {agent_name}\n"
-                f"   descriptor_type: {dt}\n"
-                f"   Suitable for: {role}"
-            )
-
-        agent_list_str = "\n\n".join(agent_info_lines)
-
-        system_prompt = (
-            "You are an intelligent orchestrator that plans the execution order of multiple AI agents.\n"
-            "Each agent's role is defined by its descriptor_type (from semantic domain). Use this as the authoritative source.\n\n"
-            "descriptor_type reference:\n"
-            "- code: Retrieves/analyzes source code from repositories. Contains business logic, field mappings, "
-            "validation rules, data models, and table relationships that are NOT in the database schema. "
-            "Useful when: (1) user wants to see code/implementation, OR (2) a structured agent also exists and "
-            "the code context can help it generate more accurate SQL (business logic lives in code, not in DB).\n"
-            "- unstructured: A semantic domain's document knowledge base. "
-            "Retrieves and analyzes all documents within the domain — API specs, design docs, "
-            "data dictionaries, business rules, field descriptions, manuals, etc. "
-            "If this domain is relevant to the user query, the unstructured agent MUST be included "
-            "in Phase 1 as foundational knowledge context. It is NOT limited to documentation lookup; "
-            "it is the domain's knowledge backbone that provides context for ALL downstream agents.\n"
-            "- structured (including structured-mysql, structured-postgres, etc.): Queries databases, generates SQL, "
-            "data analysis, charts. ONLY useful when the user wants to query actual data, get statistics, or generate reports.\n"
-            "- group: A composite child-group agent that encapsulates an entire sub-domain with its own internal agents. "
-            "Treat it as a black-box domain expert. INCLUDE if the user query overlaps with its domain description. "
-            "It runs independently — no context_from is typically needed unless multiple group agents produce "
-            "complementary results.\n\n"
-            "You MUST think step by step (Chain-of-Thought) and write your reasoning into the \"reasoning\" field.\n\n"
-            "## Thinking Steps (write into the \"reasoning\" field)\n\n"
-            "Step 1 — Extract Intent: What is the user's core intent? Strip away filler words and identify "
-            "the key action (query data? view code? read docs? mixed?).\n\n"
-            "Step 2 — Match Capabilities: For each available agent, does its descriptor_type match the intent? "
-            "Write out your judgment for EVERY agent (include or exclude, with a brief reason).\n\n"
-            "Step 3 — Apply Co-existence Rule:\n"
-            "  A) unstructured agent is the DOMAIN KNOWLEDGE BASE. If the domain contains an unstructured "
-            "agent and the domain is relevant to the query, ALWAYS include it in Phase 1. "
-            "Do NOT guess what documents it contains — it holds all of the domain's documentation "
-            "(API specs, design docs, field descriptions, business rules, etc.). "
-            "It provides foundational context for ALL other agents in the domain.\n"
-            "  B) If BOTH code and structured agents exist:\n"
-            "  - If the query involves data querying (SQL, statistics, reports, data analysis), "
-            "INCLUDE BOTH: code agent in Phase 1 (provides business logic context), "
-            "structured agent in Phase 2 with context_from code agent (generates more accurate SQL). "
-            "Business logic (soft-delete flags, status filters, computed fields, table joins) lives in code, not in DB schema.\n"
-            "  - If the query is ONLY about code/implementation with NO data query intent, EXCLUDE structured agent.\n"
-            "  - Only EXCLUDE code agent from a data query if NO structured agent exists in the group.\n"
-            "  C) When code, unstructured, AND structured all coexist and the domain is relevant: "
-            "INCLUDE all three — code and unstructured in Phase 1 as foundational context providers, "
-            "structured in Phase 2 with context_from both.\n\n"
-            "Step 4 — Determine Exclusions:\n"
-            "  - API docs/parameters/error codes (no data query intent) → EXCLUDE structured agents\n"
-            "  - Deployment/installation manuals → EXCLUDE code and structured agents\n"
-            "  - Pure code questions (no data intent) → EXCLUDE structured agents\n"
-            "  - unstructured agents: DO NOT try to guess what documents they contain. "
-            "They are domain knowledge bases. EXCLUDE them ONLY when the entire domain is irrelevant "
-            "to the query — not when you think the docs \"might not be helpful.\"\n"
-            "  - The query spans multiple domains (e.g., \"check the code AND query the data\") → INCLUDE all relevant\n"
-            "  - The query is genuinely ambiguous → INCLUDE rather than exclude\n\n"
-            "Step 5 — Plan Phases: For included agents, determine execution order:\n"
-            "  - Foundational context providers (code, documents) → earlier phases\n"
-            "  - Context consumers (SQL generation, data analysis) → later phases with context_from\n"
-            "  - Independent agents within the same phase run in parallel\n"
-            "  - context_from must only reference agents from earlier phases\n\n"
-            "## Output Format\n"
-            "Call the plan_execution tool with your execution plan.\n\n"
-            "Important:\n"
-            "- The \"reasoning\" field MUST contain your step-by-step thinking following all 5 steps. Do NOT skip it.\n"
-            "- Every agent MUST appear either in execution_plan or in excluded_agents, not both.\n"
-            "- Every excluded_agents item MUST contain the exact agent name in \"name\" and a brief explanation in \"reason\".\n"
-            "- excluded_agents can be an empty list if all agents are relevant.\n"
-            "- Only keep excluded_agents empty when the query genuinely needs ALL agent types.\n"
-            "- Including unnecessary agents wastes resources and slows down response time. Be precise."
-        )
-
-        human_content = f"User Query: {self.query}\n\nAvailable Agents:\n{agent_list_str}"
-        upstream_k = (self.metadata or {}).get("upstream_prior_knowledge", "") or ""
-        upstream_k = str(upstream_k).strip()
-        if upstream_k:
-            human_content = (
-                "【来自上游编排的前序任务结果】（供分解代理与阶段执行参考；用户需求以 User Query 为准）\n"
-                f"{upstream_k}\n\n"
-                + human_content
-            )
-
-        try:
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=human_content),
-            ]
-            logger.info("[ExecutionPlanner] LLM 规划开始 | agent 数: %d", len(self.group_agent_cards))
-
-            plan_execution_tool = StructuredTool(
-                name="plan_execution",
-                description="Plan the execution order of agents with phase-level parallelism and context routing.",
-                args_schema=ExecutionPlanResult,
-                func=None,
-                coroutine=None,
-            )
-
-            result = await invoke_llm_with_tool(
-                llm=self.llm_non_stream,
-                metadata=self.metadata,
-                fallback_formatter=self.format_llm_output,
-                tool=plan_execution_tool,
-                messages=messages,
-                tool_choice="plan_execution",
-                span_name="expert-plan-execution",
-                span_input={"query": self.query},
-            )
-
-            if result is None:
-                logger.warning("[ExecutionPlanner] tool call 返回 None，使用 fallback")
-                return fallback_plan
-
-            plan_data = result
-            if not isinstance(plan_data, dict):
-                logger.warning("[ExecutionPlanner] plan_data 不是 dict，使用 fallback")
-                return fallback_plan
-
-            reasoning = plan_data.get("reasoning", "")
-            self._last_planning_reasoning = reasoning
-            if reasoning:
-                logger.info("[ExecutionPlanner] LLM reasoning: %s", reasoning)
-
-            execution_plan = plan_data.get("execution_plan", [])
-
-            if not isinstance(execution_plan, list) or len(execution_plan) == 0:
-                logger.warning("[ExecutionPlanner] execution_plan 为空或无效，使用 fallback")
-                return fallback_plan
-
-            # 解析 excluded_agents：LLM 判定与用户问题不相关的 agent
-            excluded_agents_raw = plan_data.get("excluded_agents", [])
-            excluded_names: set = set()
-            excluded_reasons: Dict[str, str] = {}
-            if isinstance(excluded_agents_raw, list):
-                for item in excluded_agents_raw:
-                    if isinstance(item, dict):
-                        name = (item.get("name") or "").strip()
-                        reason = (item.get("reason") or "").strip()
-                        if name:
-                            excluded_names.add(name)
-                            excluded_reasons[name] = reason
-
-            # 验证计划：区分"被排除"和"被遗漏"的 agent
-            planned_names: set = set()
-            for phase_info in execution_plan:
-                for name in phase_info.get("agents", []):
-                    planned_names.add(name)
-
-            all_names_set = set(all_names)
-            not_in_plan = all_names_set - planned_names
-            truly_missing = not_in_plan - excluded_names
-            if truly_missing:
-                logger.warning("[ExecutionPlanner] 计划遗漏 agent（非排除）: %s，已补入 Phase 1", truly_missing)
-                phase1_found = False
-                for phase_info in execution_plan:
-                    if phase_info.get("phase") == 1:
-                        phase_info["agents"].extend(list(truly_missing))
-                        phase1_found = True
-                        break
-                if not phase1_found:
-                    execution_plan.insert(0, {"phase": 0, "agents": list(truly_missing), "context_from": []})
-
-            # 按 phase 排序
-            execution_plan.sort(key=lambda x: x.get("phase", 1))
-
-            # 输出直观的执行计划（包含 dd 信息以区分同名 agent）
-            _nta = self._build_name_to_agent_map()
-            plan_lines = ["[ExecutionPlanner] 执行计划:"]
-            for phase_info in execution_plan:
-                p = phase_info.get("phase", 0)
-                agents = phase_info.get("agents", [])
-                ctx = phase_info.get("context_from", [])
-                agents_display = [self._agent_display_name(a, _nta) for a in agents]
-                if ctx:
-                    ctx_display = [self._agent_display_name(c, _nta) for c in ctx]
-                    plan_lines.append(f"  Phase {p}: {', '.join(agents_display)} (上下文来自: {', '.join(ctx_display)})")
-                else:
-                    plan_lines.append(f"  Phase {p}: {', '.join(agents_display)}")
-            if excluded_names:
-                plan_lines.append("  排除的 agent:")
-                for name in excluded_names:
-                    display = self._agent_display_name(name, _nta)
-                    reason = excluded_reasons.get(name, "(未提供原因)")
-                    plan_lines.append(f"    - {display}: {reason}")
-            logger.info("\n".join(plan_lines))
-
-            return execution_plan
-
-        except Exception as e:
-            logger.warning("[ExecutionPlanner] LLM 规划失败: %s，使用 fallback (全部 Phase 1 并行)", e)
-            return fallback_plan
 
     def _build_send_message_payload(self, query_text: str, extra_context: str = "",
                                      code_contexts: Optional[List[str]] = None,
@@ -2291,6 +2156,7 @@ class ExpertAgent(BaseAgent):
             react_result = await self.react_runner.run(
                 user_query=query,
                 prior_context=prior_context,
+                execution_flow_md=self.execution_flow_md,
                 agents=self.group_agent_cards,
                 name_to_agent=name_to_agent,
                 user_id=metadata.get("user_id", ""),
@@ -2525,7 +2391,8 @@ class ExpertAgent(BaseAgent):
             if name not in preferred_handlers
         ]
 
-        # Soft reorder only: preferred members first, others remain available.
+        # Soft reorder: preferred members sorted first (as hints), full pool retained.
+        # Final tool selection is guided by tool Descriptions, not hard-filtered by capability hints.
         if preferred_cards:
             preferred_keys = {
                 str(getattr(card, "url", "") or "") or str(getattr(card, "name", "") or "")
@@ -2731,6 +2598,51 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
         if current_task_id_str:
             current_task_id = int(current_task_id_str)
 
+        # ── 解析上游 Execution Flow 状态地图 ──
+        # 上游 SG Orchestrator 通过 metadata.upstream_context.execution_flow
+        # 传递完整的执行历史。反序列化后渲染为 Markdown，注入 ExpertAgent
+        # 以便 ReAct 规划时参考执行轨迹。
+        ef_md = ""
+        try:
+            upstream_ctx = metadata.get("upstream_context") if isinstance(metadata, dict) else None
+            upstream_ef_raw = upstream_ctx.get("execution_flow") if isinstance(upstream_ctx, dict) else None
+            if upstream_ef_raw and isinstance(upstream_ef_raw, list):
+                ef_tasks: list[ExecutionTask] = []
+                for ef_dict in upstream_ef_raw:
+                    if isinstance(ef_dict, dict):
+                        try:
+                            ef_tasks.append(ExecutionTask.from_dict(ef_dict))
+                        except Exception:
+                            logger.warning(
+                                "[ExecutionFlow][SGExpert] failed to parse upstream EF task: %s",
+                                ef_dict.get("execution_id", "?"),
+                            )
+                if ef_tasks:
+                    _expert_label = self.agent_id or self.semantic_group_id or ""
+                    ef_md = render_execution_flow_md(
+                        ef_tasks,
+                        agent=_expert_label,
+                        current_agent=_expert_label,
+                        show_children=False,
+                    )
+                    logger.info(
+                        "[ExecutionFlow][SGExpert] received upstream state map | "
+                        "count=%d chars=%d",
+                        len(ef_tasks),
+                        len(ef_md),
+                    )
+                    logger.info(
+                        "╔═══════════════ Execution Flow (SGExpert) ═══════════════\n"
+                        "%s\n"
+                        "╚══════════════════════════════════════════════════════════",
+                        ef_md.strip() or "(empty)",
+                    )
+        except Exception:
+            logger.warning(
+                "[ExecutionFlow][SGExpert] failed to parse upstream execution_flow",
+                exc_info=True,
+            )
+
         agent = ExpertAgent(
             provider=self.provider,
             api_key=self.api_key,
@@ -2746,6 +2658,7 @@ class ExpertAgentExecutorSemanticGroup(AgentExecutor):
             current_tasks_status=current_tasks_status,
             current_task_id=current_task_id,
             agent_id=self.agent_id or self.semantic_group_id,
+            execution_flow_md=ef_md,
         )
 
         try:

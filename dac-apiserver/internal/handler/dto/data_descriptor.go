@@ -250,3 +250,8 @@ type DataDescriptorSemanticDomainResponse struct {
 func ToDataDescriptorSemanticDomainResponse(sd *domain.SemanticDomain) DataDescriptorSemanticDomainResponse {
 	return DataDescriptorSemanticDomainResponse{Data: sd}
 }
+
+// UpdateDataDescriptorSemanticDomainRequest updates the DD-bound agent_card JSON.
+type UpdateDataDescriptorSemanticDomainRequest struct {
+	AgentCard string `json:"agent_card"`
+}

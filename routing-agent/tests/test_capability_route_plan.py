@@ -7,6 +7,7 @@ with canned CapabilityCheckResponse objects — no live LLM, no network.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,6 +54,13 @@ from routing_agent.server import (  # noqa: E402
     RoutingAgent,
     _capability_response_from_payload,
     _format_capable_agent_line,
+    _pre_make_plan_select_max_attempts,
+    _pre_make_plan_select_timeout,
+    _render_broadcast_capability_progress_md,
+    _render_capability_progress_md,
+    _render_broadcast_pre_make_plan_progress_md,
+    _render_pre_make_plan_md,
+    _render_pre_make_plan_selection_md,
 )
 
 
@@ -283,6 +291,48 @@ def test_payload_roundtrip_keeps_chain_fields():
     assert "contributing_steps" in line
 
 
+def test_sg_expert_payload_roundtrip_keeps_chain_protocol():
+    """SG Orchestrator dumps Expert aggregate JSON; routing must keep chain fields."""
+    raw = {
+        "can_handle": True,
+        "can_contribute": False,
+        "confidence": 0.91,
+        "reason": "Member sd-a can handle the query",
+        "agent_name": "sales-group",
+        "contribution": "输入订单号，输出订单明细",
+        "score_version": "capability-chain-v1",
+        "evidence_grade": "solid",
+        "threshold": 0.6,
+        "handle_score": 0.91,
+        "steps": [{"step_id": 1, "name": "I", "score": 0.9, "evidence_strength": "solid"}],
+        "contributing_steps": [1],
+        "domain_verdict": "has",
+        "has_external_dependency": False,
+        "member_results": [
+            {
+                "agent_name": "sd-a",
+                "can_handle": True,
+                "score_version": "capability-chain-v1",
+                "domain_verdict": "has",
+            }
+        ],
+    }
+    resp = _capability_response_from_payload(
+        raw,
+        default_name="sales-group",
+        default_url="http://sg",
+        route_path=["sales-group"],
+        route_paths=[{"path": ["sales-group"], "confidence": 0.91}],
+        latency_ms=40,
+    )
+    assert resp.is_chain_scored is True
+    assert resp.domain_verdict == "has"
+    assert resp.steps[0]["name"] == "I"
+    assert resp.contributing_steps == [1]
+    assert resp.has_external_dependency is False
+    assert resp.member_results[0]["agent_name"] == "sd-a"
+
+
 def test_normalize_skips_regex_for_chain_scored_complete_contribution():
     agent = _agent()
     resp = _chain(
@@ -403,3 +453,270 @@ async def test_simple_mixed_handlers_and_contributors():
     assert step is not None and step.agent == "db-agent"
     # All 3 should be in routing_agent_pool
     assert len(meta[ROUTING_AGENT_POOL_KEY]) == 3
+
+
+def test_capability_progress_md_matches_friendly_format():
+    query = "用户ID U001 → 查询支付流水 → 最近几笔支付记录及状态"
+    resp = CapabilityCheckResponse(
+        can_handle=True,
+        can_contribute=True,
+        confidence=1.0,
+        reason="领域交集：明确有 — 问题领域：L1 订单查询；可独立完成。",
+        agent_name="order-agent",
+        contribution="输入用户ID=U001，输出订单号及订单状态列表，满足用户对支付记录及状态的查询需求",
+        score_version="capability-chain-v1",
+        evidence_grade="A",
+        threshold=0.7,
+        handle_score=1.0,
+        contributing_steps=[1],
+        domain_verdict="has",
+        has_external_dependency=False,
+        latency_ms=7320,
+        risks=["订单状态中'待支付'、'已完成'等可视为支付相关，但'已取消'可能不属于支付流水，需用户确认筛选范围"],
+        steps=[
+            {
+                "step_id": 1,
+                "description": "按用户ID U001 查询订单流水，筛选出支付相关记录（待支付、已完成等状态）",
+                "operation": "lookup",
+                "is_final": True,
+                "inputs": [{"name": "用户ID", "source": "query"}],
+                "outputs": ["订单号列表", "订单状态列表"],
+                "constraints": ["只读"],
+                "scores": {"I": 1.0, "D": 1.0, "O": 1.0, "R": 1.0, "C": 1.0},
+                "step_score": 1.0,
+                "checklists": {
+                    "I": {"required": ["用户ID"], "matched": ["用户ID"], "evidence_strength": "solid"},
+                    "D": {
+                        "required": ["订单流水数据（含订单号、状态、用户ID）"],
+                        "matched": ["订单流水数据（含订单号、状态、用户ID）"],
+                        "evidence_strength": "solid",
+                    },
+                    "R": {
+                        "required": ["订单号列表", "订单状态列表"],
+                        "matched": ["订单号列表", "订单状态列表"],
+                        "evidence_strength": "solid",
+                    },
+                    "C": {"required": ["只读"], "matched": ["只读"], "evidence_strength": "solid"},
+                },
+                "evidence": [
+                    '技能正文：按用户ID查询：grep "U001" data/orders.txt',
+                    "技能正文：输出：订单号、订单状态、商品ID、用户ID",
+                ],
+            }
+        ],
+    )
+    md = _render_capability_progress_md("order-agent", resp, query=query)
+    assert "## Capability Check — agent=`order-agent`" in md
+    assert "独立处理" in md and "can_handle=True" in md
+    assert "贡献步骤" in md and "can_contribute=True" in md
+    assert "**handle_score**: `1.000`" in md
+    assert "**domain_verdict**: `has`" in md
+    assert "**has_external_dependency**: `False`" in md
+    assert "**contributing_steps**: `[1]`" in md
+    assert "**latency_ms**: `7320`" in md
+    assert "### §〇 前置检查：领域交集判定" in md
+    assert "| **I** | 输入匹配 |" in md
+    assert "| **O** | 操作能力 | — | — |" in md
+    assert "### LLM 结构化理由（reason）" in md
+
+    combined = _render_broadcast_capability_progress_md(
+        query,
+        [(_card("order-agent"), resp), (_card("logistics-query"), _chain(agent_name="logistics-query", can_handle=True))],
+    )
+    assert combined.startswith("# 广播能力检查结果")
+    assert "order-agent [handle]" in combined
+    assert "logistics-query [handle]" in combined
+
+
+def test_capability_payload_parses_domain_verdict():
+    resp = _capability_response_from_payload(
+        {
+            "can_handle": True,
+            "can_contribute": True,
+            "confidence": 1.0,
+            "domain_verdict": "has",
+            "has_external_dependency": True,
+            "score_version": "capability-chain-v1",
+        },
+        default_name="order-agent",
+        default_url="http://x",
+        route_path=["order-agent"],
+        route_paths=[],
+        latency_ms=10,
+    )
+    assert resp.domain_verdict == "has"
+    assert resp.has_external_dependency is True
+
+
+def test_pre_make_plan_progress_md_lists_tasks_and_thought():
+    query = "用户ID U001 的最近支付记录"
+    resp = _chain(agent_name="order-agent", can_handle=True, can_contribute=True)
+    plan = {
+        "original_query": query,
+        "thought_process": "Step1 订单流水属于 order-agent；Step6 单任务即可。",
+        "tasks": [
+            {
+                "id": 1,
+                "description": "按用户ID U001 查询最近支付记录及状态",
+                "agent": "order-agent",
+                "depends_on": [],
+            }
+        ],
+    }
+    md = _render_pre_make_plan_md("order-agent", plan, query=query, resp=resp)
+    assert "## Pre-Make-Plan — agent=`order-agent`" in md
+    assert "**任务数**: `1`" in md
+    assert "`can_handle=True`" in md
+    assert "**agent**: `order-agent`" in md
+    assert "**depends_on**: `[]`" in md
+    assert "按用户ID U001 查询最近支付记录及状态" in md
+    assert "### 思考过程（thought_process）" in md
+
+    failed = _render_pre_make_plan_md("logistics-query", None, query=query)
+    assert "未返回有效规划" in failed
+
+    combined = _render_broadcast_pre_make_plan_progress_md(
+        query,
+        [
+            (_card("order-agent"), resp, plan),
+            (_card("logistics-query"), _chain(agent_name="logistics-query"), None),
+        ],
+    )
+    assert combined.startswith("# Pre-Make-Plan 结果")
+    assert "order-agent [handle]" in combined
+    assert "logistics-query [contribute]" in combined
+    assert "收到 **1/2** 个 Agent 的规划" in combined
+
+
+def test_pre_make_plan_selection_md_includes_reason_and_thought():
+    md = _render_pre_make_plan_selection_md(
+        "logistics-query",
+        candidate_count=2,
+        reason="物流查询技能覆盖运单号与轨迹，规划完整且能力实证为实据。",
+        thought="Step1 用户要查物流轨迹。",
+        source="llm",
+    )
+    lines = md.splitlines()
+    assert lines[0] == "选定 logistics-query 作为最佳路由目标"
+    assert lines[1] == "物流查询技能覆盖运单号与轨迹，规划完整且能力实证为实据。"
+    assert "Step1 用户要查物流轨迹。" in md
+
+
+class _SelectRouting(_FakeRouting):
+    _llm_select_best_plan = RoutingAgent._llm_select_best_plan
+
+
+def _select_candidates():
+    plan = {
+        "tasks": [{"task_name": "t1", "agent": "a", "description": "d"}],
+        "thought_process": "plan",
+    }
+    return [
+        (_card("logistics-query"), _chain(agent_name="logistics-query"), plan),
+        (_card("ticket-query"), _chain(agent_name="ticket-query"), plan),
+    ]
+
+
+def test_pre_make_plan_select_env_defaults(monkeypatch):
+    monkeypatch.delenv("PRE_MAKE_PLAN_SELECT_TIMEOUT", raising=False)
+    monkeypatch.delenv("PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS", raising=False)
+    assert _pre_make_plan_select_timeout() == 60.0
+    assert _pre_make_plan_select_max_attempts() == 3
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_TIMEOUT", "0")
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS", "nope")
+    assert _pre_make_plan_select_timeout() == 60.0
+    assert _pre_make_plan_select_max_attempts() == 3
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_TIMEOUT", "45.5")
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS", "2")
+    assert _pre_make_plan_select_timeout() == 45.5
+    assert _pre_make_plan_select_max_attempts() == 2
+
+
+@pytest.mark.asyncio
+async def test_llm_select_best_plan_retries_then_succeeds(monkeypatch):
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_TIMEOUT", "5")
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS", "3")
+    calls = {"n": 0}
+
+    async def _flaky(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("transient")
+        return {
+            "selected_agent_index": 2,
+            "thought": "ok",
+            "reason": "ticket-query better",
+        }
+
+    monkeypatch.setattr("routing_agent.server.invoke_llm_with_tool", _flaky)
+    agent = _SelectRouting()
+    card, resp, meta = await agent._llm_select_best_plan(
+        query="张三的包裹现在到哪了？",
+        candidates_with_plans=_select_candidates(),
+        user_id="u",
+        run_id="r",
+        trace_id="t",
+    )
+    assert calls["n"] == 3
+    assert card.name == "ticket-query"
+    assert meta["source"] == "llm"
+    assert meta["reason"] == "ticket-query better"
+    assert resp.agent_name == "ticket-query"
+
+
+@pytest.mark.asyncio
+async def test_llm_select_best_plan_timeout_retries_then_fallback(monkeypatch):
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_TIMEOUT", "0.05")
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS", "3")
+    calls = {"n": 0}
+
+    async def _hang(*_args, **_kwargs):
+        calls["n"] += 1
+        await asyncio.sleep(10)
+        return {"selected_agent_index": 2, "thought": "", "reason": "late"}
+
+    monkeypatch.setattr("routing_agent.server.invoke_llm_with_tool", _hang)
+    agent = _SelectRouting()
+    card, _resp, meta = await agent._llm_select_best_plan(
+        query="张三的包裹现在到哪了？",
+        candidates_with_plans=_select_candidates(),
+        user_id="u",
+        run_id="r",
+        trace_id="t",
+    )
+    assert calls["n"] == 3
+    assert card.name == "logistics-query"
+    assert meta["source"] == "fallback_first"
+    assert "timeout" in meta["reason"]
+    assert "3 次" in meta["reason"]
+
+
+@pytest.mark.asyncio
+async def test_llm_select_best_plan_none_then_success(monkeypatch):
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_TIMEOUT", "5")
+    monkeypatch.setenv("PRE_MAKE_PLAN_SELECT_MAX_ATTEMPTS", "3")
+    calls = {"n": 0}
+
+    async def _none_then_ok(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return {
+            "selected_agent_index": 1,
+            "thought": "first",
+            "reason": "logistics",
+        }
+
+    monkeypatch.setattr("routing_agent.server.invoke_llm_with_tool", _none_then_ok)
+    agent = _SelectRouting()
+    card, _resp, meta = await agent._llm_select_best_plan(
+        query="张三的包裹现在到哪了？",
+        candidates_with_plans=_select_candidates(),
+        user_id="u",
+        run_id="r",
+        trace_id="t",
+    )
+    assert calls["n"] == 2
+    assert card.name == "logistics-query"
+    assert meta["source"] == "llm"
+    assert meta["reason"] == "logistics"

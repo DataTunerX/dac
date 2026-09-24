@@ -157,8 +157,11 @@ This hint helps planning and debugging; missing it does NOT block tool calls or 
 ## Critical Rules
 
 - NEVER guess or fabricate data. Query agent tools when you need domain-specific information.
+- **Tool selection by description**: Each tool has a Description, Use when, and Do NOT use when field. These are authoritative for deciding whether a tool matches the question. Some tools may carry a [CAPABILITY_HINT] annotation — treat this as a rough clue only; it does NOT override the tool's own scope statement.
+- **Do NOT try tools whose description doesn't match**: If a tool's Use when / Description does not cover the user's question (e.g. a transaction agent for user-profile queries, or a docs agent for live data), do NOT call it — even if it carries a capability hint. Call `finish` and state the gap if no tool's description fits.
 - Route to **structured** tools when the user needs live data/statistics; route to **code** or **doc** when they need rules/implementation/documentation — but always pass **user wording**, not your own SQL/code rewrite.
-- If a tool returns the same summary regardless of your query, update gaps and `planned_action` to use a **different-capability** tool; set confidence to `low` if unsure.
+- If a tool returns the same summary regardless of your query, its scope does not cover this question. Do not retry it — mark the gap as unsatisfied.
+- **After a tool fails**: do NOT try another tool of the same descriptor_type just because it also has a capability hint. Evaluate each remaining tool's Use when / Do NOT use against the missing sub-goal; only call one whose description genuinely matches.
 - Prefer **sequential** calls (e.g. code then structured) when the user asks to learn rules first then query data; avoid parallel calls that duplicate the same semantic question across agents.
 - Call `finish` before exceeding {max_steps} turns.
 
@@ -207,6 +210,8 @@ Each tool accepts a natural language `query` (user semantics preserved) and retu
 
 {agent_tools_description}
 
+{execution_flow_md}
+
 ## Upstream Prior Context (from orchestrator)
 
 {prior_context}
@@ -216,24 +221,42 @@ Each tool accepts a natural language `query` (user semantics preserved) and retu
 {user_query}
 """
 
+# ── Execution Flow 章节格式化 ──
+# 当 execution_flow_md 非空时，展开为完整的 ## Upstream Execution Flow 章节；
+# 为空时返回空字符串，整节不出现（避免占位噪音）。
+def _format_ef_section(ef_md: str) -> str:
+    if not ef_md or not ef_md.strip():
+        return ""
+    return (
+        "## Upstream Execution Flow\n"
+        "\n"
+        "以下为上游 Agent 已完成的执行轨迹。记录了谁做了什么、结果如何、为什么失败、"
+        "以及为什么委派当前任务。供你调度工具时参考。\n"
+        "\n"
+        "### Usage Policy for Execution Flow\n"
+        "\n"
+        "- 用它理解「上游已经做了什么」、哪些任务失败了、上游发现的关联键是什么\n"
+        "- 避免重复调用上游已成功的同类工具\n"
+        "- 如果上游已经查出用户 ID / 订单号等关联键，把它用于后续结构化查询\n"
+        "- 如果上游在某域已失败，切换不同能力的工具，或尽早 finish 并说明缺口\n"
+        "- **严禁**：把 Execution Flow 里的结果当成最终答案逐字复述给用户\n"
+        "- **严禁**：用 EF 中的样例数据覆盖 structured 工具的实体查询结论\n"
+        "\n"
+        + ef_md
+    )
+
+
 _CAPABILITY_PREFERENCE_POLICY = """\
-Policy for using this preference (soft guidance, not an exclusive allowlist):
-1. Treat preferred members as strong prior evidence for tool selection; start with them when the question matches their evidenced scope.
-2. Other members remain available; you may call them for complementary needs or after preferred members prove insufficient.
-3. Do not conclude the task as unanswerable until each preferred handler has been tried at least once (unless that preferred agent is unavailable).
-4. A negative result from a non-preferred member does not by itself prove that preferred members cannot answer.
+Policy for using this preference (informational hints only):
+1. Some tools are annotated with [CAPABILITY_HINT] — this is a prior check's rough guess about relevance. Use it as a starting clue, NOT as a hard filter.
+2. The final decision on which tool to call MUST be based on each tool's concrete Description / Use when / Do NOT use when fields — ignore the capability hint if it contradicts the tool's own scope statement.
+3. Do NOT try a tool whose Description clearly does not match the question, even if it carries a capability hint.
+4. If a tool fails or returns irrelevant results, do NOT try another tool of the same capability type just because it also has a hint — instead, evaluate whether ANY remaining tool's Description genuinely matches the missing sub-goal.
 """
 
 _REACT_NUDGE_MESSAGE = (
     "You did not call any tool. Call at least one agent tool with the user's question (preserve original semantics), "
     "or call `finish` if you already have sufficient evidence to answer."
-)
-
-_REACT_COVERAGE_DUTY_MESSAGE = (
-    "Coverage duty from prior capability preference: you attempted to finish before trying "
-    "these preferred handler tool(s): {untried_tools}. "
-    "Call at least one of them with the user's question before finishing as unanswerable. "
-    "Other tools remain available afterward if preferred handlers are still insufficient."
 )
 
 _REACT_FORCE_FINISH_MESSAGE = (
@@ -280,11 +303,11 @@ Think step by step:
    - Was structured called **without** prior code/doc when foundation was needed? If yes → recommend `call:code_*` or `call:doc_*` first, then structured again with same user semantics.
    - Was structured called in parallel before code/doc finished? If foundation was needed → recommend sequential retry: code/doc → structured.
    - If code/doc already ran and structured still fails → diagnose whether wrong agent, wrong semantic gap, or SD internal issue — do NOT rewrite into SQL/table micro-tasks.
-6. **Next action** — pick exactly ONE:
-   - `finish` — all sub-goals satisfied with evidence; explain why
-   - `call:<tool_name>` — route to a different SD Expert; **next_query must preserve user semantics**, NOT implementation rewrite
+6. **Next action** — pick exactly ONE based on tool Descriptions, not capability hints:
+   - `finish` — all sub-goals satisfied with evidence, OR no remaining tool's Description genuinely matches the missing gap
+   - `call:<tool_name>` — ONLY if that tool's Use when / Description explicitly covers the missing sub-goal; capability hints alone are NOT sufficient reason to call a tool
    - `reformulate:<tool_name>` — retry same agent only if prior query diverged from user intent; still preserve semantics
-   - `stop_retry:<tool_name>` — do NOT call this tool again; explain why and what to use instead
+   - **Do NOT suggest tools just because they carry a [CAPABILITY_HINT].** If a tool's Description does not match the gap, recommend `finish` instead.
 
 IMPORTANT: SG orchestrator must NOT invent SQL, schema commands, or code-search micro-tasks in next_query. Pass the user's question; let the SD Expert decompose.
 
@@ -385,6 +408,22 @@ class ReActRunner:
         if len(raw) <= limit:
             return raw
         return raw[: limit - 3] + "..."
+
+    @staticmethod
+    def _react_step_start_message(step_no: int, react_max_steps: int) -> str:
+        """DAC progress for the ReAct planner LLM call (thought + tool choice)."""
+        return (
+            f"ReAct step {step_no}/{react_max_steps} · "
+            "calling LLM to decide next action (choose tool or finish)"
+        )
+
+    @staticmethod
+    def _step_analysis_progress_message(step_no: int, analysis: Dict[str, Any] | None) -> str | None:
+        """DAC progress for step analysis; skip when next_action is empty."""
+        next_action = str((analysis or {}).get("next_action") or "").strip()
+        if not next_action:
+            return None
+        return f"step {step_no} analysis: next={next_action}"
 
     @staticmethod
     async def _emit_progress(
@@ -521,7 +560,7 @@ class ReActRunner:
             return "(No prior capability preference for this request.)"
 
         lines = [
-            "A prior member-capability check produced the following soft preference:",
+            "A prior member-capability check produced the following informational hints (NOT a hard filter):",
             f"- strategy: {pref.get('execution_strategy') or 'single'}",
             f"- confidence: {pref.get('confidence', 0.0)}",
             f"- preferred_handlers: {pref.get('preferred_handlers') or []}",
@@ -559,6 +598,7 @@ class ReActRunner:
         tool_to_agent: Dict[str, Tuple[MemberInfo, AgentCard]] = {}
         used_names: set[str] = set()
         pref = capability_preference if isinstance(capability_preference, dict) else {}
+        pref_enabled = bool(pref.get("enabled"))
         preferred_handlers = [
             str(name).strip()
             for name in (pref.get("preferred_handlers") or [])
@@ -570,9 +610,11 @@ class ReActRunner:
             if str(name).strip()
         ]
 
-        # Soft ordering: preferred members first, full pool retained.
+        # Soft ordering: preferred members sorted first (as informative hints),
+        # but the full pool is retained — final selection is guided by tool
+        # descriptions, not by hard filtering.
         ordered_agents = list(agents)
-        if preferred_all:
+        if pref_enabled and preferred_all:
             preferred_items = [
                 item for item in agents if self._card_in_preferred(item[1], preferred_all)
             ]
@@ -590,14 +632,14 @@ class ReActRunner:
             used_names.add(tool_name)
 
             tool_description = self.build_tool_description(member, ac, name_to_agent)
-            if preferred_handlers and self._card_in_preferred(ac, preferred_handlers):
+            if pref_enabled and preferred_handlers and self._card_in_preferred(ac, preferred_handlers):
                 tool_description = (
-                    "[PREFERRED_HANDLER_BY_CAPABILITY_CHECK] "
+                    "[CAPABILITY_HINT: prior check found this handler potentially relevant] "
                     + tool_description
                 )
-            elif preferred_all and self._card_in_preferred(ac, preferred_all):
+            elif pref_enabled and preferred_all and self._card_in_preferred(ac, preferred_all):
                 tool_description = (
-                    "[PREFERRED_CONTRIBUTOR_BY_CAPABILITY_CHECK] "
+                    "[CAPABILITY_HINT: prior check found this contributor potentially relevant] "
                     + tool_description
                 )
             tool = StructuredTool(
@@ -1387,6 +1429,7 @@ class ReActRunner:
         nudge_retries: int = 2,
         progress_emitter: Optional[ProgressEmitter] = None,
         capability_preference: Optional[Dict[str, Any]] = None,
+        execution_flow_md: str = "",
     ) -> str:
         tools, tool_to_agent = self._build_agent_tools(
             agents,
@@ -1414,6 +1457,7 @@ class ReActRunner:
             max_steps=react_max_steps,
             capability_preference_section=capability_preference_section,
             agent_tools_description=agent_tools_description,
+            execution_flow_md=_format_ef_section(execution_flow_md),
             prior_context=prior_context_str,
             user_query=user_query,
         )
@@ -1434,7 +1478,6 @@ class ReActRunner:
         total_fails = 0
         total_fail_budget = 6
         nudge_retries_left = nudge_retries
-        coverage_duty_retries_left = 1 if preferred_handler_tools else 0
         invoked_tools: set[str] = set()
         last_result_by_tool: Dict[str, str] = {}
         previous_gaps_sig: Optional[Tuple[str, ...]] = None
@@ -1462,9 +1505,8 @@ class ReActRunner:
         logger.info("[ReAct] 用户问题：%s", self._log_text_preview(user_query, max_chars=800))
         if preferred_handler_tools:
             logger.info(
-                "[ReAct] capability preference preferred_handler_tools=%s coverage_duty_retries=%d",
+                "[ReAct] capability preference preferred_handler_tools=%s (exclusive)",
                 preferred_handler_tools,
-                coverage_duty_retries_left,
             )
         if prior_context_str and prior_context_str != "(No upstream prior context.)":
             logger.info(
@@ -1501,7 +1543,7 @@ class ReActRunner:
                     progress_emitter,
                     "sg_react_step_start",
                     message=self._truncate_progress_message(
-                        f"ReAct step {step_no}/{react_max_steps} · calling LLM",
+                        self._react_step_start_message(step_no, react_max_steps),
                         320,
                     ),
                     status="running",
@@ -1715,63 +1757,6 @@ class ReActRunner:
                         call["id"] = tool_id
 
                     if tool_name == "finish":
-                        untried_preferred = [
-                            name
-                            for name in preferred_handler_tools
-                            if name not in invoked_tools
-                        ]
-                        if untried_preferred and coverage_duty_retries_left > 0:
-                            coverage_duty_retries_left -= 1
-                            coverage_msg = _REACT_COVERAGE_DUTY_MESSAGE.format(
-                                untried_tools=", ".join(untried_preferred)
-                            )
-                            logger.info(
-                                "[ReAct] coverage duty blocked finish | step=%d "
-                                "untried_preferred=%s retries_left=%d",
-                                step_no,
-                                untried_preferred,
-                                coverage_duty_retries_left,
-                            )
-                            # Satisfy the pending finish tool_call, then nudge.
-                            messages.append(
-                                ToolMessage(
-                                    content=(
-                                        "finish rejected by coverage duty; "
-                                        + coverage_msg
-                                    ),
-                                    tool_call_id=tool_id,
-                                )
-                            )
-                            messages.append(
-                                HumanMessage(
-                                    content=coverage_msg,
-                                    additional_kwargs={"sg_react_internal": True},
-                                )
-                            )
-                            tool_history.append(
-                                {
-                                    "step": step_no,
-                                    "coverage_duty_block": True,
-                                    "untried_preferred": untried_preferred,
-                                }
-                            )
-                            await self._emit_progress(
-                                progress_emitter,
-                                "sg_react_coverage_duty",
-                                message=self._truncate_progress_message(
-                                    f"step {step_no}: coverage duty → try {untried_preferred}",
-                                    480,
-                                ),
-                                status="running",
-                                extra={
-                                    "step": step_no,
-                                    "untried_preferred": untried_preferred,
-                                    "coverage_duty_retries_left": coverage_duty_retries_left,
-                                },
-                            )
-                            finished_this_step = True
-                            break
-
                         final_answer = self._extract_finish_answer(tool_args, thought_text)
                         return await self._complete_via_finish(
                             final_answer=final_answer,
@@ -1968,24 +1953,23 @@ class ReActRunner:
                         analysis["trigger"] = trigger_reason
                         step_analyses.append(analysis)
                         self._log_execution_analysis_detail(step_no, trigger_reason, analysis)
-                        await self._emit_progress(
-                            progress_emitter,
-                            "sg_react_step_analysis",
-                            message=self._truncate_progress_message(
-                                f"step {step_no} analysis: next={analysis.get('next_action') or '?'}",
-                                320,
-                            ),
-                            status="running",
-                            extra={
-                                "step": step_no,
-                                "trigger": trigger_reason,
-                                "next_action": str(analysis.get("next_action") or ""),
-                                "next_tool": str(analysis.get("next_tool") or ""),
-                                "diagnosis_preview": self._truncate_progress_message(
-                                    str(analysis.get("diagnosis") or ""), 480,
-                                ),
-                            },
-                        )
+                        analysis_progress = self._step_analysis_progress_message(step_no, analysis)
+                        if analysis_progress:
+                            await self._emit_progress(
+                                progress_emitter,
+                                "sg_react_step_analysis",
+                                message=self._truncate_progress_message(analysis_progress, 320),
+                                status="running",
+                                extra={
+                                    "step": step_no,
+                                    "trigger": trigger_reason,
+                                    "next_action": str(analysis.get("next_action") or ""),
+                                    "next_tool": str(analysis.get("next_tool") or ""),
+                                    "diagnosis_preview": self._truncate_progress_message(
+                                        str(analysis.get("diagnosis") or ""), 480,
+                                    ),
+                                },
+                            )
                         analysis_msg = self._format_step_analysis_message(step_no, analysis)
                         messages.append(HumanMessage(
                             content=analysis_msg,

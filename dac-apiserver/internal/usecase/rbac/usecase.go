@@ -1037,7 +1037,7 @@ func (u *usecase) seedPlatformRoles(ctx context.Context) error {
 			// Business resources — full CRUD
 			"agent:read", "agent:create", "agent:update", "agent:delete",
 			"descriptor:read", "descriptor:create", "descriptor:update", "descriptor:delete",
-			"descriptor:graph:read",
+			"descriptor:graph:read", "descriptor:job-logs:read",
 			"llmconfig:read", "llmconfig:create", "llmconfig:update", "llmconfig:delete",
 			"promptconfig:read", "promptconfig:create", "promptconfig:update", "promptconfig:delete",
 			"system:config:read", "system:config:manage",

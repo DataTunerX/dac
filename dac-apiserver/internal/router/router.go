@@ -174,6 +174,7 @@ func Setup(
 				descriptors.GET("/:name", descriptorHandler.Get)
 				descriptors.GET("/:name/signature", descriptorHandler.GetSignature)
 				descriptors.GET("/:name/semantic-domain", descriptorHandler.GetSemanticDomain)
+				descriptors.PUT("/:name/semantic-domain", descriptorHandler.UpdateSemanticDomain)
 				descriptors.PUT("/:name", descriptorHandler.Update)
 				descriptors.POST("/:name/resync", descriptorHandler.RequestResync)
 				descriptors.DELETE("/:name", descriptorHandler.Delete)
@@ -183,6 +184,9 @@ func Setup(
 				descriptors.POST("/:name/knowledge/search", descriptorHandler.SearchKnowledge)
 				descriptors.POST("/:name/knowledge/delete", descriptorHandler.DeleteKnowledge)
 			}
+
+			// Lives outside /descriptors/** so descriptor:read does not grant it.
+			authorized.GET("/namespaces/:namespace/descriptor-job-logs/:name", descriptorHandler.StreamJobLogs)
 
 			// LLM ConfigMap routes - namespaced (model management)
 			llmConfigmaps := authorized.Group("/namespaces/:namespace/llm-configmaps")
@@ -283,9 +287,10 @@ func Setup(
 				semanticGroups.POST("/:id/members/remove", semanticGroupHandler.RemoveMember)
 			}
 
-			// DD Group Relation routes (list + delete relation row in data-services)
+			// DD Group Relation routes (create/list/delete membership in data-services)
 			ddGroupRelations := authorized.Group("/dd-group-relations")
 			{
+				ddGroupRelations.POST("", ddGroupRelationHandler.Create)
 				ddGroupRelations.GET("/group/:group_id", ddGroupRelationHandler.ListByGroup)
 				ddGroupRelations.GET("/sd/:sd_id", ddGroupRelationHandler.ListBySD)
 				ddGroupRelations.DELETE("/:id", ddGroupRelationHandler.DeleteByID)

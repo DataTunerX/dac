@@ -602,3 +602,91 @@ def test_speculative_dr_weak_ioc_still_fails():
     agg = aggregate(result([s1]), threshold=0.7)
     assert agg.handle_score == pytest.approx(0.562)
     assert agg.can_handle is False
+
+
+# ---------------------------------------------------------------------------
+# Domain-mismatch hard gate: all steps D=0(solid) → short-circuit
+# ---------------------------------------------------------------------------
+
+def test_domain_mismatch_all_d_zero_solid_forces_cannot_handle():
+    """All steps D=0(solid) → domain mismatch, regardless of I/O/R/C scores.
+
+    Regression guard for the product-agent-vs-legal-query failure: the LLM
+    correctly set D=0(solid) but scored O/I/R/C high, and the weighted mean
+    let the agent claim it could handle an out-of-domain query.
+    """
+    s1 = step(1, is_final=True, inputs=[("问题", "query")], outputs=["结论"],
+              I=rc(["问题"], ["问题"], evidence_strength="solid"),      # 1.0
+              D=rc(["劳动法", "辞退补偿"], [], evidence_strength="solid"),  # 0.0
+              O=1.0,                                                    # unset by mistake
+              R=rc(["结论"], ["结论"], evidence_strength="solid"),      # 1.0
+              C=rc([], [], evidence_strength="solid"))                  # 1.0
+    # Without the gate this scores (1+0+1+1+1)/5 = 0.8 ≥ 0.7 → can_handle=True
+    agg = aggregate(result([s1], grade="D"), threshold=0.7)
+    assert agg.can_handle is False
+    assert agg.can_contribute is False
+    assert agg.confidence == 0.0
+    assert agg.handle_score == 0.0
+
+
+def test_domain_mismatch_multiple_steps_all_d_zero_solid():
+    """Gate also fires when the LLM splits the out-of-domain query into steps."""
+    s1 = step(1, is_final=False, inputs=[("问题", "query")], outputs=["政策条款"],
+              D=rc(["劳动法"], [], evidence_strength="solid"))
+    s2 = step(2, is_final=True, inputs=[("政策条款", "upstream")], outputs=["补偿标准"],
+              D=rc(["补偿金", "工作年限"], [], evidence_strength="solid"))
+    agg = aggregate(result([s1, s2], grade="D"), threshold=0.7)
+    assert agg.can_handle is False
+    assert agg.can_contribute is False
+    assert agg.handle_score == 0.0
+
+
+def test_partial_d_zero_solid_does_not_trigger_gate():
+    """Only some steps D=0(solid) → normal scoring, contribution still possible.
+
+    e.g. user-agent 对 "张三买了哪些东西": step 1 (用户数据) is covered,
+    step 2 (订单数据) is not. The agent cannot handle the whole task but
+    can still contribute step 1.
+    """
+    s1 = step(1, is_final=False, inputs=[("用户名", "query")], outputs=["user_id"],
+              I=rc(["用户名"], ["用户名"], evidence_strength="solid"),
+              D=rc(["用户名", "用户ID"], ["用户名", "用户ID"], evidence_strength="solid"),
+              O=1.0,
+              R=rc(["user_id"], ["user_id"], evidence_strength="solid"),
+              C=rc([], [], evidence_strength="solid"))
+    s2 = step(2, is_final=True, inputs=[("user_id", "upstream")], outputs=["商品列表"],
+              I=rc(["user_id"], ["user_id"], evidence_strength="solid"),
+              D=rc(["订单", "商品"], [], evidence_strength="solid"),
+              O=1.0,
+              R=rc(["商品列表"], [], evidence_strength="solid"),
+              C=rc([], [], evidence_strength="solid"))
+    agg = aggregate(result([s1, s2], contribution="输入 username，输出 user_id"), threshold=0.7)
+    assert agg.can_handle is False          # step 2 fails
+    assert agg.can_contribute is True       # step 1 scores 1.0
+    assert agg.contributing_steps == [1]
+
+
+def test_all_d_zero_speculative_does_not_trigger_gate():
+    """D=0(speculative) is LLM guesswork, not a domain-mismatch fact.
+
+    The gate must only fire on solid evidence; otherwise an agent whose skill
+    body simply lacks a field list would be wrongly rejected.
+    """
+    s1 = step(1, is_final=True, inputs=[("x", "query")], outputs=["y"],
+              I=rc(["x"], ["x"], evidence_strength="solid"),
+              D=rc(["f"], [], evidence_strength="speculative"),   # 0.0, weight 0.1
+              O=1.0,
+              R=rc(["y"], ["y"], evidence_strength="solid"),
+              C=rc([], [], evidence_strength="solid"))
+    agg = aggregate(result([s1]), threshold=0.7)
+    # weighted: 1.0 + 0.0*0.1 + 1.0 + 1.0 + 1.0 = 4.0 ; total = 4.1 → 0.976
+    assert agg.handle_score == pytest.approx(0.976)
+    assert agg.can_handle is True
+
+
+def test_domain_gate_fires_even_with_low_threshold():
+    """The gate is unconditional — it is not a threshold tweak."""
+    s1 = step(1, is_final=True, D=rc(["外部领域"], [], evidence_strength="solid"))
+    agg = aggregate(result([s1], grade="D"), threshold=0.0)
+    assert agg.can_handle is False
+    assert agg.can_contribute is False

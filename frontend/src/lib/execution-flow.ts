@@ -177,8 +177,9 @@ export function groupByTurnAndStage(
 }
 
 /** Build a forest from parent_execution_id only (Q12: no heuristic parent inference).
- * Sibling order follows emit order, not execution_id alphabet. Among the same
- * parent, an agent that delegated to a sibling stays ahead of that sibling. */
+ * Sibling order is plan order (planner task id, then emit order). Do not group
+ * every node of the delegating agent ahead of delegatees — a later own-task
+ * (#3) must stay after an in-between delegation (#2). */
 export function buildExecutionTree(tasks: readonly ExecutionFlowTask[]): ExecutionFlowTreeNode[] {
   // History persists both the original parent=null frame and the reparented
   // rewrite. Live upserts by execution_id; replay must do the same or the
@@ -203,16 +204,8 @@ function sortExecutionTree(
   nodes: ExecutionFlowTreeNode[],
   orderIndex: ReadonlyMap<string, number>,
 ): ExecutionFlowTreeNode[] {
-  const delegators = new Set(
-    nodes.map((node) => node.delegated_by).filter((name): name is string => Boolean(name)),
-  )
   return [...nodes]
-    .sort((a, b) => {
-      const aOrigin = delegators.has(a.agent) ? 0 : 1
-      const bOrigin = delegators.has(b.agent) ? 0 : 1
-      if (aOrigin !== bOrigin) return aOrigin - bOrigin
-      return compareExecutionFlowTasks(a, b, orderIndex)
-    })
+    .sort((a, b) => compareExecutionFlowTasks(a, b, orderIndex))
     .map((node) => ({ ...node, children: sortExecutionTree(node.children, orderIndex) }))
 }
 
@@ -287,11 +280,8 @@ export function nodeStatusOf(task: ExecutionFlowTask): ExecutionNodeStatus {
 }
 
 export function stageLabel(stage: string): string {
-  if (stage === "pre_exec") return "首次任务执行"
   if (stage === "turn_summary") return "轮次总结"
   if (stage === "final_answer") return "最终答案"
-  const mid = /^mid_exec_round_(\d+)$/.exec(stage)
-  if (mid) return `补充执行 · 第${mid[1]}轮`
   return stage
 }
 

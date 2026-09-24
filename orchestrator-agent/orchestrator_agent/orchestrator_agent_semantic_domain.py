@@ -57,6 +57,8 @@ from .agentregistry_client import AgentRegistryClient
 from .agent_card_resolve import resolve_agent_card_by_planner_name
 from langchain_core.tools import tool, StructuredTool
 from .tool_call_utils import invoke_llm_with_tool, safe_langfuse_flush
+from . import capability_chain
+from . import skill_capability_two_phase as skill_cc
 
 try:
     from skill_sdk.skill.runner import SkillRunner  # noqa: F401  (used when local skills enabled)
@@ -4535,7 +4537,17 @@ def _empty_member_capability_response(
         "missing_requirements": list(missing_requirements or []),
         "descriptor_type": descriptor_type,
         "domain_match": False,
+        "domain_verdict": "",
         "evidence_mode": "llm",
+        "score_version": "",
+        "evidence_grade": "",
+        "handle_score": 0.0,
+        "threshold": 0.0,
+        "steps": [],
+        "contributing_steps": [],
+        "risks": [],
+        "has_external_dependency": False,
+        "contribution": "",
     }
 
 
@@ -4588,7 +4600,82 @@ def _normalize_member_capability_judgment(
         "missing_requirements": missing_requirements,
         "descriptor_type": descriptor_type,
         "domain_match": domain_match,
+        "domain_verdict": "has" if domain_match else "none",
         "evidence_mode": "llm",
+        "score_version": "",
+        "evidence_grade": "",
+        "handle_score": 0.0,
+        "threshold": 0.0,
+        "steps": [],
+        "contributing_steps": [],
+        "risks": [],
+        "has_external_dependency": False,
+        "contribution": str(judged.get("contribution") or ""),
+    }
+
+
+def _member_capability_legacy_enabled() -> bool:
+    return os.getenv("SD_MEMBER_CAPABILITY_LEGACY_JUDGE", "false").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
+
+def _sd_capability_agent_description(signatures: List[Dict[str, Any]]) -> str:
+    parts: List[str] = []
+    for signature in signatures[:4]:
+        domain_text = str(signature.get("semantic_domain") or "").strip()
+        card_text = _agent_card_description(signature.get("agent_card"))
+        if domain_text and domain_text not in parts:
+            parts.append(domain_text)
+        if card_text and card_text not in parts:
+            parts.append(card_text)
+    return "\n".join(parts) if parts else ""
+
+
+def _member_response_from_two_phase(
+    result: "skill_cc.TwoPhaseResult",
+    *,
+    agent_name: str,
+    agent_url: str,
+    descriptor_type: str,
+) -> Dict[str, Any]:
+    """Map skill-agent two-phase output onto the SD member JSON Expert already reads."""
+    domain_verdict = str(result.domain_verdict or "").strip()
+    domain_match = domain_verdict in ("has", "uncertain")
+    can_handle = bool(result.can_handle)
+    can_contribute = bool(result.can_contribute) or can_handle
+    if domain_verdict == "none" or result.failed_stage == "domain":
+        domain_match = False
+        can_handle = False
+        can_contribute = False
+    evidence = skill_cc.matched_evidence_from_steps(result.steps)
+    return {
+        "can_handle": can_handle,
+        "can_contribute": can_contribute,
+        "confidence": round(float(result.confidence or 0.0), 2),
+        "reason": str(result.reason or "").strip()[:2000],
+        "agent_name": agent_name,
+        "agent_url": agent_url,
+        "matched_entities": evidence[:],
+        "matched_tables": [],
+        "matched_metrics": [],
+        "matched_evidence": evidence,
+        "missing_requirements": list(result.missing_requirements or [])[:20],
+        "descriptor_type": descriptor_type,
+        "domain_match": domain_match,
+        "domain_verdict": domain_verdict,
+        "evidence_mode": "capability_chain",
+        "score_version": result.score_version or capability_chain.SCORE_VERSION,
+        "evidence_grade": result.evidence_grade,
+        "handle_score": result.handle_score,
+        "threshold": result.threshold,
+        "steps": list(result.steps or []),
+        "contributing_steps": list(result.contributing_steps or []),
+        "risks": list(result.risks or []),
+        "has_external_dependency": bool(result.has_external_dependency),
+        "contribution": result.contribution,
     }
 
 
@@ -4680,6 +4767,88 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
         )
 
     async def _judge_member_capability_with_llm(
+        self,
+        *,
+        query: str,
+        signatures: List[Dict[str, Any]],
+        agent_name: str,
+        agent_url: str,
+        descriptor_type: str,
+        request_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Evaluate this SD with skill-agent two-phase capability check.
+
+        Phase 1 domain-matches against the SD inventory; ``none`` skips the
+        heavy chain-scoring call. Phase 2 reuses skill-agent prompts and
+        ``capability_chain.aggregate()``. Set ``SD_MEMBER_CAPABILITY_LEGACY_JUDGE``
+        to restore the previous one-shot tool-call judge.
+        """
+        if _member_capability_legacy_enabled():
+            return await self._legacy_judge_member_capability_with_llm(
+                query=query,
+                signatures=signatures,
+                agent_name=agent_name,
+                agent_url=agent_url,
+                descriptor_type=descriptor_type,
+                request_metadata=request_metadata,
+            )
+        metadata_context = _build_member_capability_context(
+            signatures,
+            descriptor_type=descriptor_type,
+        )
+        history_text = "（无）"
+        if request_metadata:
+            history_text = history_text_from_payload(
+                parse_propagated_history(request_metadata.get("propagated_history"))
+            ) or "（无）"
+            if len(history_text) > 1800:
+                history_text = history_text[:1800] + "...(truncated)"
+        try:
+            result = await skill_cc.run_two_phase_capability_check(
+                self._build_capability_judge_llm(),
+                query=query or "",
+                agent_name=agent_name,
+                agent_description=_sd_capability_agent_description(signatures),
+                agent_skills=metadata_context,
+                history=history_text,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "[Capability][SDOrchestrator] two-phase capability check failed | "
+                "agent=%s err=%s",
+                agent_name,
+                exc,
+            )
+            empty = _empty_member_capability_response(
+                agent_name=agent_name,
+                agent_url=agent_url,
+                descriptor_type=descriptor_type,
+                reason="Capability two-phase check failed; support could not be evaluated.",
+                confidence=0.0,
+            )
+            empty["evidence_mode"] = "capability_chain"
+            return empty
+        mapped = _member_response_from_two_phase(
+            result,
+            agent_name=agent_name,
+            agent_url=agent_url,
+            descriptor_type=descriptor_type,
+        )
+        logger.info(
+            "[Capability][SDOrchestrator] two-phase done | agent=%s | "
+            "domain_verdict=%s | phase2=%s | failed_stage=%s | "
+            "can_handle=%s | can_contribute=%s | confidence=%.2f",
+            agent_name,
+            result.domain_verdict,
+            result.phase2_invoked,
+            result.failed_stage or "-",
+            mapped["can_handle"],
+            mapped["can_contribute"],
+            mapped["confidence"],
+        )
+        return mapped
+
+    async def _legacy_judge_member_capability_with_llm(
         self,
         *,
         query: str,
@@ -5177,14 +5346,15 @@ class OrchestratorAgentExecutorSemanticDomain(AgentExecutor):
         logger.info(
             "[Capability][SDOrchestrator] ----- done | agent=%s | "
             "can_handle=%s | can_contribute=%s | confidence=%.2f | "
-            "descriptor_type=%s | domain_match=%s | evidence_mode=%s | "
-            "signatures=%d | fetch_errors=%s | matched_evidence=%s | "
-            "missing=%s | reason=%s | latency_ms=%d -----",
+            "descriptor_type=%s | domain_verdict=%s | domain_match=%s | "
+            "evidence_mode=%s | signatures=%d | fetch_errors=%s | "
+            "matched_evidence=%s | missing=%s | reason=%s | latency_ms=%d -----",
             agent_name,
             response["can_handle"],
             response["can_contribute"],
             response["confidence"],
             response.get("descriptor_type", descriptor_type),
+            response.get("domain_verdict", ""),
             response.get("domain_match", False),
             response.get("evidence_mode", "llm"),
             len(signatures),

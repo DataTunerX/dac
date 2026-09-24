@@ -29,6 +29,8 @@ type DataDescriptorUsecase interface {
 	// Data Services integrations (domain types)
 	GetSignatureByDD(ctx context.Context, namespace, name string) (*Signature, error)
 	GetSemanticDomainByDD(ctx context.Context, namespace, name string) (*SemanticDomain, error)
+	// UpdateSemanticDomainAgentCard replaces agent_card on the DD's semantic domain.
+	UpdateSemanticDomainAgentCard(ctx context.Context, namespace, name, agentCard string) (*SemanticDomain, error)
 	SearchKnowledge(ctx context.Context, namespace, name, query string) ([]KnowledgeSearchResult, error)
 	GetAllKnowledge(ctx context.Context, namespace, name string) ([]KnowledgeDocument, error)
 	DeleteKnowledge(ctx context.Context, namespace, name string, docIDs []string) error
@@ -51,8 +53,9 @@ type SemanticGroupUsecase interface {
 	GetMemberTask(ctx context.Context, taskID string) (*SemanticGrouperTaskStatus, error)
 }
 
-// DDGroupRelationUsecase defines DD<->semantic-group relation queries and relation-row deletes.
+// DDGroupRelationUsecase defines DD<->semantic-group relation queries and membership writes.
 type DDGroupRelationUsecase interface {
+	Create(ctx context.Context, req *CreateDDGroupRelationRequest) (*DDGroupRelation, error)
 	ListByGroup(ctx context.Context, groupID string) ([]DDGroupRelation, int, error)
 	ListBySemanticDomain(ctx context.Context, semanticDomainID string) ([]DDGroupRelation, int, error)
 	DeleteByID(ctx context.Context, id int64) error

@@ -166,6 +166,7 @@ CASES = [
         expect_can_contribute=False,
         expect_confidence_max=0.5,
         expect_steps=(1,),
+        expect_evidence=("D",),
     ),
 
     # ── Case 5: 纯工具请求 — 非业务领域 ──
@@ -230,6 +231,7 @@ CASES = [
         expect_can_contribute=False,
         expect_confidence_min=0.0,
         expect_steps=(1,),
+        expect_evidence=("D",),
     ),
 
     # ── Case 10: 子领域推断 — SG描述虽侧重订单，但同属电商领域涵盖用户表 ──

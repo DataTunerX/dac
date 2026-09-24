@@ -283,6 +283,7 @@ func TestSeedCoversFrontendGapSurface(t *testing.T) {
 		{"descriptor:read", "GET", "/api/v1/namespaces/dev/descriptors/orders/knowledge"},
 		// descriptor resync (append + resync flow)
 		{"descriptor:update", "POST", "/api/v1/namespaces/dev/descriptors/orders/resync"},
+		{"descriptor:update", "PUT", "/api/v1/namespaces/dev/descriptors/orders/semantic-domain"},
 		// configmap get-by-name (llm)
 		{"llmconfig:read", "GET", "/api/v1/namespaces/dev/llm-configmaps/llm-default"},
 		// configmap get-by-name (prompt)
@@ -290,8 +291,9 @@ func TestSeedCoversFrontendGapSurface(t *testing.T) {
 		// agent namespaced list + detail
 		{"agent:read", "GET", "/api/v1/namespaces/dev/agents"},
 		{"agent:read", "GET", "/api/v1/namespaces/dev/agents/web"},
-		// dd-group-relations read + delete ("remove from semantic group")
+		// dd-group-relations read + create/delete ("add/remove from semantic group")
 		{"semantic-group:read", "GET", "/api/v1/dd-group-relations/sd/sd-1"},
+		{"semantic-group:manage", "POST", "/api/v1/dd-group-relations"},
 		{"semantic-group:manage", "DELETE", "/api/v1/dd-group-relations/42"},
 		// semantic-domain search used by the remove-from-group flow
 		{"semantic-group:manage", "POST", "/api/v1/semantic-domains/search/by-dd"},
@@ -299,6 +301,7 @@ func TestSeedCoversFrontendGapSurface(t *testing.T) {
 		{"semantic-group:read", "GET", "/api/v1/semantic-domains/sd-1"},
 		// data-source detail lineage graph (read-only POST query)
 		{"descriptor:graph:read", "POST", "/api/v1/knowledge-graph/get-graph-by-source"},
+		{"descriptor:job-logs:read", "GET", "/api/v1/namespaces/dev/descriptor-job-logs/orders"},
 	}
 	for _, tc := range cases {
 		match := false
@@ -332,7 +335,9 @@ func TestSeedReadCodesDoNotGrantWrites(t *testing.T) {
 	deny := []ep{
 		{"descriptor:read", "POST", "/api/v1/namespaces/dev/descriptors"},
 		{"descriptor:read", "POST", "/api/v1/namespaces/dev/descriptors/orders/resync"},
+		{"descriptor:read", "PUT", "/api/v1/namespaces/dev/descriptors/orders/semantic-domain"},
 		{"descriptor:read", "DELETE", "/api/v1/namespaces/dev/descriptors/orders"},
+		{"descriptor:read", "GET", "/api/v1/namespaces/dev/descriptor-job-logs/orders"},
 		{"llmconfig:read", "POST", "/api/v1/namespaces/dev/llm-configmaps"},
 		{"llmconfig:read", "DELETE", "/api/v1/namespaces/dev/llm-configmaps/llm-default"},
 		{"promptconfig:read", "POST", "/api/v1/namespaces/dev/prompt-configmaps"},

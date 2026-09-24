@@ -1567,11 +1567,14 @@ Orchestrator_INSTRUCTIONS_ZH = """
    * 若用户未明确要求扩展分析，默认不要主动展开这些内容。
 """
 
-SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
+DOMAIN_CHECK_PROMPT = """# 角色：领域相关判定员
 
-你要评估"本 Agent"能否解决或贡献用户问题。评估对象是任务成功的必要条件，不是主题相似度。
-你负责：拆分步骤、逐维度列清单并给出比例、给出证据等级、书写贡献说明与缺失项。
-你不负责：判定 can_handle / can_contribute、计算 confidence。这些由程序按固定公式从你的比例中推导。
+本步只回答一件事：这个 skill 跟用户问题有没有关系，值不值得进入后续能力评估。
+
+**相关 (`has`)**：本 skill 能独立处理整题，或只能处理其中一面 / 解析 join 键 / 作为相邻环节参与。单领域问题、跨领域问题用同一条规则。
+**无关 (`none`)**：问题里的每一面都落在本 skill 声明之外，本 skill 也不是解题所需的身份或键解析环节。
+
+本步不问、也不得用来改判：能不能一个人做完、是不是问题的「主域」、过滤键现在齐不齐、正文有没有「交给别人」。那些留给后续能力评估（can_handle / can_contribute）。
 
 评估依据只有下面四类文本，按可信度从高到低：
 1. 技能正文（skill inventory 中每个技能的完整说明：字段列表、数据格式、命令示例、处理流程、覆盖范围、排除项）
@@ -1579,26 +1582,97 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 3. Agent 描述
 4. 用户问题原文与历史
 
+本标准同时适用于结构化数据技能（表、字段、键）和非结构化技能（文档库、知识库、图片、音频、纯生成 / 转换）。判定必须基于正文声明，禁止靠 Agent/技能名称联想、行业常识或「通常应该有」补字段。
+
+## 判定规程（四步，必须按顺序执行）
+
+**第一步 — 拆面（强制完整）**
+只依据问题原文与历史。下列每一项各自成面，禁止压成单一「问题核心」：
+- 一类业务对象
+- 一类要查的属性
+- 一条要完成的动作
+- 问句里的主体指称（人名、公司名、工号、业务单号等）
+每个面写 L1 领域 / L2 对象 / L3 主题。口语、别称、上下位词按业务语义拆，不要求与技能正文逐字相同。
+
+**第二步 — 逐面只问「能处理或能参与」，不问独占**
+对本 Agent 正文声明的每一面，只选一个：
+- 能独立给出该面的答案 → 该面相关
+- 能提供键、字段、文档片段，或作为同一流程的相邻步骤参与 → 该面相关
+- 正文对该面无对应声明 → 该面未命中
+
+「必须先有某 ID」「不能按某键过滤」「输入不接收某形态」只说明参与方式或前置条件，**不是该面无关**。
+同义、上下位、字段/主题对应、正文声明的相邻流程环节，都算能参与。
+
+**第三步 — 排除项与分工句只作用于被点名的那一面**
+正文中的「不包含 / 不支持 / 不覆盖 / 交给其他技能 / 属于某技能」只让**被点名的那一面**在本 skill 上记未命中。
+问句里同时存在本域面时，不得据此宣称整题无关。
+下列理由一律禁止，出现则视为判定无效、必须重判为该面相关（若正文对该面有声明）或保持未命中（若确无声明），但不得整题判死：
+- 「问题核心是另一面」
+- 「本 skill 不能走完全程」
+- 「正文让我先交给别人 / 必须先有别人的输出」
+
+**第四步 — 自洽收口**
+先写命中面（能处理或能参与的面 + 正文依据），再写未命中面。
+- 命中面非空 → `domain_verdict` **只能是 `has`**。其余未命中面留给后续能力评估。
+- 命中面为空，且每一面都与声明无关 → `none`
+- 只有 L1 对得上、正文覆盖表述模糊、既不能确认也不能否认能否参与 → `uncertain`。只要能判断「能参与」，不要用 uncertain 逃避。
+
+## 禁止猜测
+
+- 判 `has` 必须在 reason 中给出基于 skill 正文的依据（摘要、归纳、同义映射均可，不要求逐字引用）。
+- 下列理由一律无效，不得据此判 has：「也许能搜到」；「大模型通用知识能回答」；「属于同一个行业 / 都涉及钱」；「文字部分重叠」；「通常应该有这类数据或字段」。
+- 同一问题 + 同一 skill 正文，判定必须唯一；不得因「主域」措辞差异在 has/none 之间摇摆。
+
+---
+本 Agent 信息：
+- name: {agent_name}
+- description: {agent_description}
+- skill inventory（技能名 + 完整正文；判定领域覆盖的主要依据）:
+{agent_skills}
+
+历史：
+{history}
+
+用户问题：
+{query}
+
+---
+输出要求：
+- 只输出一个纯 JSON 对象，**不要使用 ```json 代码块包裹**，直接输出 JSON 文本。
+- domain_verdict 取值为 "has"（相关：能处理或能参与）、"none"（无关）或 "uncertain"（不确定）。
+- reason 必须先列命中面、再列未命中面。命中面非空时 domain_verdict 必须为 has。
+
+严格按照以下 JSON schema 输出：
+
+{{
+  "domain_verdict": "has",
+  "reason": "领域交集：明确有 — 问题领域：[面1 L1/L2/L3；面2 …]；命中面：[能处理或能参与的面及正文依据]；未命中面：[…]"
+}}
+
+判例（命中面为空、整题无关时）：
+{{
+  "domain_verdict": "none",
+  "reason": "领域交集：明确无 — 问题领域：…；命中面：无；未命中面：全部。Agent 声明：正文无对应声明。"
+}}
+"""
+
+
+SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
+
+你要评估"本 Agent"能否解决或贡献用户问题。领域交集前置检查已由另一模块完成，你只需负责步骤拆分与逐维度打分。
+
+你负责：拆分步骤、逐维度列清单并给出比例、给出证据等级、书写贡献说明与缺失项。
+你不负责：判定 can_handle / can_contribute、计算 confidence。这些由程序按固定公式从你的比例中推导。
+你不负责：判定领域交不交叠。这个问题已经回答过了，不要再做领域交集判定。
+
+评估依据：
+1. 技能正文（skill inventory 中每个技能的完整说明：字段列表、数据格式、命令示例、处理流程、覆盖范围、排除项）
+2. 技能短描述
+3. Agent 描述
+4. 用户问题原文与历史
+5. 领域交集前置检查结论（以 domain_info 形式提供，作为你拆分步骤时的背景参考）
+
 本标准同时适用于结构化数据技能（表、字段、键）和非结构化技能（文档库、知识库、图片、音频、纯生成 / 转换）。
-两类技能使用同一套维度，区别只在清单里的"项"是字段还是信息需求项（主题、知识点、文档集、模态）。
-
-## 〇、前置检查：领域交集判定（在拆分步骤之前必须执行）
-
-在拆分步骤之前，必须先回答一个硬性问题：用户问题的"主题领域"与本 Agent 的"覆盖领域"是否有交集？
-
-- 先提取问题的主题领域关键词（如"劳动法"、"订单"、"天气"、"汇率"、"药品"、"股票"），只提取核心领域、行业或知识体系名称，不提取动作词。
-- 遍历 skill inventory 的正文和描述，确认是否存在至少一个技能的主题领域与问题的领域关键词存在**直接对应关系**（同义词、上下位词、明确的包含关系）。例如：skill 正文写"订单、交易、退款"覆盖"订单查询"问题；skill 正文写"请假制度、年假、病假"覆盖"请假"问题。
-- 不存在直接对应关系 ≠ 有主题相似度（文字部分重叠不算）。例如：
-  ❌ skill 覆盖"退款政策"不等于覆盖"劳动法辞退补偿"——虽然都涉及"钱"但不是同一个领域
-  ❌ skill 覆盖"商品库存"不等于覆盖"劳动法工伤认定"——没有任何交集
-  ❌ skill 覆盖"用户数据"不等于覆盖"税务申报"——业务领域完全不同
-
-判定结果分为三档：
-1. **明确有交集** — skill 正文中声明的主题/领域与问题的主题领域有直接对应：正常进入步骤拆分。
-2. **明确无交集** — 遍历所有 skill 正文，找不出任何与问题主题领域直接对应的内容：直接判 D=0 所有步骤（evidence_strength=solid，不命中的依据是 "skill 正文未声明覆盖该领域"）、O=0（除非是纯生成/翻译/计算/闲聊等不需要特定领域知识或数据的操作）、contribution=""、evidence_grade=D。reason 开头必须写"领域无交集：…"。
-3. **不确定** — 正文内容模糊，无法确定是否有交集：进入步骤拆分但 evidence_grade 最高为 C，contribution 必须保守，且 reason 开头必须写明"领域不确定：…"。
-
-**硬性要求**：前置检查的结果必须在 reason 字段的第一句话明确写出："领域交集：[明确有 / 明确无 / 不确定] — 依据…"。如果不先做这个判断就直接进步骤拆分，后续所有评分都不可信。
 
 ## 一、方法论：任务是一条步骤链
 
@@ -1694,11 +1768,8 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 - 技能正文没写的能力视为没有。禁止根据 Agent 名称、行业常识或"通常应该有"推断。
   非结构化技能尤其如此：正文只写"公司内部文档问答"而没有主题清单时，任何具体主题都不能记命中，证据等级记 C。
 - 正文明确"不包含 / 不支持 / 不覆盖"的内容，对应项直接记未命中或 0。
-- **领域不匹配硬规则**：如果前置检查（§〇）判定"明确无交集"，则所有步骤的 D 必须为 0/所需项、证据强度 solid（不命中的依据是 skill 正文未声明覆盖该领域）。
-  此时 O 也必须为 0（除非该步骤是纯生成 / 翻译 / 计算 / 闲聊——完全不需要领域数据的操作，这种情况必须在前置检查中明确说明理由）。
-  不允许因为"同一个行业"、"文字部分相似"或"也许能搜到"而给 D 记命中——领域不匹配就是 D=0，无例外。
 - 各维度独立核对各自的清单，不允许为了让总分好看而调整某个维度。
-- 每条 evidence 必须是原文引用并注明来源类别，如："技能正文：用户数据中不包含订单信息"、"问题原文：张三"。
+- 每条 evidence 必须注明来源类别（"技能正文："或"问题原文："），内容可以是技能正文或问题中的关键信息（摘要、归纳均可），如："技能正文：用户数据中不包含订单信息"、"问题原文：张三"。
 - **evidence_strength 强制要求**：每个 RatioCheck 必须标注 evidence_strength = solid 或 speculative。不能所有维度都标 solid 或都标 speculative，必须逐个维度独立判断。
 - **多维度/多子任务查询规则**：当 query 明确列出多个维度或子任务（"从 A、B、C 三个维度排查"），必须为每个维度各建至少一个步骤。本 Agent 不覆盖的维度同样建步骤，但对应的 D=0/1 或 O=0。不允许只建自己能做的维度然后判 h=true。
 
@@ -1718,7 +1789,7 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
   程序侧判断 can_contribute 的条件：有贡献步骤（步骤能力分≥阈值且产出被需要） 且 contribution 非空。
 - missing_requirements：本 Agent 无法自行提供、需由请求方或其他 Agent 补齐的输入或数据，注明所属步骤，如 "user_id（步骤 2）"。
 - risks：不影响分值的提示，如结果唯一性（"张三"可能对应多人）、记录可能不存在。
-- reason：固定结构，前置检查结论（"领域交集：[明确有/明确无/不确定] — 依据…"）放在第一句；然后逐步骤一行："步骤 N（一句话）：I=a/b D=c/d O=x R=e/f C=g/h，依据要点"；最后一句给整体结论（能独立完成 / 只能贡献步骤 N / 都不能）。
+- reason：固定结构。第一句写领域模型比对结论，格式："领域交集：[明确有/明确无/不确定] — 问题领域：[L1/L2/L3]；Agent 声明：引用正文原文（或"正文无对应声明"）"。然后逐步骤一行："步骤 N（一句话）：I=a/b D=c/d O=x R=e/f C=g/h，依据要点"；最后一句给整体结论（能独立完成 / 只能贡献步骤 N / 都不能）。
 
 ## 七、程序侧公式（供你理解结果含义，不需要你计算）
 
@@ -1750,7 +1821,7 @@ evidence_grade: A
 contribution: "输入 username=张三，输出 user_id，供步骤 2 查询订单使用"
 missing_requirements: ["订单 / 购买记录数据（步骤 2）"]
 risks: ["用户名 张三 可能对应多个用户"]
-reason: "领域交集：明确有 — 技能正文包含 '用户数据'，问题领域为用户查询。步骤 1（用户名→user_id）：I=1/1 D=2/2 O=1.0 R=1/1 C=1.0，字段列表与 grep 示例明确。步骤 2（user_id→商品列表）：I=1/1 D=0/2 O=1.0 R=0/1 C=1.0，正文明确不包含订单信息。不能独立完成；可贡献步骤 1。"
+reason: "领域交集：明确有 — 问题领域：L1 电商业务 / L2 用户 / L3 用户名；Agent 声明：技能正文『字段 用户ID|用户名|电话|邮箱』『按用户名查询：grep 张三 data/users.txt』。步骤 1（用户名→user_id）：I=1/1 D=2/2 O=1.0 R=1/1 C=1.0，字段列表与 grep 示例明确。步骤 2（user_id→商品列表）：I=1/1 D=0/2 O=1.0 R=0/1 C=1.0，正文明确不包含订单信息。不能独立完成；可贡献步骤 1。"
 
 ---
 本 Agent 信息：
@@ -1765,12 +1836,15 @@ reason: "领域交集：明确有 — 技能正文包含 '用户数据'，问题
 用户问题：
 {query}
 
+领域交集前置检查结论：
+{domain_info}
+
 ---
 输出要求：
 - 只输出一个纯 JSON 对象，**不要使用 ```json 代码块包裹**，直接输出 JSON 文本。
 - 每个 RatioCheck（input_match / data_coverage / result_match / constraint_satisfaction）必须同时给出 required（字符串数组）、matched（字符串数组）、ratio（数字，0~1）、evidence_strength（字符串，solid 或 speculative）。
 - operation_capability 只能是 1.0、0.7 或 0。
-- 不要输出 can_handle、can_contribute、confidence。
+- 不要输出 can_handle、can_contribute、confidence、domain_verdict。
 
 严格按照以下 JSON schema 输出（示例，实际内容按评估结果填写）：
 
@@ -3084,12 +3158,13 @@ class SkillAgentExecutor(AgentExecutor):
     def _dag_enforcement_enabled(self) -> bool:
         """Whether to enforce DAG constraint on delegation chains.
 
-        Controlled by env ``CROSS_SG_ENFORCE_DAG`` (default ``"true"``).
+        Controlled by env ``CROSS_SG_ENFORCE_DAG`` (default ``"false"``).
         When enabled, any agent that already appears in the delegation chain
         is excluded from planner pools, mid-exec candidate cards, detection
-        LLM prompts, and dispatch target lists.
+        LLM prompts, and dispatch target lists. Default off so A→B→A
+        callback is allowed.
         """
-        return os.getenv("CROSS_SG_ENFORCE_DAG", "true").strip().lower() in ("true", "1", "yes")
+        return os.getenv("CROSS_SG_ENFORCE_DAG", "false").strip().lower() in ("true", "1", "yes")
 
     @staticmethod
     def _format_dag_chain(chain: list[str], *, highlight: str = "") -> str:
@@ -4996,7 +5071,7 @@ class SkillAgentExecutor(AgentExecutor):
         lines.append("2. 每个 task 的 `agent` 必须从「可用智能体」中选取")
         lines.append("3. 如果所有可用智能体都无法处理该子任务，`agent` 填 `NONE`")
         lines.append("4. 已执行任务的结果只用于理解上下文，不得重复执行")
-        lines.append("5. **必须调用 `make_plan_cmd` 工具输出规划结果**")
+        lines.append("5. 只输出一个纯 JSON 对象，不要 ```json 围栏，字段全必填")
 
         result = "\n".join(lines)
         agent_names = [
@@ -6484,16 +6559,153 @@ class SkillAgentExecutor(AgentExecutor):
 
         try:
             max_attempts = int(os.getenv("CAPABILITY_CHECK_MAX_ATTEMPTS", "3"))
-            prompt = SKILL_CAPABILITY_CHECK_PROMPT.format(
+            llm = self._get_orchestration_llm()
+
+            # ═══ Phase 1: Domain overlap check ═══
+            domain_prompt = DOMAIN_CHECK_PROMPT.format(
                 agent_name=agent_name,
                 agent_description=agent_description,
                 agent_skills=agent_skills_text,
                 history=history_text,
                 query=query,
             )
+            domain_result: Optional[capability_chain.DomainCheckResult] = None
             nudge: Optional[HumanMessage] = None
+
+            for attempt in range(1, max_attempts + 1):
+                logger.info(
+                    "[Capability][Domain] llm_invoke attempt=%d/%d agent=%s",
+                    attempt, max_attempts, agent_name,
+                )
+                attempt_messages = (
+                    [HumanMessage(content=domain_prompt)]
+                    if nudge is None
+                    else [HumanMessage(content=domain_prompt), AIMessage(content=""), nudge]
+                )
+                try:
+                    answer = await llm.ainvoke(attempt_messages)
+                except Exception as exc:
+                    logger.warning(
+                        "[Capability][Domain] attempt %d: LLM invoke failed: %s: %s",
+                        attempt, type(exc).__name__, exc,
+                    )
+                    nudge = HumanMessage(content="上一次调用失败。请只输出包含 domain_verdict 和 reason 的 JSON。")
+                    continue
+
+                result_data = _parse_json_output(answer)
+                if result_data is None:
+                    raw_text = (
+                        "".join(
+                            [str(p.get("text", "")) if isinstance(p, dict) else str(p)
+                             for p in (getattr(answer, "content", None) or [])]
+                        ) if isinstance(getattr(answer, "content", None), list)
+                        else getattr(answer, "content", "") or ""
+                    )
+                    preview = (raw_text or str(answer))[:400]
+                    logger.warning(
+                        "[Capability][Domain] attempt %d: invalid JSON, nudging | preview=%s",
+                        attempt, preview,
+                    )
+                    nudge = HumanMessage(
+                        content='输出无法解析。请只输出 JSON：{"domain_verdict": "...", "reason": "..."}'
+                    )
+                    continue
+
+                try:
+                    domain_result = capability_chain.DomainCheckResult.model_validate(result_data)
+                except Exception as exc:
+                    logger.warning(
+                        "[Capability][Domain] attempt %d: parse failed: %s", attempt, exc,
+                    )
+                    nudge = HumanMessage(
+                        content=f"JSON 解析成功但字段类型不符合 schema：{exc}。请修正后重新输出。"
+                    )
+                    continue
+
+                logger.info(
+                    "[Capability][Domain] verdict=%s agent=%s",
+                    domain_result.domain_verdict, agent_name,
+                )
+                break
+
+            if domain_result is None:
+                raise ValueError(
+                    f"Domain check failed to produce valid JSON after {max_attempts} attempts."
+                )
+
+            # ── Domain mismatch → return cannot_handle immediately ──
+            if domain_result.domain_verdict == "none":
+                _latency = int((_time.monotonic() - _cc_start) * 1000)
+                cap_log = capability_chain.format_capability_chain_md(
+                    result=capability_chain.CapabilityChainResult(
+                        steps=[],
+                        evidence_grade="D",
+                        contribution="",
+                        missing_requirements=[],
+                        risks=[],
+                        reason=domain_result.reason,
+                    ),
+                    agg=capability_chain.AggregatedCapability(
+                        can_handle=False,
+                        can_contribute=False,
+                        confidence=0.0,
+                        handle_score=0.0,
+                        threshold=threshold,
+                    ),
+                    agent_name=agent_name,
+                    query=query,
+                    domain_verdict=domain_result.domain_verdict,
+                    latency_ms=_latency,
+                )
+                logger.info("\n%s", cap_log)
+                check_response = sg_broadcast.CapabilityCheckResponse(
+                    can_handle=False,
+                    confidence=0.0,
+                    reason=domain_result.reason,
+                    agent_name=agent_name,
+                    agent_url=agent_url,
+                    route_path=leaf_path,
+                    route_paths=[{"path": leaf_path, "confidence": 0.0, "alias": _path_to_alias(leaf_path)}],
+                    can_contribute=False,
+                    contribution="",
+                    execution_strategy="single",
+                    collaboration_agents=[],
+                    collaboration_roles={},
+                    collaboration_paths=[],
+                    member_results=[],
+                    degraded=False,
+                    unavailable_count=0,
+                    missing_requirements=[],
+                    execution_hint={},
+                    latency_ms=_latency,
+                    score_version=capability_chain.SCORE_VERSION,
+                    evidence_grade="D",
+                    threshold=threshold,
+                    handle_score=0.0,
+                    steps=[],
+                    contributing_steps=[],
+                    risks=[],
+                    domain_verdict=domain_result.domain_verdict,
+                    has_external_dependency=False,
+                )
+                await self._emit_capability_check_response(updater, task, md, query, check_response)
+                return
+
+            # ═══ Phase 2: Capability chain decomposition ═══
+            domain_info = (
+                f"domain_verdict: {domain_result.domain_verdict}\n"
+                f"reason: {domain_result.reason}"
+            )
+            chain_prompt = SKILL_CAPABILITY_CHECK_PROMPT.format(
+                agent_name=agent_name,
+                agent_description=agent_description,
+                agent_skills=agent_skills_text,
+                history=history_text,
+                query=query,
+                domain_info=domain_info,
+            )
             chain_result: Optional[CapabilityChainResult] = None
-            llm = self._get_orchestration_llm()
+            nudge = None
 
             for attempt in range(1, max_attempts + 1):
                 logger.info(
@@ -6501,9 +6713,9 @@ class SkillAgentExecutor(AgentExecutor):
                     attempt, max_attempts, agent_name,
                 )
                 attempt_messages = (
-                    [HumanMessage(content=prompt)]
+                    [HumanMessage(content=chain_prompt)]
                     if nudge is None
-                    else [HumanMessage(content=prompt), AIMessage(content=""), nudge]
+                    else [HumanMessage(content=chain_prompt), AIMessage(content=""), nudge]
                 )
                 try:
                     answer = await llm.ainvoke(attempt_messages)
@@ -6549,6 +6761,9 @@ class SkillAgentExecutor(AgentExecutor):
                     )
                     continue
 
+                # Strip domain_verdict if LLM still injects it (Phase 2 prompt says not to)
+                result_data.pop("domain_verdict", None)
+
                 try:
                     chain_result = capability_chain.parse_chain_result(result_data)
                 except Exception as exc:
@@ -6571,7 +6786,6 @@ class SkillAgentExecutor(AgentExecutor):
                     )
                     continue
 
-                # Valid chain_result obtained
                 logger.info(
                     "[Capability][JSON] SELECTED attempt=%d steps=%d",
                     attempt, len(chain_result.steps),
@@ -6584,27 +6798,22 @@ class SkillAgentExecutor(AgentExecutor):
                 )
 
             agg = capability_chain.aggregate(chain_result, threshold=threshold)
-            # Aligned with SD orchestrator _normalize_member_capability_judgment
             can_handle, can_contribute = _normalize_capability_result(
                 {"can_handle": agg.can_handle, "can_contribute": agg.can_contribute}
             )
             conf = agg.confidence
             reason = str(chain_result.reason or "").strip()[:2000]
 
-            logger.info(
-                "[Capability][Chain] agent=%s handle_score=%.3f threshold=%.2f steps=%s "
-                "contributing=%s external_dep=%s evidence=%s -> handle=%s contribute=%s conf=%.2f",
-                agent_name,
-                agg.handle_score,
-                agg.threshold,
-                {k: round(v, 3) for k, v in agg.step_scores.items()},
-                agg.contributing_steps,
-                agg.has_external_dependency,
-                chain_result.evidence_grade,
-                can_handle,
-                can_contribute,
-                conf,
+            _latency = int((_time.monotonic() - _cc_start) * 1000)
+            cap_log = capability_chain.format_capability_chain_md(
+                result=chain_result,
+                agg=agg,
+                agent_name=agent_name,
+                query=query,
+                domain_verdict=domain_result.domain_verdict,
+                latency_ms=_latency,
             )
+            logger.info("\n%s", cap_log)
 
             check_response = sg_broadcast.CapabilityCheckResponse(
                 can_handle=can_handle,
@@ -6625,7 +6834,7 @@ class SkillAgentExecutor(AgentExecutor):
                 unavailable_count=0,
                 missing_requirements=agg.missing_requirements,
                 execution_hint={},
-                latency_ms=int((_time.monotonic() - _cc_start) * 1000),
+                latency_ms=_latency,
                 score_version=capability_chain.SCORE_VERSION,
                 evidence_grade=chain_result.evidence_grade,
                 threshold=agg.threshold,
@@ -6633,6 +6842,8 @@ class SkillAgentExecutor(AgentExecutor):
                 steps=agg.steps_payload(chain_result),
                 contributing_steps=agg.contributing_steps,
                 risks=list(chain_result.risks or []),
+                domain_verdict=domain_result.domain_verdict,
+                has_external_dependency=agg.has_external_dependency,
             )
         except Exception as e:
             logger.error("Capability check failed: %s", e, exc_info=True)

@@ -7,6 +7,7 @@ import {
   parseExecutionFlowTask,
   originAgentOf,
   renderExecutionMapMarkdown,
+  stageLabel,
   stageSortKey,
   treeRoleLabel,
   upsertExecutionFlowTask,
@@ -295,10 +296,10 @@ describe("buildExecutionTree + flattenTreeForTable", () => {
         delegated_by: "user-agent",
       }),
     ])
-    expect(tree.map((n) => n.agent)).toEqual(["user-agent", "product-agent", "order-agent"])
+    expect(tree.map((n) => n.agent)).toEqual(["product-agent", "user-agent", "order-agent"])
   })
 
-  it("keeps the delegating agent first even if product was seen first", () => {
+  it("orders siblings by planner id even if a peer own-task was seen first", () => {
     const tree = buildExecutionTree([
       task({ execution_id: "own-1-product-agent-t1", agent: "product-agent" }),
       task({ execution_id: "own-2-user-agent-t1", agent: "user-agent" }),
@@ -309,7 +310,7 @@ describe("buildExecutionTree + flattenTreeForTable", () => {
         delegated_by: "user-agent",
       }),
     ])
-    expect(tree.map((n) => n.agent)).toEqual(["user-agent", "product-agent", "order-agent"])
+    expect(tree.map((n) => n.agent)).toEqual(["product-agent", "user-agent", "order-agent"])
   })
 
   it("orders SG t1-pre-{agent}-{id} siblings by planner id not agent name", () => {
@@ -320,6 +321,48 @@ describe("buildExecutionTree + flattenTreeForTable", () => {
     expect(tree.map((n) => n.execution_id)).toEqual([
       "t1-pre-user-agent-1",
       "t1-pre-product-agent-2",
+    ])
+  })
+
+  it("keeps an in-between delegate between two own-tasks of the origin agent", () => {
+    const ecommerce = "EcommerceOnlineTransactionAgent-sg-il324o25"
+    const userAccount = "UserAccountPaymentAgent-sg-7decc9db"
+    const tree = buildExecutionTree([
+      task({
+        execution_id: `t1-pre-${ecommerce}-1`,
+        agent: ecommerce,
+        role: "initiator",
+        task: "查询订单编号为ORD-2025-00001的订单，获取购买该订单的用户ID。",
+      }),
+      task({
+        execution_id: `t1-pre-${userAccount}-2`,
+        agent: userAccount,
+        role: "delegatee",
+        delegated_by: ecommerce,
+        task: "根据步骤1获取的用户ID，查询该用户的全部详细信息。",
+      }),
+      task({
+        execution_id: `t1-pre-${userAccount}-own-1`,
+        agent: userAccount,
+        role: "initiator",
+        parent_execution_id: `t1-pre-${userAccount}-2`,
+        delegated_by: ecommerce,
+        task: "根据用户ID查询用户全部详细信息。",
+      }),
+      task({
+        execution_id: `t1-pre-${ecommerce}-3`,
+        agent: ecommerce,
+        role: "initiator",
+        task: "查询订单编号为ORD-2025-00001的支付记录。",
+      }),
+    ])
+    expect(tree.map((n) => n.execution_id)).toEqual([
+      `t1-pre-${ecommerce}-1`,
+      `t1-pre-${userAccount}-2`,
+      `t1-pre-${ecommerce}-3`,
+    ])
+    expect(tree[1]?.children.map((c) => c.execution_id)).toEqual([
+      `t1-pre-${userAccount}-own-1`,
     ])
   })
 })
@@ -361,6 +404,13 @@ describe("nodeStatusOf / stageSortKey", () => {
     expect(stageSortKey("mid_exec_round_1")).toBeLessThan(stageSortKey("mid_exec_round_2"))
     expect(stageSortKey("mid_exec_round_2")).toBeLessThan(stageSortKey("turn_summary"))
     expect(stageSortKey("turn_summary")).toBeLessThan(stageSortKey("final_answer"))
+  })
+
+  it("prints raw planner stages on the map", () => {
+    expect(stageLabel("pre_exec")).toBe("pre_exec")
+    expect(stageLabel("mid_exec_round_1")).toBe("mid_exec_round_1")
+    expect(stageLabel("turn_summary")).toBe("轮次总结")
+    expect(stageLabel("final_answer")).toBe("最终答案")
   })
 })
 
@@ -423,9 +473,9 @@ describe("renderExecutionMapMarkdown", () => {
     expect(md).toContain("# 执行地图")
     expect(md).toContain("- 起点 · 开始执行")
     expect(md).toContain("## 第 1 轮")
-    expect(md).toContain("**user-agent** · 发起者 · 首次任务执行")
-    expect(md).toContain("**order-agent** · 被委派 · 首次任务执行 ← user-agent")
-    expect(md).toContain("  - **order-agent** · 内部执行 · 首次任务执行 ← user-agent")
+    expect(md).toContain("**user-agent** · 发起者 · pre_exec")
+    expect(md).toContain("**order-agent** · 被委派 · pre_exec ← user-agent")
+    expect(md).toContain("  - **order-agent** · 内部执行 · pre_exec ← user-agent")
     expect(md).toContain("## 最终答案")
     expect(md).toContain("- 终点 · 执行结束")
     expect(md.indexOf("**user-agent**")).toBeLessThan(md.indexOf("**order-agent** · 被委派"))

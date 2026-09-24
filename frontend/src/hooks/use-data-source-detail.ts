@@ -179,5 +179,6 @@ export function useDataSourceDetail(
     isLoadingSemanticDomain: enabled && semanticDomain === undefined,
     refreshAll,
     mutateDescriptor,
+    mutateSemanticDomain,
   }
 }

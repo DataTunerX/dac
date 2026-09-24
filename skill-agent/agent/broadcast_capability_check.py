@@ -93,6 +93,8 @@ class CapabilityCheckResponse(BaseModel):
     steps: list[dict] = Field(default_factory=list)
     contributing_steps: list[int] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    domain_verdict: str = ""
+    has_external_dependency: bool = False
 
 
 def _is_non_actionable_contribution_text(text: str) -> bool:

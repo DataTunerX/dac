@@ -291,20 +291,39 @@ export function CreateAgentDialog({
     if (!open || !initialValues) return
     const agent = initialValues
     const model = agent.model ?? {}
-    const llm = model.expertLLM || model.plannerLLM || ""
+    const dac = (agent.dacType || "").toLowerCase()
+    const policy = agent.dataPolicy
+    const isSkill = dac === "skill"
+    const isSemanticGroup =
+      !isSkill &&
+      (dac === "normal" ||
+        policy?.dataSourceType === "SemanticGroup" ||
+        Boolean(policy?.semanticGroupID))
+    const dataSourceType = isSkill ? "skill" : isSemanticGroup ? "semantic-group" : "descriptor"
+    const dataSourceId = isSkill
+      ? ""
+      : isSemanticGroup
+        ? (policy?.semanticGroupID || "").trim()
+        : (policy?.sourceNameSelector?.[0] || "").trim()
     const crossHop = (agent.crossSGMaxHop || "5").trim()
     const agentMode = crossHop === "1" ? "single" as const : "multi" as const
+    const planner = (model.plannerLLM || "").trim()
+    const expert = (model.expertLLM || model.plannerLLM || "").trim()
 
     form.reset({
       name: (agent.agentCard?.name || agent.name || "").trim(),
-      plannerModel: llm,
-      expertModel: llm,
+      plannerModel: isSkill ? expert || planner : planner,
+      expertModel: isSkill ? expert || planner : expert,
       namespace: agent.namespace || "default",
-      dataSourceType: "skill",
-      dataSourceId: "",
+      dataSourceType,
+      dataSourceId,
       description: (agent.agentCard?.description || "").trim(),
-      expertAgentMaxSteps: (agent.expertAgentMaxSteps || "2").trim(),
-      orchestratorAgentMaxLoops: (agent.orchestratorAgentMaxLoops || "0").trim(),
+      expertAgentMaxSteps: (
+        agent.expertAgentMaxSteps || (isSkill ? "30" : isSemanticGroup ? "1" : "2")
+      ).trim(),
+      orchestratorAgentMaxLoops: (
+        agent.orchestratorAgentMaxLoops || (isSkill ? "2" : isSemanticGroup ? "1" : "0")
+      ).trim(),
       skillAgentMaxLoops: (agent.skillAgentMaxLoops || "2").trim(),
       agentMode,
       crossSGMaxHop: crossHop,
@@ -312,13 +331,21 @@ export function CreateAgentDialog({
       summarizeCustomPrompt: (agent.summarizeCustomPrompt || "").trim(),
     })
 
-    // Pre-fill skill bindings
     setSkillPolicySkills(agent.skillPolicy?.skills ?? [])
     setSkillDetailFailed(false)
     setSkillDetailErrorMsg(null)
-    setSkills([])
-    setNameTouched(false)
-    setDescTouched(false)
+    if (isSkill) {
+      // skill 的 AgentCard skills 由 skillPolicy 详情联动，不直接回填
+      setSkills([])
+    } else {
+      const cardSkills = (agent.agentCard?.skills ?? [])
+        .map((s) => skillFromRaw(s))
+        .filter((s): s is Skill => s != null)
+      setSkills(cardSkills)
+    }
+    // 编辑时不要用数据源指纹覆盖名称、概览和技能
+    setNameTouched(true)
+    setDescTouched(true)
   }, [open, initialValues]) // eslint-disable-line react-hooks/exhaustive-deps
   const resetAll = () => {
     setSourceOpen(false)
@@ -721,7 +748,7 @@ export function CreateAgentDialog({
 
   // When dataSourceId changes, update namespace field
   useEffect(() => {
-    if (!open || !dataSourceId) return
+    if (!open || !dataSourceId || isEdit) return
     
     // If semantic group, namespace is already auto-selected; don't override.
     if (dataSourceType === "semantic-group") {
@@ -751,6 +778,8 @@ export function CreateAgentDialog({
     const first = llmConfigs[0]?.name || ""
     if (!first) return
 
+    // 编辑时保留已保存的模型，避免列表未包含该配置时被静默换成第一项
+    if (isEdit) return
     if (!names.has(plannerModel || "")) {
       form.setValue("plannerModel", first, { shouldValidate: true, shouldDirty: false })
     }
@@ -759,9 +788,10 @@ export function CreateAgentDialog({
     }
   }, [open, llmConfigs, plannerModel, expertModel, form])
 
-  // Fetch SemanticDomain.agent_card when targetDataSource changes
+  // Fetch SemanticDomain.agent_card when targetDataSource changes.
+  // 编辑时数据源 / 语义组不可改，也不要用指纹覆盖已保存的概览和技能。
   useEffect(() => {
-    if (!open || !targetDataSource) return
+    if (!open || !targetDataSource || isEdit) return
 
     setFingerprintState({ key: targetDataSource, status: "loading" })
     
@@ -900,11 +930,11 @@ export function CreateAgentDialog({
     })()
 
     return () => controller.abort()
-  }, [open, targetDataSource, dataSourceType, semanticGroups]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, isEdit, targetDataSource, dataSourceType, semanticGroups]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-fill form fields from agent_card if user hasn't touched them
   useEffect(() => {
-    if (!open || fingerprintState.key !== targetDataSource || fingerprintState.status !== "ready") return
+    if (!open || isEdit || fingerprintState.key !== targetDataSource || fingerprintState.status !== "ready") return
 
     const baseName = fingerprintState.agentCard?.name?.trim() || ""
     const newDesc = fingerprintState.agentCard?.description?.trim() || ""
@@ -967,7 +997,8 @@ export function CreateAgentDialog({
         const dd = dataDescriptors.find((d) => d.id === values.dataSourceId)
         // Ensure namespace matches the datasource's namespace
         const ns = (dd?.namespace || values.namespace || "default").trim() || "default"
-        
+
+        if (!isEdit) {
         if (fingerprintState.key !== targetDataSource) {
             toast.error("agent_card 状态异常，请重新选择数据源")
             return
@@ -980,6 +1011,7 @@ export function CreateAgentDialog({
             toast.error(fingerprintState.error || "未获取到 agent_card（请先为该数据源生成 semantic domain）")
             return
         }
+        }
 
         await onSubmit({
             ...values,
@@ -989,8 +1021,8 @@ export function CreateAgentDialog({
             orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "0",
         })
       } else {
-        // Semantic Group
-        if (fingerprintState.status !== "ready") {
+        // Semantic Group。编辑时语义关系不可改，不要求重新拉取指纹。
+        if (!isEdit && fingerprintState.status !== "ready") {
             toast.error(fingerprintState.error || "语义组信息不完整")
             return
         }
@@ -1018,7 +1050,9 @@ export function CreateAgentDialog({
         <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
           <DialogTitle>{isEdit ? "编辑智能体" : "新建智能体"}</DialogTitle>
           <DialogDescription>
-            {isEdit ? "修改智能体配置。当前仅 skill 类型智能体支持编辑。" : "创建一个新的智能体，绑定数据源并指定使用的大模型。"}
+            {isEdit
+              ? "可修改模型、编排最大循环数、专家最大步数、概览和技能。数据源与语义关系保持不变。"
+              : "创建一个新的智能体，绑定数据源并指定使用的大模型。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -1084,7 +1118,7 @@ export function CreateAgentDialog({
                           }
                         }}
                         open={sourceOpen}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isEdit}
                       >
                         <FormControl>
                           <SelectTrigger className="w-full">
@@ -1138,9 +1172,13 @@ export function CreateAgentDialog({
                         </SelectContent>
                       </Select>
                       <FormDescription>
-                        {dataSourceType === "descriptor"
-                          ? `智能体将基于所选数据源进行知识问答（将自动关联至数据源所在的 ${namespace || "default"} 命名空间）。`
-                          : "智能体将基于所选语义组（包含多个关联数据源）进行联合知识问答。"}
+                        {isEdit
+                          ? dataSourceType === "descriptor"
+                            ? "数据源创建后不可修改。"
+                            : "语义关系创建后不可修改。"
+                          : dataSourceType === "descriptor"
+                            ? `智能体将基于所选数据源进行知识问答（将自动关联至数据源所在的 ${namespace || "default"} 命名空间）。`
+                            : "智能体将基于所选语义组（包含多个关联数据源）进行联合知识问答。"}
                       </FormDescription>
                       {fingerprintError && (
                         <div className="text-xs text-red-600 mt-1">{fingerprintError}</div>
@@ -1249,11 +1287,12 @@ export function CreateAgentDialog({
                   name="description"
                   render={({ field }) => (
                     <FormItem className="sm:col-span-2">
-                      <FormLabel>描述</FormLabel>
+                      <FormLabel>{dataSourceType === "skill" ? "描述" : "概览"}</FormLabel>
                       <FormControl>
                         <Textarea
                           placeholder="描述该智能体的用途..."
                           {...field}
+                          className="min-h-[200px]"
                           disabled={isSubmitting}
                           onChange={(e) => {
                             setDescTouched(true)

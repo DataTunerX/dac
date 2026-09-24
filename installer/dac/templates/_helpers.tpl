@@ -215,6 +215,14 @@ app.kubernetes.io/component: {{ .name }}
 {{- printf "http://%s:%v" (include "dac.dataServices.serviceName" .) (.Values.dataServices.service.port | default 8000) }}
 {{- end }}
 
+{{- define "dac.semanticGrouper.serviceName" -}}
+{{- include "dac.componentName" (dict "context" . "name" "semantic-grouper") -}}
+{{- end }}
+
+{{- define "dac.semanticGrouper.url" -}}
+{{- printf "http://%s.%s.svc.cluster.local:%v" (include "dac.semanticGrouper.serviceName" .) .Release.Namespace (.Values.semanticGrouper.service.port | default 8000) -}}
+{{- end }}
+
 {{- define "dac.orchestratorRegistry.serviceName" -}}
 {{- include "dac.componentName" (dict "context" . "name" "orchestrator-registry") -}}
 {{- end }}

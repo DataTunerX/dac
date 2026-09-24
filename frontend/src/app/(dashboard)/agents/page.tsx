@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import { listAllAgentContainers, updateAgent } from "@/lib/agents-api";
+import { buildAgentUpdateRequest } from "@/lib/agent-update";
 import type { AgentContainerResponse } from "@/lib/api-types";
 import { apiFetcherWithParams, apiFetcher } from "@/lib/swr";
 import { AGENTS_LIST_KEY } from "@/lib/swr-keys";
@@ -303,8 +304,7 @@ const AgentCard = memo(function AgentCard({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <StatusBadge status={a.status} />
-            {a.dataSourceType === "skill" && (
-              <RbacWrapper requiredPermission="agent:update">
+            <RbacWrapper requiredPermission="agent:update">
               <Button
                 variant="ghost"
                 size="icon"
@@ -318,8 +318,7 @@ const AgentCard = memo(function AgentCard({
               >
                 <Pencil className="h-4 w-4" />
               </Button>
-              </RbacWrapper>
-            )}
+            </RbacWrapper>
             <RbacWrapper requiredPermission="agent:delete">
               <Button
                 variant="ghost"
@@ -653,11 +652,6 @@ export default function AgentsPage() {
   );
 
   const openEdit = useCallback((agent: Agent) => {
-    // Only skill-type agents support editing
-    if (agent.dataSourceType !== "skill") {
-      toast.error("当前仅 Skill 类型智能体支持编辑")
-      return
-    }
     const raw = agent.raw as AgentContainerResponse | undefined
     if (!raw?.name || !raw?.namespace) {
       toast.error("无法加载智能体详情")
@@ -671,49 +665,11 @@ export default function AgentsPage() {
     if (isSubmittingEdit || !editingAgent) return
     setIsSubmittingEdit(true)
     try {
-      const skills = (data.skills || [])
-        .map((s) => {
-          const id = (s.id || "").trim() || (s.name || "").trim();
-          const name = (s.name || "").trim() || id;
-          const description = (s.description || "").trim();
-          const tags = (s.tags || "")
-            .split(",")
-            .map((t) => t.trim())
-            .filter(Boolean);
-          const examples = (s.examples || "")
-            .split("\n")
-            .map((t) => t.trim())
-            .filter(Boolean);
-          return { id, name, description, tags, examples };
-        })
-        .filter((s) => s.id && s.name);
-
-      const llm = data.expertModel || data.plannerModel || "";
-      await updateAgent(editingAgent.namespace, editingAgent.name, {
-        dacType: "skill",
-        agentCard: {
-          name: data.name,
-          description: data.description || "",
-          skills,
-        },
-        dataPolicy: {
-          dataSourceType: "",
-          semanticGroupID: "",
-          sourceNameSelector: [],
-        },
-        skillPolicy: data.skillPolicy ?? { skills: [] },
-        model: {
-          plannerLLM: llm,
-          expertLLM: llm,
-          embedding: "embedding-config",
-        },
-        expertAgentMaxSteps: data.expertAgentMaxSteps || "30",
-        orchestratorAgentMaxLoops: data.orchestratorAgentMaxLoops || "2",
-        skillAgentMaxLoops: data.skillAgentMaxLoops || "2",
-        crossSGMaxHop: data.crossSGMaxHop || "5",
-        summarizeEnabled: data.summarizeEnabled || "true",
-        summarizeCustomPrompt: data.summarizeCustomPrompt || "",
-      })
+      await updateAgent(
+        editingAgent.namespace,
+        editingAgent.name,
+        buildAgentUpdateRequest(editingAgent, data),
+      )
       toast.success("智能体更新成功")
       setIsEditOpen(false)
       setEditingAgent(null)
@@ -936,8 +892,7 @@ export default function AgentsPage() {
                         >
                           <Eye className="h-4 w-4" />
                         </Button>
-                        {a.dataSourceType === "skill" && (
-                          <RbacWrapper requiredPermission="agent:update">
+                        <RbacWrapper requiredPermission="agent:update">
                           <Button
                             variant="ghost"
                             size="icon"
@@ -947,8 +902,7 @@ export default function AgentsPage() {
                           >
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          </RbacWrapper>
-                        )}
+                        </RbacWrapper>
                         <RbacWrapper requiredPermission="agent:delete">
                           <Button
                             variant="ghost"

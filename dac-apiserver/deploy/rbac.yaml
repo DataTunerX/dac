@@ -28,6 +28,17 @@ rules:
       - list
       - watch
 
+  # 数据源同步任务日志：按标签列出 Pod，并读取 data-sinker-job 容器日志
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs:
+      - get
+      - list
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs:
+      - get
+
   # ConfigMap 资源权限（用于 LLM / Prompts 配置管理）
   - apiGroups: [""]
     resources: ["configmaps"]

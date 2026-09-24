@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
 	"github.com/lvyanru/dac-apiserver/internal/domain/entity"
@@ -59,6 +60,7 @@ func normalizeDataSourceType(t string) string {
 type DataDescriptorHandler struct {
 	usecase domain.DataDescriptorUsecase // Changed from usecase.DataDescriptorUsecase to domain interface
 	logger  *slog.Logger
+	kube    kubernetes.Interface
 }
 
 // NewDataDescriptorHandler creates a new data descriptor handler
@@ -67,6 +69,11 @@ func NewDataDescriptorHandler(uc domain.DataDescriptorUsecase, logger *slog.Logg
 		usecase: uc,
 		logger:  logger,
 	}
+}
+
+// SetKubernetes attaches the cluster client used to stream data-sinker job logs.
+func (h *DataDescriptorHandler) SetKubernetes(cs kubernetes.Interface) {
+	h.kube = cs
 }
 
 // Create creates a new data descriptor
@@ -201,6 +208,36 @@ func (h *DataDescriptorHandler) GetSemanticDomain(ctx context.Context, c *app.Re
 	}
 
 	SuccessResponse(c, dto.ToDataDescriptorSemanticDomainResponse(sd))
+}
+
+// UpdateSemanticDomain replaces agent_card on the data descriptor's semantic domain.
+func (h *DataDescriptorHandler) UpdateSemanticDomain(ctx context.Context, c *app.RequestContext) {
+	namespace := c.Param("namespace")
+	name := c.Param("name")
+
+	if !verifyTenantNamespaceAccess(c, h.logger, namespace) {
+		ErrorResponse(c, domain.ErrForbidden)
+		return
+	}
+
+	if _, err := h.usecase.Get(ctx, namespace, name); err != nil {
+		ErrorResponse(c, err)
+		return
+	}
+
+	var req dto.UpdateDataDescriptorSemanticDomainRequest
+	if err := c.BindJSON(&req); err != nil {
+		ErrorResponse(c, domain.ErrInvalidInput)
+		return
+	}
+
+	updated, err := h.usecase.UpdateSemanticDomainAgentCard(ctx, namespace, name, req.AgentCard)
+	if err != nil {
+		ErrorResponse(c, err)
+		return
+	}
+
+	SuccessResponse(c, dto.ToDataDescriptorSemanticDomainResponse(updated))
 }
 
 // ListAll lists data descriptors across all namespaces

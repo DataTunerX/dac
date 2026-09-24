@@ -64,6 +64,8 @@ class CapabilityCheckResponse(BaseModel):
     steps: list[dict] = Field(default_factory=list)
     contributing_steps: list[int] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    domain_verdict: str = ""
+    has_external_dependency: bool = False
 
     @property
     def is_chain_scored(self) -> bool:
@@ -296,6 +298,14 @@ async def send_capability_check(
             hint = response_data.get("execution_hint") or {}
             if not isinstance(hint, dict):
                 hint = {}
+            steps_raw = response_data.get("steps") or []
+            contributing: list[int] = []
+            for item in response_data.get("contributing_steps") or []:
+                try:
+                    contributing.append(int(item))
+                except (TypeError, ValueError):
+                    continue
+            risks_raw = response_data.get("risks") or []
             return CapabilityCheckResponse(
                 can_handle=response_data.get("can_handle", False),
                 confidence=response_data.get("confidence", 0.0),
@@ -315,6 +325,18 @@ async def send_capability_check(
                 unavailable_count=int(response_data.get("unavailable_count", 0) or 0),
                 missing_requirements=response_data.get("missing_requirements") or [],
                 execution_hint=hint,
+                score_version=str(response_data.get("score_version") or ""),
+                evidence_grade=str(response_data.get("evidence_grade") or ""),
+                threshold=float(response_data.get("threshold") or 0.0),
+                handle_score=float(response_data.get("handle_score") or 0.0),
+                steps=[step for step in steps_raw if isinstance(step, dict)]
+                if isinstance(steps_raw, list) else [],
+                contributing_steps=contributing,
+                risks=[str(item) for item in risks_raw] if isinstance(risks_raw, list) else [],
+                domain_verdict=str(response_data.get("domain_verdict") or ""),
+                has_external_dependency=bool(
+                    response_data.get("has_external_dependency", False)
+                ),
             )
     except json.JSONDecodeError as e:
         logger.error(

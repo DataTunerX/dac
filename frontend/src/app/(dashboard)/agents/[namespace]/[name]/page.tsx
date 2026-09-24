@@ -7,6 +7,7 @@ import useSWR from "swr"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
 import { getAgent, updateAgent } from "@/lib/agents-api"
+import { buildAgentUpdateRequest } from "@/lib/agent-update"
 import { BizAgentCompositionGraph } from "@/components/agents/biz-agent-composition-graph"
 import { CreateAgentDialog, type CreateAgentPayload } from "@/components/agent-forms"
 import { useAgentComposition } from "@/hooks/use-agent-composition"
@@ -103,30 +104,7 @@ export default function AgentDetailPage() {
     if (isSubmittingEdit || !agent) return
     setIsSubmittingEdit(true)
     try {
-      const skills = (data.skills || [])
-        .map((s) => {
-          const id = (s.id || "").trim() || (s.name || "").trim();
-          const name = (s.name || "").trim() || id;
-          const description = (s.description || "").trim();
-          const tags = (s.tags || "").split(",").map((t) => t.trim()).filter(Boolean);
-          const examples = (s.examples || "").split("\n").map((t) => t.trim()).filter(Boolean);
-          return { id, name, description, tags, examples };
-        })
-        .filter((s) => s.id && s.name);
-      const llm = data.expertModel || data.plannerModel || "";
-      await updateAgent(namespace, name, {
-        dacType: "skill",
-        agentCard: { name: data.name, description: data.description || "", skills },
-        dataPolicy: { dataSourceType: "", semanticGroupID: "", sourceNameSelector: [] },
-        skillPolicy: data.skillPolicy ?? { skills: [] },
-        model: { plannerLLM: llm, expertLLM: llm, embedding: "embedding-config" },
-        expertAgentMaxSteps: data.expertAgentMaxSteps || "30",
-        orchestratorAgentMaxLoops: data.orchestratorAgentMaxLoops || "2",
-        skillAgentMaxLoops: data.skillAgentMaxLoops || "2",
-        crossSGMaxHop: data.crossSGMaxHop || "5",
-        summarizeEnabled: data.summarizeEnabled || "true",
-        summarizeCustomPrompt: data.summarizeCustomPrompt || "",
-      })
+      await updateAgent(namespace, name, buildAgentUpdateRequest(agent, data))
       toast.success("智能体更新成功")
       setIsEditOpen(false)
       refreshData()
@@ -272,18 +250,16 @@ export default function AgentDetailPage() {
               删除
             </Button>
           </RbacWrapper>
-          {isSkillAgent && (
-            <RbacWrapper requiredPermission="agent:update">
+          <RbacWrapper requiredPermission="agent:update">
             <Button
               variant="outline"
               onClick={() => setIsEditOpen(true)}
-              disabled={isLoading}
+              disabled={isLoading || !agent}
             >
               <Pencil className="w-4 h-4 mr-2" />
               编辑
             </Button>
-            </RbacWrapper>
-          )}
+          </RbacWrapper>
         </div>
       </div>
 
@@ -720,7 +696,7 @@ export default function AgentDetailPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {isSkillAgent && agent && (
+      {agent && (
         <CreateAgentDialog
           open={isEditOpen}
           onOpenChange={(open) => {

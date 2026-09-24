@@ -120,7 +120,7 @@ func newBusinessFixture(t *testing.T) *Engine {
 	store.tenantRoles[userDave+":"+tenantFinance] = &TenantRole{ID: "tr-a-editor", TenantID: tenantFinance, Code: roleEditor}
 	addRolePermissionCodes(store, "tr-a-editor",
 		"agent:read",
-		"descriptor:read", "descriptor:create", "descriptor:update", "descriptor:delete",
+		"descriptor:read", "descriptor:create", "descriptor:update", "descriptor:delete", "descriptor:job-logs:read",
 		"llmconfig:read", "llmconfig:create", "llmconfig:update", "llmconfig:delete",
 		"promptconfig:read", "promptconfig:create", "promptconfig:update", "promptconfig:delete",
 		"semantic-group:read",
@@ -240,6 +240,7 @@ func TestScenarioTenantAdminGovernsOwnTenant(t *testing.T) {
 	// Business resource rights inside the tenant.
 	want(t, e, userCarol, tenantFinance, "DELETE", "/api/v1/namespaces/finance-data/agents/pay-bot", true)
 	want(t, e, userCarol, tenantFinance, "POST", "/api/v1/semantic-groups/g1/members", true) // carol holds semantic-group:manage
+	want(t, e, userCarol, tenantFinance, "POST", "/api/v1/dd-group-relations", true)       // manual add member via relation row
 	want(t, e, userCarol, tenantFinance, "POST", "/api/v1/skills/namespaces/finance/skills", false)
 
 	// Isolation: carol manages dataeng?? No — she is not even a member.

@@ -119,26 +119,47 @@ func (u *semanticGroupUsecase) Update(ctx context.Context, id string, req *domai
 	if len(dsReq) == 0 {
 		return u.dsClient.GetSemanticGroup(ctx, id)
 	}
+	u.logger.Info("updating semantic group", "group_id", id, "fields", fieldNames(dsReq))
 	updated, err := u.dsClient.UpdateSemanticGroup(ctx, id, dsReq)
 	if err != nil {
+		u.logger.Error("update semantic group failed", "group_id", id, "error", err)
 		return nil, err
 	}
 	u.refreshSemanticGroupVector(ctx, id)
+	u.logger.Info("semantic group updated", "group_id", id)
 	return updated, nil
 }
 
+func fieldNames(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func (u *semanticGroupUsecase) refreshSemanticGroupVector(ctx context.Context, groupID string) {
-	withMembers, err := u.dsClient.GetSemanticGroupWithMembers(ctx, groupID)
+	refreshSemanticGroupVector(ctx, u.dsClient, u.logger, groupID)
+}
+
+// refreshSemanticGroupVector rebuilds the pgvector doc for a group after metadata or membership changes.
+func refreshSemanticGroupVector(ctx context.Context, dsClient domain.DataServicesClient, logger *slog.Logger, groupID string) {
+	withMembers, err := dsClient.GetSemanticGroupWithMembers(ctx, groupID)
 	if err != nil {
-		u.logger.Warn("semantic group pgvector refresh: load members failed", "group_id", groupID, "error", err)
+		logger.Warn("semantic group pgvector refresh: load members failed", "group_id", groupID, "error", err)
+		return
+	}
+	if withMembers == nil {
+		logger.Warn("semantic group pgvector refresh: empty payload", "group_id", groupID)
 		return
 	}
 	group := withMembers.Group
 	pageContent := buildSemanticGroupVectorText(group.GroupName, group.Description, withMembers.Members)
 
-	oldIDs, err := u.dsClient.GetVectorDocumentIDsByMetadataField(ctx, semanticGroupsVectorCollection, "group_id", groupID)
+	oldIDs, err := dsClient.GetVectorDocumentIDsByMetadataField(ctx, semanticGroupsVectorCollection, "group_id", groupID)
 	if err != nil {
-		u.logger.Warn("semantic group pgvector refresh: list old vectors failed", "group_id", groupID, "error", err)
+		logger.Warn("semantic group pgvector refresh: list old vectors failed", "group_id", groupID, "error", err)
 		oldIDs = nil
 	}
 
@@ -149,17 +170,17 @@ func (u *semanticGroupUsecase) refreshSemanticGroupVector(ctx context.Context, g
 			"group_name": group.GroupName,
 		},
 	}
-	if err := u.dsClient.AddVectorDocuments(ctx, semanticGroupsVectorCollection, []domain.VectorDocumentInput{doc}); err != nil {
-		u.logger.Warn("semantic group pgvector refresh: add vectors failed", "group_id", groupID, "error", err)
+	if err := dsClient.AddVectorDocuments(ctx, semanticGroupsVectorCollection, []domain.VectorDocumentInput{doc}); err != nil {
+		logger.Warn("semantic group pgvector refresh: add vectors failed", "group_id", groupID, "error", err)
 		return
 	}
 	if len(oldIDs) > 0 {
-		if err := u.dsClient.DeleteVectorDocumentsByIDs(ctx, semanticGroupsVectorCollection, oldIDs); err != nil {
-			u.logger.Warn("semantic group pgvector refresh: delete stale vectors failed", "group_id", groupID, "error", err)
+		if err := dsClient.DeleteVectorDocumentsByIDs(ctx, semanticGroupsVectorCollection, oldIDs); err != nil {
+			logger.Warn("semantic group pgvector refresh: delete stale vectors failed", "group_id", groupID, "error", err)
 			return
 		}
 	}
-	u.logger.Info("semantic group pgvector refreshed", "group_id", groupID)
+	logger.Info("semantic group pgvector refreshed", "group_id", groupID)
 }
 
 func buildSemanticGroupVectorText(groupName, description string, members []domain.SemanticGroupMemberDetail) string {
@@ -215,10 +236,64 @@ func (u *semanticGroupUsecase) AddMember(ctx context.Context, groupID string, re
 	if groupID == "" {
 		return nil, domain.NewInvalidInputError("id is required")
 	}
+	if req == nil || strings.TrimSpace(req.DDNamespace) == "" || strings.TrimSpace(req.DDName) == "" {
+		return nil, domain.NewInvalidInputError("dd_namespace and dd_name are required")
+	}
 	if _, err := u.dsClient.GetSemanticGroup(ctx, groupID); err != nil {
 		return nil, err
 	}
-	taskID, err := u.grouper.AddMember(ctx, groupID, req)
+
+	domains, _, err := u.dsClient.SearchSemanticDomainsByDD(ctx, req.DDNamespace, req.DDName)
+	if err != nil {
+		return nil, err
+	}
+	if len(domains) == 0 {
+		return nil, domain.NewInvalidInputError("该数据源尚未生成语义域，无法加入语义组")
+	}
+
+	existing, _, err := u.dsClient.ListDDGroupRelationsByGroup(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	existingIDs := make(map[string]struct{}, len(existing))
+	for _, rel := range existing {
+		if rel.SemanticDomainID != "" {
+			existingIDs[rel.SemanticDomainID] = struct{}{}
+		}
+	}
+
+	reason := strings.TrimSpace(req.AssociationReason)
+	if reason == "" {
+		reason = "手动添加"
+	}
+	added := 0
+	for _, sd := range domains {
+		sdID := strings.TrimSpace(sd.SemanticDomainID)
+		if sdID == "" {
+			continue
+		}
+		if _, ok := existingIDs[sdID]; ok {
+			continue
+		}
+		if _, err := u.dsClient.CreateDDGroupRelation(ctx, map[string]any{
+			"sd_id":              sdID,
+			"group_id":           groupID,
+			"association_reason": reason,
+		}); err != nil {
+			u.logger.Error("create dd group relation failed", "group_id", groupID, "sd_id", sdID, "error", err)
+			return nil, err
+		}
+		existingIDs[sdID] = struct{}{}
+		added++
+	}
+	if added == 0 {
+		return nil, domain.NewInvalidInputError("所选数据源已是该语义组成员")
+	}
+
+	taskID, err := u.grouper.RefreshGroup(ctx, groupID, domain.SemanticGroupRefreshIncremental, &domain.SemanticGroupRefreshDescriptor{
+		Namespace: req.DDNamespace,
+		Name:      req.DDName,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +314,38 @@ func (u *semanticGroupUsecase) RemoveMember(ctx context.Context, groupID string,
 	if _, err := u.dsClient.GetSemanticGroup(ctx, groupID); err != nil {
 		return nil, err
 	}
-	taskID, err := u.grouper.RemoveMember(ctx, groupID, req)
+
+	sdID := strings.TrimSpace(req.SemanticDomainID)
+	relations, _, err := u.dsClient.ListDDGroupRelationsByGroup(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	deleted := 0
+	for _, rel := range relations {
+		if rel.SemanticDomainID != sdID || rel.ID <= 0 {
+			continue
+		}
+		if err := u.dsClient.DeleteDDGroupRelationByID(ctx, rel.ID); err != nil {
+			u.logger.Error("delete dd group relation failed", "group_id", groupID, "sd_id", sdID, "relation_id", rel.ID, "error", err)
+			return nil, err
+		}
+		deleted++
+	}
+	if deleted == 0 {
+		return nil, domain.NewInvalidInputError("该语义域不是该语义组成员")
+	}
+
+	var descriptor *domain.SemanticGroupRefreshDescriptor
+	if sd, err := u.dsClient.GetSemanticDomain(ctx, sdID); err != nil {
+		u.logger.Warn("load semantic domain for refresh notify failed", "sd_id", sdID, "error", err)
+	} else if sd != nil && sd.DDNamespace != "" && sd.DDName != "" {
+		descriptor = &domain.SemanticGroupRefreshDescriptor{
+			Namespace: sd.DDNamespace,
+			Name:      sd.DDName,
+		}
+	}
+
+	taskID, err := u.grouper.RefreshGroup(ctx, groupID, domain.SemanticGroupRefreshDecremental, descriptor)
 	if err != nil {
 		return nil, err
 	}

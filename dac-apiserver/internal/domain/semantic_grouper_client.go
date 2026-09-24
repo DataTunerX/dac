@@ -2,11 +2,21 @@ package domain
 
 import "context"
 
-// SemanticGrouperClient submits member mutations to semantic-grouper and polls task status.
+const (
+	SemanticGroupRefreshIncremental = "incremental"
+	SemanticGroupRefreshDecremental = "decremental"
+)
+
+// SemanticGrouperClient submits group metadata refresh tasks and polls status.
 type SemanticGrouperClient interface {
-	AddMember(ctx context.Context, groupID string, req *AddSemanticGroupMemberRequest) (string, error)
-	RemoveMember(ctx context.Context, groupID string, req *RemoveSemanticGroupMemberRequest) (string, error)
+	RefreshGroup(ctx context.Context, groupID, mode string, descriptor *SemanticGroupRefreshDescriptor) (string, error)
 	GetTaskStatus(ctx context.Context, taskID string) (*SemanticGrouperTaskStatus, error)
+}
+
+// SemanticGroupRefreshDescriptor identifies the DD that triggered a group refresh.
+type SemanticGroupRefreshDescriptor struct {
+	Namespace string
+	Name      string
 }
 
 // AddSemanticGroupMemberRequest adds a DD to a specific semantic group.
