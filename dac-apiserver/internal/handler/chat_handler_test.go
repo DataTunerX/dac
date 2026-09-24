@@ -95,6 +95,11 @@ func TestSSEEventTypeForChunk_Progress(t *testing.T) {
 	if got := sseEventTypeForChunk(chunkWithType); got != "phase_change" {
 		t.Errorf("expected event type phase_change when EventType set, got %q", got)
 	}
+	// Execution Flow frames set EventType=execution-flow (payload has no "event")
+	chunkEF := entity.StreamChunk{Progress: `{"execution_id":"own-1"}`, EventType: "execution-flow"}
+	if got := sseEventTypeForChunk(chunkEF); got != "execution-flow" {
+		t.Errorf("expected execution-flow when EventType set, got %q", got)
+	}
 	// No event in payload -> fallback "progress"
 	chunkNoEvent := entity.StreamChunk{Progress: `{"message":"ok"}`}
 	if got := sseEventTypeForChunk(chunkNoEvent); got != "progress" {

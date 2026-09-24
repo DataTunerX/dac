@@ -29,7 +29,9 @@ type DataServicesClient interface {
 	SemanticGroupExists(ctx context.Context, id string) (bool, error)
 	SemanticGroupCount(ctx context.Context) (int, error)
 
-	// DD group relation (list + delete relation row; member sync via semantic-grouper)
+	// DD group relation (create/list/delete membership rows in data-services).
+	// Create is the manual add-member path; it does not re-run semantic-grouper consolidation.
+	CreateDDGroupRelation(ctx context.Context, req map[string]any) (*DDGroupRelation, error)
 	ListDDGroupRelationsByGroup(ctx context.Context, groupID string) ([]DDGroupRelation, int, error)
 	ListDDGroupRelationsBySD(ctx context.Context, sdID string) ([]DDGroupRelation, int, error)
 	DeleteDDGroupRelationByID(ctx context.Context, id int64) error

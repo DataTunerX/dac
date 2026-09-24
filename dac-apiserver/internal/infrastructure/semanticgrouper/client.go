@@ -34,38 +34,28 @@ func NewClient(baseURL string, timeout time.Duration, logger *slog.Logger) *Clie
 	}
 }
 
-func (c *Client) AddMember(ctx context.Context, groupID string, req *domain.AddSemanticGroupMemberRequest) (string, error) {
+func (c *Client) RefreshGroup(ctx context.Context, groupID, mode string, descriptor *domain.SemanticGroupRefreshDescriptor) (string, error) {
 	if groupID == "" {
 		return "", domain.NewInvalidInputError("group id is required")
 	}
-	if req == nil || req.DDNamespace == "" || req.DDName == "" {
-		return "", domain.NewInvalidInputError("dd_namespace and dd_name are required")
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		mode = domain.SemanticGroupRefreshDecremental
+	}
+	if mode != domain.SemanticGroupRefreshIncremental && mode != domain.SemanticGroupRefreshDecremental {
+		return "", domain.NewInvalidInputError("mode must be incremental or decremental")
 	}
 	payload := map[string]any{
 		"group_id": groupID,
-		"descriptor": map[string]string{
-			"namespace": req.DDNamespace,
-			"name":      req.DDName,
-		},
+		"mode":     mode,
 	}
-	if req.AssociationReason != "" {
-		payload["association_reason"] = req.AssociationReason
+	if descriptor != nil && descriptor.Namespace != "" && descriptor.Name != "" {
+		payload["descriptor"] = map[string]string{
+			"namespace": descriptor.Namespace,
+			"name":      descriptor.Name,
+		}
 	}
-	return c.submitTask(ctx, "/api/v1/group/members/add", payload)
-}
-
-func (c *Client) RemoveMember(ctx context.Context, groupID string, req *domain.RemoveSemanticGroupMemberRequest) (string, error) {
-	if groupID == "" {
-		return "", domain.NewInvalidInputError("group id is required")
-	}
-	if req == nil || req.SemanticDomainID == "" {
-		return "", domain.NewInvalidInputError("sd_id is required")
-	}
-	payload := map[string]any{
-		"group_id": groupID,
-		"sd_id":    req.SemanticDomainID,
-	}
-	return c.submitTask(ctx, "/api/v1/group/members/remove", payload)
+	return c.submitTask(ctx, "/api/v1/group/refresh", payload)
 }
 
 func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (*domain.SemanticGrouperTaskStatus, error) {

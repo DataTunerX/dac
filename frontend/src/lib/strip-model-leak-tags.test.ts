@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { stripModelLeakTags, stripModelLeakLines } from "./strip-model-leak-tags"
+import { stripDacProtocolLines, stripModelLeakTags, stripModelLeakLines } from "./strip-model-leak-tags"
 
 const closeThink = "</" + "think>"
 const closeRedacted = "</" + "redacted_thinking>"
@@ -22,6 +22,22 @@ describe("stripModelLeakTags", () => {
   it("preserves normal markdown and code fences", () => {
     const input = "```js\nconsole.log('ok')\n```\n\n正常回答"
     expect(stripModelLeakTags(input)).toBe(input)
+  })
+})
+
+describe("stripDacProtocolLines", () => {
+  it("removes progress and execution-flow lines from answer text", () => {
+    const input = [
+      "visible answer",
+      '[[DAC_PROGRESS]] {"event":"task_started"}',
+      '[[DAC_EXECUTION_FLOW]] {"schema_version":"v1","execution_id":"own-1"}',
+      "still visible",
+    ].join("\n")
+    expect(stripDacProtocolLines(input)).toBe("visible answer\nstill visible")
+  })
+
+  it("keeps normal markdown", () => {
+    expect(stripDacProtocolLines("hello\nworld")).toBe("hello\nworld")
   })
 })
 

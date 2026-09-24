@@ -61,8 +61,8 @@ type SemanticGroupResponse struct {
 
 // SemanticGroupMemberDetailResponse is one member (relation + semantic domain) for with-members API.
 type SemanticGroupMemberDetailResponse struct {
-	Relation       DDGroupRelationResponse  `json:"relation"`
-	SemanticDomain *SemanticDomainResponse  `json:"semantic_domain"`
+	Relation       DDGroupRelationResponse `json:"relation"`
+	SemanticDomain *SemanticDomainResponse `json:"semantic_domain"`
 }
 
 // SemanticGroupInfoResponse is child group summary for with-members API.
@@ -86,9 +86,9 @@ type SemanticDomainResponse struct {
 
 // SemanticGroupWithMembersResponse is the response of GET /semantic-groups/:id/with-members.
 type SemanticGroupWithMembersResponse struct {
-	Group       SemanticGroupResponse              `json:"group"`
+	Group       SemanticGroupResponse               `json:"group"`
 	Members     []SemanticGroupMemberDetailResponse `json:"members"`
-	ChildGroups []SemanticGroupInfoResponse        `json:"child_groups"`
+	ChildGroups []SemanticGroupInfoResponse         `json:"child_groups"`
 }
 
 func ToSemanticGroupResponse(g *domain.SemanticGroup) *SemanticGroupResponse {
@@ -150,6 +150,13 @@ func toSemanticDomainResponse(s *domain.SemanticDomain) *SemanticDomainResponse 
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
 	}
+}
+
+// CreateDDGroupRelationRequest is POST /dd-group-relations (manual add member).
+type CreateDDGroupRelationRequest struct {
+	SemanticDomainID  string `json:"sd_id" validate:"required"`
+	GroupID           string `json:"group_id" validate:"required"`
+	AssociationReason string `json:"association_reason"`
 }
 
 type DDGroupRelationResponse struct {

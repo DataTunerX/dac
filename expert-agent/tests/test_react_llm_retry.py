@@ -130,3 +130,23 @@ async def test_emit_progress_invokes_callback():
 @pytest.mark.asyncio
 async def test_emit_progress_noop_when_emitter_none():
     await ReActRunner._emit_progress(None, "sg_react_step_start", message="ignored")
+
+
+def test_react_step_start_message_explains_llm_purpose():
+    msg = ReActRunner._react_step_start_message(2, 20)
+    assert msg == (
+        "ReAct step 2/20 · calling LLM to decide next action (choose tool or finish)"
+    )
+
+
+def test_step_analysis_progress_skips_empty_next_action():
+    assert ReActRunner._step_analysis_progress_message(1, {}) is None
+    assert ReActRunner._step_analysis_progress_message(1, {"next_action": ""}) is None
+    assert ReActRunner._step_analysis_progress_message(1, {"next_action": "   "}) is None
+    assert ReActRunner._step_analysis_progress_message(1, None) is None
+
+
+def test_step_analysis_progress_shows_concrete_next_action():
+    assert ReActRunner._step_analysis_progress_message(
+        1, {"next_action": "call:structured_query"}
+    ) == "step 1 analysis: next=call:structured_query"

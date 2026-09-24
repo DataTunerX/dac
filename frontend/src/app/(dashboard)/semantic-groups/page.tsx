@@ -265,7 +265,8 @@ export default function SemanticGroupsPage() {
 
   const fetchData = () => mutateList()
 
-  // Semantic group is currently read-only in UI (no manual create/edit).
+  // Create is still automated (semantic-grouper). Detail page supports
+  // editing description / agent_card and adding/removing members.
 
   const openDelete = async (g: SemanticGroupResponse) => {
     setDeleting(g)

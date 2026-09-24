@@ -187,3 +187,16 @@ export async function getDescriptorSemanticDomain(
     throw e
   }
 }
+
+/** PUT .../semantic-domain — replace agent_card JSON, keep other SD fields. */
+export async function updateDescriptorSemanticDomain(
+  namespace: string,
+  name: string,
+  agentCard: string,
+): Promise<DataDescriptorSemanticDomain | null> {
+  const res = await api.put<NestedDataEnvelope<DataDescriptorSemanticDomain>>(
+    `/namespaces/${encodeURIComponent(namespace)}/descriptors/${encodeURIComponent(name)}/semantic-domain`,
+    { agent_card: agentCard },
+  )
+  return unwrapNestedData<DataDescriptorSemanticDomain>(res.data)
+}

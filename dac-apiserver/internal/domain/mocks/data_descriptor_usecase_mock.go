@@ -9,18 +9,19 @@ import (
 
 // MockDataDescriptorUsecase is a mock implementation of usecase.DataDescriptorUsecase
 type MockDataDescriptorUsecase struct {
-	CreateFunc func(ctx context.Context, req *domain.CreateDataDescriptorRequest) (*entity.DataDescriptor, error)
-	GetFunc    func(ctx context.Context, namespace, name string) (*entity.DataDescriptor, error)
-	ListFunc   func(ctx context.Context, namespace string, opts domain.ListOptions) ([]*entity.DataDescriptor, error)
+	CreateFunc        func(ctx context.Context, req *domain.CreateDataDescriptorRequest) (*entity.DataDescriptor, error)
+	GetFunc           func(ctx context.Context, namespace, name string) (*entity.DataDescriptor, error)
+	ListFunc          func(ctx context.Context, namespace string, opts domain.ListOptions) ([]*entity.DataDescriptor, error)
 	UpdateFunc        func(ctx context.Context, namespace, name string, req *domain.UpdateDataDescriptorRequest) (*entity.DataDescriptor, error)
 	DeleteFunc        func(ctx context.Context, namespace, name string) error
 	RequestResyncFunc func(ctx context.Context, namespace, name string) error
 
-	GetSignatureByDDFunc      func(ctx context.Context, namespace, name string) (*domain.Signature, error)
-	GetSemanticDomainByDDFunc func(ctx context.Context, namespace, name string) (*domain.SemanticDomain, error)
-	SearchKnowledgeFunc       func(ctx context.Context, namespace, name, query string) ([]domain.KnowledgeSearchResult, error)
-	GetAllKnowledgeFunc       func(ctx context.Context, namespace, name string) ([]domain.KnowledgeDocument, error)
-	DeleteKnowledgeFunc       func(ctx context.Context, namespace, name string, docIDs []string) error
+	GetSignatureByDDFunc              func(ctx context.Context, namespace, name string) (*domain.Signature, error)
+	GetSemanticDomainByDDFunc         func(ctx context.Context, namespace, name string) (*domain.SemanticDomain, error)
+	UpdateSemanticDomainAgentCardFunc func(ctx context.Context, namespace, name, agentCard string) (*domain.SemanticDomain, error)
+	SearchKnowledgeFunc               func(ctx context.Context, namespace, name, query string) ([]domain.KnowledgeSearchResult, error)
+	GetAllKnowledgeFunc               func(ctx context.Context, namespace, name string) ([]domain.KnowledgeDocument, error)
+	DeleteKnowledgeFunc               func(ctx context.Context, namespace, name string, docIDs []string) error
 }
 
 // Create mocks the Create method
@@ -92,6 +93,14 @@ func (m *MockDataDescriptorUsecase) GetSignatureByDD(ctx context.Context, namesp
 func (m *MockDataDescriptorUsecase) GetSemanticDomainByDD(ctx context.Context, namespace, name string) (*domain.SemanticDomain, error) {
 	if m.GetSemanticDomainByDDFunc != nil {
 		return m.GetSemanticDomainByDDFunc(ctx, namespace, name)
+	}
+	return nil, nil
+}
+
+// UpdateSemanticDomainAgentCard mocks the UpdateSemanticDomainAgentCard method
+func (m *MockDataDescriptorUsecase) UpdateSemanticDomainAgentCard(ctx context.Context, namespace, name, agentCard string) (*domain.SemanticDomain, error) {
+	if m.UpdateSemanticDomainAgentCardFunc != nil {
+		return m.UpdateSemanticDomainAgentCardFunc(ctx, namespace, name, agentCard)
 	}
 	return nil, nil
 }

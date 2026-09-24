@@ -54,8 +54,9 @@ var SeedPermissions = []SeedPermission{
 	{Code: "descriptor:read", Name: "查看数据描述符", Resource: "descriptor", Action: ActionRead, HTTPMethod: "GET", HTTPPath: "/api/v1/descriptors|/api/v1/namespaces/*/descriptors/**", Description: "查看数据描述符列表/详情/签名/语义域/知识分片"},
 	{Code: "descriptor:graph:read", Name: "查看数据血缘图谱", Resource: "descriptor", Action: ActionRead, HTTPMethod: "POST", HTTPPath: "/api/v1/knowledge-graph/get-graph-by-source", Description: "数据源详情页的知识图谱/血缘关系展示"},
 	{Code: "descriptor:create", Name: "创建数据描述符", Resource: "descriptor", Action: ActionWrite, HTTPMethod: "POST", HTTPPath: "/api/v1/namespaces/*/descriptors", Description: "创建数据描述符"},
-	{Code: "descriptor:update", Name: "更新数据描述符", Resource: "descriptor", Action: ActionWrite, HTTPMethod: "PUT,POST", HTTPPath: "/api/v1/namespaces/*/descriptors/*|/api/v1/namespaces/*/descriptors/*/resync", Description: "更新数据描述符与触发重同步"},
+	{Code: "descriptor:update", Name: "更新数据描述符", Resource: "descriptor", Action: ActionWrite, HTTPMethod: "PUT,POST", HTTPPath: "/api/v1/namespaces/*/descriptors/*|/api/v1/namespaces/*/descriptors/*/resync|/api/v1/namespaces/*/descriptors/*/semantic-domain", Description: "更新数据描述符、触发重同步与编辑 Agent Card"},
 	{Code: "descriptor:delete", Name: "删除数据描述符", Resource: "descriptor", Action: ActionWrite, HTTPMethod: "DELETE", HTTPPath: "/api/v1/namespaces/*/descriptors/*", Description: "删除数据描述符"},
+	{Code: "descriptor:job-logs:read", Name: "查看数据源同步日志", Resource: "descriptor", Action: ActionRead, HTTPMethod: "GET", HTTPPath: "/api/v1/namespaces/*/descriptor-job-logs/*", Description: "查看数据源同步任务 data-sinker-job 容器的实时日志"},
 
 	{Code: "llmconfig:read", Name: "查看模型配置", Resource: "llmconfig", Action: ActionRead, HTTPMethod: "GET", HTTPPath: "/api/v1/namespaces/*/llm-configmaps|/api/v1/namespaces/*/llm-configmaps/*", Description: "查看模型管理列表与详情"},
 	{Code: "llmconfig:create", Name: "创建模型配置", Resource: "llmconfig", Action: ActionWrite, HTTPMethod: "POST", HTTPPath: "/api/v1/namespaces/*/llm-configmaps", Description: "创建 LLM 模型配置"},
@@ -75,7 +76,7 @@ var SeedPermissions = []SeedPermission{
 	{Code: "observability:read", Name: "查看注册中心", Resource: "observability", Action: ActionRead, HTTPMethod: "GET", HTTPPath: "/api/v1/observability/**", Description: "查看注册中心 Agent 注册信息"},
 
 	{Code: "semantic-group:read", Name: "查看语义组", Resource: "semantic_group", Action: ActionRead, HTTPMethod: "GET", HTTPPath: "/api/v1/semantic-groups/**|/api/v1/dd-group-relations/**|/api/v1/semantic-domains/*", Description: "查看语义组与语义组关联"},
-	{Code: "semantic-group:manage", Name: "管理语义组", Resource: "semantic_group", Action: ActionManage, HTTPMethod: "*", HTTPPath: "/api/v1/semantic-groups/**|/api/v1/dd-group-relations/**|/api/v1/semantic-domains/search/by-dd", Description: "管理语义组(增删改)与解除数据源关联"},
+	{Code: "semantic-group:manage", Name: "管理语义组", Resource: "semantic_group", Action: ActionManage, HTTPMethod: "*", HTTPPath: "/api/v1/semantic-groups/**|/api/v1/dd-group-relations/**|/api/v1/semantic-domains/search/by-dd", Description: "管理语义组(增删改)、添加/移除组成员与解除数据源关联"},
 
 	{Code: "discovery:read", Name: "查看资产探测", Resource: "discovery", Action: ActionRead, HTTPMethod: "GET", HTTPPath: "/api/v1/discovery/scans/**", Description: "查看资产探测扫描列表与详情"},
 	{Code: "discovery:manage", Name: "管理资产探测", Resource: "discovery", Action: ActionManage, HTTPMethod: "*", HTTPPath: "/api/v1/discovery/scans/**", Description: "发起/删除资产探测扫描"},

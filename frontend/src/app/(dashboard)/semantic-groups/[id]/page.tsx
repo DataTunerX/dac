@@ -6,23 +6,33 @@ import Link from "next/link"
 import useSWR from "swr"
 import { api } from "@/lib/api"
 import { listAgentsAll } from "@/lib/agents-api"
-import { getSemanticGroupWithMembers } from "@/lib/semantic-groups-api"
+import { listAllDescriptors } from "@/lib/descriptors-api"
+import {
+  getSemanticGroupWithMembers,
+  removeSemanticGroupMember,
+  submitAddSemanticGroupMember,
+  submitRemoveSemanticGroupMember,
+  updateSemanticGroup,
+  waitForSemanticGroupMemberTask,
+} from "@/lib/semantic-groups-api"
 import { semanticGroupKey } from "@/lib/swr-keys"
 import type {
-  SemanticGroupResponse,
-  SemanticGroupInfoResponse,
   DDGroupRelationResponse,
+  DataDescriptorResponse,
 } from "@/lib/api-types"
 import { toast } from "sonner"
 import { Markdown, defaultMarkdownComponents } from "@/components/markdown"
-import { RbacWrapper } from "@/components/rbac"
+import { RbacButton, RbacWrapper } from "@/components/rbac"
 
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -36,8 +46,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { ArrowLeft, ChevronRight, Database, Layers, Link2, RefreshCw, Trash2, X, FileText, Maximize2, Scan, Loader2 } from "lucide-react"
+import { ArrowLeft, Check, ChevronRight, Database, Layers, Link2, RefreshCw, Trash2, X, FileText, Maximize2, Scan, Loader2, Pencil, Plus, Sparkles } from "lucide-react"
 import { RelationGraph, REL_GRAPH } from "@/components/relation-graph"
+import { cn } from "@/lib/utils"
 
 function shortID(id: string) {
   const s = String(id || "")
@@ -81,6 +92,67 @@ function parsePathQuery(pathQuery: string | null, currentId: string): string[] {
 /** Build path query for a given path array (no leading/trailing comma). */
 function pathQueryFromIds(ids: string[]): string {
   return ids.filter(Boolean).join(",")
+}
+
+type AgentCardSkillDraft = {
+  id: string
+  name: string
+  description: string
+  tags: string
+  examples: string
+}
+
+type AgentCardObject = Record<string, unknown> & {
+  name?: string
+  description?: string
+  skills?: unknown
+}
+
+function parseAgentCard(raw?: string): AgentCardObject | null {
+  const s = String(raw ?? "").trim()
+  if (!s) return {}
+  try {
+    const obj = JSON.parse(s) as unknown
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      return obj as AgentCardObject
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function stringifyAgentCard(card: AgentCardObject): string {
+  return JSON.stringify(card)
+}
+
+function skillsFromCard(card: AgentCardObject | null): AgentCardSkillDraft[] {
+  const raw = card?.skills
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((sk) => ({
+      id: String(sk.id ?? ""),
+      name: String(sk.name ?? ""),
+      description: String(sk.description ?? ""),
+      tags: Array.isArray(sk.tags) ? sk.tags.map((t) => String(t)).join(", ") : "",
+      examples: Array.isArray(sk.examples) ? sk.examples.map((t) => String(t)).join("\n") : "",
+    }))
+}
+
+function applySkills(card: AgentCardObject, drafts: AgentCardSkillDraft[]): AgentCardObject {
+  const skills = drafts.map((d) => ({
+    id: d.id.trim(),
+    name: d.name.trim(),
+    description: d.description.trim(),
+    tags: d.tags.split(/[,，]/).map((t) => t.trim()).filter(Boolean),
+    examples: d.examples.split("\n").map((t) => t.trim()).filter(Boolean),
+  }))
+  return { ...card, skills }
+}
+
+function emptySkillDraft(): AgentCardSkillDraft {
+  return { id: "", name: "", description: "", tags: "", examples: "" }
 }
 
 export default function SemanticGroupDetailPage() {
@@ -136,6 +208,46 @@ export default function SemanticGroupDetailPage() {
   const [graphMaxHeight, setGraphMaxHeight] = useState<number>(REL_GRAPH.maxHeight)
   const [graphFullscreenOpen, setGraphFullscreenOpen] = useState(false)
   const [fullscreenScale, setFullscreenScale] = useState(1)
+
+  const [descOpen, setDescOpen] = useState(false)
+  const [descDraft, setDescDraft] = useState("")
+  const [savingDesc, setSavingDesc] = useState(false)
+
+  const [cardOpen, setCardOpen] = useState(false)
+  const [cardName, setCardName] = useState("")
+  const [cardDesc, setCardDesc] = useState("")
+  const [cardSkills, setCardSkills] = useState<AgentCardSkillDraft[]>([])
+  const [cardRawFallback, setCardRawFallback] = useState("")
+  const [cardUseRaw, setCardUseRaw] = useState(false)
+  const [savingCard, setSavingCard] = useState(false)
+
+  const [addMemberOpen, setAddMemberOpen] = useState(false)
+  const [addMemberQuery, setAddMemberQuery] = useState("")
+  const [addMemberReason, setAddMemberReason] = useState("手动添加")
+  const [descriptorOptions, setDescriptorOptions] = useState<DataDescriptorResponse[]>([])
+  const [loadingDescriptors, setLoadingDescriptors] = useState(false)
+  const [selectedDescriptorKey, setSelectedDescriptorKey] = useState("")
+  const [addingMember, setAddingMember] = useState(false)
+  const [removeMemberOpen, setRemoveMemberOpen] = useState(false)
+  const [removingMember, setRemovingMember] = useState(false)
+  const [memberToRemove, setMemberToRemove] = useState<{
+    label: string
+    sdIds: string[]
+  } | null>(null)
+
+  const parsedAgentCard = useMemo(() => parseAgentCard(group?.agent_card), [group?.agent_card])
+  const agentCardSkills = useMemo(() => skillsFromCard(parsedAgentCard), [parsedAgentCard])
+  const canEditMembers = childGroups.length === 0
+  const existingMemberKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const r of relations) {
+      const meta = sdMeta[r.sd_id]
+      if (meta?.dd_namespace && meta?.dd_name) {
+        keys.add(`${meta.dd_namespace}/${meta.dd_name}`)
+      }
+    }
+    return keys
+  }, [relations, sdMeta])
 
   // Graph interactions: fullscreen + drag-to-pan (mouse).
   const graphViewportInlineRef = useRef<HTMLDivElement | null>(null)
@@ -334,17 +446,203 @@ export default function SemanticGroupDetailPage() {
   }
 
   const confirmDeleteRel = async () => {
-    if (!deletingRel?.id) return
+    if (!group?.id || !deletingRel?.sd_id) return
+    const toastId = toast.loading("正在刷新组描述和 Agent Card…")
     try {
-      await api.delete(`/dd-group-relations/${encodeURIComponent(String(deletingRel.id))}`)
-      toast.success("已解除关联")
+      await removeSemanticGroupMember(group.id, { sd_id: deletingRel.sd_id })
+      toast.success("已解除关联，组描述和 Agent Card 已刷新", { id: toastId })
       setDeleteRelOpen(false)
       setDeletingRel(null)
       await mutate()
     } catch (e) {
       console.error("delete relation failed", e)
+      const err = e as { message?: string; response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || err.message || "解除关联失败", { id: toastId })
+    }
+  }
+
+  const openEditDescription = () => {
+    setDescDraft(group?.description || "")
+    setDescOpen(true)
+  }
+
+  const saveDescription = async () => {
+    if (!group?.id || savingDesc) return
+    setSavingDesc(true)
+    try {
+      // Keep table description and agent_card.description in sync so list/detail and agent creation agree.
+      const card = parseAgentCard(group.agent_card) ?? {}
+      card.description = descDraft
+      await updateSemanticGroup(group.id, {
+        description: descDraft,
+        agent_card: stringifyAgentCard(card),
+      })
+      toast.success("描述已更新")
+      setDescOpen(false)
+      await mutate()
+    } catch (e) {
+      console.error("update semantic group description failed", e)
       const err = e as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || "解除关联失败")
+      toast.error(err.response?.data?.message || "更新描述失败")
+    } finally {
+      setSavingDesc(false)
+    }
+  }
+
+  const openEditAgentCard = () => {
+    const parsed = parseAgentCard(group?.agent_card)
+    if (!parsed) {
+      setCardUseRaw(true)
+      setCardRawFallback(group?.agent_card || "")
+      setCardName("")
+      setCardDesc("")
+      setCardSkills([])
+    } else {
+      setCardUseRaw(false)
+      setCardRawFallback("")
+      setCardName(String(parsed.name ?? ""))
+      setCardDesc(String(parsed.description ?? group?.description ?? ""))
+      setCardSkills(skillsFromCard(parsed).length > 0 ? skillsFromCard(parsed) : [emptySkillDraft()])
+    }
+    setCardOpen(true)
+  }
+
+  const saveAgentCard = async () => {
+    if (!group?.id || savingCard) return
+    setSavingCard(true)
+    try {
+      let nextCard: AgentCardObject
+      if (cardUseRaw) {
+        const parsed = parseAgentCard(cardRawFallback)
+        if (!parsed) {
+          toast.error("agent_card 不是合法 JSON")
+          return
+        }
+        nextCard = parsed
+      } else {
+        const base = parseAgentCard(group.agent_card) ?? {}
+        nextCard = applySkills(
+          { ...base, name: cardName.trim(), description: cardDesc },
+          cardSkills.filter((s) => s.id.trim() || s.name.trim()),
+        )
+      }
+      const description = String(nextCard.description ?? group.description ?? "")
+      await updateSemanticGroup(group.id, {
+        description,
+        agent_card: stringifyAgentCard(nextCard),
+      })
+      toast.success("Agent Card 已更新")
+      setCardOpen(false)
+      await mutate()
+    } catch (e) {
+      console.error("update semantic group agent_card failed", e)
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || "更新 Agent Card 失败")
+    } finally {
+      setSavingCard(false)
+    }
+  }
+
+  const openAddMember = async () => {
+    setAddMemberOpen(true)
+    setAddMemberQuery("")
+    setSelectedDescriptorKey("")
+    setAddMemberReason("手动添加")
+    setLoadingDescriptors(true)
+    try {
+      const items = await listAllDescriptors()
+      setDescriptorOptions(items)
+    } catch (e) {
+      console.error("list descriptors for add member failed", e)
+      toast.error("加载数据源列表失败")
+    } finally {
+      setLoadingDescriptors(false)
+    }
+  }
+
+  const confirmAddMember = async () => {
+    if (!group?.id || !selectedDescriptorKey || addingMember) return
+    const [ns, ...rest] = selectedDescriptorKey.split("/")
+    const name = rest.join("/")
+    if (!ns || !name) return
+    setAddingMember(true)
+    const groupId = group.id
+    try {
+      const taskId = await submitAddSemanticGroupMember(groupId, {
+        dd_namespace: ns,
+        dd_name: name,
+        association_reason: addMemberReason.trim() || "手动添加",
+      })
+      toast.success("成员已添加，组描述正在后台刷新…")
+      setAddMemberOpen(false)
+      await mutate()
+      // Background poll — don't block the UI
+      void (async () => {
+        try {
+          const status = await waitForSemanticGroupMemberTask(taskId)
+          if (status.result?.action === "SKIPPED") return
+          await mutate()
+          toast.success("组描述和 Agent Card 已刷新")
+        } catch (e) {
+          console.warn("background refresh group after add member failed", e)
+          toast.warning("组描述刷新未完成，请稍后手动刷新", { description: "可点击页面上的刷新按钮" })
+        }
+      })()
+    } catch (e) {
+      console.error("add semantic group member failed", e)
+      const err = e as { message?: string; response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || err.message || "添加成员失败")
+    } finally {
+      setAddingMember(false)
+    }
+  }
+
+  const openRemoveMember = (bucket: {
+    hasDD: boolean
+    dd_namespace: string
+    dd_name: string
+    items: DDGroupRelationResponse[]
+  }) => {
+    const sdIds = [...new Set(bucket.items.map((r) => r.sd_id).filter(Boolean))]
+    if (sdIds.length === 0) return
+    setMemberToRemove({
+      label: bucket.hasDD ? `${bucket.dd_namespace} / ${bucket.dd_name}` : "该成员",
+      sdIds,
+    })
+    setRemoveMemberOpen(true)
+  }
+
+  const confirmRemoveMember = async () => {
+    if (!group?.id || !memberToRemove || removingMember) return
+    setRemovingMember(true)
+    const groupId = group.id
+    try {
+      // Submit all removals in parallel (fire-and-forget)
+      const taskIds: string[] = []
+      for (const sdId of memberToRemove.sdIds) {
+        taskIds.push(await submitRemoveSemanticGroupMember(groupId, { sd_id: sdId }))
+      }
+      toast.success("成员已移除，组描述正在后台刷新…")
+      setRemoveMemberOpen(false)
+      setMemberToRemove(null)
+      await mutate()
+      // Background poll for all tasks
+      void (async () => {
+        try {
+          await Promise.all(taskIds.map((tid) => waitForSemanticGroupMemberTask(tid)))
+          await mutate()
+          toast.success("组描述和 Agent Card 已刷新")
+        } catch (e) {
+          console.warn("background refresh group after remove member failed", e)
+          toast.warning("组描述刷新未完成，请稍后手动刷新", { description: "可点击页面上的刷新按钮" })
+        }
+      })()
+    } catch (e) {
+      console.error("remove semantic group member failed", e)
+      const err = e as { message?: string; response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || err.message || "移除成员失败")
+    } finally {
+      setRemovingMember(false)
     }
   }
 
@@ -471,9 +769,17 @@ export default function SemanticGroupDetailPage() {
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center gap-2 text-sm font-medium text-content">
-          <FileText className="w-4 h-4 text-content-muted" />
-          描述
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-content">
+            <FileText className="w-4 h-4 text-content-muted" />
+            描述
+          </div>
+          <RbacWrapper requiredPermission="semantic-group:manage">
+            <Button variant="outline" size="sm" onClick={openEditDescription} disabled={!group?.id}>
+              <Pencil className="w-3.5 h-3.5 mr-1.5" />
+              编辑
+            </Button>
+          </RbacWrapper>
         </div>
         <Card className="p-6 border-line">
           {group?.description ? (
@@ -485,69 +791,139 @@ export default function SemanticGroupDetailPage() {
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center gap-2 text-sm font-medium text-content">
-          <Layers className="w-4 h-4 text-content-muted" />
-          层级成员列表
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-content">
+            <Sparkles className="w-4 h-4 text-content-muted" />
+            Agent Card
+          </div>
+          <RbacWrapper requiredPermission="semantic-group:manage">
+            <Button variant="outline" size="sm" onClick={openEditAgentCard} disabled={!group?.id}>
+              <Pencil className="w-3.5 h-3.5 mr-1.5" />
+              编辑
+            </Button>
+          </RbacWrapper>
+        </div>
+        <Card className="p-6 border-line space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1 min-w-0">
+              <div className="text-xs text-content-muted">名称</div>
+              <div className="text-sm text-content truncate">{parsedAgentCard?.name || "-"}</div>
+            </div>
+            <div className="space-y-1 min-w-0">
+              <div className="text-xs text-content-muted">Skills</div>
+              <div className="text-sm text-content">{agentCardSkills.length} 个</div>
+            </div>
+          </div>
+          {agentCardSkills.length > 0 ? (
+            <ul className="space-y-2">
+              {agentCardSkills.map((sk) => (
+                <li key={`${sk.id}-${sk.name}`} className="rounded-md border border-line px-3 py-2">
+                  <div className="text-sm font-medium text-content truncate">{sk.name || sk.id || "未命名 skill"}</div>
+                  {sk.id ? <div className="text-xs font-mono text-content-muted">{sk.id}</div> : null}
+                  {sk.description ? (
+                    <div className="mt-1 text-xs text-content-muted whitespace-pre-wrap break-words line-clamp-3">{sk.description}</div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="text-sm text-content-muted">暂无 skill</div>
+          )}
+        </Card>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-content">
+            <Layers className="w-4 h-4 text-content-muted" />
+            层级成员列表
+          </div>
+          {canEditMembers ? (
+            <RbacWrapper requiredPermission="semantic-group:manage">
+              <Button variant="outline" size="sm" onClick={() => void openAddMember()} disabled={!group?.id}>
+                <Plus className="w-3.5 h-3.5 mr-1.5" />
+                添加成员
+              </Button>
+            </RbacWrapper>
+          ) : null}
         </div>
         <Card className="border-line overflow-hidden">
           {isLoading && !group ? (
             <div className="px-4 py-6 text-sm text-content-muted">加载中…</div>
-          ) : !group?.parent_id && childGroups.length > 0 ? (
-            <ul className="list-none divide-y divide-[var(--color-line)]" role="list">
-              {childGroups.map((cg) => (
-                <li key={cg.id}>
-                  <Link
-                    href={hrefForChild(cg.id)}
-                    className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface-muted/60 transition-colors min-w-0"
-                  >
-                    <span className="flex items-center gap-3 min-w-0">
-                      <span className="w-8 h-8 rounded-full bg-surface-muted flex items-center justify-center text-content-muted shrink-0">
-                        <Layers className="w-4 h-4" />
-                      </span>
-                      <span className="font-medium text-content truncate">{cg.group_name || cg.id}</span>
-                      <span className="text-xs text-content-muted truncate hidden sm:inline">{descriptionLead(cg.description) || "—"}</span>
-                    </span>
-                    <ChevronRight className="w-4 h-4 text-content-muted shrink-0" aria-hidden />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          ) : ddBuckets.length > 0 ? (
-            <ul className="list-none divide-y divide-[var(--color-line)]" role="list">
-              {ddBuckets.map((b) => {
-                const href = b.hasDD
-                  ? `/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`
-                  : "#"
-                const isClickable = b.hasDD
-                return (
-                  <li key={b.key}>
-                    <Link
-                      href={href}
-                      className={`flex items-center justify-between gap-3 px-4 py-3 border-l-2 border-l-transparent min-w-0 ${
-                        isClickable
-                          ? "hover:bg-surface-muted/60 transition-colors"
-                          : "bg-surface-muted/40 cursor-not-allowed opacity-70"
-                      }`}
-                      onClick={isClickable ? undefined : (e) => e.preventDefault()}
-                      aria-disabled={!isClickable}
-                    >
-                      <span className="flex items-center gap-3 min-w-0">
-                        <span className="w-8 h-8 rounded-full bg-surface-muted flex items-center justify-center text-content-muted shrink-0">
-                          <Database className="w-4 h-4" />
-                        </span>
-                        <span className="font-medium text-content truncate">
-                          {b.hasDD ? `${b.dd_namespace} / ${b.dd_name}` : "加载中…"}
-                        </span>
-                        <span className="text-xs text-content-muted shrink-0">{b.items.length} 个关联</span>
-                      </span>
-                      {isClickable && <ChevronRight className="w-4 h-4 text-content-muted shrink-0" aria-hidden />}
-                    </Link>
-                  </li>
-                )
-              })}
-            </ul>
-          ) : (
+          ) : childGroups.length === 0 && ddBuckets.length === 0 ? (
             <div className="px-4 py-6 text-sm text-content-muted">暂无成员</div>
+          ) : (
+            <>
+              {childGroups.length > 0 ? (
+                <ul className="list-none divide-y divide-[var(--color-line)]" role="list">
+                  {childGroups.map((cg) => (
+                    <li key={cg.id}>
+                      <Link
+                        href={hrefForChild(cg.id)}
+                        className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface-muted/60 transition-colors min-w-0"
+                      >
+                        <span className="flex items-center gap-3 min-w-0">
+                          <span className="w-8 h-8 rounded-full bg-surface-muted flex items-center justify-center text-content-muted shrink-0">
+                            <Layers className="w-4 h-4" />
+                          </span>
+                          <span className="font-medium text-content truncate">{cg.group_name || cg.id}</span>
+                          <span className="text-xs text-content-muted truncate hidden sm:inline">{descriptionLead(cg.description) || "—"}</span>
+                        </span>
+                        <ChevronRight className="w-4 h-4 text-content-muted shrink-0" aria-hidden />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {ddBuckets.length > 0 ? (
+                <ul
+                  className={`list-none divide-y divide-[var(--color-line)] ${childGroups.length > 0 ? "border-t border-line" : ""}`}
+                  role="list"
+                >
+                  {ddBuckets.map((b) => {
+                    const href = b.hasDD
+                      ? `/datasources/${encodeURIComponent(b.dd_namespace)}/${encodeURIComponent(b.dd_name)}`
+                      : "#"
+                    const isClickable = b.hasDD
+                    return (
+                      <li key={b.key} className="flex items-center gap-2 pr-3 min-w-0">
+                        <Link
+                          href={href}
+                          className={`flex flex-1 items-center gap-3 px-4 py-3 min-w-0 ${
+                            isClickable
+                              ? "hover:bg-surface-muted/60 transition-colors"
+                              : "bg-surface-muted/40 cursor-not-allowed opacity-70"
+                          }`}
+                          onClick={isClickable ? undefined : (e) => e.preventDefault()}
+                          aria-disabled={!isClickable}
+                        >
+                          <span className="w-8 h-8 rounded-full bg-surface-muted flex items-center justify-center text-content-muted shrink-0">
+                            <Database className="w-4 h-4" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block font-medium text-content truncate">
+                              {b.hasDD ? `${b.dd_namespace} / ${b.dd_name}` : "加载中…"}
+                            </span>
+                            <span className="text-xs text-content-muted">{b.items.length} 个关联</span>
+                          </span>
+                        </Link>
+                        <RbacButton
+                          requiredPermission="semantic-group:manage"
+                          variant="outline"
+                          size="sm"
+                          className="shrink-0 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => openRemoveMember(b)}
+                          disabled={removingMember}
+                        >
+                          <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                          移除
+                        </RbacButton>
+                      </li>
+                    )
+                  })}
+                </ul>
+              ) : null}
+            </>
           )}
         </Card>
       </div>
@@ -599,6 +975,7 @@ export default function SemanticGroupDetailPage() {
               markerId="arrow"
               onOpenReason={openReason}
               onDeleteRel={openDeleteRel}
+              onRemoveDDFromGroup={openRemoveMember}
               onNavigateToGroup={(id) => router.push(hrefForChild(id))}
               onNavigateToDataSource={(ns, name) => router.push(`/datasources/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)}
             />
@@ -701,6 +1078,7 @@ export default function SemanticGroupDetailPage() {
                     markerId="arrow-fs"
                     onOpenReason={openReason}
                     onDeleteRel={openDeleteRel}
+              onRemoveDDFromGroup={openRemoveMember}
                     onNavigateToGroup={(id) => router.push(hrefForChild(id))}
                     onNavigateToDataSource={(ns, name) => router.push(`/datasources/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)}
                   />
@@ -708,6 +1086,223 @@ export default function SemanticGroupDetailPage() {
               </div>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={descOpen} onOpenChange={setDescOpen}>
+        <DialogContent className="w-[min(96vw,42rem)] max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
+            <DialogTitle>编辑描述</DialogTitle>
+          </DialogHeader>
+          <div className="px-6 py-4 flex-1 min-h-0 overflow-y-auto">
+            <Label htmlFor="sg-description">描述</Label>
+            <Textarea
+              id="sg-description"
+              className="mt-2 min-h-[220px]"
+              value={descDraft}
+              onChange={(e) => setDescDraft(e.target.value)}
+              placeholder="语义组描述"
+            />
+            <p className="mt-2 text-xs text-content-muted">保存时会同步写入 agent_card.description，避免管理页与创建智能体读到不同文案。</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDescOpen(false)} disabled={savingDesc}>取消</Button>
+            <Button onClick={() => void saveDescription()} disabled={savingDesc}>
+              {savingDesc ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cardOpen} onOpenChange={setCardOpen}>
+        <DialogContent className="w-[min(96vw,48rem)] max-w-3xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
+            <DialogTitle>编辑 Agent Card</DialogTitle>
+          </DialogHeader>
+          <div className="px-6 py-4 flex-1 min-h-0 overflow-y-auto space-y-4">
+            {cardUseRaw ? (
+              <div className="space-y-2">
+                <Label htmlFor="sg-agent-card-raw">agent_card JSON</Label>
+                <Textarea
+                  id="sg-agent-card-raw"
+                  className="min-h-[280px] font-mono text-xs"
+                  value={cardRawFallback}
+                  onChange={(e) => setCardRawFallback(e.target.value)}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="sg-agent-card-name">名称</Label>
+                  <Input id="sg-agent-card-name" value={cardName} onChange={(e) => setCardName(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sg-agent-card-desc">description</Label>
+                  <Textarea
+                    id="sg-agent-card-desc"
+                    className="min-h-[120px]"
+                    value={cardDesc}
+                    onChange={(e) => setCardDesc(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium text-content">Skills</div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCardSkills((prev) => [...prev, emptySkillDraft()])}
+                  >
+                    <Plus className="w-3.5 h-3.5 mr-1.5" />
+                    添加 skill
+                  </Button>
+                </div>
+                <div className="space-y-3">
+                  {cardSkills.map((sk, idx) => (
+                    <div key={`${idx}-${sk.id}`} className="rounded-md border border-line p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs text-content-muted">Skill {idx + 1}</div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-600 hover:text-red-700"
+                          onClick={() => setCardSkills((prev) => prev.filter((_, i) => i !== idx))}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                      <Input
+                        placeholder="id"
+                        value={sk.id}
+                        onChange={(e) => setCardSkills((prev) => prev.map((item, i) => i === idx ? { ...item, id: e.target.value } : item))}
+                      />
+                      <Input
+                        placeholder="name"
+                        value={sk.name}
+                        onChange={(e) => setCardSkills((prev) => prev.map((item, i) => i === idx ? { ...item, name: e.target.value } : item))}
+                      />
+                      <Textarea
+                        placeholder="description"
+                        className="min-h-[72px]"
+                        value={sk.description}
+                        onChange={(e) => setCardSkills((prev) => prev.map((item, i) => i === idx ? { ...item, description: e.target.value } : item))}
+                      />
+                      <Input
+                        placeholder="tags，逗号分隔"
+                        value={sk.tags}
+                        onChange={(e) => setCardSkills((prev) => prev.map((item, i) => i === idx ? { ...item, tags: e.target.value } : item))}
+                      />
+                      <Textarea
+                        placeholder="examples，每行一条"
+                        className="min-h-[64px]"
+                        value={sk.examples}
+                        onChange={(e) => setCardSkills((prev) => prev.map((item, i) => i === idx ? { ...item, examples: e.target.value } : item))}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCardOpen(false)} disabled={savingCard}>取消</Button>
+            <Button onClick={() => void saveAgentCard()} disabled={savingCard}>
+              {savingCard ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>
+        <DialogContent className="w-[min(96vw,42rem)] max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
+            <DialogTitle>添加成员</DialogTitle>
+            <p className="text-sm text-content-muted font-normal pt-1">
+              添加后将根据当前成员重新生成组的描述和 Agent Card。
+            </p>
+          </DialogHeader>
+          <div className="px-6 py-4 flex-1 min-h-0 overflow-y-auto space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="add-member-search">选择数据源</Label>
+              <Input
+                id="add-member-search"
+                placeholder="按命名空间或名称筛选"
+                value={addMemberQuery}
+                onChange={(e) => setAddMemberQuery(e.target.value)}
+              />
+            </div>
+            <div className="max-h-[280px] overflow-auto rounded-md border border-line">
+              {loadingDescriptors ? (
+                <div className="px-3 py-6 text-sm text-content-muted">加载数据源…</div>
+              ) : (
+                (() => {
+                  const q = addMemberQuery.trim().toLowerCase()
+                  const available = descriptorOptions.filter((d) => {
+                    const key = `${d.namespace}/${d.name}`
+                    if (existingMemberKeys.has(key)) return false
+                    if (!q) return true
+                    return key.toLowerCase().includes(q)
+                  })
+                  if (available.length === 0) {
+                    return (
+                      <div className="px-3 py-6 text-sm text-content-muted">
+                        {q ? "没有匹配的可添加数据源" : "暂无可添加的数据源（现有成员已从列表中排除）"}
+                      </div>
+                    )
+                  }
+                  return (
+                    <ul className="divide-y divide-[var(--color-line)]">
+                      {available.slice(0, 80).map((d) => {
+                        const key = `${d.namespace}/${d.name}`
+                        const selected = selectedDescriptorKey === key
+                        return (
+                          <li key={key}>
+                            <button
+                              type="button"
+                              aria-pressed={selected}
+                              className={cn(
+                                "w-full text-left px-3 py-2.5 text-sm flex items-center gap-3 border-l-2 transition-colors",
+                                selected
+                                  ? "bg-cta/10 border-l-cta"
+                                  : "border-l-transparent hover:bg-surface-muted/60",
+                              )}
+                              onClick={() => setSelectedDescriptorKey(key)}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <div className={cn("font-medium truncate", selected ? "text-cta" : "text-content")}>
+                                  {d.name}
+                                </div>
+                                <div className="text-xs text-content-muted">{d.namespace}</div>
+                              </span>
+                              {selected ? (
+                                <Check className="w-4 h-4 text-cta shrink-0" aria-hidden />
+                              ) : null}
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )
+                })()
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="add-member-reason">关联原因（可选）</Label>
+              <Input
+                id="add-member-reason"
+                value={addMemberReason}
+                onChange={(e) => setAddMemberReason(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddMemberOpen(false)} disabled={addingMember}>取消</Button>
+            <Button onClick={() => void confirmAddMember()} disabled={addingMember || !selectedDescriptorKey}>
+              {addingMember ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              添加
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -776,12 +1371,34 @@ export default function SemanticGroupDetailPage() {
         </DialogContent>
       </Dialog>
 
+      <AlertDialog open={removeMemberOpen} onOpenChange={setRemoveMemberOpen}>
+        <AlertDialogContent className="w-[min(96vw,36rem)] max-w-xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认移除成员？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将从该语义组移除数据源 <span className="font-medium text-content">{memberToRemove?.label || "-"}</span>。组的描述和 Agent Card 会根据剩余成员自动刷新。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removingMember}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={confirmRemoveMember}
+              disabled={removingMember}
+            >
+              {removingMember ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              移除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={deleteRelOpen} onOpenChange={(v) => setDeleteRelOpen(v)}>
         <AlertDialogContent className="w-[min(96vw,36rem)] max-w-xl">
           <AlertDialogHeader>
             <AlertDialogTitle>确认解除关联？</AlertDialogTitle>
             <AlertDialogDescription>
-              将解除该语义组与 semantic domain <span className="font-mono text-content">{deletingRel?.sd_id || "-"}</span> 的关联。
+              将解除该语义组与 semantic domain <span className="font-mono text-content">{deletingRel?.sd_id || "-"}</span> 的关联。组的描述和 Agent Card 会根据剩余成员自动刷新。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -2,8 +2,10 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/lvyanru/dac-apiserver/internal/domain"
@@ -114,6 +116,31 @@ func (u *dataDescriptorUsecase) GetSignatureByDD(ctx context.Context, namespace,
 // GetSemanticDomainByDD retrieves the newest semantic domain record for a given data descriptor (if any).
 func (u *dataDescriptorUsecase) GetSemanticDomainByDD(ctx context.Context, namespace, name string) (*domain.SemanticDomain, error) {
 	return u.dsClient.GetSemanticDomainByDD(ctx, namespace, name)
+}
+
+// UpdateSemanticDomainAgentCard writes a new agent_card onto the DD's existing semantic domain.
+// Other SD fields (semantic_domain text, dd binding, version) are left unchanged.
+func (u *dataDescriptorUsecase) UpdateSemanticDomainAgentCard(ctx context.Context, namespace, name, agentCard string) (*domain.SemanticDomain, error) {
+	card := strings.TrimSpace(agentCard)
+	if card == "" {
+		return nil, domain.NewInvalidInputError("agent_card is required")
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(card), &obj); err != nil || obj == nil {
+		return nil, domain.NewInvalidInputError("agent_card 不是合法 JSON")
+	}
+
+	sd, err := u.dsClient.GetSemanticDomainByDD(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if sd == nil || strings.TrimSpace(sd.SemanticDomainID) == "" {
+		return nil, domain.NewNotFoundError("semantic_domain", namespace+"/"+name)
+	}
+
+	return u.dsClient.UpdateSemanticDomain(ctx, sd.SemanticDomainID, map[string]any{
+		"agent_card": card,
+	})
 }
 
 // SearchKnowledge searches for knowledge fragments associated with the descriptor.

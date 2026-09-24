@@ -16,6 +16,7 @@ import {
   getDescriptor,
   getDescriptorSemanticDomain,
   getDescriptorSignature,
+  updateDescriptorSemanticDomain,
   listAllDescriptors,
   waitUntilDescriptorGone,
 } from "./descriptors-api"
@@ -51,6 +52,18 @@ describe("descriptors-api", () => {
     }
     vi.mocked(api.get).mockRejectedValue(err)
     await expect(getDescriptorSignature("ns", "n")).resolves.toBeNull()
+  })
+
+  it("updateDescriptorSemanticDomain PUTs agent_card on the namespaced path", async () => {
+    vi.mocked(api.put).mockResolvedValue({
+      data: { data: { semantic_domain_id: "sd-1", agent_card: '{"name":"X"}' } },
+    })
+    const out = await updateDescriptorSemanticDomain("ns", "n", '{"name":"X"}')
+    expect(api.put).toHaveBeenCalledWith(
+      "/namespaces/ns/descriptors/n/semantic-domain",
+      { agent_card: '{"name":"X"}' },
+    )
+    expect(out).toEqual({ semantic_domain_id: "sd-1", agent_card: '{"name":"X"}' })
   })
 
   it("getDescriptorSemanticDomain unwraps nested { data: SemanticDomain }", async () => {

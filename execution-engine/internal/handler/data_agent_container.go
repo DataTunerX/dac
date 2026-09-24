@@ -54,7 +54,7 @@ func (h *DataAgentContainerHandler) handleDAC(ctx context.Context, dac *dacv1alp
 	logger := h.Logger.WithValues("namespace", dac.Namespace, "name", dac.Name)
 	logger.Info("Processing DataAgentContainer Logic")
 
-	// if service or deployment not exist, will create them. if service or deployment exist, do nothing.
+	// Service is created once. ds and normal Deployments are created or updated.
 	err := h.DACGenerator.Do(ctx, dac)
 	if err != nil {
 		return err

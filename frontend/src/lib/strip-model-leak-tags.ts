@@ -23,6 +23,17 @@ export function stripModelLeakTags(input: string): string {
   return stripOrphanTags(stripTaggedBlocks(input))
 }
 
+const DAC_PROTOCOL_LINE = /^\s*\[\[DAC_(PROGRESS|EXECUTION_FLOW|ANSWER|SUMMARY)\]\]\s/
+
+/** Drop DAC protocol frames that must never render as user-visible answer text. */
+export function stripDacProtocolLines(input: string): string {
+  if (!input) return input
+  return input
+    .split("\n")
+    .filter((line) => !DAC_PROTOCOL_LINE.test(line))
+    .join("\n")
+}
+
 /** Remove model-internal markers (e.g. "reason:…") that sometimes leak into the visible answer. */
 export function stripModelLeakLines(input: string): string {
   if (!input) return input

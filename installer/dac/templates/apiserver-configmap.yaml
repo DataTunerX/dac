@@ -47,6 +47,10 @@ data:
     data_services:
       base_url: {{ include "dac.dataServices.url" . | quote }}
 
+    semantic_grouper:
+      base_url: {{ include "dac.semanticGrouper.url" . | quote }}
+      timeout: 60s
+
     # skill-hub base URL is hardcoded in apiserver to
     # http://skill-hub.dac.svc.cluster.local:8000; only timeout is configurable here.
     skill_hub:

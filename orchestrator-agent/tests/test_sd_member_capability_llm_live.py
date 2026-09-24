@@ -22,6 +22,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from orchestrator_agent import orchestrator_agent_semantic_domain as domain
+from orchestrator_agent import capability_chain
 
 
 pytestmark = pytest.mark.skipif(
@@ -107,7 +108,10 @@ CASES: List[LiveCase] = [
             }
         ],
         expect_domain_match=True,
-        expect_can_handle=True,
+        # Two-phase chain scoring: payment is a required step this inventory
+        # cannot complete, so can_handle is false (old judge treated "owning
+        # the inventory anchor" as can_handle=true with a payment gap).
+        expect_can_handle=False,
         expect_can_contribute=True,
         must_mention_missing="支付",
     ),
@@ -155,7 +159,9 @@ CASES: List[LiveCase] = [
             }
         ],
         expect_domain_match=True,
-        expect_can_handle=True,
+        # Username is a required step; orders inventory has user_id + phone
+        # but not 姓名. Chain scoring therefore contributes, not handles.
+        expect_can_handle=False,
         expect_can_contribute=True,
         must_mention_missing="用户",
     ),
@@ -369,18 +375,31 @@ async def test_live_llm_member_capability_cases(case: LiveCase):
     )
 
     print(
-        f"\n[{case.name}] domain_match={result.get('domain_match')} "
+        f"\n[{case.name}] domain_verdict={result.get('domain_verdict')} "
+        f"domain_match={result.get('domain_match')} "
         f"can_handle={result.get('can_handle')} "
         f"can_contribute={result.get('can_contribute')} "
         f"confidence={result.get('confidence')} "
+        f"score_version={result.get('score_version')} "
+        f"contributing_steps={result.get('contributing_steps')} "
         f"missing={result.get('missing_requirements')} "
         f"evidence={result.get('matched_evidence')} "
         f"reason={result.get('reason')}"
     )
 
-    assert result["evidence_mode"] == "llm"
+    assert result["evidence_mode"] == "capability_chain"
+    assert result.get("score_version") == capability_chain.SCORE_VERSION
     assert result["domain_match"] is case.expect_domain_match
     assert result["can_handle"] is case.expect_can_handle
+    if case.expect_domain_match:
+        assert result.get("domain_verdict") in ("has", "uncertain")
+    else:
+        assert result.get("domain_verdict") == "none"
+        assert result.get("steps") == []
+        assert result.get("can_contribute") is False
+    if result["can_handle"]:
+        assert result.get("steps")
+        assert result.get("contributing_steps")
     if case.expect_can_contribute is not None:
         assert result["can_contribute"] is case.expect_can_contribute
     if case.must_mention_missing:

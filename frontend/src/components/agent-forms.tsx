@@ -29,6 +29,7 @@ import type {
   SkillPolicy,
   SkillInfoResponse,
   SkillNamespaceResponse,
+  AgentContainerResponse,
 } from "@/lib/api-types"
 import {
   Dialog,
@@ -74,6 +75,9 @@ const formSchema = z
     skillAgentMaxLoops: z.string().optional(),
     agentMode: z.enum(["single", "multi"]).optional(),
     crossSGMaxHop: z.string().optional(),
+    // 总结配置（仅 skill 类型）
+    summarizeEnabled: z.enum(["true", "false"]).optional(),
+    summarizeCustomPrompt: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     // skill 类型不绑定 DD/SG，无需 dataSourceId
@@ -136,6 +140,9 @@ export type CreateAgentPayload = FormValues & {
   crossSGMaxHop?: string
   /** skill DAC 必填；Semantic Group 可选（驱动 LocalSkill 下载） */
   skillPolicy?: SkillPolicy
+  /** 总结配置 */
+  summarizeEnabled?: string
+  summarizeCustomPrompt?: string
 }
 
 type Skill = {
@@ -196,11 +203,15 @@ export function CreateAgentDialog({
   open,
   onOpenChange,
   onSubmit,
+  initialValues,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (data: CreateAgentPayload) => Promise<void>
+  /** When provided the dialog operates in edit mode — title, button text, and form defaults adapt. */
+  initialValues?: AgentContainerResponse
 }) {
+  const isEdit = !!initialValues
   const [dataDescriptors, setDataDescriptors] = useState<DataDescriptor[]>([])
   const [semanticGroups, setSemanticGroups] = useState<SemanticGroup[]>([])
   const [isLoadingDD, setIsLoadingDD] = useState(false)
@@ -270,8 +281,72 @@ export function CreateAgentDialog({
       skillAgentMaxLoops: "2",
       agentMode: "multi",
       crossSGMaxHop: "5",
+      summarizeEnabled: "true",
+      summarizeCustomPrompt: "",
     },
   })
+
+  // ── Edit mode: pre-fill form when dialog opens with initialValues ──
+  useEffect(() => {
+    if (!open || !initialValues) return
+    const agent = initialValues
+    const model = agent.model ?? {}
+    const dac = (agent.dacType || "").toLowerCase()
+    const policy = agent.dataPolicy
+    const isSkill = dac === "skill"
+    const isSemanticGroup =
+      !isSkill &&
+      (dac === "normal" ||
+        policy?.dataSourceType === "SemanticGroup" ||
+        Boolean(policy?.semanticGroupID))
+    const dataSourceType = isSkill ? "skill" : isSemanticGroup ? "semantic-group" : "descriptor"
+    const dataSourceId = isSkill
+      ? ""
+      : isSemanticGroup
+        ? (policy?.semanticGroupID || "").trim()
+        : (policy?.sourceNameSelector?.[0] || "").trim()
+    const crossHop = (agent.crossSGMaxHop || "5").trim()
+    const agentMode = crossHop === "1" ? "single" as const : "multi" as const
+    const planner = (model.plannerLLM || "").trim()
+    const expert = (model.expertLLM || model.plannerLLM || "").trim()
+
+    form.reset({
+      name: (agent.agentCard?.name || agent.name || "").trim(),
+      plannerModel: isSkill ? expert || planner : planner,
+      expertModel: isSkill ? expert || planner : expert,
+      namespace: agent.namespace || "default",
+      dataSourceType,
+      dataSourceId,
+      description: (agent.agentCard?.description || "").trim(),
+      expertAgentMaxSteps: (
+        agent.expertAgentMaxSteps || (isSkill ? "30" : isSemanticGroup ? "1" : "2")
+      ).trim(),
+      orchestratorAgentMaxLoops: (
+        agent.orchestratorAgentMaxLoops || (isSkill ? "2" : isSemanticGroup ? "1" : "0")
+      ).trim(),
+      skillAgentMaxLoops: (agent.skillAgentMaxLoops || "2").trim(),
+      agentMode,
+      crossSGMaxHop: crossHop,
+      summarizeEnabled: (agent.summarizeEnabled || "true").trim() as "true" | "false",
+      summarizeCustomPrompt: (agent.summarizeCustomPrompt || "").trim(),
+    })
+
+    setSkillPolicySkills(agent.skillPolicy?.skills ?? [])
+    setSkillDetailFailed(false)
+    setSkillDetailErrorMsg(null)
+    if (isSkill) {
+      // skill 的 AgentCard skills 由 skillPolicy 详情联动，不直接回填
+      setSkills([])
+    } else {
+      const cardSkills = (agent.agentCard?.skills ?? [])
+        .map((s) => skillFromRaw(s))
+        .filter((s): s is Skill => s != null)
+      setSkills(cardSkills)
+    }
+    // 编辑时不要用数据源指纹覆盖名称、概览和技能
+    setNameTouched(true)
+    setDescTouched(true)
+  }, [open, initialValues]) // eslint-disable-line react-hooks/exhaustive-deps
   const resetAll = () => {
     setSourceOpen(false)
     lastAutoName.current = ""
@@ -308,6 +383,8 @@ export function CreateAgentDialog({
       skillAgentMaxLoops: "2",
       agentMode: "multi",
       crossSGMaxHop: "5",
+      summarizeEnabled: "true",
+      summarizeCustomPrompt: "",
     })
   }
 
@@ -324,6 +401,7 @@ export function CreateAgentDialog({
   const description = useWatch({ control: form.control, name: "description" })
   const dataSourceId = useWatch({ control: form.control, name: "dataSourceId" })
   const agentMode = useWatch({ control: form.control, name: "agentMode" })
+  const summarizeEnabled = useWatch({ control: form.control, name: "summarizeEnabled" })
 
   // State for user interaction tracking (to avoid overwriting user input)
   const [nameTouched, setNameTouched] = useState(false)
@@ -350,6 +428,8 @@ export function CreateAgentDialog({
       lastSkillInit.current = false
       return
     }
+    // 编辑时循环数和步数以 CR 为准。这段默认值只用于新建时切换数据源类型。
+    if (isEdit) return
     if (dataSourceType === "descriptor") {
       lastSkillInit.current = false
       form.setValue("orchestratorAgentMaxLoops", "0", { shouldDirty: false, shouldTouch: false })
@@ -357,7 +437,7 @@ export function CreateAgentDialog({
     } else if (dataSourceType === "skill") {
       // skill 单容器默认：与设计示例对齐
       form.setValue("orchestratorAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
-      form.setValue("expertAgentMaxSteps", "10", { shouldDirty: false, shouldTouch: false })
+      form.setValue("expertAgentMaxSteps", "30", { shouldDirty: false, shouldTouch: false })
       form.setValue("skillAgentMaxLoops", "2", { shouldDirty: false, shouldTouch: false })
       // Only seed hop/mode when entering skill, otherwise a re-run would wipe user input (e.g. 3 → 5).
       if (!lastSkillInit.current) {
@@ -370,7 +450,7 @@ export function CreateAgentDialog({
       form.setValue("orchestratorAgentMaxLoops", "1", { shouldDirty: false, shouldTouch: false })
       form.setValue("expertAgentMaxSteps", "1", { shouldDirty: false, shouldTouch: false })
     }
-  }, [open, dataSourceType, form])
+  }, [open, isEdit, dataSourceType, form])
 
   // Enter skill branch: clear DD/SG-derived skills; AgentCard skills filled from hub detail only
   useEffect(() => {
@@ -670,7 +750,7 @@ export function CreateAgentDialog({
 
   // When dataSourceId changes, update namespace field
   useEffect(() => {
-    if (!open || !dataSourceId) return
+    if (!open || !dataSourceId || isEdit) return
     
     // If semantic group, namespace is already auto-selected; don't override.
     if (dataSourceType === "semantic-group") {
@@ -700,6 +780,8 @@ export function CreateAgentDialog({
     const first = llmConfigs[0]?.name || ""
     if (!first) return
 
+    // 编辑时保留已保存的模型，避免列表未包含该配置时被静默换成第一项
+    if (isEdit) return
     if (!names.has(plannerModel || "")) {
       form.setValue("plannerModel", first, { shouldValidate: true, shouldDirty: false })
     }
@@ -708,9 +790,10 @@ export function CreateAgentDialog({
     }
   }, [open, llmConfigs, plannerModel, expertModel, form])
 
-  // Fetch SemanticDomain.agent_card when targetDataSource changes
+  // Fetch SemanticDomain.agent_card when targetDataSource changes.
+  // 编辑时数据源 / 语义组不可改，也不要用指纹覆盖已保存的概览和技能。
   useEffect(() => {
-    if (!open || !targetDataSource) return
+    if (!open || !targetDataSource || isEdit) return
 
     setFingerprintState({ key: targetDataSource, status: "loading" })
     
@@ -849,11 +932,11 @@ export function CreateAgentDialog({
     })()
 
     return () => controller.abort()
-  }, [open, targetDataSource, dataSourceType, semanticGroups]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, isEdit, targetDataSource, dataSourceType, semanticGroups]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-fill form fields from agent_card if user hasn't touched them
   useEffect(() => {
-    if (!open || fingerprintState.key !== targetDataSource || fingerprintState.status !== "ready") return
+    if (!open || isEdit || fingerprintState.key !== targetDataSource || fingerprintState.status !== "ready") return
 
     const baseName = fingerprintState.agentCard?.name?.trim() || ""
     const newDesc = fingerprintState.agentCard?.description?.trim() || ""
@@ -901,10 +984,12 @@ export function CreateAgentDialog({
           expertModel: llm,
           skills,
           skillPolicy: { skills: skillPolicySkills },
-          expertAgentMaxSteps: values.expertAgentMaxSteps || "10",
+          expertAgentMaxSteps: values.expertAgentMaxSteps || "30",
           orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "2",
           skillAgentMaxLoops: values.skillAgentMaxLoops || "2",
           crossSGMaxHop: values.agentMode === "single" ? "1" : values.crossSGMaxHop || "5",
+          summarizeEnabled: values.summarizeEnabled || "true",
+          summarizeCustomPrompt: values.summarizeCustomPrompt || "",
         })
         handleOpenChange(false)
         return
@@ -914,7 +999,8 @@ export function CreateAgentDialog({
         const dd = dataDescriptors.find((d) => d.id === values.dataSourceId)
         // Ensure namespace matches the datasource's namespace
         const ns = (dd?.namespace || values.namespace || "default").trim() || "default"
-        
+
+        if (!isEdit) {
         if (fingerprintState.key !== targetDataSource) {
             toast.error("agent_card 状态异常，请重新选择数据源")
             return
@@ -927,6 +1013,7 @@ export function CreateAgentDialog({
             toast.error(fingerprintState.error || "未获取到 agent_card（请先为该数据源生成 semantic domain）")
             return
         }
+        }
 
         await onSubmit({
             ...values,
@@ -936,8 +1023,8 @@ export function CreateAgentDialog({
             orchestratorAgentMaxLoops: values.orchestratorAgentMaxLoops || "0",
         })
       } else {
-        // Semantic Group
-        if (fingerprintState.status !== "ready") {
+        // Semantic Group。编辑时语义关系不可改，不要求重新拉取指纹。
+        if (!isEdit && fingerprintState.status !== "ready") {
             toast.error(fingerprintState.error || "语义组信息不完整")
             return
         }
@@ -963,9 +1050,11 @@ export function CreateAgentDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[720px] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-6 py-4 border-b border-line bg-surface-muted/50">
-          <DialogTitle>新建智能体</DialogTitle>
+          <DialogTitle>{isEdit ? "编辑智能体" : "新建智能体"}</DialogTitle>
           <DialogDescription>
-            创建一个新的智能体，绑定数据源并指定使用的大模型。
+            {isEdit
+              ? "可修改模型、编排最大循环数、专家最大步数、概览和技能。数据源与语义关系保持不变。"
+              : "创建一个新的智能体，绑定数据源并指定使用的大模型。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -990,7 +1079,7 @@ export function CreateAgentDialog({
                             setSkillVersionsByKey({})
                           }
                         }}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isEdit}
                       >
                         <FormControl>
                           <SelectTrigger className="w-full">
@@ -1031,7 +1120,7 @@ export function CreateAgentDialog({
                           }
                         }}
                         open={sourceOpen}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isEdit}
                       >
                         <FormControl>
                           <SelectTrigger className="w-full">
@@ -1085,9 +1174,13 @@ export function CreateAgentDialog({
                         </SelectContent>
                       </Select>
                       <FormDescription>
-                        {dataSourceType === "descriptor"
-                          ? `智能体将基于所选数据源进行知识问答（将自动关联至数据源所在的 ${namespace || "default"} 命名空间）。`
-                          : "智能体将基于所选语义组（包含多个关联数据源）进行联合知识问答。"}
+                        {isEdit
+                          ? dataSourceType === "descriptor"
+                            ? "数据源创建后不可修改。"
+                            : "语义关系创建后不可修改。"
+                          : dataSourceType === "descriptor"
+                            ? `智能体将基于所选数据源进行知识问答（将自动关联至数据源所在的 ${namespace || "default"} 命名空间）。`
+                            : "智能体将基于所选语义组（包含多个关联数据源）进行联合知识问答。"}
                       </FormDescription>
                       {fingerprintError && (
                         <div className="text-xs text-red-600 mt-1">{fingerprintError}</div>
@@ -1108,7 +1201,7 @@ export function CreateAgentDialog({
                         <Input
                           placeholder="例如：agent-datadescriptor-00001"
                           {...field}
-                          disabled={isSubmitting}
+                          disabled={isSubmitting || isEdit}
                           onChange={(e) => {
                             setNameTouched(true)
                             field.onChange(e)
@@ -1169,7 +1262,7 @@ export function CreateAgentDialog({
                             field.onChange(val)
                           }}
                           onOpenChange={() => {}}
-                          disabled={isSubmitting || isLoadingNs}
+                          disabled={isSubmitting || isEdit || isLoadingNs}
                         >
                           <FormControl>
                             <SelectTrigger>
@@ -1196,11 +1289,12 @@ export function CreateAgentDialog({
                   name="description"
                   render={({ field }) => (
                     <FormItem className="sm:col-span-2">
-                      <FormLabel>描述</FormLabel>
+                      <FormLabel>{dataSourceType === "skill" ? "描述" : "概览"}</FormLabel>
                       <FormControl>
                         <Textarea
                           placeholder="描述该智能体的用途..."
                           {...field}
+                          className="min-h-[200px]"
                           disabled={isSubmitting}
                           onChange={(e) => {
                             setDescTouched(true)
@@ -1351,7 +1445,7 @@ export function CreateAgentDialog({
                             <FormLabel>最大步数</FormLabel>
                             <FormControl>
                               <Input
-                                placeholder="默认 10"
+                                placeholder="默认 30"
                                 {...field}
                                 disabled={isSubmitting}
                               />
@@ -1361,6 +1455,64 @@ export function CreateAgentDialog({
                         )}
                       />
                     </div>
+
+                  {/* ── 总结配置（仅 skill 类型） ── */}
+                  <div className="space-y-3 rounded-lg border border-line bg-surface p-4">
+                    <div className="text-xs font-semibold text-content-muted">总结配置</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <FormField
+                        control={form.control}
+                        name="summarizeEnabled"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>开启总结</FormLabel>
+                            <Select
+                              value={field.value || "true"}
+                              onValueChange={field.onChange}
+                              disabled={isSubmitting}
+                            >
+                              <FormControl>
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="是否启用 LLM 总结" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="true">开启（默认）</SelectItem>
+                                <SelectItem value="false">关闭（直接透传 skill 结果）</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormDescription>
+                              关闭后所有智能体直接输出 skill 原始结果，不进行 LLM 总结
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    {summarizeEnabled !== "false" && (
+                      <FormField
+                        control={form.control}
+                        name="summarizeCustomPrompt"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>自定义总结提示词</FormLabel>
+                            <FormControl>
+                              <Textarea
+                                placeholder="可选。不填则使用默认提示词"
+                                className="min-h-[200px]"
+                                {...field}
+                                disabled={isSubmitting}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              仅在多智能体模式下发生实际协作时生效。为空时使用系统默认总结策略
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
+                  </div>
                   </div>
                 ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1845,7 +1997,7 @@ export function CreateAgentDialog({
                 }
               >
                 {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                创建智能体
+                {isEdit ? "保存修改" : "创建智能体"}
           </Button>
         </DialogFooter>
           </form>

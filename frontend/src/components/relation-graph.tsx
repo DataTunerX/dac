@@ -366,7 +366,7 @@ export function RelationGraph({
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-red-600 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="h-8 w-8 text-red-600 hover:text-red-700"
                           onClick={(e) => {
                             e.stopPropagation()
                             onDeleteRel(r)

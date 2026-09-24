@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -145,14 +146,20 @@ func (r *agentContainerRepository) Delete(ctx context.Context, namespace, name s
 
 // toUnstructured converts domain entity to unstructured.Unstructured
 func (r *agentContainerRepository) toUnstructured(container *entity.AgentContainer) (*unstructured.Unstructured, error) {
+	metadata := map[string]interface{}{
+		"name":      container.Name,
+		"namespace": container.Namespace,
+		"labels":    container.Labels,
+	}
+	// K8s rejects Update/UpdateStatus without resourceVersion (optimistic concurrency).
+	if rv := strings.TrimSpace(container.ResourceVersion); rv != "" {
+		metadata["resourceVersion"] = rv
+	}
+
 	obj := map[string]interface{}{
 		"apiVersion": "dac.dac.io/v1alpha1",
 		"kind":       "DataAgentContainer",
-		"metadata": map[string]interface{}{
-			"name":      container.Name,
-			"namespace": container.Namespace,
-			"labels":    container.Labels,
-		},
+		"metadata": metadata,
 		"spec": map[string]interface{}{
 			"dacType": container.DACType,
 			"dataPolicy": map[string]interface{}{
@@ -177,6 +184,8 @@ func (r *agentContainerRepository) toUnstructured(container *entity.AgentContain
 			"orchestratorAgentMaxLoops": container.OrchestratorAgentMaxLoops,
 			"skillAgentMaxLoops":        container.SkillAgentMaxLoops,
 			"crossSGMaxHop":             container.CrossSGMaxHop,
+			"summarizeEnabled":          container.SummarizeEnabled,
+			"summarizeCustomPrompt":     container.SummarizeCustomPrompt,
 		},
 	}
 
@@ -276,6 +285,7 @@ func (r *agentContainerRepository) fromUnstructured(unst *unstructured.Unstructu
 		Name:                  k8sContainer.Metadata.Name,
 		Namespace:             k8sContainer.Metadata.Namespace,
 		Labels:                k8sContainer.Metadata.Labels,
+		ResourceVersion:       k8sContainer.Metadata.ResourceVersion,
 		DACType:               k8sContainer.Spec.DACType,
 		DataPolicy: entity.DataPolicy{
 			DataSourceType:     k8sContainer.Spec.DataPolicy.DataSourceType,
@@ -299,6 +309,8 @@ func (r *agentContainerRepository) fromUnstructured(unst *unstructured.Unstructu
 		OrchestratorAgentMaxLoops: k8sContainer.Spec.OrchestratorAgentMaxLoops,
 		SkillAgentMaxLoops:        k8sContainer.Spec.SkillAgentMaxLoops,
 		CrossSGMaxHop:             k8sContainer.Spec.CrossSGMaxHop,
+		SummarizeEnabled:          k8sContainer.Spec.SummarizeEnabled,
+		SummarizeCustomPrompt:     k8sContainer.Spec.SummarizeCustomPrompt,
 		ActiveDataDescriptors:     activeDDs,
 		Endpoint:              endpoint,
 		Conditions:            conditions,

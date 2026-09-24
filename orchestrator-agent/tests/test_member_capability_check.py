@@ -276,19 +276,6 @@ def test_capability_result_issues_request_scoped_execution_hint(monkeypatch):
     ) is None
 
 
-def test_valid_execution_hint_is_neutral_planner_evidence():
-    executor = object.__new__(sg.OrchestratorAgentExecutorSemanticGroup)
-    note = executor._execution_hint_memory_note({
-        "can_handle": True,
-        "confidence": 0.95,
-        "selected_members": ["OmnichannelRetailEcommercePlatformAgent-dd-x"],
-    })
-
-    assert "not as a forced routing decision" in note
-    assert "minimum set of agents" in note
-    assert "prefer this SG's own Expert" not in note
-
-
 def test_response_preserves_old_fields_and_defaults_new_fields():
     response = sg.CapabilityCheckResponse(
         can_handle=True,
@@ -308,3 +295,53 @@ def test_response_preserves_old_fields_and_defaults_new_fields():
     assert payload["unavailable_count"] == 0
     assert payload["missing_requirements"] == []
     assert payload["execution_hint"] == {}
+    assert payload["score_version"] == ""
+    assert payload["domain_verdict"] == ""
+    assert payload["has_external_dependency"] is False
+
+
+def test_expert_payload_preserves_chain_protocol():
+    executor = object.__new__(sg.OrchestratorAgentExecutorSemanticGroup)
+    resp = executor._capability_response_from_expert_payload(
+        {
+            "can_handle": True,
+            "confidence": 0.91,
+            "reason": "chain scored",
+            "domain_verdict": "has",
+            "score_version": "capability-chain-v1",
+            "evidence_grade": "solid",
+            "threshold": 0.6,
+            "handle_score": 0.91,
+            "steps": [{"step_id": 1, "name": "I", "score": 0.9}],
+            "contributing_steps": [1],
+            "risks": ["uniqueness"],
+            "has_external_dependency": False,
+            "contribution": "输入订单号，输出订单明细",
+            "member_results": [
+                {
+                    "agent_name": "sd-a",
+                    "can_handle": True,
+                    "score_version": "capability-chain-v1",
+                    "steps": [{"step_id": 1, "name": "I", "score": 0.9}],
+                }
+            ],
+            "collaboration_agents": ["sd-a"],
+        },
+        agent_name="group-a",
+        agent_url="http://group-a",
+        latency_ms=12,
+    )
+
+    assert resp.is_chain_scored is True
+    assert resp.score_version == "capability-chain-v1"
+    assert resp.domain_verdict == "has"
+    assert resp.steps[0]["name"] == "I"
+    assert resp.contributing_steps == [1]
+    assert resp.handle_score == 0.91
+    assert resp.has_external_dependency is False
+    assert resp.contribution == "输入订单号，输出订单明细"
+    assert resp.member_results[0]["agent_name"] == "sd-a"
+    dumped = resp.model_dump()
+    assert dumped["score_version"] == "capability-chain-v1"
+    assert dumped["domain_verdict"] == "has"
+    assert dumped["has_external_dependency"] is False

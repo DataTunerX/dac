@@ -48,17 +48,17 @@ type SemanticGroupMemberDetail struct {
 
 // SemanticGroupInfo is summary of a child group (from with_members child_groups).
 type SemanticGroupInfo struct {
-	ID          string  `json:"id"`
-	GroupName   string  `json:"group_name"`
-	Description string  `json:"description"`
-	AgentCard   string  `json:"agent_card"`
+	ID          string `json:"id"`
+	GroupName   string `json:"group_name"`
+	Description string `json:"description"`
+	AgentCard   string `json:"agent_card"`
 }
 
 // SemanticGroupWithMembers is the full response of GetSemanticGroupWithMembers.
 type SemanticGroupWithMembers struct {
-	Group       SemanticGroup                `json:"group"`
-	Members     []SemanticGroupMemberDetail  `json:"members"`
-	ChildGroups []SemanticGroupInfo          `json:"child_groups"`
+	Group       SemanticGroup               `json:"group"`
+	Members     []SemanticGroupMemberDetail `json:"members"`
+	ChildGroups []SemanticGroupInfo         `json:"child_groups"`
 }
 
 // DDGroupRelation is a DD–semantic-group relation (data-services response shape).
@@ -67,6 +67,13 @@ type DDGroupRelation struct {
 	SemanticDomainID  string `json:"sd_id"`
 	GroupID           string `json:"group_id"`
 	AssociationReason string `json:"association_reason"`
+}
+
+// CreateDDGroupRelationRequest adds one semantic domain as a member of a semantic group.
+type CreateDDGroupRelationRequest struct {
+	SemanticDomainID  string
+	GroupID           string
+	AssociationReason string
 }
 
 // KnowledgeSearchResult is a single knowledge search hit (data-services response shape).

@@ -58,6 +58,8 @@ type CreateAgentContainerRequest struct {
 	OrchestratorAgentMaxLoops string
 	SkillAgentMaxLoops        string
 	CrossSGMaxHop             string
+	SummarizeEnabled          string
+	SummarizeCustomPrompt     string
 }
 
 // UpdateAgentContainerRequest represents a request to update an agent container
@@ -72,6 +74,8 @@ type UpdateAgentContainerRequest struct {
 	OrchestratorAgentMaxLoops *string
 	SkillAgentMaxLoops        *string
 	CrossSGMaxHop             *string
+	SummarizeEnabled          *string
+	SummarizeCustomPrompt     *string
 }
 
 // CreateDataDescriptorRequest represents a request to create a data descriptor

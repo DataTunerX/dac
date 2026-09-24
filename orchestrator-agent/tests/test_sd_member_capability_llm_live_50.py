@@ -765,7 +765,7 @@ async def test_live_sd_capability_50(case: CapCase):
     assert len(set(outcomes)) == 1, f"unstable across {runs} runs: {outcomes}"
 
     domain_match, can_handle, can_contribute = outcomes[0]
-    assert last.get("evidence_mode") == "llm"
+    assert last.get("evidence_mode") == "capability_chain"
     assert domain_match is case.expect_domain_match
     assert can_handle is case.expect_can_handle
     assert can_contribute is case.expect_can_contribute

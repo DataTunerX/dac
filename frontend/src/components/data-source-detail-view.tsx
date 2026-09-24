@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useDataSourceDetail } from "@/hooks/use-data-source-detail";
 import { DataSourceStructureTab } from "@/components/data-source-detail/structure-tab";
+import { DataSourceAgentCardTab } from "@/components/data-source-detail/agent-card-tab";
 import { formatGpuEnabledLabel, getPdfLoaderLabel } from "@/lib/pdf-loader";
 import { getConfigMap } from "@/lib/configmaps-api";
 import type { DataSourceResponse, DataDescriptorResponse, ObjectReferenceResponse } from "@/lib/api-types";
@@ -47,7 +48,10 @@ import {
   Briefcase,
   Trash2,
   X,
+  ScrollText,
 } from "lucide-react";
+import { DataSourceJobLogDialog } from "@/components/data-source-job-log-dialog";
+import { canViewSinkerJobLogs, SINKER_JOB_LOG_PERMISSION } from "@/lib/sinker-job-logs";
 import { Markdown, defaultMarkdownComponents } from "@/components/markdown";
 import {
   Table,
@@ -89,6 +93,7 @@ type UnknownRecord = Record<string, unknown>;
 
 const DATA_SOURCE_TABS = [
   { key: "overview", label: "概览" },
+  { key: "agentcard", label: "Agent Card" },
   { key: "structure", label: "数据结构" },
   { key: "knowledge", label: "知识分片" },
   { key: "graph", label: "知识图谱" },
@@ -136,8 +141,6 @@ type DataDescriptor = {
 };
 
 type Signature = UnknownRecord;
-type SemanticDomain = UnknownRecord;
-
 
 type LineageConsumer = {
   kind: "agent" | "unknown";
@@ -348,7 +351,9 @@ export function DataSourceDetailView() {
     isLoading,
     isNotFound,
     isLoadError,
+    isLoadingSemanticDomain,
     refreshAll,
+    mutateSemanticDomain,
   } = useDataSourceDetail(namespace, name, {
     includeAgentLineage: tab === "lineage",
   });
@@ -376,6 +381,7 @@ export function DataSourceDetailView() {
   const [checkingDependency, setCheckingDependency] = useState(false);
   const [detachingGroupId, setDetachingGroupId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [jobLogOpen, setJobLogOpen] = useState(false);
 
   const [selectedTable, setSelectedTable] = useState<{
     tableName: string;
@@ -497,18 +503,6 @@ export function DataSourceDetailView() {
       setIsLoadingPromptsDetail(false);
     }
   };
-
-  const agentCard = useMemo(() => {
-    if (!isRecord(semanticDomain)) return null;
-    const raw = semanticDomain.agent_card;
-    if (typeof raw !== "string" || !raw.trim()) return null;
-    try {
-      const obj = JSON.parse(raw) as unknown;
-      return typeof obj === "object" && obj !== null ? (obj as UnknownRecord) : null;
-    } catch {
-      return null;
-    }
-  }, [semanticDomain]);
 
   const tableCount = useMemo(() => {
     const meta = signatureMeta;
@@ -770,6 +764,14 @@ export function DataSourceDetailView() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {dd && canViewSinkerJobLogs(dd.overall_phase) ? (
+              <RbacWrapper requiredPermission={SINKER_JOB_LOG_PERMISSION}>
+                <Button variant="outline" onClick={() => setJobLogOpen(true)}>
+                  <ScrollText className="w-4 h-4 mr-2" />
+                  日志
+                </Button>
+              </RbacWrapper>
+            ) : null}
             <Button
               variant="outline"
               size="icon"
@@ -945,6 +947,14 @@ export function DataSourceDetailView() {
               </div>
             </section>
           </div>
+        ) : tab === "agentcard" ? (
+          <DataSourceAgentCardTab
+            namespace={namespace}
+            name={name}
+            semanticDomain={semanticDomain}
+            isLoading={isLoadingSemanticDomain}
+            onSaved={() => mutateSemanticDomain()}
+          />
         ) : tab === "structure" ? (
           <DataSourceStructureTab
             isStructuredSource={isStructuredSource}
@@ -1250,6 +1260,13 @@ export function DataSourceDetailView() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <DataSourceJobLogDialog
+        open={jobLogOpen}
+        onOpenChange={setJobLogOpen}
+        namespace={namespace}
+        name={name || ""}
+      />
 
       <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
         <AlertDialogContent>

@@ -60,6 +60,7 @@ celery.conf.update(
     task_default_queue="semantic_group",
     task_routes={
         "semantic_grouper.group": {"queue": "semantic_group"},
+        "semantic_grouper.group_refresh": {"queue": "semantic_group"},
     },
     task_track_started=True,
     result_expires=3600,
@@ -435,4 +436,57 @@ def semantic_group_task(self, data: Dict[str, Any]) -> Dict[str, Any]:
 
         else:
             raise ValueError(f"Unsupported operation: {operation}")
+
+
+@celery.task(name="semantic_grouper.group_refresh", bind=True, acks_late=True)
+def semantic_group_refresh_task(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Refresh a specified semantic group's description and agent_card from
+    current members. Membership writes are owned by dac-apiserver.
+    """
+    group_id = data.get("group_id")
+    mode = data.get("mode") or "decremental"
+    if not group_id:
+        raise ValueError("group_id is required")
+
+    logger.info(
+        "============= start semantic_group_refresh_task %s, mode=%s, group_id=%s ===================",
+        self.request.id,
+        mode,
+        group_id,
+    )
+
+    lock = get_semantic_group_lock()
+    logger.info("Attempting to acquire distributed lock for refresh on %s ...", group_id)
+
+    with lock:
+        logger.info("Distributed lock acquired, refreshing group %s mode=%s", group_id, mode)
+        result = semantic_grouper.refresh_group_metadata(group_id=group_id, mode=mode)
+        if isinstance(result, dict) and result.get("status") == "error":
+            error_msg = result.get("message", "刷新语义组失败")
+            logger.error("Failed to refresh group %s: %s", group_id, error_msg)
+            raise ValueError(error_msg)
+
+        descriptor = data.get("descriptor") or {}
+        dd_namespace = descriptor.get("namespace")
+        dd_name = descriptor.get("name")
+        if dd_namespace and dd_name:
+            if str(mode).strip().lower() == "incremental":
+                _persist_group_membership_on_dd(
+                    dd_namespace,
+                    dd_name,
+                    {"status": "success", "group_id": group_id},
+                )
+            try:
+                notify_dd_reconcile(dd_namespace, dd_name)
+                logger.info(
+                    "Notified DD %s/%s to reconcile after group refresh",
+                    dd_namespace,
+                    dd_name,
+                )
+            except Exception as e:
+                logger.warning("Failed to notify DD reconcile after group refresh (non-fatal): %s", e)
+
+        logger.info("Refresh group %s completed: %s", group_id, result)
+        return result
 

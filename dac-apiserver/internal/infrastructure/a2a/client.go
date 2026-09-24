@@ -17,8 +17,10 @@ import (
 // DAC frame markers (aligned with Python is_internal_dac_frame): any line starting with dacFramePrefix
 // is a structured frame; payload is the substring after dacFrameSuffix.
 const (
-	dacFramePrefix = "[[DAC_"
-	dacFrameSuffix = "]]"
+	dacFramePrefix            = "[[DAC_"
+	dacFrameSuffix            = "]]"
+	dacExecutionFlowFrameName = "DAC_EXECUTION_FLOW"
+	executionFlowSSEEventType = "execution-flow"
 )
 
 // client implements domain.A2AClient by delegating to the trpc A2A client.
@@ -100,9 +102,9 @@ type answerFrameState struct {
 	sawChunk bool
 }
 
-// feed appends text and returns structured-frame JSON payloads (all [[DAC_*]] lines) and content lines.
+// feed appends text and returns structured DAC frames (all [[DAC_*]] lines) and content lines.
 // Frame payloads are later sent as StreamChunk.Progress so the handler can use payload["event"] as SSE event name.
-func (b *lineBuffer) feed(text string) (framePayloads []string, content []string) {
+func (b *lineBuffer) feed(text string) (frames []parsedDACFrame, content []string) {
 	s := b.buf + text
 	b.buf = ""
 	parts := strings.Split(s, "\n")
@@ -111,29 +113,43 @@ func (b *lineBuffer) feed(text string) (framePayloads []string, content []string
 		if line == "" {
 			continue
 		}
-		if payload, ok := extractDACFramePayload(line); ok {
+		if name, payload, ok := extractDACFrame(line); ok {
 			if payload != "" {
-				framePayloads = append(framePayloads, payload)
+				frames = append(frames, parsedDACFrame{name: name, payload: payload})
 			}
 		} else {
 			content = append(content, parts[i])
 		}
 	}
 	b.buf = parts[len(parts)-1]
-	return framePayloads, content
+	return frames, content
+}
+
+type parsedDACFrame struct {
+	name    string
+	payload string
+}
+
+// extractDACFrame returns the frame name (e.g. "DAC_PROGRESS", "DAC_EXECUTION_FLOW")
+// and JSON payload after "]]" for a line starting with dacFramePrefix.
+// The caller must branch on the frame name: DAC_EXECUTION_FLOW is not a progress event.
+func extractDACFrame(line string) (name, payload string, ok bool) {
+	if !strings.HasPrefix(line, dacFramePrefix) {
+		return "", "", false
+	}
+	idx := strings.Index(line, dacFrameSuffix)
+	if idx == -1 {
+		return "", "", false
+	}
+	name = line[len("[["):idx]
+	payload = strings.TrimSpace(line[idx+len(dacFrameSuffix):])
+	return name, payload, true
 }
 
 // extractDACFramePayload returns the JSON payload after the first "]]" for a line starting with dacFramePrefix.
 func extractDACFramePayload(line string) (string, bool) {
-	if !strings.HasPrefix(line, dacFramePrefix) {
-		return "", false
-	}
-	idx := strings.Index(line, dacFrameSuffix)
-	if idx == -1 {
-		return "", false
-	}
-	payload := strings.TrimSpace(line[idx+len(dacFrameSuffix):])
-	return payload, true
+	_, payload, ok := extractDACFrame(line)
+	return payload, ok
 }
 
 // flush returns any remaining buffer as a single content part (may be empty).
@@ -205,8 +221,16 @@ func parseAnswerFramePayload(payload string) (eventName string, text string, ok 
 }
 
 // handleFramePayload converts DAC_ANSWER final output into explicit content chunks and keeps
-// non-answer DAC frames as progress JSON payloads.
-func (c *client) handleFramePayload(payload string, outputCh chan<- entity.StreamChunk, state *answerFrameState) {
+// non-answer DAC frames as progress JSON payloads. Execution Flow frames get EventType
+// "execution-flow" so the SSE handler can distinguish them from DAC Progress.
+func (c *client) handleFramePayload(frameName, payload string, outputCh chan<- entity.StreamChunk, state *answerFrameState) {
+	if frameName == dacExecutionFlowFrameName {
+		// Keep EF off the progress SSE event: payload is ExecutionTask JSON, not DAC Progress.
+		outputCh <- entity.StreamChunk{Progress: payload, EventType: executionFlowSSEEventType}
+		c.logger.Info("sent execution-flow chunk", "payload_chars", len(payload))
+		return
+	}
+
 	eventName, text, ok := parseAnswerFramePayload(payload)
 	if !ok {
 		outputCh <- entity.StreamChunk{Progress: payload}
@@ -248,8 +272,8 @@ func (c *client) handleArtifactUpdate(
 		return
 	}
 	framePayloads, contentLines := lineBuf.feed(text)
-	for _, payload := range framePayloads {
-		c.handleFramePayload(payload, outputCh, answerState)
+	for _, frame := range framePayloads {
+		c.handleFramePayload(frame.name, frame.payload, outputCh, answerState)
 	}
 	for _, line := range contentLines {
 		cleaned := stripSuccessMarker(line)

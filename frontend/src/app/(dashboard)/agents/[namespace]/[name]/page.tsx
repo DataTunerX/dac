@@ -6,8 +6,10 @@ import { useParams, useRouter } from "next/navigation"
 import useSWR from "swr"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
-import { getAgent } from "@/lib/agents-api"
+import { getAgent, updateAgent } from "@/lib/agents-api"
+import { buildAgentUpdateRequest } from "@/lib/agent-update"
 import { BizAgentCompositionGraph } from "@/components/agents/biz-agent-composition-graph"
+import { CreateAgentDialog, type CreateAgentPayload } from "@/components/agent-forms"
 import { useAgentComposition } from "@/hooks/use-agent-composition"
 import { agentKey } from "@/lib/swr-keys"
 import { RbacButton, RbacWrapper } from "@/components/rbac"
@@ -29,7 +31,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { ArrowLeft, Loader2, Trash2, RefreshCw, Server, Database, Shield, Sparkles, ChevronRight, ChevronDown, Info, Wrench, Briefcase, Maximize2, X } from "lucide-react"
+import { ArrowLeft, Loader2, Trash2, RefreshCw, Server, Database, Shield, Sparkles, ChevronRight, ChevronDown, Info, Wrench, Briefcase, Maximize2, X, Pencil, FileText } from "lucide-react"
 
 
 function InfoItem({ label, value }: { label: string; value: ReactNode }) {
@@ -67,6 +69,10 @@ export default function AgentDetailPage() {
   const [expandedSkillIds, setExpandedSkillIds] = useState<Record<string, boolean>>({})
   const [isLineageZoomOpen, setIsLineageZoomOpen] = useState(false)
 
+  // Edit state
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
+
   useEffect(() => {
     if (swrError) toast.error("加载智能体详情失败")
   }, [swrError])
@@ -91,6 +97,23 @@ export default function AgentDetailPage() {
     } finally {
       setIsDeleting(false)
       setIsDeleteOpen(false)
+    }
+  }
+
+  const handleUpdate = async (data: CreateAgentPayload) => {
+    if (isSubmittingEdit || !agent) return
+    setIsSubmittingEdit(true)
+    try {
+      await updateAgent(namespace, name, buildAgentUpdateRequest(agent, data))
+      toast.success("智能体更新成功")
+      setIsEditOpen(false)
+      refreshData()
+    } catch (err: unknown) {
+      console.error("Update agent failed", err)
+      const e = err as { response?: { data?: { message?: string } } }
+      toast.error(e.response?.data?.message || "更新失败，请检查配置")
+    } finally {
+      setIsSubmittingEdit(false)
     }
   }
 
@@ -230,6 +253,16 @@ export default function AgentDetailPage() {
             >
               <Trash2 className="w-4 h-4 mr-2" />
               删除
+            </Button>
+          </RbacWrapper>
+          <RbacWrapper requiredPermission="agent:update">
+            <Button
+              variant="outline"
+              onClick={() => setIsEditOpen(true)}
+              disabled={isLoading || !agent}
+            >
+              <Pencil className="w-4 h-4 mr-2" />
+              编辑
             </Button>
           </RbacWrapper>
         </div>
@@ -374,6 +407,34 @@ export default function AgentDetailPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* ── 总结配置（仅 skill 类型） ── */}
+        {isSkillAgent && (
+        <div className="space-y-3">
+          <div className="text-sm font-medium text-content flex items-center gap-2">
+            <FileText className="w-4 h-4 text-content-muted" />
+            总结配置
+          </div>
+          <Card className="rounded-lg border border-line">
+            <CardContent className="pt-6 space-y-4">
+              <InfoItem
+                label="总结开关"
+                value={
+                  <span>
+                    {(agent?.summarizeEnabled || "true") === "true" ? "已开启" : "已关闭"}
+                  </span>
+                }
+              />
+              <div className="space-y-1.5">
+                <div className="text-xs font-medium text-content-muted">自定义总结提示词</div>
+                <div className="px-3 py-2 rounded-md border border-line bg-surface text-sm text-content font-normal shadow-sm min-h-[160px] max-h-[320px] overflow-auto whitespace-pre-wrap break-words">
+                  {agent?.summarizeCustomPrompt?.trim() || "（未设置，使用默认提示词）"}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        )}
 
         <div className="space-y-6">
           <div className="space-y-3">
@@ -657,6 +718,17 @@ export default function AgentDetailPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {agent && (
+        <CreateAgentDialog
+          open={isEditOpen}
+          onOpenChange={(open) => {
+            setIsEditOpen(open)
+          }}
+          initialValues={agent}
+          onSubmit={handleUpdate}
+        />
+      )}
     </div>
   )
 }

@@ -568,25 +568,21 @@ async def test_llm_judge_prompt_receives_metadata_context(monkeypatch):
     executor = _executor()
     captured = {}
 
-    async def fake_invoke_llm_with_tool(**kwargs):
-        captured["messages"] = kwargs["messages"]
-        captured["tool_choice"] = kwargs["tool_choice"]
-        return {
-            "domain_match": True,
-            "can_handle": False,
-            "can_contribute": True,
-            "confidence": 0.55,
-            "reason": "仅部分相关",
-            "matched_evidence": ["支付网关"],
-            "missing_requirements": ["库存扣减"],
-        }
+    async def fake_ainvoke(messages):
+        captured["messages"] = messages
+        return SimpleNamespace(
+            content=json.dumps(
+                {"domain_verdict": "none", "reason": "领域交集：明确无 — 库存扣减不在本域"},
+                ensure_ascii=False,
+            )
+        )
 
+    fake_llm = SimpleNamespace(ainvoke=fake_ainvoke)
     monkeypatch.setattr(
         domain.OrchestratorAgentExecutorSemanticDomain,
         "_build_capability_judge_llm",
-        lambda self: object(),
+        lambda self: fake_llm,
     )
-    monkeypatch.setattr(domain, "invoke_llm_with_tool", fake_invoke_llm_with_tool)
 
     result = await executor._judge_member_capability_with_llm(
         query="支付网关超时重试和库存扣减怎么实现？",
@@ -603,15 +599,14 @@ async def test_llm_judge_prompt_receives_metadata_context(monkeypatch):
         request_metadata={"run_id": "r1"},
     )
 
-    assert captured["tool_choice"] == "judge_member_capability"
     joined = "\n".join(str(getattr(m, "content", m)) for m in captured["messages"])
     assert "支付网关超时重试代码" in joined
     assert "payment-gateway retry" in joined
+    assert "领域相关判定员" in joined
     assert result["can_handle"] is False
-    assert result["can_contribute"] is True
-    assert result["missing_requirements"] == ["库存扣减"]
-    assert result["evidence_mode"] == "llm"
-    assert "repository/file coverage" in joined or "code" in joined.lower()
+    assert result["can_contribute"] is False
+    assert result["domain_verdict"] == "none"
+    assert result["evidence_mode"] == "capability_chain"
 
 
 def test_normalize_keeps_can_handle_when_secondary_requirements_missing():

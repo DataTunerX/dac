@@ -63,6 +63,25 @@ describe("parseChatSSELine", () => {
     expect(dataLine?.kind === "chunk" && dataLine.reasoning).toBe("")
   })
 
+  it("treats event: execution-flow data as execution-flow payload", () => {
+    const eventLine = parseChatSSELine("event: execution-flow", "")
+    expect(eventLine?.kind).toBe("event")
+    expect(eventLine?.kind === "event" && eventLine.eventType).toBe("execution-flow")
+
+    const dataLine = parseChatSSELine(
+      'data: {"schema_version":"v1","execution_id":"own-1-user-agent-t1","turn":1,"stage":"pre_exec","agent":"user-agent","role":"initiator","task":"lookup","result":"U001"}',
+      "execution-flow"
+    )
+    expect(dataLine?.kind).toBe("execution-flow")
+    expect(dataLine?.kind === "execution-flow" && dataLine.payload.execution_id).toBe("own-1-user-agent-t1")
+    expect(dataLine?.kind === "execution-flow" && dataLine.payload.agent).toBe("user-agent")
+  })
+
+  it("drops invalid execution-flow payloads", () => {
+    const dataLine = parseChatSSELine('data: {"schema_version":"v1","task":"missing-id"}', "execution-flow")
+    expect(dataLine).toBeNull()
+  })
+
   it("progress payload with message and agent_id is parsed as progress", () => {
     const dataLine = parseChatSSELine(
       'data: {"event":"root_selected","message":"RoutingAgent selected root group X","agent_id":"RoutingAgent"}',

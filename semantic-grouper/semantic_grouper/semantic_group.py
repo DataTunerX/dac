@@ -4172,3 +4172,129 @@ class SemanticGrouper:
                 "message": f"处理失败: {str(e)}"
             }
 
+    def refresh_group_metadata(
+        self,
+        group_id: str,
+        mode: str = "decremental",
+    ) -> Dict[str, Any]:
+        """
+        Refresh a group's description / agent_card from its current members.
+
+        Membership is owned by dac-apiserver (dd_group_relation). This method
+        only re-inducts group metadata:
+        - incremental: merge current members into the existing group card
+        - decremental: rebuild from remaining members only
+        """
+        if not group_id:
+            return {
+                "status": "error",
+                "action": "REFRESHED",
+                "message": "group_id is empty",
+            }
+        mode_norm = (mode or "decremental").strip().lower()
+        if mode_norm not in ("incremental", "decremental"):
+            return {
+                "status": "error",
+                "action": "REFRESHED",
+                "group_id": group_id,
+                "message": f"unsupported refresh mode: {mode}",
+            }
+        if mode_norm == "decremental":
+            return self.reconcile_group_metadata(group_id)
+
+        if not self.semantic_group_client:
+            return {
+                "status": "error",
+                "action": "REFRESHED",
+                "group_id": group_id,
+                "message": "SemanticGroupClient 未配置",
+            }
+
+        try:
+            group_response = self.semantic_group_client.get_semantic_group_by_id(group_id)
+            group_data = dict(group_response.get("data") or {})
+            if not group_data:
+                return {
+                    "status": "error",
+                    "action": "REFRESHED",
+                    "group_id": group_id,
+                    "message": f"语义组不存在: {group_id}",
+                }
+        except Exception as e:
+            if self._is_http_not_found_error(e):
+                return {
+                    "status": "success",
+                    "action": "SKIPPED",
+                    "group_id": group_id,
+                    "remaining_member_count": 0,
+                    "message": "组已不存在，跳过 metadata refresh",
+                }
+            logger.error(
+                "refresh_group_metadata: failed to load group %s: %s",
+                group_id,
+                e,
+                exc_info=True,
+            )
+            return {
+                "status": "error",
+                "action": "REFRESHED",
+                "group_id": group_id,
+                "message": f"获取组信息失败: {e}",
+            }
+
+        try:
+            relations_response = self.semantic_group_client.get_relations_by_group_id(group_id)
+            relations_data = relations_response.get("data", [])
+            if not isinstance(relations_data, list):
+                relations_data = []
+        except Exception as e:
+            logger.error(
+                "refresh_group_metadata: failed to load members %s: %s",
+                group_id,
+                e,
+                exc_info=True,
+            )
+            return {
+                "status": "error",
+                "action": "REFRESHED",
+                "group_id": group_id,
+                "message": f"获取组成员失败: {e}",
+            }
+
+        if not relations_data:
+            logger.info("refresh_group_metadata: group %s has no members, skip", group_id)
+            return {
+                "status": "success",
+                "action": "SKIPPED",
+                "group_id": group_id,
+                "remaining_member_count": 0,
+                "message": "组没有成员，跳过刷新",
+            }
+
+        member_domains = self._fetch_member_domain_snapshots(relations_data)
+        if not member_domains:
+            return {
+                "status": "error",
+                "action": "REFRESHED",
+                "group_id": group_id,
+                "message": "无法获取组成员语义域数据",
+            }
+
+        refreshed = self._refresh_semantic_group_after_member_resync(
+            group_id,
+            member_domains[-1],
+            group_data,
+        )
+        if not refreshed:
+            recon = self.reconcile_group_metadata(group_id)
+            if recon.get("status") == "error":
+                return recon
+            return recon
+
+        return {
+            "status": "success",
+            "action": "REFRESHED",
+            "group_id": group_id,
+            "remaining_member_count": len(member_domains),
+            "message": "已根据当前成员刷新组描述与 Agent Card",
+        }

@@ -309,6 +309,9 @@ func (h *ChatHandler) handleStreaming(ctx context.Context, c *app.RequestContext
 		// Progress or custom event: emit SSE so frontend can show progress / handle event.
 		if chunk.Progress != "" {
 			eventType := sseEventTypeForChunk(chunk)
+			if eventType == "execution-flow" {
+				h.logger.Info("sse write execution-flow", "payload_chars", len(chunk.Progress))
+			}
 			if err := writer.WriteEvent("", eventType, []byte(chunk.Progress)); err != nil {
 				h.logger.Error("failed to write progress event", "error", err)
 				break
@@ -376,14 +379,12 @@ func (h *ChatHandler) handleStreaming(ctx context.Context, c *app.RequestContext
 	}
 }
 
-// sseEventTypeForChunk returns the SSE event name for a progress chunk.
+// sseEventTypeForChunk returns the SSE event name for a progress/EF chunk.
 //
 // Contract (aligned with Python): upstream sends [[DAC_PROGRESS]] and [[DAC_ANSWER]] <JSON>; both
 // have an "event" field (build_progress_frame / build_answer_frame in orchestrator, routing, expert).
-// Our A2A client only sets chunk.Progress to that JSON and never sets chunk.EventType, so
-// the authoritative source for the SSE event name is the "event" field inside Progress JSON.
-// EventType on the chunk is only used when explicitly set by a different adapter (e.g. future
-// data-service stream); then it overrides the payload.
+// Execution Flow frames ([[DAC_EXECUTION_FLOW]]) have no "event" field; the A2A client sets
+// chunk.EventType = "execution-flow" so they are not misclassified as progress.
 func sseEventTypeForChunk(chunk entity.StreamChunk) string {
 	if chunk.EventType != "" {
 		return chunk.EventType

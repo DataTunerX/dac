@@ -316,3 +316,162 @@ async def test_executor_fast_path_completes_without_normal_run(monkeypatch):
     artifact_text = updater.add_artifact.await_args.args[0][0].text
     assert json.loads(artifact_text) == capability_result
 
+
+def _chain_payload(**overrides):
+    payload = {
+        "can_handle": True,
+        "can_contribute": True,
+        "confidence": 0.91,
+        "reason": "two-phase " + ("x" * 520),
+        "domain_match": True,
+        "domain_verdict": "has",
+        "score_version": "capability-chain-v1",
+        "evidence_grade": "solid",
+        "evidence_mode": "capability_chain",
+        "threshold": 0.6,
+        "handle_score": 0.91,
+        "steps": [{"step_id": 1, "name": "I", "score": 0.9, "evidence_strength": "solid"}],
+        "contributing_steps": [1],
+        "risks": ["uniqueness"],
+        "has_external_dependency": False,
+        "contribution": "输入订单号，输出订单明细",
+        "matched_evidence": ["orders"],
+        "matched_entities": ["订单"],
+        "matched_tables": [],
+        "matched_metrics": [],
+        "missing_requirements": [],
+        "descriptor_type": "structured",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_normalize_member_capability_keeps_chain_protocol():
+    agent = _agent()
+    member = SimpleNamespace(descriptor_type="structured")
+    normalized = agent._normalize_member_capability(
+        member,
+        _card("sd-a"),
+        _chain_payload(),
+    )
+
+    assert normalized["score_version"] == "capability-chain-v1"
+    assert normalized["domain_verdict"] == "has"
+    assert normalized["domain_match"] is True
+    assert normalized["steps"][0]["name"] == "I"
+    assert normalized["contributing_steps"] == [1]
+    assert normalized["handle_score"] == 0.91
+    assert normalized["threshold"] == 0.6
+    assert normalized["has_external_dependency"] is False
+    assert normalized["matched_evidence"] == ["orders"]
+    assert normalized["contribution"] == "输入订单号，输出订单明细"
+    assert len(normalized["reason"]) > 500
+
+
+def test_normalize_none_verdict_clears_domain_match():
+    agent = _agent()
+    normalized = agent._normalize_member_capability(
+        SimpleNamespace(descriptor_type="structured"),
+        _card("sd-b"),
+        _chain_payload(
+            can_handle=False,
+            can_contribute=False,
+            domain_match=True,
+            domain_verdict="none",
+            steps=[],
+            contributing_steps=[],
+        ),
+    )
+
+    assert normalized["domain_verdict"] == "none"
+    assert normalized["domain_match"] is False
+    assert normalized["status"] == "unsupported"
+
+
+def test_aggregate_lifts_chain_protocol_from_selected_handler():
+    handler = {
+        **_result("sd-a", can_handle=True, confidence=0.91, entities=["订单"]),
+        **_chain_payload(reason="member can handle"),
+        "agent_name": "sd-a",
+    }
+    result = _agent()._aggregate_member_capabilities([
+        handler,
+        _result("sd-b"),
+    ])
+
+    assert result["can_handle"] is True
+    assert result["score_version"] == "capability-chain-v1"
+    assert result["domain_verdict"] == "has"
+    assert result["steps"][0]["name"] == "I"
+    assert result["contributing_steps"] == [1]
+    assert result["handle_score"] == 0.91
+    assert result["member_results"][0]["score_version"] == "capability-chain-v1"
+    assert result["contribution"] == "输入订单号，输出订单明细"
+
+
+def test_aggregate_domain_verdict_none_when_all_members_out_of_domain():
+    result = _agent()._aggregate_member_capabilities([
+        {
+            **_result("sd-a"),
+            "domain_verdict": "none",
+            "domain_match": False,
+            "score_version": "capability-chain-v1",
+        },
+        {
+            **_result("sd-b"),
+            "domain_verdict": "none",
+            "domain_match": False,
+            "score_version": "capability-chain-v1",
+        },
+    ])
+
+    assert result["can_handle"] is False
+    assert result["can_contribute"] is False
+    assert result["domain_verdict"] == "none"
+    assert result["score_version"] == "capability-chain-v1"
+
+
+def test_aggregate_lifts_chain_from_collaboration_contributors():
+    orders = {
+        **_result(
+            "Orders",
+            can_contribute=True,
+            confidence=0.75,
+            entities=["orders"],
+            missing=["refund_rate"],
+        ),
+        "domain_verdict": "has",
+        "score_version": "capability-chain-v1",
+        "contribution": "输入订单号，输出订单金额",
+        "steps": [{"step_id": 1, "description": "订单"}],
+        "contributing_steps": [1],
+        "handle_score": 0.8,
+        "threshold": 0.6,
+        "has_external_dependency": True,
+    }
+    refunds = {
+        **_result(
+            "Refunds",
+            can_contribute=True,
+            confidence=0.8,
+            metrics=["refund_rate"],
+            missing=["orders"],
+        ),
+        "domain_verdict": "has",
+        "score_version": "capability-chain-v1",
+        "contribution": "输入订单号，输出退款率",
+        "steps": [{"step_id": 1, "description": "退款"}],
+        "contributing_steps": [1],
+        "has_external_dependency": False,
+    }
+    result = _agent()._aggregate_member_capabilities([orders, refunds])
+
+    assert result["can_handle"] is True
+    assert result["execution_strategy"] == "collaboration"
+    assert result["score_version"] == "capability-chain-v1"
+    assert result["domain_verdict"] == "has"
+    assert result["steps"][0]["description"] == "退款"
+    assert result["contribution"] == "输入订单号，输出退款率"
+    assert result["collaboration_agents"] == ["Refunds", "Orders"]
+    assert result["member_results"][0]["score_version"] == "capability-chain-v1"
+

@@ -50,6 +50,7 @@ var permissionMatrix = []matrixRow{
 	{code: "descriptor:create", method: "POST", path: "/api/v1/namespaces/finance-data/descriptors", posUser: userDave, posTenant: tenantFinance, negUser: userErin, negTenant: tenantFinance},
 	{code: "descriptor:update", method: "PUT", path: "/api/v1/namespaces/finance-data/descriptors/orders", posUser: userDave, posTenant: tenantFinance, negUser: userErin, negTenant: tenantFinance},
 	{code: "descriptor:delete", method: "DELETE", path: "/api/v1/namespaces/finance-data/descriptors/orders", posUser: userDave, posTenant: tenantFinance, negUser: userErin, negTenant: tenantFinance},
+	{code: "descriptor:job-logs:read", method: "GET", path: "/api/v1/namespaces/finance-data/descriptor-job-logs/orders", posUser: userDave, posTenant: tenantFinance, negUser: userErin, negTenant: tenantFinance},
 
 	// —— llm configmaps ——
 	{code: "llmconfig:read", method: "GET", path: "/api/v1/namespaces/finance-data/llm-configmaps/llm", posUser: userErin, posTenant: tenantFinance, negUser: userHugo, negTenant: tenantFinance},

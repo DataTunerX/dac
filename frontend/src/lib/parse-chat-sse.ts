@@ -1,14 +1,16 @@
 /**
  * SSE line parsing for chat stream: event type, progress JSON, chunk delta, [DONE].
  * Caller tracks lastEventType; any non-empty event means the next data line is progress JSON,
- * EXCEPT for `final_answer` events which carry the complete answer in `payload.text`.
+ * EXCEPT for `final_answer` (payload.text as chunk) and `execution-flow` (ExecutionTask JSON).
  */
 
 import type { ChatProgressPayload } from "@/lib/api-types"
+import { parseExecutionFlowTask, type ExecutionFlowTask } from "@/lib/execution-flow"
 
 export type ParseSSELineResult =
   | { kind: "event"; eventType: string }
   | { kind: "progress"; payload: ChatProgressPayload }
+  | { kind: "execution-flow"; payload: ExecutionFlowTask }
   | { kind: "chunk"; content: string; reasoning: string }
   | { kind: "done" }
   | null
@@ -28,6 +30,7 @@ interface FinalAnswerPayload {
  * 这些事件的 data 行不是 progress，而是包含完整回复文本。
  */
 const FINAL_ANSWER_EVENTS = new Set(["final_answer"])
+const EXECUTION_FLOW_EVENTS = new Set(["execution-flow"])
 
 export function parseChatSSELine(
   line: string,
@@ -48,6 +51,10 @@ export function parseChatSSELine(
     // final_answer 事件：从 payload.text 提取完整回复内容
     if (FINAL_ANSWER_EVENTS.has(lastEventType)) {
       return parseFinalAnswerDataLine(dataStr)
+    }
+
+    if (EXECUTION_FLOW_EVENTS.has(lastEventType)) {
+      return parseExecutionFlowDataLine(dataStr)
     }
 
     if (lastEventType.length > 0) {
@@ -82,6 +89,20 @@ function parseProgressDataLine(dataStr: string): ParseSSELineResult {
     const payload = JSON.parse(dataStr) as ChatProgressPayload
     return { kind: "progress", payload }
   } catch {
+    return null
+  }
+}
+
+function parseExecutionFlowDataLine(dataStr: string): ParseSSELineResult {
+  try {
+    const parsed = parseExecutionFlowTask(JSON.parse(dataStr) as unknown)
+    if (!parsed) {
+      console.warn("[ExecutionFlow] drop invalid SSE payload")
+      return null
+    }
+    return { kind: "execution-flow", payload: parsed }
+  } catch {
+    console.warn("[ExecutionFlow] failed to parse SSE data")
     return null
   }
 }

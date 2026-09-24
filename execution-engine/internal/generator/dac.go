@@ -191,9 +191,7 @@ func (h *DataAgentContainerGenerator) Do(ctx context.Context, dac *dacv1alpha1.D
 		if err != nil {
 			return err
 		}
-
-		// Reconcile updates so skillPolicy, AgentCard, model, and resource changes
-		// reach an existing normal DAC Deployment and trigger a rollout.
+		// Same as ds: update an existing Deployment so model, loop limits, overview, and skills roll Pods.
 		if err := h.K8sServices.CreateOrUpdateDeployment(dac.Namespace, deployment); err != nil {
 			return err
 		}
@@ -503,6 +501,10 @@ func (h *DataAgentContainerGenerator) generateOrchestratorAgentEnvs(dac *dacv1al
 		envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MID_EXEC_ROUNDS", Value: dacConfig.CrossSGMidExecRounds})
 	}
 	envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: resolveCrossSGMaxHop(dac, dacConfig)})
+	envs = appendNonEmptyEnv(envs,
+		corev1.EnvVar{Name: "SUMMARIZE_ENABLED", Value: dac.Spec.SummarizeEnabled},
+		corev1.EnvVar{Name: "SUMMARIZE_CUSTOM_PROMPT", Value: dac.Spec.SummarizeCustomPrompt},
+	)
 
 	envs = appendEnableThinkingEnv(envs, llmConfig)
 
@@ -1802,6 +1804,10 @@ func (h *DataAgentContainerGenerator) generateSkillAgentEnvs(dac *dacv1alpha1.Da
 	}
 	envs = appendEnableThinkingEnv(envs, llmConfig)
 	envs = appendNonEmptyEnv(envs, corev1.EnvVar{Name: "CROSS_SG_MAX_HOP", Value: resolveCrossSGMaxHop(dac, dacConfig)})
+	envs = appendNonEmptyEnv(envs,
+		corev1.EnvVar{Name: "SUMMARIZE_ENABLED", Value: dac.Spec.SummarizeEnabled},
+		corev1.EnvVar{Name: "SUMMARIZE_CUSTOM_PROMPT", Value: dac.Spec.SummarizeCustomPrompt},
+	)
 	return envs
 }
 

@@ -144,6 +144,8 @@ export type AgentContainerResponse = {
   orchestratorAgentMaxLoops?: string
   skillAgentMaxLoops?: string
   crossSGMaxHop?: string
+  summarizeEnabled?: string
+  summarizeCustomPrompt?: string
   activeDataDescriptors?: ActiveDataDescriptorResponse[]
   endpoint?: EndpointResponse
   conditions?: ConditionResponse[]
@@ -164,6 +166,8 @@ export type CreateAgentContainerRequest = {
   orchestratorAgentMaxLoops?: string
   skillAgentMaxLoops?: string
   crossSGMaxHop?: string
+  summarizeEnabled?: string
+  summarizeCustomPrompt?: string
 }
 
 /** PATCH/PUT agent update body (aligned with UpdateAgentContainerRequest). */
@@ -178,6 +182,8 @@ export type UpdateAgentContainerRequest = {
   orchestratorAgentMaxLoops?: string
   skillAgentMaxLoops?: string
   crossSGMaxHop?: string
+  summarizeEnabled?: string
+  summarizeCustomPrompt?: string
 }
 
 /** GET /namespaces/:ns/agents or GET /agents list payload (after unwrap) */
@@ -394,6 +400,9 @@ export interface ChatProgressPayload {
   agent?: string
   [key: string]: unknown
 }
+
+/** SSE `event: execution-flow` payload (ExecutionTask JSON, schema_version=v1). */
+export type { ExecutionFlowTask as ExecutionFlowTaskPayload } from "@/lib/execution-flow"
 
 export type ConversationResponse = {
   id: string

@@ -1,4 +1,5 @@
 import type { ChatProgressPayload } from "@/lib/api-types"
+import type { ExecutionFlowTask } from "@/lib/execution-flow"
 
 /** Single message in the conversation. Assistant messages may carry frozen progress once the stream ends. */
 export interface ChatMessage {
@@ -7,6 +8,7 @@ export interface ChatMessage {
   content: string
   reasoning_content?: string
   progressList?: readonly ChatProgressPayload[]
+  executionFlowList?: readonly ExecutionFlowTask[]
 }
 
 /** Stable empty array for progress list (rerender-best-practice). */

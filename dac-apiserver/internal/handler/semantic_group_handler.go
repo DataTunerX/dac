@@ -191,6 +191,7 @@ func (h *SemanticGroupHandler) Update(ctx context.Context, c *app.RequestContext
 		ErrorResponse(c, domain.ErrInvalidInput)
 		return
 	}
+	h.logger.Info("semantic group update request", "group_id", id)
 	updated, err := h.usecase.Update(ctx, id, &domain.UpdateSemanticGroupRequest{
 		GroupName:   req.GroupName,
 		Description: req.Description,
@@ -198,6 +199,7 @@ func (h *SemanticGroupHandler) Update(ctx context.Context, c *app.RequestContext
 		Version:     req.Version,
 	})
 	if err != nil {
+		h.logger.Error("semantic group update failed", "group_id", id, "error", err)
 		ErrorResponse(c, err)
 		return
 	}

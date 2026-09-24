@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from celery.result import AsyncResult
 
-from semantic_grouper.celery_app import celery, semantic_group_task
+from semantic_grouper.celery_app import celery, semantic_group_task, semantic_group_refresh_task
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +32,12 @@ class GroupRequest(BaseModel):
 
 class GroupResponse(BaseModel):
     task_id: str
+
+
+class RefreshGroupRequest(BaseModel):
+    group_id: str
+    mode: str = "decremental"  # "incremental" or "decremental"
+    descriptor: Optional[DescriptorModel] = None
 
 
 class TaskStatusResponse(BaseModel):
@@ -65,6 +71,32 @@ async def group(request: GroupRequest):
 
     logger.info("Dispatching semantic group task: %s", task_data)
     result = semantic_group_task.delay(task_data)
+    return {"task_id": result.id}
+
+
+@app.post("/api/v1/group/refresh", response_model=GroupResponse)
+async def refresh_group(request: RefreshGroupRequest):
+    """
+    Refresh a specified semantic group's description / agent_card from
+    current members. Membership is maintained by dac-apiserver.
+    """
+    mode = (request.mode or "decremental").strip().lower()
+    if mode not in ("incremental", "decremental"):
+        raise HTTPException(
+            status_code=400,
+            detail="mode must be 'incremental' or 'decremental'",
+        )
+    task_data = {
+        "group_id": request.group_id,
+        "mode": mode,
+    }
+    if request.descriptor is not None:
+        task_data["descriptor"] = {
+            "namespace": request.descriptor.namespace,
+            "name": request.descriptor.name,
+        }
+    logger.info("Dispatching group refresh task: %s", task_data)
+    result = semantic_group_refresh_task.delay(task_data)
     return {"task_id": result.id}
 
 

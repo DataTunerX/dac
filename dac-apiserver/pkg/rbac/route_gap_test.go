@@ -65,12 +65,14 @@ var routeTable = []struct {
 	{"GET", "/api/v1/namespaces/dev/descriptors/dd1", "get descriptor"},
 	{"GET", "/api/v1/namespaces/dev/descriptors/dd1/signature", "signature"},
 	{"GET", "/api/v1/namespaces/dev/descriptors/dd1/semantic-domain", "semantic-domain"},
+	{"PUT", "/api/v1/namespaces/dev/descriptors/dd1/semantic-domain", "update semantic-domain agent_card"},
 	{"PUT", "/api/v1/namespaces/dev/descriptors/dd1", "update descriptor"},
 	{"POST", "/api/v1/namespaces/dev/descriptors/dd1/resync", "resync"},
 	{"DELETE", "/api/v1/namespaces/dev/descriptors/dd1", "delete descriptor"},
 	{"GET", "/api/v1/namespaces/dev/descriptors/dd1/knowledge", "get knowledge"},
 	{"POST", "/api/v1/namespaces/dev/descriptors/dd1/knowledge/search", "search knowledge"},
 	{"POST", "/api/v1/namespaces/dev/descriptors/dd1/knowledge/delete", "delete knowledge"},
+	{"GET", "/api/v1/namespaces/dev/descriptor-job-logs/dd1", "descriptor job logs"},
 	// configmaps
 	{"POST", "/api/v1/namespaces/dev/llm-configmaps", "create llm cm"},
 	{"GET", "/api/v1/namespaces/dev/llm-configmaps", "list llm cm"},
@@ -142,6 +144,7 @@ var routeTable = []struct {
 	{"POST", "/api/v1/semantic-groups/sg1/members", "add sg member"},
 	{"POST", "/api/v1/semantic-groups/sg1/members/remove", "remove sg member"},
 	// dd-group-relations
+	{"POST", "/api/v1/dd-group-relations", "create relation"},
 	{"GET", "/api/v1/dd-group-relations/group/g1", "list by group"},
 	{"GET", "/api/v1/dd-group-relations/sd/sd1", "list by sd"},
 	{"DELETE", "/api/v1/dd-group-relations/rel1", "delete relation"},
