@@ -4,7 +4,7 @@ Skill-agent (``CAPABILITY_EVALUATION_SCORING_DESIGN.md``) is the only place
 that *scores*.  Routing only:
 
 * keeps / drops candidates with a fixed threshold rule
-* ranks them with a fixed key so A/B evidence beats C/D at the same score
+* ranks them with a fixed key so confidence wins first and evidence breaks ties
 * decides whether a single-root fast path is allowed
 * decides whether a contributor-only set should go to multi-root composition
 
@@ -20,6 +20,39 @@ EVIDENCE_RANK = {"A": 3, "B": 2, "C": 1, "D": 0}
 # they neither outrank a chain-scored A nor lose to a chain-scored C by default.
 LEGACY_EVIDENCE_RANK = 2
 TRUSTED_EVIDENCE_GRADES = frozenset({"A", "B"})
+CAPABILITY_CONFIDENCE_WEIGHT = 0.67
+PLAN_QUALITY_WEIGHT = 0.33
+
+
+def weighted_plan_score(confidence: float, plan_quality: float) -> float:
+    """Combine capability confidence and LLM plan quality deterministically.
+
+    Both inputs are normalized to ``[0, 1]`` so malformed model output cannot
+    overpower the configured 67/33 routing policy.
+    """
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = 0.0
+    try:
+        plan_quality_value = float(plan_quality)
+    except (TypeError, ValueError):
+        plan_quality_value = 0.0
+    confidence_value = max(0.0, min(1.0, confidence_value))
+    plan_quality_value = max(0.0, min(1.0, plan_quality_value))
+    return (
+        CAPABILITY_CONFIDENCE_WEIGHT * confidence_value
+        + PLAN_QUALITY_WEIGHT * plan_quality_value
+    )
+
+
+def can_handle_candidates(candidates: Iterable[tuple[Any, Any]]) -> list[tuple[Any, Any]]:
+    """Return only candidates that explicitly claim full-query handling ability."""
+    return [
+        (card, resp)
+        for card, resp in candidates
+        if bool(getattr(resp, "can_handle", False))
+    ]
 
 
 def is_chain_scored(resp: Any) -> bool:
@@ -35,14 +68,14 @@ def evidence_rank(resp: Any) -> int:
     return EVIDENCE_RANK.get(grade, 0)
 
 
-def sort_key(resp: Any) -> tuple[int, int, float]:
-    """Descending sort key: handle first, then evidence, then confidence."""
+def sort_key(resp: Any) -> tuple[int, float, int]:
+    """Descending sort key: handle first, then confidence, then evidence."""
     can_handle = 1 if getattr(resp, "can_handle", False) else 0
     try:
         conf = float(getattr(resp, "confidence", 0.0) or 0.0)
     except (TypeError, ValueError):
         conf = 0.0
-    return (can_handle, evidence_rank(resp), conf)
+    return (can_handle, conf, evidence_rank(resp))
 
 
 def keep_after_broadcast_threshold(resp: Any, threshold: float) -> bool:

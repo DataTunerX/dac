@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,12 +12,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from routing_agent.capability_select import (  # noqa: E402
+    CAPABILITY_CONFIDENCE_WEIGHT,
+    PLAN_QUALITY_WEIGHT,
+    can_handle_candidates,
     evidence_rank,
     evidence_trusted_for_fast_path,
     keep_after_broadcast_threshold,
     partition_route_candidates,
     should_compose_contributors_only,
     sort_key,
+    weighted_plan_score,
 )
 
 
@@ -57,6 +62,57 @@ def test_sort_same_handle_prefers_stronger_evidence():
     a = _resp(can_handle=True, confidence=0.9, score_version="capability-chain-v1", evidence_grade="A")
     d = _resp(can_handle=True, confidence=0.9, score_version="capability-chain-v1", evidence_grade="D")
     assert sort_key(a) > sort_key(d)
+
+
+def test_sort_same_handle_prefers_confidence_before_evidence():
+    higher_confidence = _resp(
+        can_handle=True,
+        confidence=1.0,
+        score_version="capability-chain-v1",
+        evidence_grade="B",
+    )
+    stronger_evidence = _resp(
+        can_handle=True,
+        confidence=0.9,
+        score_version="capability-chain-v1",
+        evidence_grade="A",
+    )
+    assert sort_key(higher_confidence) > sort_key(stronger_evidence)
+
+
+def test_weighted_plan_score_uses_67_percent_confidence():
+    assert CAPABILITY_CONFIDENCE_WEIGHT == 0.67
+    assert PLAN_QUALITY_WEIGHT == 0.33
+    assert math.isclose(weighted_plan_score(1.0, 0.5), 0.835)
+
+
+def test_weighted_plan_score_clamps_inputs():
+    assert weighted_plan_score(2.0, -1.0) == 0.67
+
+
+def test_confidence_lead_beats_small_plan_quality_advantage():
+    confidence_leader = weighted_plan_score(1.0, 0.80)
+    slightly_better_plan = weighted_plan_score(0.96, 0.85)
+    assert confidence_leader > slightly_better_plan
+
+
+def test_large_plan_quality_gap_can_still_change_winner():
+    weak_plan = weighted_plan_score(1.0, 0.2)
+    strong_plan = weighted_plan_score(0.9, 1.0)
+    assert strong_plan > weak_plan
+
+
+def test_can_handle_candidates_removes_false_even_if_contributor_is_confident():
+    handler = (SimpleNamespace(name="handler"), _resp(can_handle=True, confidence=0.71))
+    contributor = (
+        SimpleNamespace(name="contributor"),
+        _resp(can_handle=False, can_contribute=True, confidence=1.0),
+    )
+    incapable = (SimpleNamespace(name="incapable"), _resp(can_handle=False, confidence=0.99))
+
+    filtered = can_handle_candidates([contributor, incapable, handler])
+
+    assert filtered == [handler]
 
 
 def test_broadcast_threshold_handle_must_meet():

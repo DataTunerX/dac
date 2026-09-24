@@ -276,24 +276,17 @@ def test_capability_result_issues_request_scoped_execution_hint(monkeypatch):
     ) is None
 
 
-def test_valid_execution_hint_builds_authoritative_own_expert_plan():
+def test_valid_execution_hint_is_neutral_planner_evidence():
     executor = object.__new__(sg.OrchestratorAgentExecutorSemanticGroup)
-    plan = executor._build_authoritative_execution_plan(
-        query="上海有哪些门店？给出门店编码和名称。",
-        own_names={"EcommerceTransactionAgent-sg-x", "LocalSkill"},
-        preferred_own_agent="EcommerceTransactionAgent-sg-x",
-        execution_hint={
-            "can_handle": True,
-            "selected_members": [
-                "OmnichannelRetailEcommercePlatformAgent-dd-x"
-            ],
-        },
-    )
+    note = executor._execution_hint_memory_note({
+        "can_handle": True,
+        "confidence": 0.95,
+        "selected_members": ["OmnichannelRetailEcommercePlatformAgent-dd-x"],
+    })
 
-    assert plan is not None
-    assert len(plan.tasks) == 1
-    assert plan.tasks[0].agent == "EcommerceTransactionAgent-sg-x"
-    assert "门店" in plan.tasks[0].description
+    assert "not as a forced routing decision" in note
+    assert "minimum set of agents" in note
+    assert "prefer this SG's own Expert" not in note
 
 
 def test_response_preserves_old_fields_and_defaults_new_fields():

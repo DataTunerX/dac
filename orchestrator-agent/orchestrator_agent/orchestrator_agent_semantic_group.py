@@ -6164,9 +6164,44 @@ SUMMARIZE_CORE_PRINCIPLES = (
     "4. 下游结果中若含类似套话，请忽略并只提取实质信息，不要在输出中重复。\n"
     "5. 信息冲突时简要说明；缺信息时说明缺什么，勿编造。\n"
     "6. 对话历史仅用于理解当前问题的指代和语境，不要将历史中的旧结论当作当前事实。\n"
+    "7. 必须保留执行结果中的 TDB/知识库证据引用。对每个采用的事实结论，保留其原有的"
+    "引用标记、source/document/file 名称、记录 ID、页码、章节、段落或定位信息；不得删除、"
+    "改写成不可追溯的笼统来源，也不得虚构来源。\n"
+    "8. 如果正文中不便逐项放置引用，在答案末尾增加“证据来源”小节，逐条列出结论与原始"
+    "证据引用的对应关系。没有证据引用的执行结果不得伪装成已由 TDB 证实。\n"
 )
 
 SUMMARIZE_DELEGATED_SYSTEM_PROMPT = SUMMARIZE_CORE_PRINCIPLES
+
+
+_EVIDENCE_REFERENCE_RE = re.compile(
+    r"(?:\bTDB\b|\bsource(?:_id)?\s*[:=]|来源\s*[:：]|"
+    r"\b(?:document|file|doc_id|document_id|record_id|page)\s*[:=#]|"
+    r"文档\s*[:：]|页码\s*[:：]|https?://|\[[0-9]+\])",
+    re.IGNORECASE,
+)
+
+
+def _preserve_evidence_references(answer: str, evidence_context: str) -> str:
+    """Deterministically retain TDB/source lines omitted by summarization."""
+    final = str(answer or "").strip()
+    refs: list[str] = []
+    seen: set[str] = set()
+    for raw_line in str(evidence_context or "").splitlines():
+        line = raw_line.strip()
+        if not line or not _EVIDENCE_REFERENCE_RE.search(line):
+            continue
+        line = line[:1200]
+        if line in seen or line in final:
+            continue
+        seen.add(line)
+        refs.append(line)
+        if len(refs) >= 40:
+            break
+    if not refs:
+        return final
+    appendix = "\n".join(f"- {line}" for line in refs)
+    return f"{final}\n\n## 证据来源（原始执行引用）\n{appendix}".strip()
 
 
 def _format_own_and_delegate_text(
@@ -6209,7 +6244,8 @@ def _render_summary_execution_context(
             agent=current_agent,
             role=agent_role,
             current_agent=current_agent,
-            show_children=False,
+            # Preserve evidence emitted inside delegated/expert execution.
+            show_children=True,
         )
     if ef_md and ef_md.strip():
         sections.append(ef_md)
@@ -6597,53 +6633,6 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         )
         return hint
 
-    @staticmethod
-    def _pick_own_expert_name(own_names: set[str], preferred: str = "") -> str:
-        preferred = str(preferred or "").strip()
-        if preferred and preferred in own_names and preferred != "LocalSkill":
-            return preferred
-        candidates = sorted(
-            name for name in own_names if name and name != "LocalSkill"
-        )
-        return candidates[0] if candidates else ""
-
-    def _build_authoritative_execution_plan(
-        self,
-        *,
-        query: str,
-        own_names: set[str],
-        preferred_own_agent: str,
-        execution_hint: Optional[Dict[str, Any]],
-    ) -> Optional["TaskList"]:
-        """Create the primary own-Expert task from validated member evidence.
-
-        ``missing_requirements`` must NOT block authoritative dispatch: capability
-        already established can_handle for the primary ask; out-of-domain slices
-        are expected to surface as partial results / mid-exec delegation.
-        """
-        if not execution_hint or not execution_hint.get("can_handle"):
-            return None
-        if execution_hint.get("degraded"):
-            return None
-        own_expert = self._pick_own_expert_name(own_names, preferred_own_agent)
-        if not own_expert:
-            return None
-        return TaskList(
-            thought_process=(
-                "Reusing validated SG member capability evidence; dispatching "
-                "the original query to this SG's Expert."
-            ),
-            original_query=query,
-            tasks=[
-                PlannerTask(
-                    id=1,
-                    description=query,
-                    agent=own_expert,
-                    depends_on=[],
-                )
-            ],
-        )
-
     def _execution_hint_memory_note(self, plan: Dict[str, Any]) -> str:
         selected = [
             str(name).strip()
@@ -6664,10 +6653,38 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         if reason:
             lines.append("reason=" + reason[:300])
         lines.append(
-            "Therefore prefer this SG's own Expert Agent for execution; "
-            "do not return agent=NONE solely because the SG summary card is generic."
+            "Treat this as evidence that this SG is capable, not as a forced routing "
+            "decision. Compare it with explicit peer capabilities and choose the "
+            "minimum set of agents needed for the user's requested scope."
         )
         return "\n".join(lines)
+
+    @staticmethod
+    def _single_verified_local_result_is_complete(
+        plan: "TaskList",
+        own_names: set[str],
+        verified_task_ids: set[int],
+        task_results: dict[int, str],
+        capability_confirmed: bool = False,
+    ) -> bool:
+        """Deterministic stop gate for a completed one-task LocalSkill plan."""
+        tasks = list(getattr(plan, "tasks", None) or [])
+        if len(tasks) != 1:
+            return False
+        task = tasks[0]
+        agent_name = str(getattr(task, "agent", "") or "").strip()
+        result = str(task_results.get(task.id) or "").strip()
+        lowered = result.lower()
+        has_failure_signal = any(marker in lowered for marker in (
+            "execution error", "delegation failed", "data_sovereignty_gap",
+            "dependency_unmet", "no suitable skill", "unfulfilled_needs",
+        ))
+        return (
+            agent_name in own_names
+            and (task.id in verified_task_ids or capability_confirmed)
+            and bool(result)
+            and not has_failure_signal
+        )
 
     # ─────────────────────── Data-Flow Logging Helper ───────────────────────
 
@@ -8281,51 +8298,30 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             len(base_group_memory or ""),
             len(group_memory or ""),
         )
-        authoritative_plan = self._build_authoritative_execution_plan(
-            query=query,
-            own_names=own_names,
-            preferred_own_agent=self_agent_name,
-            execution_hint=execution_hint,
-        )
-        if authoritative_plan:
-            # A fresh, non-degraded member capability decision is authoritative
-            # for the primary execution attempt. Do not let a second LLM plan
-            # replace it with LocalSkill, another SG, or NONE.
-            plan = authoritative_plan
-            logger.info(
-                "[Capability][ExecutionHint] authoritative dispatch | own_expert=%s "
-                "selected_members=%s strategy=%s",
-                plan.tasks[0].agent,
-                (execution_hint.get("selected_members") or [])[:10],
-                execution_hint.get("execution_strategy") or "single",
+        # Capability evidence informs planning but must not bypass it.  The
+        # planner sees the complete local + peer pool and decides the smallest
+        # sufficient execution set.
+        try:
+            plan = await agent.planner_agent.make_plan(
+                query,
+                augmented_pool,
+                group_memory=group_memory,
             )
-        else:
-            if execution_hint:
-                logger.warning(
-                    "[Capability][ExecutionHint] no own Expert available; "
-                    "falling back to normal planner"
-                )
-            try:
-                plan = await agent.planner_agent.make_plan(
-                    query,
-                    augmented_pool,
-                    group_memory=group_memory,
-                )
-            except ValueError as plan_err:
-                # Planning failed after retries; return a normal failed task.
-                err_msg = f"任务规划失败：{plan_err}"
-                logger.error(
-                    "[Cross-SG][CollabPlanning] make_plan failed after retries | sg=%s err=%s",
-                    sg_label, plan_err,
-                )
-                await updater.add_artifact(
-                    [TextPart(text=err_msg)],
-                    name="planning-error",
-                )
-                await updater.failed(
-                    message=new_agent_text_message(err_msg, context_id=task.context_id),
-                )
-                return
+        except ValueError as plan_err:
+            # Planning failed after retries; return a normal failed task.
+            err_msg = f"任务规划失败：{plan_err}"
+            logger.error(
+                "[Cross-SG][CollabPlanning] make_plan failed after retries | sg=%s err=%s",
+                sg_label, plan_err,
+            )
+            await updater.add_artifact(
+                [TextPart(text=err_msg)],
+                name="planning-error",
+            )
+            await updater.failed(
+                message=new_agent_text_message(err_msg, context_id=task.context_id),
+            )
+            return
 
         own_tasks: list[PlannerTask] = []
         delegation_tasks: list[PlannerTask] = []
@@ -8401,6 +8397,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         delegated_results: dict[str, str] = {}
         # 用于跨 own/delegation 边界的依赖传播：按 task_id 索引所有已执行完成的结果
         _all_task_results: dict[int, str] = {}
+        self._verified_local_skill_task_ids: set[int] = set()
         # 记录已跳过的 delegation 任务（hop 耗尽时标记，避免遗漏 summary）
         skipped_delegation_agents: set[str] = set()
         _own_executed_count = 0
@@ -8874,6 +8871,24 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         # Guard: if hop is already exhausted, skip mid-exec entirely.
         if current_hop <= 1:
             logger.info("[Cross-SG][CollabMidExecLoop] hop exhausted (current_hop=%d), skipping mid-exec loop", current_hop)
+            await self._emit_collab_mid_exec_loop_done(
+                updater,
+                total_rounds=0,
+                total_delegated=len(delegated_results),
+            )
+            return _all_task_results, delegated_results
+
+        if self._single_verified_local_result_is_complete(
+            plan,
+            own_names,
+            self._verified_local_skill_task_ids,
+            _all_task_results,
+            capability_confirmed=bool(execution_hint),
+        ):
+            logger.info(
+                "[Cross-SG][CollabMidExecLoop] verified LocalSkill completed the "
+                "single-task plan; skipping gap detection and remote delegation"
+            )
             await self._emit_collab_mid_exec_loop_done(
                 updater,
                 total_rounds=0,
@@ -9891,6 +9906,13 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 trace_id=trace_id,
             )
             final_answer = str(result.get("final_answer") or "").strip()
+            status_code, _reason_code = self._map_skill_runner_status(result.get("status"))
+            if status_code == "complete" and final_answer:
+                verified = getattr(self, "_verified_local_skill_task_ids", None)
+                if verified is None:
+                    verified = set()
+                    self._verified_local_skill_task_ids = verified
+                verified.add(task.id)
             logger.info(
                 "[Cross-SG][CollabExecuteOwn] local skill done | task_id=%d status=%s skill=%s result_chars=%d",
                 task.id,
@@ -10289,9 +10311,9 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
 
     def _mid_delegate_max_targets(self) -> int:
         try:
-            return max(1, int(os.getenv("SG_MID_DELEGATE_MAX_TARGETS", "3") or 3))
+            return max(1, int(os.getenv("SG_MID_DELEGATE_MAX_TARGETS", "1") or 1))
         except ValueError:
-            return 3
+            return 1
 
     def _mid_exec_self_agent_name(self) -> str:
         return str(
@@ -10409,39 +10431,10 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         if not scoped:
             return scoped
 
-        context_parts: list[str] = []
-        if original_query:
-            context_parts.append(f"原始问题：{original_query}")
-        if own_results:
-            own_text = "\n".join(
-                f"[Task#{tid}]: {res}" for tid, res in own_results.items() if res
-            )
-            if own_text:
-                context_parts.append(f"本层已执行结果：\n{own_text}")
-        if delegated_results:
-            del_text = "\n".join(
-                f"[{name}]: {res or '[EMPTY]'}"
-                for name, res in delegated_results.items()
-            )
-            if del_text:
-                context_parts.append(f"已完成委托结果：\n{del_text}")
-        if detection_reason:
-            context_parts.append(f"检测理由：{detection_reason}")
-
-        if context_parts:
-            context_block = "\n\n".join(context_parts)
-            return (
-                "【跨 SG 补数子任务】请仅根据下列子任务判断本智能体是否拥有所需数据域"
-                "（can_handle / can_contribute）。不要按完整原题的其它域目标来否决。\n\n"
-                "══════════ 上下文（供准确判断） ══════════\n"
-                f"{context_block}\n"
-                "══════════════════════════════════════\n\n"
-                f"子任务：{scoped}"
-            )
         return (
-            "【跨 SG 补数子任务】请仅根据下列子任务判断本智能体是否拥有所需数据域"
-            "（can_handle / can_contribute）。不要按完整原题的其它域目标来否决。\n\n"
-            f"{scoped}"
+            "【跨 SG 补数子任务】只判断本智能体能否独立完成下面这个明确子任务。"
+            "不要根据原始问题的其他主题声明贡献。\n\n"
+            f"子任务：{scoped}"
         )
 
     @staticmethod
@@ -10580,12 +10573,16 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         # fine-tuning agent for a purchase-history query) from being selected
         # just because they happened to be the only candidate in the pool.
         _threshold = self._mid_exec_confidence_threshold()
-        if capable_pairs and _threshold > 0:
+        if capable_pairs:
             _before = len(capable_pairs)
             _filtered = [
                 (card, resp)
                 for card, resp in capable_pairs
-                if float(getattr(resp, "confidence", 0.0) or 0.0) >= _threshold
+                if bool(getattr(resp, "can_handle", False))
+                if (
+                    _threshold <= 0
+                    or float(getattr(resp, "confidence", 0.0) or 0.0) >= _threshold
+                )
             ]
             if len(_filtered) < _before:
                 _dropped = [
@@ -10752,6 +10749,9 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         prompt = (
             "你是一个多 agent 协作的数据缺口检测器。基于已有的执行结果和原始问题，"
             "判断是否还需要其他领域的补充数据。\n\n"
+            "最高优先级停止规则：如果已有成功结果已经直接覆盖用户明确要求，且结果没有明确的"
+            "失败、partial、unfulfilled_needs 或缺失字段信号，必须返回 needs_help=false。"
+            "不得为了增强、交叉验证、获得更多背景或因为其他 agent 可能有相关信息而继续委派。\n\n"
             "核心判断逻辑：\n"
             "1）首先分析本层自身执行结果，判断当前结果是否足以完整回答原始问题。\n"
             "2）如果本层结果是空结果（如 'not found'、'查询结果为空'、'0 条记录'、'no records'），"
@@ -10767,8 +10767,8 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             "structured_control 里已有可传递的关联键，且明确缺外域字段，"
             "应 needs_help=true，synthesized_query 必须带上这些关联键。\n"
             "5）outcome=partial 或 reason_code=data_sovereignty_gap 时，一律 needs_help=true。\n"
-            "6）只有当本层结果明确表示：原始问题中的实体或概念在自身数据域中确实不存在，"
-            "且没有任何其他 agent 可能拥有该数据时，才返回 needs_help=false。\n\n"
+            "6）当已有结果完整满足原始问题的明确范围时返回 needs_help=false。只有原始问题要求的"
+            "具体字段或交付物明确缺失时才委派；潜在的附加信息不构成数据缺口。\n\n"
             "synthesized_query 书写规则（强制）：\n"
             "- 只写下游 SG 本轮需要交付的子问题：关联键 + 缺失字段；\n"
             "- 当没有关联键时，传递原始问题中的实体信息（姓名、ID、关键词等）作为查询线索；\n"
@@ -11385,7 +11385,10 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
                 f"{del_text}"
             )
 
-        result = str(response.content or "").strip()
+        result = _preserve_evidence_references(
+            str(response.content or "").strip(),
+            human_prompt,
+        )
         logger.info(
             "[Cross-SG][CollabSummary] summary generated | result_chars=%d preview=%s",
             len(result),

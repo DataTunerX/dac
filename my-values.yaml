@@ -33,7 +33,7 @@ global:
 apiserver:
   image:
     repository: "dac-apiserver"
-    tag: "17-amd64"
+    tag: "18-amd64"
   config:
     routingAgent:
       timeout: "60m"
@@ -41,7 +41,7 @@ apiserver:
 frontend:
   image:
     repository: "frontend"
-    tag: "21-amd64"
+    tag: "23-amd64"
 
 dataServices:
   image:
@@ -61,22 +61,22 @@ dataServices:
 executionEngine:
   image:
     repository: "execution-engine"
-    tag: "18-amd64"
+    tag: "19-amd64"
   dacConfig:
-    crossSGMaxHop: "1"
+    crossSGMaxHop: "2"
   agentImages:
     orchestratorAgent:
       repository: "orchestrator-agent"
-      tag: "14-amd64"
+      tag: "16-amd64"
     expertAgent:
       repository: "expert-agent"
       tag: "14-amd64"
     codeAgent:
       repository: "code-agent"
-      tag: "12-amd64"
+      tag: "13-amd64"
     docAgent:
       repository: "doc-agent"
-      tag: "12-amd64"
+      tag: "13-amd64"
     dacDataServices:
       repository: "dac-data-services"
       tag: "12-amd64"
@@ -97,7 +97,7 @@ executionEngine:
     # identical "plan_and_run ENTER" line).
     skillAgent:
       repository: "skill-agent"
-      tag: "25-amd64"
+      tag: "28-amd64"
   llmConfigs:
     # apiKey is a placeholder -- pass the real key via --set-string at
     # upgrade time (see the comment on global.llm above).
@@ -129,7 +129,7 @@ bizOrchestratorRegistry:
 bizRoutingAgent:
   image:
     repository: "routing-agent"
-    tag: "17-amd64"
+    tag: "22-amd64"
 
 bizChartAgent:
   image:
@@ -142,14 +142,15 @@ bizSkillAgent:
     # pulls every skill-hub skill (incl. the tdb-* domain skills) into its agent
     # card and outbids the per-domain agents in capability routing.
     skillSyncWatchAll: "false"
+    crossSGMaxHop: "2"
   image:
     repository: "skill-agent"
-    tag: "25-amd64"
+    tag: "28-amd64"
 
 skillHub:
   image:
     repository: "skill-hub"
-    tag: "13-amd64"
+    tag: "14-amd64"
   # PINNED to hostPath on purpose. The chart default is now "pvc", but this
   # cluster's existing skill zips (incl. TDB-SKILL) live on node dce4 at
   # /var/lib/dac/skill-hub/skills. Switching to a fresh PVC would start empty and

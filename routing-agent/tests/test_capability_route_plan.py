@@ -331,19 +331,19 @@ async def test_simple_single_handler_direct_pick():
 
 
 @pytest.mark.asyncio
-async def test_simple_single_contributor_direct_pick():
-    """No handler → single contributor wins (sort picks it, 1 candidate → direct)."""
+async def test_simple_single_contributor_is_not_selected_as_root():
+    """A contributor cannot own the full query root."""
     user = _card("user-agent")
     user_resp = _chain(agent_name="user-agent", can_contribute=True, confidence=0.85)
     agent = _agent()
     agent.broadcast_capability_check = AsyncMock(return_value=[(user, user_resp)])
     step, rps, meta = await agent.get_best_agent_by_broadcast("张三买了哪些东西", "u", "r", "t")
-    assert step is not None and step.agent == "user-agent"
+    assert step is None
 
 
 @pytest.mark.asyncio
-async def test_simple_two_contributors_pre_make_plan():
-    """No handler + 2 contributors → Pre-Make-Plan picks one."""
+async def test_simple_two_contributors_do_not_enter_root_selection():
+    """No handler means no root, even if multiple agents can contribute."""
     user = _card("user-agent")
     gateway = _card("gateway-agent")
     user_resp = _chain(agent_name="user-agent", can_contribute=True, confidence=0.85)
@@ -352,7 +352,8 @@ async def test_simple_two_contributors_pre_make_plan():
     agent.broadcast_capability_check = AsyncMock(return_value=[(user, user_resp), (gateway, gw_resp)])
     agent._select_by_pre_make_plan = AsyncMock(return_value=(user, user_resp))
     step, rps, meta = await agent.get_best_agent_by_broadcast("张三买了哪些东西", "u", "r", "t")
-    assert step is not None and step.agent == "user-agent"
+    assert step is None
+    agent._select_by_pre_make_plan.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -386,8 +387,7 @@ async def test_simple_candidates_capped_at_three():
 
 @pytest.mark.asyncio
 async def test_simple_mixed_handlers_and_contributors():
-    """1 handler + 2 contributors → 3 candidates enter Pre-Make-Plan.
-    Handler ranks first by sort_key."""
+    """Only the handler may be root; contributors remain visible to its planner."""
     db = _card("db-agent")
     user = _card("user-agent")
     order = _card("order-agent")
@@ -401,5 +401,6 @@ async def test_simple_mixed_handlers_and_contributors():
     agent._select_by_pre_make_plan = AsyncMock(return_value=(db, db_resp))
     step, rps, meta = await agent.get_best_agent_by_broadcast("张三买了哪些东西", "u", "r", "t")
     assert step is not None and step.agent == "db-agent"
-    # All 3 should be in routing_agent_pool
+    agent._select_by_pre_make_plan.assert_not_awaited()
+    # All 3 still reach the selected root's planner pool.
     assert len(meta[ROUTING_AGENT_POOL_KEY]) == 3

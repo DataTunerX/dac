@@ -7,3 +7,11 @@ target/
 # Playwright accessibility snapshots written to the repo root by the
 # browser MCP server when a bare filename is passed.
 /*.yml
+
+# Local DAC presentation runner and generated demo cases must stay outside the repo.
+/demo/
+/.claude/commands/demo.md
+/.claude/skills/demo-runner/
+/frontend/src/app/(dashboard)/demo/
+/frontend/src/lib/demo-scenarios.ts
+/frontend/src/lib/demo-scenarios.test.ts

@@ -2426,6 +2426,7 @@ class SkillAgent(BaseAgent):
         self.current_task_id = current_task_id
         self.agent_id = agent_id
         self.reason_code: str = ""
+        self.completion_status: str = ""
         self.progress_callback = progress_callback
 
     def _log_propagated_history(self) -> None:
@@ -2553,6 +2554,7 @@ class SkillAgent(BaseAgent):
         elapsed_ms = int((_time.perf_counter() - t0) * 1000)
         status_code, reason_code = _map_skill_runner_status(result.get("status"))
         self.reason_code = reason_code
+        self.completion_status = status_code
 
         final_answer = str(result.get("final_answer") or "").strip()
         skill_name_used = str(result.get("skill") or "")
@@ -2705,6 +2707,11 @@ SUMMARIZE_CORE_PRINCIPLES = (
     "4. 下游结果中若含类似套话，请忽略并只提取实质信息，不要在输出中重复。\n"
     "5. 信息冲突时简要说明；缺信息时说明缺什么，勿编造。\n"
     "6. 对话历史仅用于理解当前问题的指代和语境，不要将历史中的旧结论当作当前事实。\n"
+    "7. 必须保留执行结果中的 TDB/知识库证据引用。对每个采用的事实结论，保留其原有的"
+    "引用标记、source/document/file 名称、记录 ID、页码、章节、段落或定位信息；不得删除、"
+    "改写成不可追溯的笼统来源，也不得虚构来源。\n"
+    "8. 如果正文中不便逐项放置引用，在答案末尾增加“证据来源”小节，逐条列出结论与原始"
+    "证据引用的对应关系。没有证据引用的执行结果不得伪装成已由 TDB 证实。\n"
 )
 
 SUMMARIZE_EVAL_SYSTEM_PROMPT = (
@@ -2753,6 +2760,40 @@ SUMMARIZE_EVAL_SYSTEM_PROMPT = (
 AGENT_SUMMARIZE_SYSTEM_PROMPT = SUMMARIZE_CORE_PRINCIPLES
 
 
+_EVIDENCE_REFERENCE_RE = re.compile(
+    r"(?:\bTDB\b|\bsource(?:_id)?\s*[:=]|来源\s*[:：]|"
+    r"\b(?:document|file|doc_id|document_id|record_id|page)\s*[:=#]|"
+    r"文档\s*[:：]|页码\s*[:：]|https?://|\[[0-9]+\])",
+    re.IGNORECASE,
+)
+
+
+def _preserve_evidence_references(answer: str, evidence_context: str) -> str:
+    """Append source-bearing input lines that the summary LLM omitted.
+
+    Prompting normally keeps citations in place; this deterministic guard makes
+    traceability survive even when the model rewrites away a TDB reference.
+    """
+    final = str(answer or "").strip()
+    refs: list[str] = []
+    seen: set[str] = set()
+    for raw_line in str(evidence_context or "").splitlines():
+        line = raw_line.strip()
+        if not line or not _EVIDENCE_REFERENCE_RE.search(line):
+            continue
+        line = line[:1200]
+        if line in seen or line in final:
+            continue
+        seen.add(line)
+        refs.append(line)
+        if len(refs) >= 40:
+            break
+    if not refs:
+        return final
+    appendix = "\n".join(f"- {line}" for line in refs)
+    return f"{final}\n\n## 证据来源（原始执行引用）\n{appendix}".strip()
+
+
 def _format_own_and_delegate_text(
     task_results: dict[int, str] | None,
     delegate_results: dict[str, str] | None,
@@ -2792,7 +2833,9 @@ def _render_summary_execution_context(
             agent=current_agent,
             role=agent_role,
             current_agent=current_agent,
-            show_children=False,
+            # Summary needs the complete evidence-bearing downstream text;
+            # hiding child execution can hide TDB document/page references.
+            show_children=True,
         )
     if ef_md and ef_md.strip():
         sections.append(ef_md)
@@ -3777,8 +3820,9 @@ class SkillAgentExecutor(AgentExecutor):
         if reason:
             lines.append("reason=" + reason[:300])
         lines.append(
-            "Therefore prefer this agent's own member for execution; "
-            "do not return agent=NONE solely because the agent card is generic."
+            "Treat this as evidence that the local member is capable, not as a forced "
+            "routing decision. Compare it with explicit peer capabilities and choose "
+            "the minimum set of agents needed for the user's requested scope."
         )
         return "\n".join(lines)
 
@@ -4278,6 +4322,37 @@ class SkillAgentExecutor(AgentExecutor):
     # Mid-execution detection and delegation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _single_verified_local_result_is_complete(
+        plan: TaskList,
+        own_names: set[str],
+        verified_task_ids: set[int],
+        task_results: dict[int, str],
+        capability_confirmed: bool = False,
+    ) -> bool:
+        """Return true only for one successfully completed local-skill task.
+
+        This is a deterministic stop gate ahead of the gap-detection LLM.  It
+        intentionally does not guess about multi-task or delegated plans.
+        """
+        tasks = list(getattr(plan, "tasks", None) or [])
+        if len(tasks) != 1:
+            return False
+        task = tasks[0]
+        agent_name = str(getattr(task, "agent", "") or "").strip()
+        result = str(task_results.get(task.id) or "").strip()
+        lowered = result.lower()
+        has_failure_signal = any(marker in lowered for marker in (
+            "execution error", "delegation failed", "data_sovereignty_gap",
+            "dependency_unmet", "no suitable skill", "unfulfilled_needs",
+        ))
+        return (
+            agent_name in own_names
+            and (task.id in verified_task_ids or capability_confirmed)
+            and bool(result)
+            and not has_failure_signal
+        )
+
     async def _detect_delegation_needs(
         self,
         query: str,
@@ -4332,8 +4407,11 @@ class SkillAgentExecutor(AgentExecutor):
         prompt = (
             "你是一个多 agent 协作的数据缺口检测器。基于已有的执行结果和原始问题，"
             "判断是否还需要其他领域的补充数据。\n\n"
+            "最高优先级停止规则：如果已有成功结果已经直接覆盖用户明确要求，且结果没有明确的"
+            "失败、partial、unfulfilled_needs 或缺失字段信号，必须返回 needs_help=false。"
+            "不得为了增强、交叉验证、获得更多背景或因为其他 agent 可能有相关信息而继续委派。\n\n"
             "核心判断逻辑：\n"
-            "1）首先分析本层自身执行结果，判断当前结果是否足以完整回答原始问题。\n"
+            "1）首先分析本层自身执行结果，判断当前结果是否足以回答原始问题。\n"
             "2）如果本层结果是空结果（如 'not found'、'查询结果为空'、'0 条记录'、'no records'），"
             "不能因此直接拒绝委派。需要进一步判断：\n"
             "   a) 本层 skill 说明或结果中是否提到了其他可用的技能/数据源/agent？\n"
@@ -4347,8 +4425,8 @@ class SkillAgentExecutor(AgentExecutor):
             "structured_control 里已有可传递的关联键，且明确缺外域字段，"
             "应 needs_help=true，synthesized_query 必须带上这些关联键。\n"
             "5）outcome=partial 或 reason_code=data_sovereignty_gap 时，一律 needs_help=true。\n"
-            "6）只有当本层结果明确表示：原始问题中的实体或概念在自身数据域中确实不存在，"
-            "且没有任何其他 agent 可能拥有该数据时，才返回 needs_help=false。\n\n"
+            "6）当已有结果完整满足原始问题的明确范围时返回 needs_help=false。只有原始问题要求的"
+            "具体字段或交付物明确缺失时才委派；潜在的附加信息不构成数据缺口。\n\n"
             "synthesized_query 书写规则（强制）：\n"
             "- 只写下游 SG 本轮需要交付的子问题：关联键 + 缺失字段；\n"
             "- 当没有关联键时，传递原始问题中的实体信息（姓名、ID、关键词等）作为查询线索；\n"
@@ -4575,9 +4653,9 @@ class SkillAgentExecutor(AgentExecutor):
 
     def _mid_delegate_max_targets(self) -> int:
         try:
-            return max(1, int(os.getenv("SG_MID_DELEGATE_MAX_TARGETS", "3") or 3))
+            return max(1, int(os.getenv("SG_MID_DELEGATE_MAX_TARGETS", "1") or 1))
         except ValueError:
-            return 3
+            return 1
 
     def _mid_exec_confidence_threshold(self) -> float:
         """Minimum confidence score for mid-exec delegation target selection.
@@ -4601,45 +4679,19 @@ class SkillAgentExecutor(AgentExecutor):
     ) -> str:
         """Build a probe query for remote SG capability check.
 
-        Uses the same structured ``executed_tasks`` format as
-        :meth:`_build_mid_exec_planner_context` so the remote SG sees
-        a clean, consistent view of what has already been done.
+        Deliberately sends only the missing sub-task.  Including the original
+        broad query or all prior results causes unrelated domains to claim a
+        contribution even though they cannot own the actual missing work.
         """
         scoped = (synthesized_query or "").strip()
         if not scoped:
             return scoped
 
-        lines: list[str] = []
-        lines.append("请根据下面提供的信息和自身的skill的能力，分析是否可以解答或处理信息中提到的问题。")
-        lines.append("")
-
-        # ── Section 1: Core Task ──
-        if original_query:
-            lines.append(f"**原始问题**：{original_query}")
-        if detection_reason:
-            lines.append(f"**委派原因**：{detection_reason}")
-        lines.append("")
-
-        # ── Section 2: Executed Tasks ──
-        if executed_tasks:
-            lines.append("## 已执行任务")
-            lines.append("")
-            lines.append("| Task ID | Agent | 描述 | 状态 | 结果 |")
-            lines.append("|---------|-------|------|------|------|")
-            for t in executed_tasks:
-                tid = str(t.get("task_id", t.get("id", "?")))
-                agent = str(t.get("agent", "") or "")
-                desc = (str(t.get("description", "") or ""))[:200]
-                status = str(t.get("status", "?"))
-                result = (str(t.get("result", "") or ""))[:500]
-                status_icon = "✅" if status == "completed" else "❌"
-                lines.append(f"| {tid} | {agent} | {desc} | {status_icon} | {result} |")
-            lines.append("")
-
-        # ── Section 3: Sub-Task ──
-        lines.append(f"**子任务**：{scoped}")
-
-        return "\n".join(lines)
+        return (
+            "【跨 SG 补数子任务】只判断本智能体能否独立完成下面这个明确子任务。"
+            "不要根据原始问题的其他主题声明贡献。\n\n"
+            f"子任务：{scoped}"
+        )
 
     async def _load_mid_exec_broadcast_candidates(
         self,
@@ -4776,35 +4828,19 @@ class SkillAgentExecutor(AgentExecutor):
         # fine-tuning agent for a purchase-history query) from being selected
         # just because they happened to be the only candidate in the pool.
         #
-        # IMPORTANT: the threshold ONLY applies to agents that claim
-        # ``can_handle=True``.  Agents that are ``can_handle=False`` but
-        # ``can_contribute=True`` (e.g. a product-agent that can supplement
-        # product details once order-agent returns product IDs) are NOT
-        # filtered — they are genuinely useful contributors even if their
-        # confidence is below the threshold.
+        # Mid-exec dispatch assigns ownership of a concrete scoped task, so an
+        # agent must explicitly report can_handle=true and pass confidence.
         _threshold = self._mid_exec_confidence_threshold()
-        if capable_pairs and _threshold > 0:
+        if capable_pairs:
             _before = len(capable_pairs)
             _filtered: list[tuple[AgentCard, Any]] = []
             _dropped: list[str] = []
-            _skipped_contributors: list[str] = []
             for card, resp in capable_pairs:
                 conf = float(getattr(resp, "confidence", 0.0) or 0.0)
                 can_handle = bool(getattr(resp, "can_handle", False))
-                can_contribute = bool(getattr(resp, "can_contribute", False))
-                if can_handle:
-                    # can_handle=True: must pass confidence threshold
-                    if conf >= _threshold:
-                        _filtered.append((card, resp))
-                    else:
-                        _dropped.append(f"{card.name}({conf:.2f})")
-                elif can_contribute:
-                    # can_handle=False but can_contribute=True: skip threshold,
-                    # keep as a contributor
+                if can_handle and (_threshold <= 0 or conf >= _threshold):
                     _filtered.append((card, resp))
-                    _skipped_contributors.append(f"{card.name}({conf:.2f})")
                 else:
-                    # neither can_handle nor can_contribute: drop
                     _dropped.append(f"{card.name}({conf:.2f})")
             if len(_filtered) < _before:
                 if _dropped:
@@ -4813,12 +4849,6 @@ class SkillAgentExecutor(AgentExecutor):
                         "threshold=%.2f before=%d after=%d dropped=%s",
                         _threshold, _before, len(_filtered), _dropped,
                     )
-            if _skipped_contributors:
-                logger.info(
-                    "[MidExec][CapSelect] confidence threshold bypassed for contributors | "
-                    "threshold=%.2f kept=%s",
-                    _threshold, _skipped_contributors,
-                )
             capable_pairs = _filtered
 
         if not capable_pairs:
@@ -6047,6 +6077,9 @@ class SkillAgentExecutor(AgentExecutor):
             if not satisfactory and not missing_info:
                 missing_info = "当前信息不足以完整回答用户问题，需要补充获取相关数据。"
 
+            if answer:
+                answer = _preserve_evidence_references(answer, human_prompt)
+
             # 直接返回 LLM 的评估结果，不再进行任何一致性修正或内容检查
             return SummaryEvaluationResult(
                 answer=answer,
@@ -6164,7 +6197,7 @@ class SkillAgentExecutor(AgentExecutor):
                 round((_time.monotonic() - _t0) * 1000),
                 len(final_text),
             )
-            return final_text
+            return _preserve_evidence_references(final_text, human_prompt)
         except Exception as e:
             logger.error("[Summary] LLM summarization failed: %s", e)
             return (
@@ -7032,6 +7065,7 @@ class SkillAgentExecutor(AgentExecutor):
         own_results: dict[int, str] = {}
         delegate_results: dict[str, str] = {}
         all_task_results: dict[int, str] = {}
+        verified_local_skill_task_ids: set[int] = set()
         self._tasks_status_list: list[dict] = []
 
         for task_item in plan.tasks:
@@ -7150,6 +7184,12 @@ class SkillAgentExecutor(AgentExecutor):
                     if chunk:
                         result_parts.append(chunk)
                 result = "\n".join(result_parts)
+                if (
+                    self._is_local_skill_task(task_item)
+                    and local_agent.completion_status == "complete"
+                    and result.strip()
+                ):
+                    verified_local_skill_task_ids.add(task_item.id)
                 own_results[task_item.id] = result
                 all_task_results[task_item.id] = result
                 is_fail = result.startswith("Delegation failed:") or result.startswith("Execution error:") or not result.strip()
@@ -7377,6 +7417,19 @@ class SkillAgentExecutor(AgentExecutor):
         # Guard: if hop is already exhausted, skip mid-exec entirely.
         if current_hop <= 1:
             logger.info("[MidExec] hop exhausted (current_hop=%d), skipping mid-exec loop", current_hop)
+            return all_task_results, delegate_results, current_hop, plan_task_meta, execution_flow_tasks
+
+        if self._single_verified_local_result_is_complete(
+            plan,
+            own_names,
+            verified_local_skill_task_ids,
+            all_task_results,
+            capability_confirmed=bool(execution_hint),
+        ):
+            logger.info(
+                "[MidExec] verified local skill completed the single-task plan; "
+                "skipping gap detection and remote delegation"
+            )
             return all_task_results, delegate_results, current_hop, plan_task_meta, execution_flow_tasks
 
         await self._emit_progress(

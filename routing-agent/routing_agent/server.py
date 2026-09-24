@@ -2953,11 +2953,13 @@ class RoutingAgent(BaseAgent):
         """
         # ── Build candidate context ──
         plans_text_parts: list[str] = []
-        for idx, (card, _, plan) in enumerate(candidates_with_plans):
+        for idx, (card, resp, plan) in enumerate(candidates_with_plans):
             tasks = plan.get("tasks", [])
             tasks_text = json.dumps(tasks, ensure_ascii=False, indent=2)
             plans_text_parts.append(
                 f"### Agent {idx + 1}: {card.name}\n"
+                f"Capability confidence: {float(resp.confidence):.4f}\n"
+                f"Evidence grade: {str(getattr(resp, 'evidence_grade', '') or 'N/A')}\n"
                 f"Description: {card.description}\n"
                 f"Planned tasks:\n{tasks_text}"
             )
@@ -2976,9 +2978,13 @@ class RoutingAgent(BaseAgent):
             "b) 合理性：任务划分粒度是否合适？任务之间的依赖关系是否正确？\n"
             "c) 自洽性：每个子任务分配的 agent 与该 Agent 的 description 是否匹配？\n"
             "d) 整体印象：该规划是否能高效、准确地回答用户问题？\n\n"
-            "## Step 3 — 比较与选择\n"
-            "横向比较各 Agent 的规划，选出最优的一个。如果有多个规划质量接近，优先选择"
-            "覆盖度更完整、任务划分更清晰的。\n\n"
+            "请仅根据 a-d 为每个候选给出 0.0 到 1.0 的 plan_quality_score；不要把 capability "
+            "confidence 重复计入 plan_quality_score。分数列表必须与 Agent 顺序完全一致。\n\n"
+            "## Step 3 — 加权比较与选择\n"
+            "最终分数固定按以下公式计算：\n"
+            "final_score = 0.67 × capability_confidence + 0.33 × plan_quality_score\n"
+            "confidence 占 67%，规划质量占 33%。selected_agent_index 应选择 final_score 最高者。"
+            "服务端会用同一公式重新计算并执行最终选择。\n\n"
             f"用户问题：{query}\n\n"
             f"各 Agent 的规划：\n{plans_text}\n\n"
             "请调用 select_best_plan 工具输出你的选择。"
@@ -2988,8 +2994,11 @@ class RoutingAgent(BaseAgent):
             thought: str = Field(
                 description="按 Step 1 → Step 2 → Step 3 的完整推理过程"
             )
+            plan_quality_scores: List[float] = Field(
+                description="各 Agent 的规划质量分，范围 0.0 到 1.0，顺序与输入候选一致"
+            )
             selected_agent_index: int = Field(
-                description="选中的 Agent 编号（1-based，对应上面 Agent N 的 N）"
+                description="按 67% confidence + 33% plan quality 选中的 Agent 编号（1-based）"
             )
             reason: str = Field(
                 description="选择理由，一句话总结"
@@ -3027,10 +3036,35 @@ class RoutingAgent(BaseAgent):
             )
             return (candidates_with_plans[0][0], candidates_with_plans[0][1])
 
-        idx = int(result.get("selected_agent_index", 1)) - 1
-        idx = max(0, min(idx, len(candidates_with_plans) - 1))
+        raw_plan_scores = result.get("plan_quality_scores")
+        if not isinstance(raw_plan_scores, list) or len(raw_plan_scores) != len(candidates_with_plans):
+            logger.warning(
+                "[PreMakePlan] invalid plan_quality_scores count=%s expected=%d — "
+                "falling back to confidence-first candidate",
+                len(raw_plan_scores) if isinstance(raw_plan_scores, list) else "invalid",
+                len(candidates_with_plans),
+            )
+            return (candidates_with_plans[0][0], candidates_with_plans[0][1])
+
+        weighted_scores = [
+            capability_select.weighted_plan_score(resp.confidence, raw_plan_scores[i])
+            for i, (_, resp, _) in enumerate(candidates_with_plans)
+        ]
+        idx = max(range(len(weighted_scores)), key=weighted_scores.__getitem__)
+        score_details = [
+            {
+                "agent": card.name,
+                "confidence": round(float(resp.confidence), 4),
+                "plan_quality": round(max(0.0, min(1.0, float(raw_plan_scores[i]))), 4),
+                "final_score": round(weighted_scores[i], 4),
+            }
+            for i, (card, resp, _) in enumerate(candidates_with_plans)
+        ]
         logger.info(
-            "[PreMakePlan] selected agent=%s reason=%s thought=%s",
+            "[PreMakePlan] weighted selection 67/33 scores=%s llm_recommended=%s "
+            "selected agent=%s reason=%s thought=%s",
+            score_details,
+            result.get("selected_agent_index"),
             candidates_with_plans[idx][0].name,
             result.get("reason", ""),
             (result.get("thought", "") or "")[:300],
@@ -3079,14 +3113,21 @@ class RoutingAgent(BaseAgent):
                 trace_id,
                 propagated_history=history_payload,
             )
+            handling_agents = capability_select.can_handle_candidates(capable_agents)
 
-            if not capable_agents:
-                logger.info("[RoutePlan] Simple route: no capable agent found")
+            if not handling_agents:
+                logger.info(
+                    "[RoutePlan] Simple route: no can_handle=true agent found "
+                    "(broadcast_results=%d)",
+                    len(capable_agents),
+                )
                 span.update_trace(output={"selected_agent": None, "capable_count": 0})
                 result: tuple[Optional[PlannerStep], Optional[list[dict]], dict] = (None, None, {})
             else:
-                # ── Cap at 3 candidates (already sorted: handlers first) ──
-                candidates: list[tuple[AgentCard, CapabilityCheckResponse]] = capable_agents[:MAX_SIMPLE_CANDIDATES]
+                # A confidence value describes confidence in full-query handling.
+                # Agents that explicitly answered can_handle=false must not enter
+                # the single-root shortlist, even when they can contribute a step.
+                candidates: list[tuple[AgentCard, CapabilityCheckResponse]] = handling_agents[:MAX_SIMPLE_CANDIDATES]
                 handler_count = sum(1 for _, r in candidates if r.can_handle)
                 logger.info(
                     "[RoutePlan] Simple route: %d candidates (handlers=%d, contributors=%d)",
@@ -3142,6 +3183,10 @@ class RoutingAgent(BaseAgent):
                 exec_meta = {
                     "execution_strategy": "single",
                     PROPAGATED_HISTORY_KEY: history_payload,
+                    # Root selection is intentionally restricted to
+                    # can_handle=true agents, but the selected root's planner
+                    # still needs visibility into explicitly-declared
+                    # contributors for genuine multi-domain plans.
                     ROUTING_AGENT_POOL_KEY: _build_routing_agent_pool_from_capable(capable_agents),
                     ROUTING_SELECTED_ROOT_KEY: selected_card.name,
                     # Evidence for the routing decision: every agent the broadcast
@@ -3161,7 +3206,7 @@ class RoutingAgent(BaseAgent):
                         key=lambda entry: entry["confidence"],
                         reverse=True,
                     ),
-                    "candidate_count": len(capable_agents),
+                    "candidate_count": len(handling_agents),
                 }
                 if isinstance(selected_resp.execution_hint, dict) and selected_resp.execution_hint:
                     exec_meta[SG_EXECUTION_HINT_KEY] = selected_resp.execution_hint
@@ -3186,7 +3231,7 @@ class RoutingAgent(BaseAgent):
                 span.update_trace(output={
                     "selected_agent": selected_card.name,
                     "selected_confidence": selected_resp.confidence,
-                    "capable_count": len(capable_agents),
+                    "capable_count": len(handling_agents),
                     "mode": "simple",
                 })
                 result = (step, (rps if rps else None), exec_meta)

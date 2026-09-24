@@ -160,10 +160,7 @@ def test_select_mid_delegate_single_round_broadcast_ranks_soft_hints(monkeypatch
     assert len(calls) == 1
     assert set(calls[0]) == {"hint-sg-aaa", "other-sg-bbb"}
     # Equal confidence → soft hint ranks first.
-    assert result["target_sg_names"][0] == "hint-sg-aaa"
-    assert "other-sg-bbb" in result["target_sg_names"]
-    assert result["hints_by_sg"]["other-sg-bbb"]["selected_members"] == ["member-dd"]
-    assert "member evidence" in result["evidence_text"]
+    assert result["target_sg_names"] == ["hint-sg-aaa"]
 
 
 def test_select_mid_delegate_higher_confidence_beats_soft_hint(monkeypatch):
@@ -195,6 +192,81 @@ def test_select_mid_delegate_higher_confidence_beats_soft_hint(monkeypatch):
         )
     )
     assert result["target_sg_names"][0] == "other-sg-bbb"
+
+
+def test_select_mid_delegate_drops_contributor_even_with_high_confidence(monkeypatch):
+    executor = object.__new__(sg.OrchestratorAgentExecutorSemanticGroup)
+    executor.agent_card = SimpleNamespace(name="self-sg")
+    executor.agent_id = "self-sg"
+    contributor = _card("unrelated-contributor")
+    handler = _card("scoped-handler")
+
+    async def _fake_probe(query, probe_cards, *_args, **_kwargs):
+        return [
+            (contributor, _resp(can_contribute=True, confidence=1.0)),
+            (handler, _resp(can_handle=True, confidence=0.8)),
+        ]
+
+    async def _fake_list(*, collection_name=None):
+        return [contributor, handler, _card("self-sg")]
+
+    monkeypatch.setattr(sg.sg_broadcast, "probe_agents_capability_concurrent", _fake_probe)
+    monkeypatch.setattr(sg.sg_broadcast, "list_all_orchestrator_agent_cards", _fake_list)
+
+    result = asyncio.run(
+        executor._select_mid_delegate_targets_via_capability(
+            "查找缺失的具体字段", [contributor, handler]
+        )
+    )
+    assert result["target_sg_names"] == ["scoped-handler"]
+
+
+def test_mid_exec_probe_contains_only_scoped_missing_task():
+    probe = sg.OrchestratorAgentExecutorSemanticGroup._mid_exec_capability_probe_query(
+        "查找 document_id=42 的页码",
+        original_query="写一份完整竞争分析",
+        own_results={1: "已有大量分析"},
+        detection_reason="希望补充更多背景",
+    )
+    assert "document_id=42" in probe
+    assert "完整竞争分析" not in probe
+    assert "已有大量分析" not in probe
+
+
+def test_single_verified_local_result_stops_only_single_task_plan():
+    one = sg.TaskList(
+        thought_process="local",
+        original_query="q",
+        tasks=[sg.PlannerTask(id=1, description="q", agent="LocalSkill", depends_on=[])],
+    )
+    assert sg.OrchestratorAgentExecutorSemanticGroup._single_verified_local_result_is_complete(
+        one, {"LocalSkill"}, {1}, {1: "answer with [TDB:doc-1:p3]"}
+    )
+    assert not sg.OrchestratorAgentExecutorSemanticGroup._single_verified_local_result_is_complete(
+        one, {"LocalSkill"}, set(), {1: "answer"}
+    )
+
+
+def test_summary_prompt_requires_tdb_evidence_preservation():
+    assert "证据来源" in sg.SUMMARIZE_CORE_PRINCIPLES
+    assert "TDB" in sg.SUMMARIZE_CORE_PRINCIPLES
+    assert "不得删除" in sg.SUMMARIZE_CORE_PRINCIPLES
+
+
+def test_summary_guard_appends_omitted_tdb_reference():
+    result = sg._preserve_evidence_references(
+        "结论：产品支持该能力。",
+        "事实说明\n来源：TDB document=vendor-guide.pdf page=42",
+    )
+    assert "## 证据来源（原始执行引用）" in result
+    assert "vendor-guide.pdf" in result
+    assert "page=42" in result
+
+
+def test_summary_guard_does_not_duplicate_existing_reference():
+    reference = "来源：TDB document=vendor-guide.pdf page=42"
+    result = sg._preserve_evidence_references(f"结论。\n{reference}", reference)
+    assert result.count(reference) == 1
 
 
 def test_select_mid_delegate_no_fallback_when_capability_empty(monkeypatch):
