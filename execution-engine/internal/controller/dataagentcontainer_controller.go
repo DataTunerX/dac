@@ -19,14 +19,32 @@ package controller
 import (
 	"context"
 	"github.com/DataTunerX/dac/execution-engine/internal/handler"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crhandler "sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"time"
 
 	dacv1alpha1 "github.com/DataTunerX/dac/execution-engine/api/v1alpha1"
+)
+
+// dac-configuration (ns dac) carries the cluster-wide default image tags
+// (skill-agent-image, orchestrator-agent-image, …) that GenerateSkillDataAgentContainerDeployment
+// and friends read fresh on every reconcile. Bumping it (e.g. via `helm upgrade`) does not, on its
+// own, touch any already-running DataAgentContainer — the object's own spec never changes, so no
+// Update event fires for it. The Watches() below closes that gap: a change to this ConfigMap
+// requeues every DataAgentContainer so already-running agents pick up the new image instead of
+// only agents created after the bump.
+const (
+	dacConfigConfigMapName      = "dac-configuration"
+	dacConfigConfigMapNamespace = "dac"
 )
 
 // DataAgentContainerReconciler reconciles a DataAgentContainer object
@@ -89,10 +107,40 @@ func (r *DataAgentContainerReconciler) Reconcile(ctx context.Context, req ctrl.R
 	return ctrl.Result{}, nil
 }
 
+// enqueueAllDataAgentContainers maps a dac-configuration change to a reconcile
+// request for every DataAgentContainer in the cluster, so image bumps (and any
+// other dac-configuration field the generator reads) roll out to already-running
+// agents instead of only affecting agents created after the change.
+func (r *DataAgentContainerReconciler) enqueueAllDataAgentContainers(ctx context.Context, _ client.Object) []reconcile.Request {
+	logger := logf.FromContext(ctx)
+
+	var list dacv1alpha1.DataAgentContainerList
+	if err := r.Client.List(ctx, &list); err != nil {
+		logger.Error(err, "Failed to list DataAgentContainers for dac-configuration watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(list.Items))
+	for _, item := range list.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: item.Namespace, Name: item.Name},
+		})
+	}
+	logger.Info("dac-configuration changed, requeueing all DataAgentContainers", "count", len(requests))
+	return requests
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *DataAgentContainerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dacv1alpha1.DataAgentContainer{}).
+		Watches(
+			&corev1.ConfigMap{},
+			crhandler.EnqueueRequestsFromMapFunc(r.enqueueAllDataAgentContainers),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				return obj.GetNamespace() == dacConfigConfigMapNamespace && obj.GetName() == dacConfigConfigMapName
+			})),
+		).
 		Named("dataagentcontainer").
 		Complete(r)
 }

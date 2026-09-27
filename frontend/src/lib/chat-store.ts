@@ -460,56 +460,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
         console.warn("Conversation not found")
         return "not_found"
       }
-      if (!response.ok) {
-        if (response.status === 404) {
-          if (optimisticRunIds.has(runId)) return "skipped"
-          console.warn("Conversation not found")
-          return "not_found"
-        }
-        console.error("Failed to load history:", response.statusText)
-        return "skipped"
-      }
-      const data = (await response.json()) as ConversationHistoryResponse
-      if (controller.signal.aborted) return "skipped"
-      const rawMessages = Array.isArray(data?.messages) ? data.messages : []
-      const historyMessages: Message[] = rawMessages
-        .map((m, i): Message | null => {
-          const r = typeof m === "object" && m !== null ? (m as Record<string, unknown>) : {}
-          const role = r.role
-          const content = r.content
-          if ((role !== "user" && role !== "assistant" && role !== "system") || typeof content !== "string")
-            return null
-          const think = typeof r.think === "string" ? r.think : undefined
-          const reasoning = typeof r.reasoning_content === "string" ? r.reasoning_content : undefined
-          const rawProgress = r.progress_list
-          const progressList: ChatProgressPayload[] | undefined =
-            Array.isArray(rawProgress) && rawProgress.length > 0
-              ? (rawProgress as ChatProgressPayload[])
-              : undefined
-          const parsedThink = parseHistoryThink(think)
-          if (parsedThink.executionFlowList.length > 0) {
-            console.info(
-              "[ExecutionFlow] history think parsed",
-              "run_id=",
-              runId,
-              "count=",
-              parsedThink.executionFlowList.length,
-            )
-          }
-          return {
-            id: `${runId}-${i}`,
-            role,
-            content: stripDacProtocolLines(stripModelLeakTags(content)),
-            reasoning_content: parsedThink.reasoning || reasoning || "",
-            ...((progressList && progressList.length > 0)
-              ? { progressList }
-              : (parsedThink.progressList.length > 0 ? { progressList: parsedThink.progressList } : {})),
-            ...(parsedThink.executionFlowList.length > 0
-              ? { executionFlowList: parsedThink.executionFlowList }
-              : {}),
-          }
-        })
-        .filter((x): x is Message => Boolean(x))
       if (controller.signal.aborted) return "skipped"
       // Do not overwrite if user started streaming while history was in flight.
       if (!shouldLoadHistoryForRunId(runId)) return "skipped"
