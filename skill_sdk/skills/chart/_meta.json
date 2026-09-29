@@ -1,0 +1,8 @@
+{
+  "version": "1.0.0",
+  "slug": "chart",
+  "allowed_tools": ["a2a_chat"],
+  "a2a": {
+    "url": "http://biz-chart-agent.dac:10100"
+  }
+}

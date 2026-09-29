@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="skill_sdk",
-    version="0.3.3",
+    version="0.3.4",
     packages=find_packages(exclude=["tests*"]),  # 排除测试目录
     install_requires=[
         "requests==2.32.5",
@@ -27,6 +27,7 @@ setup(
         "openai>=1.104.2",
         "pymupdf>=1.24.0",
         "python-lsp-jsonrpc==1.1.2",
+        "a2a-sdk==0.3.5",
     ],
     python_requires=">=3.12",  # 降低Python版本要求以增加兼容性
     author="james",

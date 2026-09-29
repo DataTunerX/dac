@@ -51,9 +51,29 @@ class TestBuildSummarizeDelegatedPrompt:
             current_agent="order-agent",
         )
         assert "不要自我介绍" in system
+        assert "请直接输出答案" in system
+        assert "请直接输出答案" not in human
         assert "## 执行流水账" in human
         assert "原始问题：张三买了哪些东西" in human
-        assert "请直接输出答案" in human
+        assert "上游传入上下文" not in human
+        assert "executed_tasks" not in human
+        assert "本层自身执行结果" not in human
+        assert "委托给下游 SG" not in human
+        assert human.count(_ZHANGSAN_FAIL) == 1
+
+    def test_custom_system_prompt_replaces_default(self):
+        system, human = _build_summarize_delegated_prompt(
+            "张三买了哪些东西",
+            execution_flow_tasks=_ZHANGSAN_EF,
+            current_agent="order-agent",
+            custom_system_prompt="只用表格回答",
+        )
+        assert system == "只用表格回答"
+        assert "不要自我介绍" not in system
+        assert "请直接输出答案" not in system
+        assert "请直接输出答案" not in human
+        assert "## 执行流水账" in human
+        assert "原始问题：张三买了哪些东西" in human
         assert "上游传入上下文" not in human
         assert "executed_tasks" not in human
         assert "本层自身执行结果" not in human

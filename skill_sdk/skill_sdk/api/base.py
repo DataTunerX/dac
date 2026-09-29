@@ -59,12 +59,19 @@ class Skill(BaseModel):
             "Empty list means unrestricted (backward compatible)."
         ),
     )
+    a2a_url: str = Field(
+        default="",
+        description=(
+            "A2A server base URL from ``_meta.json`` ``a2a.url``. "
+            "Empty when this skill does not call a remote agent."
+        ),
+    )
 
     def to_json(self, *, indent: int = 2, ensure_ascii: bool = False) -> str:
         """
         Serialize to a JSON object string with keys
         ``name``, ``description``, ``detail``, ``version``, ``scripts``,
-        ``base_dir``, ``resource_dirs``, ``allowed_tools``
+        ``base_dir``, ``resource_dirs``, ``allowed_tools``, ``a2a_url``
         (same shape as skill pack exports).
         """
         return self.model_dump_json(indent=indent, ensure_ascii=ensure_ascii)

@@ -2,9 +2,23 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from pydantic import BaseModel
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """Runtime values the runner injects into async plugins.
+
+    These are not tool arguments. The model does not supply them.
+    """
+
+    user_id: str = ""
+    run_id: str = ""
+    trace_id: str = ""
+    a2a_url: str = ""
 
 
 class ToolPlugin(ABC):
@@ -34,6 +48,8 @@ class ToolPlugin(ABC):
     name: ClassVar[str]
     description: ClassVar[str]
     args_schema: ClassVar[type[BaseModel]]
+    # Async plugins are awaited by SkillRunner. Sync plugins keep execute().
+    is_async: ClassVar[bool] = False
 
     @staticmethod
     def _format_error(message: str, **extra: Any) -> str:
@@ -64,3 +80,13 @@ class ToolPlugin(ABC):
             A JSON-encoded string representing the result.
         """
         ...
+
+    async def aexecute(self, ctx: ToolContext, **kwargs: Any) -> str:
+        """Execute an async plugin.
+
+        SkillRunner calls this instead of :meth:`execute` when ``is_async``
+        is true. Sync plugins never reach this method.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} is not an async tool plugin"
+        )

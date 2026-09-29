@@ -1053,7 +1053,9 @@ export function CreateAgentDialog({
           <DialogTitle>{isEdit ? "编辑智能体" : "新建智能体"}</DialogTitle>
           <DialogDescription>
             {isEdit
-              ? "可修改模型、编排最大循环数、专家最大步数、概览和技能。数据源与语义关系保持不变。"
+              ? dataSourceType === "descriptor"
+                ? "可修改模型、编排最大循环数、专家最大步数、概览和技能。数据源保持不变。"
+                : "可修改模型、编排最大循环数、专家最大步数、概览、技能和自定义总结提示词。数据源与语义关系保持不变。"
               : "创建一个新的智能体，绑定数据源并指定使用的大模型。"}
           </DialogDescription>
         </DialogHeader>
@@ -1456,63 +1458,6 @@ export function CreateAgentDialog({
                       />
                     </div>
 
-                  {/* ── 总结配置（仅 skill 类型） ── */}
-                  <div className="space-y-3 rounded-lg border border-line bg-surface p-4">
-                    <div className="text-xs font-semibold text-content-muted">总结配置</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <FormField
-                        control={form.control}
-                        name="summarizeEnabled"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>开启总结</FormLabel>
-                            <Select
-                              value={field.value || "true"}
-                              onValueChange={field.onChange}
-                              disabled={isSubmitting}
-                            >
-                              <FormControl>
-                                <SelectTrigger className="w-full">
-                                  <SelectValue placeholder="是否启用 LLM 总结" />
-                                </SelectTrigger>
-                              </FormControl>
-                              <SelectContent>
-                                <SelectItem value="true">开启（默认）</SelectItem>
-                                <SelectItem value="false">关闭（直接透传 skill 结果）</SelectItem>
-                              </SelectContent>
-                            </Select>
-                            <FormDescription>
-                              关闭后所有智能体直接输出 skill 原始结果，不进行 LLM 总结
-                            </FormDescription>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </div>
-                    {summarizeEnabled !== "false" && (
-                      <FormField
-                        control={form.control}
-                        name="summarizeCustomPrompt"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>自定义总结提示词</FormLabel>
-                            <FormControl>
-                              <Textarea
-                                placeholder="可选。不填则使用默认提示词"
-                                className="min-h-[200px]"
-                                {...field}
-                                disabled={isSubmitting}
-                              />
-                            </FormControl>
-                            <FormDescription>
-                              仅在多智能体模式下发生实际协作时生效。为空时使用系统默认总结策略
-                            </FormDescription>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    )}
-                  </div>
                   </div>
                 ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1663,6 +1608,72 @@ export function CreateAgentDialog({
                   </a>
                 </div>
               </div>
+
+              {/* 总结配置：skill 与业务智能体。数据智能体不展示。 */}
+              {dataSourceType === "skill" || dataSourceType === "semantic-group" ? (
+                <div className="space-y-3 rounded-lg border border-line bg-surface p-4">
+                  <div className="text-xs font-semibold text-content-muted">总结配置</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="summarizeEnabled"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>开启总结</FormLabel>
+                          <Select
+                            value={field.value || "true"}
+                            onValueChange={field.onChange}
+                            disabled={isSubmitting}
+                          >
+                            <FormControl>
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="是否启用 LLM 总结" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="true">开启（默认）</SelectItem>
+                              <SelectItem value="false">
+                                {dataSourceType === "skill"
+                                  ? "关闭（直接透传 skill 结果）"
+                                  : "关闭（直接透传原始结果）"}
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormDescription>
+                            {dataSourceType === "skill"
+                              ? "关闭后所有智能体直接输出 skill 原始结果，不进行 LLM 总结"
+                              : "关闭后直接输出原始执行结果，不进行 LLM 总结"}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                  {summarizeEnabled !== "false" && (
+                    <FormField
+                      control={form.control}
+                      name="summarizeCustomPrompt"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>自定义总结提示词</FormLabel>
+                          <FormControl>
+                            <Textarea
+                              placeholder="可选。不填则使用默认提示词"
+                              className="min-h-[200px]"
+                              {...field}
+                              disabled={isSubmitting}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            为空时使用系统默认总结策略
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+                </div>
+              ) : null}
 
               {/* 技能绑定：语义组 / skill，位于模型配置下方 */}
               {dataSourceType === "skill" || dataSourceType === "semantic-group" ? (

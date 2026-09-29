@@ -102,7 +102,11 @@ export function buildAgentUpdateRequest(
       skills,
     },
     ...(isSemanticGroup
-      ? { skillPolicy: data.skillPolicy ?? existing.skillPolicy ?? { skills: [] } }
+      ? {
+          skillPolicy: data.skillPolicy ?? existing.skillPolicy ?? { skills: [] },
+          summarizeEnabled: data.summarizeEnabled || "true",
+          summarizeCustomPrompt: data.summarizeCustomPrompt || "",
+        }
       : {}),
     model: {
       plannerLLM: data.plannerModel || existing.model?.plannerLLM || "",

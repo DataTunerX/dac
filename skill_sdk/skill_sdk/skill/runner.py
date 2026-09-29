@@ -25,7 +25,9 @@ from pydantic import BaseModel, Field
 
 from skill_sdk.api.base import Skill
 from skill_sdk.compaction import CompactionConfig, CompactionGuard, default_compaction_config
+from skill_sdk.plugin.base import ToolContext
 from skill_sdk.plugin.registry import ToolRegistry
+from skill_sdk.tool.a2a_chat_plugin import A2A_CHAT_TOOL_NAME
 from skill_sdk.skill.lister import SkillLister
 from skill_sdk.skill.loader import SkillLoader
 from skill_sdk.skill.tool_result import ToolResult
@@ -996,15 +998,41 @@ class SkillRunner:
             return None
         return set(declared) | set(ALWAYS_ALLOWED_TOOLS)
 
+    def _a2a_chat_configured(self, skill: Skill) -> bool:
+        """True when the skill's ``_meta.json`` declares an A2A server URL."""
+        return bool(str(getattr(skill, "a2a_url", "") or "").strip())
+
     def _tools_for_skill(self, skill: Skill) -> list[Any]:
-        """Filter ``_runner_tools`` to the skill's allow-list (if any)."""
+        """Filter ``_runner_tools`` to the skill's allow-list (if any).
+
+        ``a2a_chat`` is included only when the skill declares ``a2a.url``.
+        Skills that omit it keep the previous tool set.
+        """
+        pool = [
+            t for t in self._runner_tools
+            if getattr(t, "name", None) != A2A_CHAT_TOOL_NAME
+            or self._a2a_chat_configured(skill)
+        ]
         allowed = self._resolve_allowed_tool_names(skill)
         if allowed is None:
-            return list(self._runner_tools)
+            return list(pool)
 
-        tools = [t for t in self._runner_tools if getattr(t, "name", None) in allowed]
+        tools = [t for t in pool if getattr(t, "name", None) in allowed]
         present = {getattr(t, "name", None) for t in tools}
-        missing = sorted(name for name in allowed if name not in present)
+        url_missing = (
+            A2A_CHAT_TOOL_NAME in allowed and not self._a2a_chat_configured(skill)
+        )
+        if url_missing:
+            logger.warning(
+                "skill=%s allowed_tools includes %s but a2a.url is empty",
+                skill.name,
+                A2A_CHAT_TOOL_NAME,
+            )
+        missing = sorted(
+            name
+            for name in allowed
+            if name not in present and not (name == A2A_CHAT_TOOL_NAME and url_missing)
+        )
         if missing:
             logger.warning(
                 "skill=%s allowed_tools missing from runner registry: %s",
@@ -1021,6 +1049,8 @@ class SkillRunner:
 
     def _is_tool_allowed_for_skill(self, skill: Skill, tool_name: str) -> bool:
         """Execution-time allow-list check (defense in depth beyond bind_tools)."""
+        if tool_name == A2A_CHAT_TOOL_NAME and not self._a2a_chat_configured(skill):
+            return False
         allowed = self._resolve_allowed_tool_names(skill)
         if allowed is None:
             return True
@@ -1884,6 +1914,7 @@ class SkillRunner:
                                 user_id=user_id,
                                 run_id=run_id,
                                 trace_id=trace_id,
+                                a2a_url=str(skill.a2a_url or ""),
                             )
                             # If pre-check warned, prepend the warning to the result
                             if pre_check:
@@ -2004,6 +2035,7 @@ class SkillRunner:
         user_id: str,
         run_id: str,
         trace_id: str,
+        a2a_url: str = "",
     ) -> str:
         """Dispatch LLM tool calls — three-phase pipeline.
 
@@ -2020,7 +2052,13 @@ class SkillRunner:
             return prepared.to_tool_message_content()
 
         # Phase 2: execute
-        executed = await self._execute_prepared_tool(prepared, user_id, run_id, trace_id)
+        executed = await self._execute_prepared_tool(
+            prepared,
+            user_id,
+            run_id,
+            trace_id,
+            a2a_url=a2a_url,
+        )
 
         # Phase 3: finalize
         finalized = self._finalize_tool_result(prepared, executed)
@@ -2107,6 +2145,7 @@ class SkillRunner:
         user_id: str,
         run_id: str,
         trace_id: str,
+        a2a_url: str = "",
     ) -> dict[str, Any]:
         """Phase 2: execute the prepared tool call.
 
@@ -2125,7 +2164,17 @@ class SkillRunner:
         tool_args = prepared["tool_args"]
         logger.info("_execute tool=%s args=%r", tool_name, _short_tool_args(tool_name, tool_args))
         try:
-            raw_result = str(target.invoke(tool_args))
+            plugin_cls = self._tool_registry.get(tool_name)
+            if plugin_cls is not None and bool(getattr(plugin_cls, "is_async", False)):
+                ctx = ToolContext(
+                    user_id=user_id,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    a2a_url=a2a_url,
+                )
+                raw_result = str(await plugin_cls().aexecute(ctx, **tool_args))
+            else:
+                raw_result = str(target.invoke(tool_args))
             logger.info(
                 "_execute tool=%s result=%r",
                 tool_name,

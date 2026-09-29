@@ -385,8 +385,8 @@ export default function AgentDetailPage() {
           </Card>
         </div>
 
-        {/* ── 总结配置（仅 skill 类型） ── */}
-        {isSkillAgent && (
+        {/* 总结配置：skill 与业务智能体。数据智能体不展示。 */}
+        {(isSkillAgent || isSemanticGroupAgent) && (
         <div className="space-y-3">
           <div className="text-sm font-medium text-content flex items-center gap-2">
             <FileText className="w-4 h-4 text-content-muted" />

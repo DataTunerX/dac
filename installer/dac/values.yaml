@@ -654,7 +654,7 @@ bizRoutingAgent:
       memory: 4Gi
 
 # ---------------------------------------------------------------------------
-# biz-chart-agent - ECharts generation agent (agent mode, self-registers)
+# biz-chart-agent - ECharts generation agent (agent mode, does not self-register)
 # ---------------------------------------------------------------------------
 bizChartAgent:
   enabled: false
@@ -666,10 +666,10 @@ bizChartAgent:
     redisDb: "2"
     agentName: "ChartAgent"
     agentDescription: "根据用户描述与数据判断是否可绘图并生成 ECharts 图表；数据不足时明确说明无法生成。"
-    # -- Start mode (agent = self-register to biz registry)
+    # -- Start mode (agent = task-context query; global = raw user query)
     startMode: "agent"
-    # -- Whether to self-register to agent registry
-    registerAgent: "true"
+    # -- Do not self-register; chart is reached via the skill's a2a.url
+    registerAgent: "false"
   service:
     type: ClusterIP
     port: 10100

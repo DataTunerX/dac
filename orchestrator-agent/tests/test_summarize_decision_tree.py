@@ -163,6 +163,32 @@ class TestSummarizeDecisionTree:
         assert result == "张三购买了订单 ORD-2025-00001"
         ex.llm.ainvoke.assert_called_once()
 
+    def test_disabled_passthrough_skips_llm(self):
+        ex = _executor()
+        ex.summarize_enabled = False
+        result = _run_summarize(
+            ex,
+            query="张三买了什么",
+            own_results={1: "订单用户ID=U001"},
+            agent_role="initiator",
+        )
+        assert result == "订单用户ID=U001"
+        ex.llm.ainvoke.assert_not_called()
+
+    def test_custom_prompt_is_the_system_message(self):
+        ex = _executor()
+        ex.summarize_enabled = True
+        ex.summarize_prompt = "只用表格回答"
+        ex.llm.ainvoke = AsyncMock(return_value=MagicMock(content="表格"))
+        _run_summarize(
+            ex,
+            query="张三买了什么",
+            own_results={1: "订单用户ID=U001"},
+            agent_role="initiator",
+        )
+        messages = ex.llm.ainvoke.await_args.args[0]
+        assert messages[0].content == "只用表格回答"
+
     def test_default_role_is_initiator_and_calls_llm(self):
         ex = _executor()
         ex.llm.ainvoke = AsyncMock(return_value=MagicMock(content="LLM_OK"))

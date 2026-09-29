@@ -594,7 +594,11 @@ export default function AgentsPage() {
           sourceNameSelector: !isSemanticGroup ? [data.dataSourceId] : undefined,
         },
         ...(isSemanticGroup
-          ? { skillPolicy: data.skillPolicy ?? { skills: [] } }
+          ? {
+              skillPolicy: data.skillPolicy ?? { skills: [] },
+              summarizeEnabled: data.summarizeEnabled || "true",
+              summarizeCustomPrompt: data.summarizeCustomPrompt || "",
+            }
           : {}),
         model: {
           plannerLLM: data.plannerModel,

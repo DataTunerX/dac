@@ -521,7 +521,8 @@ class ChartAgent(BaseAgent):
         self._observe_reason_history: List[str] = []  # 多轮审核不通过的意见列表，下一轮生成时全部带入
         self._current_data_summary: Optional[str] = None
         self._current_suggested_chart: Optional[str] = None
-        # LLM 模式：global=审核通过时仅返回 answer（默认）；agent=审核通过时带 reason 前缀
+        # global：直接用用户问题作图。其他值在有任务上下文时走 agent_mode_query。
+        # 审核通过后两种模式都只返回图表本身，不附加 reason 前缀。
         self.start_mode: str = (os.getenv("CHART_AGENT_START_MODE", "global").strip().lower() or "global")
         self.agent_id = "ChartAgent"
 
@@ -1486,12 +1487,8 @@ class ChartAgent(BaseAgent):
                         llm_result.answer = f"当前数据不足以生成符合要求的{chart_label}。\n\n原因：{observe_result.reason}"
                         self._observe_reason_history.append(observe_result.reason)  # 追加到多轮历史
                     else:
-                        if self.start_mode == "global":
-                            llm_result.answer = f"{llm_result.answer}"
-                        else:
-                            step_status_llm_check_success = "The current answer addresses the question very well."
-                            llm_result.answer = f"reason:{step_status_llm_check_success}\n\n{llm_result.answer}"
-                        self._observe_reason_history.clear()  # 审核通过，清空历史以便下次请求从头开始
+                        # 审核通过：answer 保持图表代码块，不拼接 reason 前缀。
+                        self._observe_reason_history.clear()
         except Exception as e:
             # 记录完整堆栈便于排查；任何异常都回退为“无相关知识”提示
             logger.exception("step error: %s", e)

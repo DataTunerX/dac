@@ -40,6 +40,8 @@ describe("buildAgentUpdateRequest", () => {
     expect(req.dacType).toBe("ds")
     expect(req.dataPolicy).toBeUndefined()
     expect(req.skillPolicy).toBeUndefined()
+    expect(req.summarizeCustomPrompt).toBeUndefined()
+    expect(req.summarizeEnabled).toBeUndefined()
     expect(req.agentCard).toEqual({
       name: "订单助手",
       description: "新的概览",
@@ -74,10 +76,14 @@ describe("buildAgentUpdateRequest", () => {
       plannerModel: "p",
       expertModel: "e",
       skillPolicy: { skills: [{ namespace: "default", name: "lookup", version: "1" }] },
+      summarizeEnabled: "true",
+      summarizeCustomPrompt: "只用表格回答",
       skills: [],
     })
 
     expect(req.dacType).toBe("normal")
+    expect(req.summarizeEnabled).toBe("true")
+    expect(req.summarizeCustomPrompt).toBe("只用表格回答")
     expect(req.dataPolicy).toBeUndefined()
     expect(req.skillPolicy).toEqual({
       skills: [{ namespace: "default", name: "lookup", version: "1" }],

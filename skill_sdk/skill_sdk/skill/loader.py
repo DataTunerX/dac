@@ -293,6 +293,7 @@ class SkillLoader:
             base_dir=str(Path(base_dir).resolve()) if base_dir else "",
             resource_dirs=list(resource_dirs) if resource_dirs is not None else [],
             allowed_tools=SkillLoader._parse_allowed_tools(meta),
+            a2a_url=SkillLoader._parse_a2a_url(meta),
         )
 
     @staticmethod
@@ -326,6 +327,29 @@ class SkillLoader:
             "allowed_tools must be a list of strings or a string, "
             f"got {type(raw).__name__}"
         )
+
+    @staticmethod
+    def _parse_a2a_url(meta: dict[str, Any]) -> str:
+        """Parse ``a2a.url`` from ``_meta.json``.
+
+        Missing or blank means this skill does not call an A2A server.
+        A non-object ``a2a`` value, or a url that is not http(s), is an
+        authoring error and fails the load.
+        """
+        raw = meta.get("a2a")
+        if raw is None:
+            return ""
+        if not isinstance(raw, dict):
+            raise ValueError(
+                "a2a must be an object with a url field, "
+                f"got {type(raw).__name__}"
+            )
+        url = str(raw.get("url") or "").strip()
+        if not url:
+            return ""
+        if not (url.startswith("http://") or url.startswith("https://")):
+            raise ValueError(f"a2a.url must use http or https, got {url!r}")
+        return url.rstrip("/")
 
     def load(
         self,

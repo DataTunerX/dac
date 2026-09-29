@@ -1180,6 +1180,19 @@ SG_DOMAIN_CHECK_PROMPT = """# 角色：SG 领域相关判定员
 3. Agent 名称（领域归属的强信号，如有明确前缀如 order / payment / user）
 4. 用户问题原文与历史
 
+## 第零步 — 整体范围硬声明（优先于下面四步，命中则直接收口为 none）
+
+先检查 SG 描述或成员 SD 数据清单中是否存在**针对问题整体类别**（不是某一个次要面）的排他/排除声明：
+
+- **排他声明**（「本 SG 只能回答 / 仅处理 / 仅限 / 仅支持 ⟨类别 X⟩ 类问题」）：
+  若用户问题的核心业务对象、整体类别**不属于** X → 不再进入第一步拆面，直接判定 `domain_verdict = "none"`。
+- **整体排除声明**（「本 SG 不回答 / 不能处理 / 不支持 / 不处理 ⟨类别 Y⟩ 类问题」，且 Y 是一个整体问题类别，不是某个字段/子主题）：
+  若用户问题的核心业务对象、整体类别**属于** Y → 直接判定 `domain_verdict = "none"`。
+
+这两类声明针对的是「问题整体属于/不属于哪一类」，与第三步「排除项只作用于被点名的那一面」是不同的规则——第三步处理的是问题里**某一个次要面**被声明排除、但问题其他面仍可能相关的情况；本步处理的是声明已经把**整个可处理范围**框定死了，问题的核心类别落在框外。两者不冲突：本步命中时直接收口，不再执行第一步拆面、第二步逐面判断，也不受第四步「命中面非空则 has」规则约束；本步不命中（没有整体范围声明，或声明的范围与问题类别不冲突）时，才继续走第一步之后的四步流程。
+
+判 none 时 reason 必须引用声明中的具体排他/排除措辞，说明问题的整体类别为何落在声明范围之外/排除范围之内；不得凭 Agent 名称或行业联想认定存在这类声明。
+
 ## 判定规程（四步，必须按顺序执行）
 
 **第一步 — 拆面（强制完整）**
@@ -1248,6 +1261,12 @@ SG 描述中的「不包含 / 不支持 / 不覆盖 / 不属于本 SG」只让**
 {{
   "domain_verdict": "none",
   "reason": "领域交集：明确无 — 问题领域：…；命中面：无；未命中面：全部。SG 声明：描述/成员SD无对应声明。"
+}}
+
+判例（第零步整体范围硬声明命中时）：
+{{
+  "domain_verdict": "none",
+  "reason": "整体范围硬声明命中 — SG 声明：描述「只能回答 X」/「不回答 Y」；问题整体类别为 Z，不属于 X（或属于 Y）；未进入分面判断。"
 }}
 """
 
@@ -5806,6 +5825,7 @@ SUMMARIZE_CORE_PRINCIPLES = (
     "4. 下游结果中若含类似套话，请忽略并只提取实质信息，不要在输出中重复。\n"
     "5. 信息冲突时简要说明；缺信息时说明缺什么，勿编造。\n"
     "6. 对话历史仅用于理解当前问题的指代和语境，不要将历史中的旧结论当作当前事实。\n"
+    "7. 请直接输出答案。\n"
 )
 
 SUMMARIZE_DELEGATED_SYSTEM_PROMPT = SUMMARIZE_CORE_PRINCIPLES
@@ -6060,12 +6080,15 @@ def _build_summarize_delegated_prompt(
     delegate_results: dict[str, str] | None = None,
     current_agent: str = "",
     agent_role: str = "initiator",
+    custom_system_prompt: str | None = None,
 ) -> tuple[str, str]:
     """Build (system, human) prompts for ``_summarize_delegated_result``.
 
     Mirrors skill-agent ``_build_agent_summarize_prompt``: one Execution
-    Flow document plus the original question.  The human message asks for
-    a direct answer.
+    Flow document plus the original question.  The human message is only
+    that context.  Output instructions stay in the system prompt.  A
+    non-empty *custom_system_prompt* replaces
+    ``SUMMARIZE_DELEGATED_SYSTEM_PROMPT``.
     """
     context = _render_summary_execution_context(
         original_query,
@@ -6075,15 +6098,16 @@ def _build_summarize_delegated_prompt(
         current_agent=current_agent,
         agent_role=agent_role,
     )
-    human_prompt = context + "\n\n请直接输出答案："
+    human_prompt = context
+    system_prompt = (custom_system_prompt or "").strip() or SUMMARIZE_DELEGATED_SYSTEM_PROMPT
     _log_built_summary_prompt(
         "sg-summarize",
-        system_prompt=SUMMARIZE_DELEGATED_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         human_prompt=human_prompt,
         current_agent=current_agent,
         agent_role=agent_role,
     )
-    return SUMMARIZE_DELEGATED_SYSTEM_PROMPT, human_prompt
+    return system_prompt, human_prompt
 
 
 class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
@@ -6151,6 +6175,20 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         self._skill_runner_initialised = False
         self._skill_runner_lock = asyncio.Lock()
         self._log_local_skill_executor_config()
+
+        # Same env contract as skill-agent: empty prompt keeps the default system prompt.
+        self.summarize_enabled: bool = (
+            os.getenv("SUMMARIZE_ENABLED", "true").strip().lower()
+            in ("true", "1", "yes")
+        )
+        self.summarize_prompt: str | None = (
+            os.getenv("SUMMARIZE_CUSTOM_PROMPT", "").strip() or None
+        )
+        logger.info(
+            "[Summarize] config loaded | enabled=%s custom_prompt_chars=%s",
+            self.summarize_enabled,
+            len(self.summarize_prompt) if self.summarize_prompt else 0,
+        )
 
     @staticmethod
     def _execution_hint_ttl_sec() -> float:
@@ -11518,8 +11556,11 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
 
         Decision tree (mirrors skill-agent ``_summarize``):
 
-        1. ``agent_role == "delegatee"`` → **passthrough** (delegated never summarizes)
-        2. initiator → **LLM summarization**
+        1. ``SUMMARIZE_ENABLED=false`` → **passthrough**
+        2. ``agent_role == "delegatee"`` → **passthrough** (delegated never summarizes)
+        3. initiator → **LLM summarization**
+           - ``SUMMARIZE_CUSTOM_PROMPT`` non-empty → custom system prompt
+           - empty → ``SUMMARIZE_DELEGATED_SYSTEM_PROMPT``
 
         Prompt context is built by :func:`_build_summarize_delegated_prompt`
         (Execution Flow markdown, not a JSON dump of ``upstream_context``).
@@ -11527,6 +11568,17 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
         own_text, del_text = _format_own_and_delegate_text(
             own_results, delegated_results,
         )
+        if not getattr(self, "summarize_enabled", True):
+            passthrough = _build_summary_passthrough(own_results, delegated_results)
+            logger.info(
+                "[Cross-SG][CollabSummary] passthrough (SUMMARIZE_ENABLED=false) | "
+                "own_chars=%d del_chars=%d agent_role=%s passthrough_chars=%d",
+                len(own_text),
+                len(del_text),
+                agent_role,
+                len(passthrough),
+            )
+            return passthrough
         if agent_role == "delegatee":
             passthrough = _build_summary_passthrough(own_results, delegated_results)
             logger.info(
@@ -11555,6 +11607,7 @@ class OrchestratorAgentExecutorSemanticGroup(AgentExecutor):
             delegate_results=delegated_results,
             current_agent=current_agent,
             agent_role=agent_role or "initiator",
+            custom_system_prompt=getattr(self, "summarize_prompt", None),
         )
 
         logger.info(
