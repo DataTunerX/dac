@@ -34,6 +34,27 @@ spec:
               value: {{ .Values.apiserver.config.jwt.secret | quote }}
             - name: DAC_JWT_MAX_REFRESH
               value: {{ .Values.apiserver.config.jwt.maxRefresh | quote }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 75
+            periodSeconds: 2
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}
 {{- end }}

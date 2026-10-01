@@ -33,6 +33,53 @@ if [ -z "$BACKEND_UPSTREAM" ]; then
 fi
 export BACKEND_UPSTREAM
 
+wait_for_backend() {
+  wait_timeout="${BACKEND_WAIT_TIMEOUT_SECONDS:-120}"
+  wait_interval="${BACKEND_WAIT_INTERVAL_SECONDS:-2}"
+
+  case "$wait_timeout" in
+    ''|*[!0-9]*)
+      log "ERROR: BACKEND_WAIT_TIMEOUT_SECONDS must be a non-negative integer"
+      exit 1
+      ;;
+  esac
+  case "$wait_interval" in
+    ''|*[!0-9]*|0)
+      log "ERROR: BACKEND_WAIT_INTERVAL_SECONDS must be a positive integer"
+      exit 1
+      ;;
+  esac
+
+  if ! backend_target="$(node -e '
+    const target = new URL(process.env.BACKEND_UPSTREAM);
+    if (target.protocol !== "http:" && target.protocol !== "https:") {
+      throw new Error(`unsupported protocol: ${target.protocol}`);
+    }
+    const port = target.port || (target.protocol === "https:" ? "443" : "80");
+    process.stdout.write(`${target.hostname}\n${port}\n`);
+  ')"; then
+    log "ERROR: BACKEND_URL is not a valid HTTP(S) URL: ${BACKEND_URL}"
+    exit 1
+  fi
+
+  backend_host="$(printf '%s\n' "$backend_target" | sed -n '1p')"
+  backend_port="$(printf '%s\n' "$backend_target" | sed -n '2p')"
+  waited=0
+
+  log "waiting for backend at ${backend_host}:${backend_port}"
+  while ! nc -z -w 1 "$backend_host" "$backend_port" >/dev/null 2>&1; do
+    if [ "$waited" -ge "$wait_timeout" ]; then
+      log "ERROR: backend did not become reachable within ${wait_timeout}s"
+      exit 1
+    fi
+    sleep "$wait_interval"
+    waited=$((waited + wait_interval))
+  done
+  log "backend is reachable"
+}
+
+wait_for_backend
+
 # Render nginx config from template using runtime env.
 out_dir="/etc/nginx/http.d"
 if [ ! -d "$out_dir" ]; then
@@ -69,6 +116,7 @@ while :; do
 
   if ! kill -0 "$nginx_pid" 2>/dev/null; then
     log "nginx exited unexpectedly"
+    kill "$node_pid" 2>/dev/null || true
     wait "$nginx_pid" 2>/dev/null || true
     wait "$node_pid" 2>/dev/null || true
     exit 1
@@ -76,4 +124,3 @@ while :; do
 
   sleep 1
 done
-
