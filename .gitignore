@@ -4,6 +4,17 @@ node_modules/
 target/
 .env
 
+# Local OS and workspace artifacts.
+.DS_Store
+/temp/
+
+# Python-generated files and local environments.
+**/__pycache__/
+*.py[cod]
+**/.venv/
+**/.pytest_cache/
+**/.ruff_cache/
+
 # Playwright accessibility snapshots written to the repo root by the
 # browser MCP server when a bare filename is passed.
 /*.yml
