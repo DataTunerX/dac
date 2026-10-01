@@ -1,6 +1,6 @@
 # 能力检查维度加权方案设计
 
-> 基于 evidence_strength 的动态维度加权，解决 D/R 维度在能力检查阶段不可评估的问题。
+> 基于 evidence_strength 的动态维度加权，并以确定性硬门槛和一致性校验防止高平均分掩盖必要能力缺失。
 
 ---
 
@@ -57,10 +57,26 @@ step_score = (I*W_I + D*W_D + O*W_O + R*W_R + C*W_C) / (W_I + W_D + W_O + W_R + 
 
 ### 2.2 设计原则
 
-1. **LLM 决定权重的分配，代码只执行算术** — 不引入外部 hard-coded 分类规则
+1. **LLM 提供结构化清单，代码执行算术和资格判定** — LLM 不直接决定 `can_handle`、`can_contribute` 或 `confidence`
 2. **粒度是 per-step × per-dimension** — 同一 agent 的不同步骤、同一步骤的不同维度可以有不同权重
-3. **speculative 不意味权重为 0** — 保留 0.1 的微小信号，防止 D=0/R=0 的明确否定信号被完全忽略
+3. **speculative 不意味权重为 0** — 对未触发硬门槛的评分保留 0.1 的微小信号；硬门槛不受权重影响
 4. **证据强度不进入任何额外链路** — 不影响 evidence_grade（后者仍是全局 A/B/C/D）、不影响 routing 侧的任何过滤逻辑
+
+### 2.3 独立完成硬门槛
+
+加权分用于排序和表示匹配程度，但不能覆盖必要能力缺失。每个必要步骤独立检查以下门槛：
+
+| 条件 | reason code | 结果 |
+|------|-------------|------|
+| D.required 非空且 D=0 | `data_coverage_zero` | 该步骤不可执行，Agent 不可独立完成 |
+| O=0 | `operation_unsupported` | 该步骤不可执行，Agent 不可独立完成 |
+| R.required 非空且 R<1 | `output_mismatch` | 输出契约不完整，Agent 不可独立完成 |
+| C.required 非空且 C<1 | `constraint_unmet` | 明确约束未全部满足，Agent 不可独立完成 |
+| `missing_requirements` 非空 | - | Agent 不可独立完成 |
+
+命中硬门槛的步骤不进入 `contributing_steps`。其他未命中门槛且步骤分达到阈值的步骤仍可作为贡献步骤。
+
+程序还会校验 `required` / `matched` / `ratio` 是否一致，并比较 LLM 的结构化 `declared_outcome` 与程序计算结果。评分、缺失项与结论冲突时，整份报告被拒绝并重试；达到重试上限后 fail closed。
 
 ---
 
@@ -136,9 +152,11 @@ agent 的全局 `evidence_grade = "C"`（routing 侧看到后：排序降级 + �
 
 两者各自解决各自的问题，互不冲突。
 
-### 3.5 向后兼容
+### 3.5 协议版本
 
-新增字段为可选，旧版消费者（routing 侧）仅解析已有字段，不受影响。`score_version` 保持不变（`"capability-chain-v1"`），不升级版本号。
+`evidence_strength` 缺失时仍按 `speculative` 处理。能力评估 LLM 输出新增必填字段 `declared_outcome`，取值为 `can_complete`、`can_contribute` 或 `cannot_contribute`，仅用于和程序结果做一致性校验。
+
+对 routing 侧的响应保持向后兼容：硬门槛 reason code 放在已有 `steps[]` 结构内，旧消费者可忽略。`score_version` 升级为 `"capability-chain-v2-hard-gates"`，便于日志、缓存和回放区分语义。
 
 ---
 
@@ -255,7 +273,7 @@ agent 描述仅有概括声明（"转发到下游服务，聚合结果返回"）
 | 当前（等权） | 1.0 | 0.6 | ±0.20 | ✅ 是 |
 | 新方案（降权） | 1.0 | 0.9375 | ±0.03 | ❌ 否 |
 
-**D/R 的猜测从 ±0.20 的波动缩窄到 ±0.03，不再主导最终分数。**
+**D/R 的猜测从 ±0.20 的波动缩窄到 ±0.03，不再主导排序分数。若 D=0 或 R<1 命中硬门槛，即使加权分为 0.9375，`can_handle` 仍为 false。**
 
 ---
 
@@ -277,10 +295,10 @@ agent 描述仅有概括声明（"转发到下游服务，聚合结果返回"）
 | `evidence_grade`（A/B/C/D） | 不改变 | evidence_grade 是**全局**可信度（整个 agent 的评分整体有多可靠），evidence_strength 是**维度级**可信度。两者正交互补 |
 | `handle_score` 阈值 0.7 | 语义可能变化 | 新公式下 speculative 维度多的 agent 得分更稳定，handle_score 的分布发生变化。阈值 0.7 需在实际运行中验证是否需要微调，但每个 speculative 维度的降权幅度（0.1→1.0 权重差）足够小，预期仍适用 |
 | routing 侧过滤（0.5/0.6/0.78） | 不直接受影响 | confidence 是 handle_score 或 max(step_score)，新公式只改变了这些值的计算方式，不影响 routing 侧的使用方式 |
-| `can_handle` 判定 | 可能受益 | 外部依赖 agent 的 D/R speculative，分数更稳定，减少了因 LLM 猜测波动导致的 can_handle 翻转 |
-| `can_contribute` 判定 | 同上 | contributing_steps 中如果 D/R 是 speculative，step_score 更稳定 |
-| `score_version` | 不变 | 仍为 `"capability-chain-v1"`，向下兼容 |
-| 输出协议 | 新增可选字段 | 旧版消费者忽略新增字段，不报错 |
+| `can_handle` 判定 | 改变 | 除平均分和外部依赖外，所有必要步骤必须通过 D/O/R/C 硬门槛，且 `missing_requirements` 为空 |
+| `can_contribute` 判定 | 改变 | 命中硬门槛的步骤不能贡献；其他达到阈值的步骤仍可贡献 |
+| `score_version` | 升级 | `"capability-chain-v2-hard-gates"`，明确区分资格语义 |
+| 输出协议 | 扩展 | LLM 输出新增必填 `declared_outcome`；响应的 `steps[]` 新增 `hard_gate_failures`，旧 routing 消费者可忽略 |
 
 ---
 
@@ -288,8 +306,8 @@ agent 描述仅有概括声明（"转发到下游服务，聚合结果返回"）
 
 | 文件 | 改动内容 | 改动范围 |
 |------|---------|---------|
-| `agent/capability_chain.py` | `RatioCheck` 新增 `evidence_strength` 字段；`step_score()` 从等权平均改为加权平均 | Schema + 一个函数 |
-| `agent/skill_agent.py` | `SKILL_CAPABILITY_CHECK_PROMPT` 中 I/D/R/C 的打分指令各加一段 `evidence_strength` 标注标准；打分总则中新增一条强制要求 | Prompt 文本 |
+| `agent/capability_chain.py` | `RatioCheck` 支持 `evidence_strength`；加权评分；D/O/R/C 硬门槛；清单比例与结论一致性校验；程序生成最终结论 | Schema + 评分和校验函数 |
+| `agent/skill_agent.py` | Prompt 声明硬门槛与 `declared_outcome`；矛盾报告重试并在耗尽后 fail closed | Prompt + capability_check 调用链 |
 | routing-agent 侧 | 无需改动 | 新增字段为 JSON 可选字段，向下兼容 |
 
 ---

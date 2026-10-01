@@ -625,6 +625,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
     """Aggregate the chain-scored LLM output exactly as production does."""
     chain = capability_chain.parse_chain_result(raw)
     agg = capability_chain.aggregate(chain)
+    errors = capability_chain.consistency_errors(chain, agg)
     can_handle, can_contribute = sa._normalize_capability_result(
         {"can_handle": agg.can_handle, "can_contribute": agg.can_contribute}
     )
@@ -636,7 +637,8 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
         "step_scores": agg.step_scores,
         "contributing_steps": agg.contributing_steps,
         "evidence_grade": chain.evidence_grade,
-        "reason": chain.reason,
+        "reason": capability_chain.render_reason(chain, agg),
+        "consistency_errors": errors,
     }
 
 
@@ -653,5 +655,6 @@ async def test_skill_capability_cross_domain_live(case: CrossDomainCase):
         f"handle={can_handle} contribute={can_contribute} "
         f"conf={data.get('confidence')} reason={reason[:300]}"
     )
+    assert data["consistency_errors"] == []
     assert can_handle is case.expect_can_handle
     assert can_contribute is case.expect_can_contribute

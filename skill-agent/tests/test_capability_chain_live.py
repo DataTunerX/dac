@@ -284,17 +284,20 @@ async def test_capability_chain_live(case: ChainCase):
     raw = await _judge(case)
     chain = capability_chain.parse_chain_result(raw)
     agg = capability_chain.aggregate(chain, threshold=0.7)
+    errors = capability_chain.consistency_errors(chain, agg)
 
     print(f"\n[{case.name}] handle={agg.can_handle} contribute={agg.can_contribute} "
-          f"conf={agg.confidence} handle_score={agg.handle_score} evidence={chain.evidence_grade}")
+          f"conf={agg.confidence} handle_score={agg.handle_score} evidence={chain.evidence_grade} "
+          f"declared={chain.declared_outcome}")
     for s in chain.steps:
         print(f"  step {s.step_id} ({s.operation}, final={s.is_final}): "
               f"I={s.input_match.ratio:.2f} D={s.data_coverage.ratio:.2f} O={s.operation_capability:.1f} "
               f"R={s.result_match.ratio:.2f} C={s.constraint_satisfaction.ratio:.2f} "
               f"-> {agg.step_scores[s.step_id]:.2f}  inputs={[i.model_dump() for i in s.inputs]}")
-    print(f"  contribution={chain.contribution!r} complete={chain.contribution_complete}")
+    print(f"  contribution={chain.contribution!r}")
     print(f"  missing={chain.missing_requirements} risks={chain.risks}")
     print(f"  reason={chain.reason[:400]}")
+    print(f"  consistency_errors={errors}")
 
     # Every ratio dimension must carry a checklist (or be an explicit "no requirement").
     for s in chain.steps:
@@ -306,6 +309,7 @@ async def test_capability_chain_live(case: ChainCase):
         assert s.operation_capability in capability_chain.OPERATION_LEVELS
 
     assert len(chain.steps) in case.expect_steps
+    assert errors == []
     assert agg.can_handle is case.expect_can_handle
     assert agg.can_contribute is case.expect_can_contribute
     assert agg.confidence == pytest.approx(case.expect_confidence, abs=TOL)
@@ -316,7 +320,4 @@ async def test_capability_chain_live(case: ChainCase):
         blob = " ".join(chain.missing_requirements)
         assert any(sub in blob for sub in case.expect_missing_substrings), blob
     if agg.can_contribute and not agg.can_handle:
-        # contribution_complete may come from the heuristic fallback in
-        # parse_chain_result / aggregate, not explicitly from the LLM.
-        assert (chain.contribution_complete is True) or chain.contribution_complete is None
         assert len(chain.contribution) >= 10

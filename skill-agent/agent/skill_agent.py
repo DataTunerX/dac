@@ -1571,8 +1571,10 @@ Orchestrator_INSTRUCTIONS_ZH = """
 SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 
 你要评估"本 Agent"能否解决或贡献用户问题。评估对象是任务成功的必要条件，不是主题相似度。
-你负责：拆分步骤、逐维度列清单并给出比例、给出证据等级、书写贡献说明与缺失项。
-你不负责：判定 can_handle / can_contribute、计算 confidence。这些由程序按固定公式从你的比例中推导。
+你负责：拆分步骤、逐维度列清单并给出比例、给出证据等级、书写贡献说明与缺失项，
+并用 declared_outcome 声明你的自评结论供程序做一致性校验。
+你不负责：最终判定 can_handle / can_contribute、计算 confidence。这些由程序按固定规则从你的比例和硬门槛中推导；
+declared_outcome 与程序结论冲突时，本次结果会被拒绝并要求重试。
 
 评估依据只有下面四类文本，按可信度从高到低：
 1. 技能正文（skill inventory 中每个技能的完整说明：字段列表、数据格式、命令示例、处理流程、覆盖范围、排除项）
@@ -1678,14 +1680,33 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
 - **evidence_strength 强制要求**：每个 RatioCheck 必须标注 evidence_strength = solid 或 speculative。不能所有维度都标 solid 或都标 speculative，必须逐个维度独立判断。
 - **多维度/多子任务查询规则**：当 query 明确列出多个维度或子任务（"从 A、B、C 三个维度排查"），必须为每个维度各建至少一个步骤。本 Agent 不覆盖的维度同样建步骤，但对应的 D=0/1 或 O=0。不允许只建自己能做的维度然后判 h=true。
 
-## 五、证据等级（整体一个，不进乘法）
+## 五、独立完成的硬门槛
+
+下面条件适用于任务链中的每个必要步骤。任一步命中任一条件，本 Agent 都不能独立完成整条任务链，
+无论算术平均分多高：
+
+- D 的 required 非空且 ratio=0：缺少该步骤必须的数据或知识。
+- O=0：不支持该步骤要求的操作。
+- R 的 required 非空且 ratio<1：不能产出该步骤要求的完整输出。
+- C 的 required 非空且 ratio<1：至少一个明确约束无法满足。
+- missing_requirements 非空：仍需请求方或其他 Agent 补齐必要输入或数据。
+
+命中 D/O/R/C 硬门槛的步骤本身也不能作为可贡献步骤。其他完整可执行的步骤仍可贡献。
+
+declared_outcome 只能取：
+
+- can_complete：所有必要步骤通过硬门槛、没有外部缺失项，且总分达到阈值。
+- can_contribute：不能独立完成，但至少一个未命中硬门槛的步骤达到阈值，并填写了具体 contribution。
+- cannot_contribute：既不能独立完成，也没有满足上述条件的贡献步骤；此时 contribution 必须为空。
+
+## 六、证据等级（整体一个，不进乘法）
 
 - A：各维度依据全部来自技能正文中的明确内容（字段列表、数据格式、命令示例；主题清单、来源、版本、处理流程、排除项）。
 - B：主要来自技能正文，个别维度只能依赖技能短描述，或使用了 D 特例 3 的子项推断。
 - C：主要依赖技能短描述或 Agent 描述，正文无对应内容。
 - D：缺乏文本依据，含推测成分。
 
-## 六、contribution、missing_requirements、risks、reason
+## 七、contribution、missing_requirements、risks、reason
 
 - contribution：本 Agent 至少能独立完成一个有用步骤时按三要素书写，否则留空。
   三要素：输入（使用问题中的哪个已知值，或需补齐哪个缺失值）；输出（产出哪个具体项）；用途（对应哪个后续步骤的输入，或最终结果的哪一部分）。
@@ -1694,18 +1715,19 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
   程序侧判断 can_contribute 的条件：有贡献步骤（步骤能力分≥阈值且产出被需要） 且 contribution 非空。
 - missing_requirements：本 Agent 无法自行提供、需由请求方或其他 Agent 补齐的输入或数据，注明所属步骤，如 "user_id（步骤 2）"。
 - risks：不影响分值的提示，如结果唯一性（"张三"可能对应多人）、记录可能不存在。
-- reason：固定结构，逐步骤一行："步骤 N（一句话）：I=a/b D=c/d O=x R=e/f C=g/h，依据要点"；最后一句给整体结论（能独立完成 / 只能贡献步骤 N / 都不能）。
+- reason：固定结构，逐步骤一行："步骤 N（一句话）：I=a/b D=c/d O=x R=e/f C=g/h，依据要点"；
+  只写评分依据，不要在 reason 中重复能力结论。能力结论只写入 declared_outcome，并由程序校验和渲染。
 
-## 七、程序侧公式（供你理解结果含义，不需要你计算）
+## 八、程序侧规则（供你理解结果含义，不需要你计算）
 
   步骤能力分 = weighted-arithmetic-mean(I,D,O,R,C)
     solid 维度权重=1.0，speculative 维度权重=0.1
     O 维度始终 solid（三档评分有明确的声明或无声明依据）
-  can_handle = 各步骤能力分的算术平均达到阈值，且没有本 Agent 无法自行产出的 upstream / missing 输入
-  can_contribute = can_handle，或存在某一步能力分达到阈值且其产出被需要
+  can_handle = 各步骤能力分的算术平均达到阈值，且所有硬门槛通过、没有外部输入或 missing_requirements
+  can_contribute = can_handle，或存在某一步能力分达到阈值且该步骤没有命中硬门槛
   confidence = 能独立完成时取 step_score 均值；只能贡献时取贡献步骤能力分最大值；都不能时为 0
 
-## 八、完整示例
+## 九、完整示例
 
 本 Agent 技能正文关键内容：字段 用户ID|用户名|电话|邮箱；"按用户名查询：grep 张三 data/users.txt"；"用户数据中不包含订单信息，如需获取用户的订单数据，请使用 order_query 技能"。
 用户问题："张三买了哪些东西"
@@ -1723,10 +1745,11 @@ SKILL_CAPABILITY_CHECK_PROMPT = """# 角色：Skill-Agent 能力评估员
   R: required=[商品列表] matched=[] ratio=0.0 evidence_strength=solid
   C: required=[] matched=[] ratio=1.0 evidence_strength=solid
 evidence_grade: A
+declared_outcome: can_contribute
 contribution: "输入 username=张三，输出 user_id，供步骤 2 查询订单使用"
 missing_requirements: ["订单 / 购买记录数据（步骤 2）"]
 risks: ["用户名 张三 可能对应多个用户"]
-reason: "步骤 1（用户名→user_id）：I=1/1 D=2/2 O=1.0 R=1/1 C=1.0，字段列表与 grep 示例明确。步骤 2（user_id→商品列表）：I=1/1 D=0/2 O=1.0 R=0/1 C=1.0，正文明确不包含订单信息。不能独立完成；可贡献步骤 1。"
+reason: "步骤 1（用户名→user_id）：I=1/1 D=2/2 O=1.0 R=1/1 C=1.0，字段列表与 grep 示例明确。步骤 2（user_id→商品列表）：I=1/1 D=0/2 O=1.0 R=0/1 C=1.0，正文明确不包含订单信息。"
 
 ---
 本 Agent 信息：
@@ -1746,6 +1769,7 @@ reason: "步骤 1（用户名→user_id）：I=1/1 D=2/2 O=1.0 R=1/1 C=1.0，字
 - 只输出一个纯 JSON 对象，**不要使用 ```json 代码块包裹**，直接输出 JSON 文本。
 - 每个 RatioCheck（input_match / data_coverage / result_match / constraint_satisfaction）必须同时给出 required（字符串数组）、matched（字符串数组）、ratio（数字，0~1）、evidence_strength（字符串，solid 或 speculative）。
 - operation_capability 只能是 1.0、0.7 或 0。
+- declared_outcome 只能是 can_complete、can_contribute、cannot_contribute 之一，且必须与评分、硬门槛和 missing_requirements 一致。
 - 不要输出 can_handle、can_contribute、confidence。
 
 严格按照以下 JSON schema 输出（示例，实际内容按评估结果填写）：
@@ -1771,10 +1795,11 @@ reason: "步骤 1（用户名→user_id）：I=1/1 D=2/2 O=1.0 R=1/1 C=1.0，字
     }}
   ],
   "evidence_grade": "A",
+  "declared_outcome": "can_complete",
   "contribution": "输入时间范围，输出慢查询TOP列表",
   "missing_requirements": [],
   "risks": [],
-  "reason": "步骤1（慢查询日志→慢查询列表）：I=1/1 D=1/1 O=1.0 R=1/1 C=1/1，依据技能正文grep示例。可独立完成。"
+  "reason": "步骤1（慢查询日志→慢查询列表）：I=1/1 D=1/1 O=1.0 R=1/1 C=1/1，依据技能正文grep示例。"
 }}
 
 注意要点：
@@ -6637,6 +6662,7 @@ class SkillAgentExecutor(AgentExecutor):
             )
             nudge: Optional[HumanMessage] = None
             chain_result: Optional[CapabilityChainResult] = None
+            agg: Optional[capability_chain.AggregatedCapability] = None
             llm = self._get_orchestration_llm()
 
             for attempt in range(1, max_attempts + 1):
@@ -6659,7 +6685,7 @@ class SkillAgentExecutor(AgentExecutor):
                     nudge = HumanMessage(
                         content=(
                             "上一次调用失败。请重新输出一个完整的 JSON 对象，"
-                            "字段必须包含 steps、evidence_grade、contribution、"
+                            "字段必须包含 steps、evidence_grade、declared_outcome、contribution、"
                             "missing_requirements、risks、reason。"
                         )
                     )
@@ -6684,6 +6710,7 @@ class SkillAgentExecutor(AgentExecutor):
                         content=(
                             "输出无法解析为合法 JSON。请只输出一个 JSON 对象，"
                             "字段包含 steps（步骤数组）、evidence_grade（A/B/C/D）、"
+                            "declared_outcome（can_complete/can_contribute/cannot_contribute）、"
                             "contribution（贡献说明，不能贡献时为空字符串）、"
                             "missing_requirements（缺失项列表，无缺失时为 []）、"
                             "risks（风险列表，无风险时为 []）、"
@@ -6694,7 +6721,7 @@ class SkillAgentExecutor(AgentExecutor):
                     continue
 
                 try:
-                    chain_result = capability_chain.parse_chain_result(result_data)
+                    candidate_result = capability_chain.parse_chain_result(result_data)
                 except Exception as exc:
                     preview = json.dumps(result_data, ensure_ascii=False, default=str)[:400]
                     logger.warning(
@@ -6715,36 +6742,62 @@ class SkillAgentExecutor(AgentExecutor):
                     )
                     continue
 
-                # Valid chain_result obtained
+                candidate_agg = capability_chain.aggregate(candidate_result, threshold=threshold)
+                contradictions = capability_chain.consistency_errors(candidate_result, candidate_agg)
+                if contradictions:
+                    logger.warning(
+                        "[Capability][JSON] attempt %d: contradictory capability report, nudging | issues=%s",
+                        attempt,
+                        contradictions,
+                    )
+                    nudge = HumanMessage(
+                        content=(
+                            "能力评估存在结构化矛盾，结果未被接受："
+                            f"{'; '.join(contradictions)}。"
+                            "请保持原始任务步骤不变，重新核对 I/D/O/R/C、硬门槛、"
+                            "missing_requirements、contribution 与 declared_outcome。"
+                            "任何必要步骤出现 D=0、O=0、R<1 或 C<1，或存在 "
+                            "missing_requirements 时，不得声明 can_complete。"
+                        )
+                    )
+                    continue
+
+                chain_result = candidate_result
+                agg = candidate_agg
                 logger.info(
-                    "[Capability][JSON] SELECTED attempt=%d steps=%d",
-                    attempt, len(chain_result.steps),
+                    "[Capability][JSON] SELECTED attempt=%d steps=%d outcome=%s",
+                    attempt,
+                    len(chain_result.steps),
+                    agg.outcome,
                 )
                 break
 
-            if chain_result is None:
+            if chain_result is None or agg is None:
                 raise ValueError(
-                    f"Capability check failed to produce valid JSON after {max_attempts} attempts."
+                    f"Capability check failed to produce a valid, consistent JSON report after {max_attempts} attempts."
                 )
 
-            agg = capability_chain.aggregate(chain_result, threshold=threshold)
             # Aligned with SD orchestrator _normalize_member_capability_judgment
             can_handle, can_contribute = _normalize_capability_result(
                 {"can_handle": agg.can_handle, "can_contribute": agg.can_contribute}
             )
             conf = agg.confidence
-            reason = str(chain_result.reason or "").strip()[:2000]
+            reason = capability_chain.render_reason(chain_result, agg)[:2000]
 
             logger.info(
                 "[Capability][Chain] agent=%s handle_score=%.3f threshold=%.2f steps=%s "
-                "contributing=%s external_dep=%s evidence=%s -> handle=%s contribute=%s conf=%.2f",
+                "contributing=%s external_dep=%s hard_gates=%s missing=%s evidence=%s "
+                "outcome=%s -> handle=%s contribute=%s conf=%.2f",
                 agent_name,
                 agg.handle_score,
                 agg.threshold,
                 {k: round(v, 3) for k, v in agg.step_scores.items()},
                 agg.contributing_steps,
                 agg.has_external_dependency,
+                agg.hard_gate_failures,
+                agg.missing_requirements,
                 chain_result.evidence_grade,
+                agg.outcome,
                 can_handle,
                 can_contribute,
                 conf,

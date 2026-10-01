@@ -10,7 +10,8 @@ and the weighted-dimension scoring defined in
   reports an evidence grade, a contribution statement, missing requirements
   and a structured reason.  The LLM does **not** output ``can_handle``,
   ``can_contribute`` or ``confidence``.
-* This module only performs arithmetic and rule mapping on that output.
+* This module performs arithmetic, hard-gate enforcement, and consistency
+  validation on that output.
 * Per-dimension evidence_strength (solid / speculative) determines
   dimension weights: solid=1.0, speculative=0.1.  The O dimension is
   always solid (its three-level scoring is always based on a clear
@@ -18,13 +19,15 @@ and the weighted-dimension scoring defined in
 
       step_score   = weighted-arithmetic-mean(I/D/O/R/C)
       handle_score = mean(step_scores)
-      can_handle   = handle_score >= THRESHOLD and no unresolved upstream input
+      can_handle   = handle_score >= THRESHOLD and all mandatory gates pass
       can_contribute = can_handle or exists step with score >= THRESHOLD whose
                        output is needed (final or feeds a later step) and the
                        contribution statement is complete
       confidence   = handle_score | max contributing step score | 0
 
-No content-based scoring lives here.
+No content-based scoring lives here.  A high arithmetic score cannot rescue a
+step with no required data coverage, no operation support, an output mismatch,
+or an unmet mandatory constraint.
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
-SCORE_VERSION = "capability-chain-v1"
+SCORE_VERSION = "capability-chain-v2-hard-gates"
 
 # Solid dimensions get full weight; speculative dimensions (D/R when
 # the skill body lacks concrete field / topic lists) are down-weighted
@@ -65,6 +68,17 @@ OperationKind = Literal[
     "generate",
     "modify",
 ]
+
+CapabilityOutcome = Literal[
+    "can_complete",
+    "can_contribute",
+    "cannot_contribute",
+]
+
+HARD_GATE_DATA_COVERAGE_ZERO = "data_coverage_zero"
+HARD_GATE_OPERATION_UNSUPPORTED = "operation_unsupported"
+HARD_GATE_OUTPUT_MISMATCH = "output_mismatch"
+HARD_GATE_CONSTRAINT_UNMET = "constraint_unmet"
 
 
 def get_threshold() -> float:
@@ -162,6 +176,12 @@ class CapabilityChainResult(BaseModel):
     evidence_grade: Literal["A", "B", "C", "D"] = Field(
         description="证据等级：A=全部依据来自技能正文明确内容；B=主要来自正文、个别依赖短描述；C=主要依赖短描述或 Agent 描述；D=缺乏文本依据"
     )
+    declared_outcome: CapabilityOutcome = Field(
+        description=(
+            "LLM 根据逐步评分声明的自评结论，仅用于一致性校验："
+            "can_complete / can_contribute / cannot_contribute。最终结论由程序计算"
+        )
+    )
     contribution: str = Field(
         default="",
         description="按三要素书写：输入（使用哪个已知值 / 需补齐哪个值）、输出（产出哪个具体项）、用途（对应哪个后续步骤的输入或最终结果的哪部分）。不能贡献时留空",
@@ -175,7 +195,7 @@ class CapabilityChainResult(BaseModel):
         description="不影响分值的风险提示，如结果唯一性、数据实例可能不存在",
     )
     reason: str = Field(
-        description="固定结构：逐步骤列出 I/D/O/R/C 的比例与依据要点，最后一句给结论"
+        description="逐步骤列出 I/D/O/R/C 的比例与依据要点；不要在此重复能力结论"
     )
 
 
@@ -243,6 +263,27 @@ def _produced_by_earlier_step(name: str, current: StepEvaluation, steps: list[St
     return False
 
 
+def hard_gate_failures(step: StepEvaluation) -> list[str]:
+    """Return deterministic mandatory-gate failures for one required step."""
+    failures: list[str] = []
+    if step.data_coverage.required and math.isclose(
+        step.data_coverage.ratio,
+        0.0,
+        abs_tol=1e-9,
+    ):
+        failures.append(HARD_GATE_DATA_COVERAGE_ZERO)
+    if math.isclose(step.operation_capability, 0.0, abs_tol=1e-9):
+        failures.append(HARD_GATE_OPERATION_UNSUPPORTED)
+    if step.result_match.required and step.result_match.ratio < 1.0:
+        failures.append(HARD_GATE_OUTPUT_MISMATCH)
+    if (
+        step.constraint_satisfaction.required
+        and step.constraint_satisfaction.ratio < 1.0
+    ):
+        failures.append(HARD_GATE_CONSTRAINT_UNMET)
+    return failures
+
+
 @dataclass
 class AggregatedCapability:
     can_handle: bool
@@ -255,6 +296,8 @@ class AggregatedCapability:
     has_external_dependency: bool = False
     contribution: str = ""
     missing_requirements: list[str] = field(default_factory=list)
+    hard_gate_failures: dict[int, list[str]] = field(default_factory=dict)
+    outcome: CapabilityOutcome = "cannot_contribute"
 
     def steps_payload(self, result: CapabilityChainResult) -> list[dict[str, Any]]:
         """Serialisable per-step detail for the response ``steps`` field."""
@@ -277,6 +320,9 @@ class AggregatedCapability:
                         "C": round(s.constraint_satisfaction.ratio, 3),
                     },
                     "step_score": round(self.step_scores.get(s.step_id, 0.0), 3),
+                    "hard_gate_failures": list(
+                        self.hard_gate_failures.get(s.step_id, [])
+                    ),
                     "checklists": {
                         "I": {
                             "required": s.input_match.required,
@@ -305,12 +351,25 @@ class AggregatedCapability:
         return payload
 
 
-def aggregate(result: CapabilityChainResult, threshold: float | None = None) -> AggregatedCapability:
-    """Map the LLM's per-dimension scores to ``can_handle`` / ``can_contribute`` / ``confidence``."""
+def aggregate(
+    result: CapabilityChainResult,
+    threshold: float | None = None,
+) -> AggregatedCapability:
+    """Map per-dimension scores to eligibility, contribution, and confidence."""
     thr = get_threshold() if threshold is None else max(0.0, min(1.0, float(threshold)))
     steps = sorted(result.steps, key=lambda s: s.step_id)
 
     scores: dict[int, float] = {s.step_id: step_score(s) for s in steps}
+    gate_failures = {
+        s.step_id: failures
+        for s in steps
+        if (failures := hard_gate_failures(s))
+    }
+    missing_requirements = [
+        str(item).strip()
+        for item in (result.missing_requirements or [])
+        if str(item).strip()
+    ]
     handle_score = (
         sum(scores.values()) / len(scores) if scores else 0.0
     )
@@ -327,7 +386,13 @@ def aggregate(result: CapabilityChainResult, threshold: float | None = None) -> 
         for i in s.inputs
     )
 
-    can_handle = bool(steps) and handle_score >= thr and not has_external_dependency
+    can_handle = (
+        bool(steps)
+        and handle_score >= thr
+        and not has_external_dependency
+        and not gate_failures
+        and not missing_requirements
+    )
 
     # 任何步骤只要能力分达到阈值就能贡献，不区分 final / non-final。
     # LLM 已经通过链拆解决定了产出流向（is_final=true 的是最终答案，
@@ -335,7 +400,7 @@ def aggregate(result: CapabilityChainResult, threshold: float | None = None) -> 
     contributing: list[StepEvaluation] = [
         s
         for s in steps
-        if scores[s.step_id] >= thr
+        if scores[s.step_id] >= thr and s.step_id not in gate_failures
     ]
 
     contribution_text = (result.contribution or "").strip()
@@ -344,8 +409,8 @@ def aggregate(result: CapabilityChainResult, threshold: float | None = None) -> 
     # 1. can_handle       — 能独立完成，自然也能贡献
     # 2. contributing 非空 — 有步骤分数到达阈值（纯算术，不依赖 LLM 自评字段）
     #
-    # 不再依赖 contribution 字段是否非空，因为 LLM 经常忘记在 tool call 中输出它。
-    # contribution 文本作为元信息保留在 AggregatedCapability 中供下游消费。
+    # 算术聚合保持独立；缺少 contribution 的自相矛盾在 consistency_errors()
+    # 中单独报告，使调用方能够给 LLM 精确的重试提示。
     can_contribute = can_handle or bool(contributing)
 
     if can_handle:
@@ -356,6 +421,12 @@ def aggregate(result: CapabilityChainResult, threshold: float | None = None) -> 
         confidence = 0.0
 
     contributing_ids = [s.step_id for s in contributing]
+    if can_handle:
+        outcome: CapabilityOutcome = "can_complete"
+    elif can_contribute:
+        outcome = "can_contribute"
+    else:
+        outcome = "cannot_contribute"
 
     return AggregatedCapability(
         can_handle=can_handle,
@@ -367,8 +438,120 @@ def aggregate(result: CapabilityChainResult, threshold: float | None = None) -> 
         step_scores=scores,
         has_external_dependency=has_external_dependency,
         contribution=contribution_text if can_contribute else "",
-        missing_requirements=[m for m in (result.missing_requirements or []) if str(m).strip()],
+        missing_requirements=missing_requirements,
+        hard_gate_failures=gate_failures,
+        outcome=outcome,
     )
+
+
+def consistency_errors(
+    result: CapabilityChainResult,
+    aggregated: AggregatedCapability,
+) -> list[str]:
+    """Return contradictions between the LLM report and computed capability."""
+    errors: list[str] = []
+    for step in result.steps:
+        checks = {
+            "I": step.input_match,
+            "D": step.data_coverage,
+            "R": step.result_match,
+            "C": step.constraint_satisfaction,
+        }
+        for dimension, check in checks.items():
+            required = list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in check.required
+                    if str(item).strip()
+                )
+            )
+            matched = list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in check.matched
+                    if str(item).strip()
+                )
+            )
+            unknown_matches = [item for item in matched if item not in required]
+            if unknown_matches:
+                errors.append(
+                    f"step {step.step_id} {dimension}.matched contains items "
+                    "not present in required: "
+                    f"{unknown_matches}"
+                )
+            matched_required = sum(1 for item in required if item in matched)
+            expected_ratio = matched_required / len(required) if required else 1.0
+            if not math.isclose(check.ratio, expected_ratio, abs_tol=1e-6):
+                errors.append(
+                    f"step {step.step_id} {dimension}.ratio={check.ratio:.3f} "
+                    f"but checklist implies {expected_ratio:.3f}"
+                )
+
+    if result.declared_outcome != aggregated.outcome:
+        errors.append(
+            f"declared_outcome={result.declared_outcome} "
+            f"but computed_outcome={aggregated.outcome}"
+        )
+    if result.declared_outcome == "can_complete" and aggregated.missing_requirements:
+        errors.append("can_complete conflicts with non-empty missing_requirements")
+    contribution = str(result.contribution or "").strip()
+    if result.declared_outcome == "can_contribute" and not contribution:
+        errors.append("can_contribute requires a concrete contribution")
+    if result.declared_outcome == "cannot_contribute" and contribution:
+        errors.append("cannot_contribute conflicts with a non-empty contribution")
+    if (
+        aggregated.missing_requirements
+        and not aggregated.hard_gate_failures
+        and not aggregated.has_external_dependency
+        and all(
+            math.isclose(check.ratio, 1.0, abs_tol=1e-6)
+            for step in result.steps
+            for check in (
+                step.input_match,
+                step.data_coverage,
+                step.result_match,
+                step.constraint_satisfaction,
+            )
+        )
+    ):
+        errors.append(
+            "missing_requirements is non-empty but inputs and I/D/R/C "
+            "checklists show no unmet requirement"
+        )
+    return errors
+
+
+def render_reason(
+    result: CapabilityChainResult,
+    aggregated: AggregatedCapability,
+) -> str:
+    """Render a canonical conclusion from structured fields, never free-form prose."""
+    lines: list[str] = []
+    for step in sorted(result.steps, key=lambda item: item.step_id):
+        failures = aggregated.hard_gate_failures.get(step.step_id, [])
+        suffix = f" hard_gates={failures}" if failures else ""
+        description = (
+            f" ({step.description.strip()})" if step.description.strip() else ""
+        )
+        evidence = f" evidence={step.evidence}" if step.evidence else ""
+        lines.append(
+            f"步骤{step.step_id}{description}: I={step.input_match.ratio:.3f} "
+            f"D={step.data_coverage.ratio:.3f} O={step.operation_capability:.3f} "
+            f"R={step.result_match.ratio:.3f} C={step.constraint_satisfaction.ratio:.3f} "
+            f"score={aggregated.step_scores.get(step.step_id, 0.0):.3f}"
+            f"{suffix}{evidence}"
+        )
+    if aggregated.missing_requirements:
+        lines.append(f"missing_requirements={aggregated.missing_requirements}")
+    if aggregated.has_external_dependency:
+        lines.append("unresolved_external_input=true")
+    conclusion = {
+        "can_complete": "能独立完成",
+        "can_contribute": f"只能贡献步骤 {aggregated.contributing_steps}",
+        "cannot_contribute": "不能完成或贡献",
+    }[aggregated.outcome]
+    lines.append(f"程序校验结论: {conclusion}")
+    return "；".join(lines)
 
 
 def parse_chain_result(data: dict[str, Any]) -> CapabilityChainResult:

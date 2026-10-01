@@ -1,4 +1,4 @@
-"""Unit tests for capability_chain scoring and aggregation.
+"""Unit tests for capability-chain scoring, hard gates, and consistency.
 
 Weighted-arithmetic-mean scoring (evidence_strength)
 ====================================================
@@ -9,21 +9,18 @@ handle_score = mean(step_scores)
 """
 
 import pytest
-import os
-from dataclasses import field
-from typing import Any
 
 from agent.capability_chain import (
     CapabilityChainResult,
-    StepEvaluation,
     RatioCheck,
-    AggregatedCapability,
+    StepEvaluation,
     aggregate,
-    step_score,
-    parse_chain_result,
+    consistency_errors,
     get_threshold,
+    parse_chain_result,
+    render_reason,
+    step_score,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -89,10 +86,12 @@ def result(
     contribution: str = "",
     grade: str = "A",
     missing: list[str] | None = None,
+    declared_outcome: str = "can_complete",
 ) -> CapabilityChainResult:
     return CapabilityChainResult(
         steps=steps,
         evidence_grade=grade,
+        declared_outcome=declared_outcome,
         contribution=contribution,
         missing_requirements=list(missing or []),
         risks=[],
@@ -271,7 +270,7 @@ def test_ratio_is_clamped():
 # ---------------------------------------------------------------------------
 # Design doc case 12.1: user-agent, "张三买了哪些东西"
 # All dimensions solid: field list, explicit exclusion, grep example.
-# Expected: same results as before (weighted formula with all solid == legacy).
+# The arithmetic score is retained for ranking, but hard gates decide eligibility.
 # ---------------------------------------------------------------------------
 
 def case_user_agent() -> CapabilityChainResult:
@@ -281,18 +280,20 @@ def case_user_agent() -> CapabilityChainResult:
     s2 = step(2, is_final=True, inputs=[("user_id", "upstream")], outputs=["商品列表"],
               I=rc(["user_id"], ["user_id"]), D=rc(["订单", "商品"], []), O=1.0, R=rc(["商品列表"], []))
     return result([s1, s2], contribution="输入 username=张三，输出 user_id，供步骤 2 查询订单使用",
-                  missing=["订单/购买记录数据（步骤 2）"])
+                  missing=["订单/购买记录数据（步骤 2）"], declared_outcome="can_contribute")
 
 
 def test_case_12_1_user_agent_contributes_step_1_with_full_confidence():
     agg = aggregate(case_user_agent(), threshold=0.7)
     # s1: all solid, (1+1+1+1+1)/5=1.0   s2: all solid, (1+0+1+0+1)/5=0.6
-    # handle = 0.8 ≥ 0.7, no external dep
+    # The mean exceeds the threshold, but step 2 fails mandatory D and R gates.
     assert agg.handle_score == pytest.approx(0.8)
-    assert agg.can_handle is True
+    assert agg.can_handle is False
     assert agg.can_contribute is True
-    assert agg.confidence == pytest.approx(0.8)
+    assert agg.confidence == pytest.approx(1.0)
     assert agg.contributing_steps == [1]
+    assert agg.hard_gate_failures == {2: ["data_coverage_zero", "output_mismatch"]}
+    assert agg.outcome == "can_contribute"
     assert agg.has_external_dependency is False
     assert agg.contribution.startswith("输入 username=张三")
     assert agg.missing_requirements == ["订单/购买记录数据（步骤 2）"]
@@ -309,17 +310,18 @@ def case_order_agent() -> CapabilityChainResult:
               I=rc(["user_id"], ["user_id"]), D=rc(["订单", "商品名"], ["订单", "商品名"]),
               O=1.0, R=rc(["商品列表"], ["商品列表"]))
     return result([s1, s2], contribution="需补齐 user_id，输出该用户的商品列表，对应最终结果",
-                  missing=["user_id"])
+                  missing=["user_id"], declared_outcome="can_contribute")
 
 
 def test_case_12_2_order_agent_contributes_final_step_but_depends_on_user_id():
     agg = aggregate(case_order_agent(), threshold=0.7)
     # s1: (1+0+1+0+1)/5=0.6   s2: (1+1+1+1+1)/5=1.0   handle=0.8≥0.7
     assert agg.handle_score == pytest.approx(0.8)
-    assert agg.can_handle is True
+    assert agg.can_handle is False
     assert agg.can_contribute is True
-    assert agg.confidence == pytest.approx(0.8)
+    assert agg.confidence == pytest.approx(1.0)
     assert agg.contributing_steps == [2]
+    assert agg.hard_gate_failures == {1: ["data_coverage_zero", "output_mismatch"]}
     assert agg.missing_requirements == ["user_id"]
 
 
@@ -360,9 +362,13 @@ def test_case_12_4_constraint_failure_contributing():
     # s1.inputs has source="upstream" at step_id=1 → external dependency → can_handle=False
     assert agg.has_external_dependency is True
     assert agg.can_handle is False
-    assert agg.can_contribute is True
-    assert agg.confidence == pytest.approx(0.9)
-    assert agg.contributing_steps == [1]
+    assert agg.can_contribute is False
+    assert agg.confidence == pytest.approx(0.0)
+    assert agg.contributing_steps == []
+    assert agg.hard_gate_failures == {
+        1: ["constraint_unmet"],
+        2: ["operation_unsupported", "constraint_unmet"],
+    }
     assert agg.contribution == ""
 
 
@@ -380,10 +386,11 @@ def test_case_12_5_unstructured_qa_contributes_first_final_step():
                            contribution="输入 入职时间=去年，输出 年假天数及出处，对应最终结果的年假部分"),
                     threshold=0.7)
     # s1: (1+1+1+1+1)/5=1.0  s2: (1+0+1+1+1)/5=0.8  handle=0.9≥0.7
-    assert agg.can_handle is True
+    assert agg.can_handle is False
     assert agg.can_contribute is True
-    assert agg.confidence == pytest.approx(0.9)
-    assert agg.contributing_steps == [1, 2]
+    assert agg.confidence == pytest.approx(1.0)
+    assert agg.contributing_steps == [1]
+    assert agg.hard_gate_failures == {2: ["data_coverage_zero"]}
 
 
 # ---------------------------------------------------------------------------
@@ -401,16 +408,16 @@ def test_case_12_6_contract_review_contributes_steps_1_and_3():
               I=rc(["风险条款列表", "去年版本文本"], ["风险条款列表", "去年版本文本"]),
               D=rc(["x"], ["x"]), O=0.7, R=rc(["变化说明"], ["变化说明"]))
     agg = aggregate(result([s1, s2, s3], contribution="输入 合同PDF，输出 风险条款列表（风险部分）；补齐 去年版本文本 后可输出 两版差异说明",
-                           missing=["去年版本合同文本（步骤 2）"]), threshold=0.7)
+                           missing=["去年版本合同文本（步骤 2）"], declared_outcome="can_contribute"), threshold=0.7)
     # s1: (1+1+1+1+1)/5=1.0  s2: (1+0+1+0+1)/5=0.6  s3: (1+1+0.7+1+1)/5=0.94
     assert agg.step_scores[1] == pytest.approx(1.0)
     assert agg.step_scores[2] == pytest.approx(0.6)
     assert agg.step_scores[3] == pytest.approx(0.94)
     # handle = (1.0+0.6+0.94)/3 = 0.847 ≥ 0.7
-    assert agg.can_handle is True
+    assert agg.can_handle is False
     assert agg.can_contribute is True
     assert agg.contributing_steps == [1, 3]
-    assert agg.confidence == pytest.approx(0.85)
+    assert agg.confidence == pytest.approx(1.0)
     assert agg.has_external_dependency is False
 
 
@@ -467,6 +474,161 @@ def test_any_step_with_sufficient_score_is_contributing():
     assert agg.can_contribute is True
 
 
+def test_each_mandatory_hard_gate_overrides_a_passing_average():
+    cases = [
+        (
+            step(1, D=rc(["required data"], [])),
+            "data_coverage_zero",
+        ),
+        (
+            step(1, O=0.0),
+            "operation_unsupported",
+        ),
+        (
+            step(1, R=rc(["field a", "field b"], ["field a"])),
+            "output_mismatch",
+        ),
+        (
+            step(1, C=rc(["constraint a", "constraint b"], ["constraint a"])),
+            "constraint_unmet",
+        ),
+    ]
+
+    for candidate, expected_failure in cases:
+        agg = aggregate(result([candidate]), threshold=0.7)
+        assert agg.handle_score >= 0.7
+        assert agg.can_handle is False
+        assert agg.can_contribute is False
+        assert agg.confidence == 0.0
+        assert agg.hard_gate_failures == {1: [expected_failure]}
+
+
+def test_empty_optional_checklists_do_not_trigger_hard_gates():
+    candidate = step(
+        1,
+        D=rc([], []),
+        R=rc([], []),
+        C=rc([], []),
+    )
+    agg = aggregate(result([candidate]), threshold=0.7)
+    assert agg.hard_gate_failures == {}
+    assert agg.can_handle is True
+
+
+def test_missing_requirements_block_complete_even_with_perfect_scores():
+    candidate = step(1)
+    r = result(
+        [candidate],
+        contribution="输入 source_id，输出记录，供最终回答使用",
+        missing=["source_id（步骤 1）"],
+        declared_outcome="can_contribute",
+    )
+    agg = aggregate(r, threshold=0.7)
+    assert agg.handle_score == 1.0
+    assert agg.can_handle is False
+    assert agg.can_contribute is True
+    assert agg.outcome == "can_contribute"
+    assert any(
+        "checklists show no unmet requirement" in error
+        for error in consistency_errors(r, agg)
+    )
+
+
+def test_checklist_ratio_contradiction_is_rejected():
+    candidate = step(
+        1,
+        D=RatioCheck(
+            required=["source_id"],
+            matched=[],
+            ratio=1.0,
+            evidence_strength="solid",
+        ),
+    )
+    r = result([candidate], declared_outcome="can_complete")
+    agg = aggregate(r, threshold=0.7)
+    assert agg.can_handle is True
+    assert (
+        "step 1 D.ratio=1.000 but checklist implies 0.000"
+        in consistency_errors(r, agg)
+    )
+
+
+def test_checklist_unknown_match_is_rejected():
+    candidate = step(
+        1,
+        D=RatioCheck(
+            required=["source_id"],
+            matched=["invented field"],
+            ratio=0.0,
+            evidence_strength="solid",
+        ),
+    )
+    r = result([candidate], declared_outcome="cannot_contribute")
+    agg = aggregate(r, threshold=0.7)
+    assert any(
+        "matched contains items not present in required" in error
+        for error in consistency_errors(r, agg)
+    )
+
+
+def test_declared_complete_is_rejected_when_a_hard_gate_fails():
+    candidate = step(1, D=rc(["required data"], []))
+    r = result([candidate], declared_outcome="can_complete")
+    agg = aggregate(r, threshold=0.7)
+    assert agg.outcome == "cannot_contribute"
+    assert (
+        "declared_outcome=can_complete but computed_outcome=cannot_contribute"
+        in consistency_errors(r, agg)
+    )
+
+
+def test_declared_complete_is_rejected_when_requirements_are_missing():
+    candidate = step(1)
+    r = result([candidate], missing=["source_id"], declared_outcome="can_complete")
+    agg = aggregate(r, threshold=0.7)
+    errors = consistency_errors(r, agg)
+    assert (
+        "declared_outcome=can_complete but computed_outcome=can_contribute"
+        in errors
+    )
+    assert "can_complete conflicts with non-empty missing_requirements" in errors
+
+
+def test_contribution_text_must_match_declared_outcome():
+    r = case_user_agent()
+    r.contribution = ""
+    agg = aggregate(r, threshold=0.7)
+    assert (
+        "can_contribute requires a concrete contribution"
+        in consistency_errors(r, agg)
+    )
+
+    blocked = result(
+        [step(1, O=0.0)],
+        contribution="claims a contribution that cannot be executed",
+        declared_outcome="cannot_contribute",
+    )
+    blocked_agg = aggregate(blocked, threshold=0.7)
+    assert (
+        "cannot_contribute conflicts with a non-empty contribution"
+        in consistency_errors(blocked, blocked_agg)
+    )
+
+
+def test_consistent_partial_report_has_no_errors():
+    r = case_user_agent()
+    assert consistency_errors(r, aggregate(r, threshold=0.7)) == []
+
+
+def test_render_reason_uses_computed_conclusion_not_free_form_claim():
+    r = case_user_agent()
+    r.reason = "能独立完成。"
+    rendered = render_reason(r, aggregate(r, threshold=0.7))
+    assert "能独立完成" not in rendered
+    assert "程序校验结论: 只能贡献步骤 [1]" in rendered
+    assert "data_coverage_zero" in rendered
+
+
 def test_threshold_boundaries():
     s = step(1, is_final=True, O=0.7)
     # (1+1+0.7+1+1)/5 = 0.94
@@ -500,6 +662,7 @@ def test_evidence_grade_does_not_change_confidence():
 def test_parse_chain_result_accepts_raw_tool_args_and_ignores_extras():
     raw = {
         "evidence_grade": "A",
+        "declared_outcome": "can_complete",
         "steps": [
             {
                 "step_id": 1,
@@ -545,17 +708,18 @@ def test_steps_payload_contains_scores_checklists_and_evidence_strength():
         "required": ["username"], "matched": ["username"], "evidence_strength": "solid",
     }
     assert payload[1]["checklists"]["D"]["evidence_strength"] == "solid"
+    assert payload[1]["hard_gate_failures"] == ["data_coverage_zero", "output_mismatch"]
 
 
 # ---------------------------------------------------------------------------
 # Weighted scoring: regression — design-doc cases unchanged with all solid
 # ---------------------------------------------------------------------------
 
-def test_all_solid_weighted_matches_legacy_for_case_12_1():
-    """Case 12.1 with all solid: same handle_score / can_handle as before."""
+def test_all_solid_weighted_score_does_not_override_hard_gate_for_case_12_1():
+    """The arithmetic score remains observable but cannot override a hard gate."""
     agg = aggregate(case_user_agent(), threshold=0.7)
     assert agg.handle_score == pytest.approx(0.8)
-    assert agg.can_handle is True
+    assert agg.can_handle is False
 
 
 def test_all_solid_weighted_matches_legacy_for_case_12_3():
